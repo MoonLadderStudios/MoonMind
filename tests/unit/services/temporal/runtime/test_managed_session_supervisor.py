@@ -8,6 +8,14 @@ from pathlib import Path
 import pytest
 
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.codex_conformance.canary import (
+    CANARY_DUPLICATE_EXECUTION,
+    CANARY_SCENARIO_VERSION,
+    CANARY_SESSION_TERMINATED_EARLY,
+    CANARY_TOOL_PROTOCOL_INCOMPATIBLE,
+    DEFAULT_MARKER_PATH,
+    validate_canary_evidence,
+)
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -52,8 +60,86 @@ def _record(tmp_path: Path) -> CodexManagedSessionRecord:
         workspacePath=str(workspace),
         sessionWorkspacePath=str(session_workspace),
         artifactSpoolPath=str(spool),
+        metadata={"candidateImageDigest": "sha256:" + "b" * 64},
         startedAt=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
     )
+
+def _canary_marker() -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "scenarioVersion": CANARY_SCENARIO_VERSION,
+        "nonce": "nonce-123456",
+        "command": "sleep 4 && printf ok",
+        "processExitCode": 0,
+        "startedAt": "2026-07-10T12:00:00Z",
+        "completedAt": "2026-07-10T12:00:04Z",
+        "durationSeconds": 4.0,
+        "outputSha256": "a" * 64,
+    }
+
+def _canary_events(*, session_id: str = "sess-1") -> list[dict[str, object]]:
+    return [
+        {
+            "stream": "session",
+            "timestamp": "2026-07-10T12:00:01Z",
+            "kind": "tool_call_started",
+            "text": "Tool call started.",
+            "sessionId": session_id,
+            "turnId": "turn-1",
+            "metadata": {"codexCanaryProtocolEvent": "resumable_process_handle"},
+        },
+        {
+            "stream": "session",
+            "timestamp": "2026-07-10T12:00:02Z",
+            "kind": "tool_call_completed",
+            "text": "Tool call completed.",
+            "sessionId": session_id,
+            "turnId": "turn-1",
+            "metadata": {"codexCanaryProtocolEvent": "poll_after_yield"},
+        },
+        {
+            "stream": "session",
+            "timestamp": "2026-07-10T12:00:06Z",
+            "kind": "turn_completed",
+            "text": "Turn completed.",
+            "sessionId": session_id,
+            "turnId": "turn-1",
+        },
+    ]
+
+def _canary_evidence(
+    *,
+    record: CodexManagedSessionRecord,
+    observation: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "schemaVersion": "v1",
+        "issueRef": "MoonLadderStudios/MoonMind#3150",
+        "scenarioVersion": CANARY_SCENARIO_VERSION,
+        "candidateImageDigest": "sha256:" + "b" * 64,
+        "codexCliVersion": "codex-test",
+        "moonmindBuildSha": "build-test",
+        "runId": "run-1",
+        "workflowId": "workflow-1",
+        "sessionId": observation["sessionId"],
+        "sessionIdsObserved": observation["sessionIdsObserved"],
+        "turnId": observation["turnId"],
+        "markerArtifactRef": observation["markerArtifactRef"],
+        "markerPath": observation["markerPath"],
+        "marker": _canary_marker(),
+        "timestamps": observation["timestamps"],
+        "protocolEvents": observation["protocolEvents"],
+        "finalAgentStatus": "completed",
+        "agentRunResultSuccessful": True,
+        "cleanupObserved": observation["cleanupObserved"],
+        "cleanupSessionId": observation["cleanupSessionId"],
+        "githubMutationCount": observation["githubMutationCount"],
+        "processInvocationCount": observation["processInvocationCount"],
+        "markerArtifactCreateCount": observation["markerArtifactCreateCount"],
+        "providerAvailable": True,
+        "failureCode": None,
+        "evidenceArtifactRef": observation["evidenceArtifactRef"],
+    }
 
 @pytest.mark.asyncio
 async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path) -> None:
@@ -489,6 +575,267 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert '"kind":"summary_published"' in journal_text
     assert '"kind":"checkpoint_published"' in journal_text
     assert log_streamer.consume_observability_events(record.agent_run_id) == []
+
+@pytest.mark.asyncio
+async def test_publish_snapshot_publishes_codex_canary_observation_from_runtime_evidence(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    marker_path = Path(record.workspace_path) / DEFAULT_MARKER_PATH
+    marker_path.parent.mkdir(parents=True)
+    marker_path.write_text(json.dumps(_canary_marker()) + "\n", encoding="utf-8")
+    for event in _canary_events():
+        supervisor.emit_session_event(
+            record=record,
+            text=str(event["text"]),
+            kind=str(event["kind"]),
+            turn_id=str(event["turnId"]),
+            metadata=dict(event.get("metadata", {})),
+        )
+
+    snapshot = await supervisor.publish_snapshot("sess-1")
+
+    observation = snapshot.metadata["codexConformanceCanary"]
+    assert observation["markerArtifactRef"] == "sess-1/codex_conformance_canary.marker.json"
+    assert observation["evidenceArtifactRef"] == "sess-1/codex_conformance_canary.evidence.json"
+    assert observation["sessionIdsObserved"] == ["sess-1"]
+    assert observation["testedImageDigest"] == "sha256:" + "b" * 64
+    assert observation["marker"] == _canary_marker()
+    assert observation["protocolEvents"] == [
+        "resumable_process_handle",
+        "poll_after_yield",
+    ]
+    summary_payload = json.loads(
+        artifact_storage.resolve_storage_path("sess-1/session.summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert (
+        summary_payload["metadata"]["codexConformanceCanary"]["markerArtifactRef"]
+        == "sess-1/codex_conformance_canary.marker.json"
+    )
+    assert (
+        summary_payload["metadata"]["canaryEvidence"]["marker"]
+        == _canary_marker()
+    )
+    marker_artifact = artifact_storage.resolve_storage_path(
+        "sess-1/codex_conformance_canary.marker.json"
+    )
+    evidence_artifact = artifact_storage.resolve_storage_path(
+        "sess-1/codex_conformance_canary.evidence.json"
+    )
+    assert json.loads(marker_artifact.read_text(encoding="utf-8")) == _canary_marker()
+    assert "codexConformanceCanary" in json.loads(
+        evidence_artifact.read_text(encoding="utf-8")
+    )
+
+def test_codex_canary_observation_validates_success(tmp_path: Path) -> None:
+    record = _record(tmp_path)
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=_canary_events(),
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is not None
+    result = validate_canary_evidence(
+        _canary_evidence(record=record, observation=observation),
+        now=datetime(2026, 7, 10, 12, 1, 0, tzinfo=UTC),
+    )
+    assert result.passed is True
+
+def test_codex_canary_observation_requires_resumable_handle(tmp_path: Path) -> None:
+    record = _record(tmp_path)
+    events = [
+        {
+            **event,
+            "kind": "assistant_message",
+            "text": "Assistant message completed.",
+            "metadata": {},
+        }
+        for event in _canary_events()
+    ]
+
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is None
+
+
+def test_codex_canary_observation_does_not_synthesize_protocol_from_plain_tool_events(
+    tmp_path: Path,
+) -> None:
+    record = _record(tmp_path)
+    events = [
+        {
+            key: value
+            for key, value in event.items()
+            if key != "metadata"
+        }
+        for event in _canary_events()
+    ]
+
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is None
+
+
+def test_codex_canary_observation_requires_poll_after_yield(tmp_path: Path) -> None:
+    record = _record(tmp_path)
+    events = _canary_events()[:1]
+
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is None
+
+def test_codex_canary_observation_preserves_early_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    record = _record(tmp_path)
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=_canary_events(),
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:03Z",
+    )
+
+    assert observation is not None
+    result = validate_canary_evidence(
+        _canary_evidence(record=record, observation=observation),
+        now=datetime(2026, 7, 10, 12, 1, 0, tzinfo=UTC),
+    )
+    assert result.passed is False
+    assert result.reason_code == CANARY_TOOL_PROTOCOL_INCOMPATIBLE
+
+@pytest.mark.parametrize(
+    ("metadata", "reason_code"),
+    [
+        ({"processInvocationCount": 2}, CANARY_DUPLICATE_EXECUTION),
+        ({"markerArtifactCreateCount": 2}, CANARY_DUPLICATE_EXECUTION),
+    ],
+)
+def test_codex_canary_observation_preserves_duplicate_counts(
+    tmp_path: Path,
+    metadata: dict[str, object],
+    reason_code: str,
+) -> None:
+    record = _record(tmp_path)
+    events = _canary_events()
+    events[0]["metadata"] = {**dict(events[0]["metadata"]), **metadata}
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is not None
+    result = validate_canary_evidence(
+        _canary_evidence(record=record, observation=observation),
+        now=datetime(2026, 7, 10, 12, 1, 0, tzinfo=UTC),
+    )
+    assert result.passed is False
+    assert result.reason_code == reason_code
+
+def test_codex_canary_observation_preserves_changed_session_failure(
+    tmp_path: Path,
+) -> None:
+    record = _record(tmp_path)
+    events = _canary_events()
+    events[1]["sessionId"] = "sess-2"
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is not None
+    result = validate_canary_evidence(
+        _canary_evidence(record=record, observation=observation),
+        now=datetime(2026, 7, 10, 12, 1, 0, tzinfo=UTC),
+    )
+    assert result.passed is False
+    assert result.reason_code == CANARY_SESSION_TERMINATED_EARLY
+
+def test_codex_canary_observation_preserves_github_mutation_failure(
+    tmp_path: Path,
+) -> None:
+    record = _record(tmp_path)
+    events = _canary_events()
+    events.append(
+        {
+            "stream": "session",
+            "timestamp": "2026-07-10T12:00:03Z",
+            "kind": "tool_call_completed",
+            "text": "GitHub mutation attempted.",
+            "sessionId": "sess-1",
+            "turnId": "turn-1",
+            "metadata": {"githubMutation": True},
+        }
+    )
+    observation = ManagedSessionSupervisor._build_codex_canary_observation(
+        record=record,
+        status="terminated",
+        marker_ref="sess-1/codex_conformance_canary.marker.json",
+        evidence_ref="sess-1/codex_conformance_canary.evidence.json",
+        events=events,
+        marker=_canary_marker(),
+        cleanup_timestamp="2026-07-10T12:00:07Z",
+    )
+
+    assert observation is not None
+    result = validate_canary_evidence(
+        _canary_evidence(record=record, observation=observation),
+        now=datetime(2026, 7, 10, 12, 1, 0, tzinfo=UTC),
+    )
+    assert result.passed is False
+    assert result.reason_code == CANARY_TOOL_PROTOCOL_INCOMPATIBLE
 
 @pytest.mark.asyncio
 async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundary_refs(

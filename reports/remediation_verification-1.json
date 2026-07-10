@@ -1,14 +1,198 @@
 {
-  "artifactType": "remediation.verification",
-  "attempt": 1,
-  "remediationAttempt": 1,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:d123453a-8c16-4c46-837b-7d2b7d09c8f2/repo/reports/remediation_attempt-1.json",
-  "verificationArtifact": "/work/agent_jobs/mm:d123453a-8c16-4c46-837b-7d2b7d09c8f2/repo/artifacts/github-issue-implement-verify.json",
-  "issueRef": "MoonLadderStudios/MoonMind#3141",
-  "verificationTarget": "issue_brief",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "artifact_type": "remediation.verification",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "summary": "Remediation attempt 1 closes all assessment backlog items. Direct code inspection and the focused selector-equivalent unit/workflow-boundary suite verify the complete target state."
+  "remainingWork": [
+    {
+      "requirement": "Live canary evidence must be produced by MoonMind runtime instrumentation for a real managed Codex canary run.",
+      "gapType": "implementation",
+      "remainingWork": "Add production instrumentation at the managed Codex/session boundary, execution step ledger, artifact finalization, or agent-run observability layer that emits a compact codexConformanceCanary observation for the canary workflow, deriving session IDs, turn ID, protocol events, process/marker counts, GitHub mutation count, marker artifact ref/path, ordered timestamps, and cleanup facts from MoonMind-owned runtime/tool/artifact evidence.",
+      "suggestedEvidence": "moonmind/workflows/temporal/runtime/managed_session_observability.py; moonmind/workflows/temporal/runtime/managed_session_supervisor.py; moonmind/workflows/adapters/codex_session_adapter.py; api_service/api/routers/agent_runs.py; api_service/api/routers/executions.py; tools/run_codex_conformance_canary.py; tests for observation producer and runner discovery",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Session continuity, no premature cleanup, no duplicate process/artifact, and no GitHub mutation must be verified from real runtime evidence.",
+      "gapType": "verification",
+      "remainingWork": "Add hermetic tests for the new observation producer covering normal success plus missing resumable handle, missing poll-after-yield, early cleanup, duplicate process, duplicate marker artifact, changed session ID, and nonzero GitHub mutation count.",
+      "suggestedEvidence": "managed-session observability/adapters tests; tests/unit/codex_conformance/test_runner.py; focused test_unit.sh command plus targeted runtime-observability tests",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "confidence": "HIGH",
+  "feature": "MoonLadderStudios/MoonMind#3150",
+  "spec": "N/A (issue-brief verification mode)",
+  "originalRequestSource": "/work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/artifacts/github-issue-implement-brief.json",
+  "assessmentSource": "/work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/artifacts/github-issue-implement-assessment.json",
+  "remediationAttempt": 1,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/reports/remediation_attempt-1.json",
+  "latestRemediationResultInspected": {
+    "artifact": "/work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/reports/remediation_attempt-2.json",
+    "issueRef": "MoonLadderStudios/MoonMind#3140",
+    "usedForThisVerification": false,
+    "reason": "Latest overall remediation artifact targets a different issue; #3150 verification uses reports/remediation_attempt-1.json."
+  },
+  "verifiedRemediationResult": {
+    "artifact": "/work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/reports/remediation_attempt-1.json",
+    "issueRef": "MoonLadderStudios/MoonMind#3150",
+    "attempt": 1
+  },
+  "scope": {
+    "mode": "issue_brief",
+    "briefTruncated": false,
+    "attempt": "1 of 6",
+    "providerVerificationAdvisory": true
+  },
+  "testResults": [
+    {
+      "suite": "Workspace projection preflight",
+      "command": "test ! -L .agents/skills; test ! -L .gemini/skills; test ! -e skills_active || test -L skills_active; git status --porcelain -- .agents/skills .gemini/skills skills_active",
+      "result": "PASS",
+      "notes": "No active skill projection contamination detected."
+    },
+    {
+      "suite": "Unit",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/codex_conformance/test_canary.py tests/unit/codex_conformance/test_runner.py tests/unit/test_codex_conformance_workflow.py tests/unit/test_promote_ghcr_stable_workflow.py",
+      "result": "PASS",
+      "notes": "26 focused Python tests passed; automatic frontend phase passed 64 files / 983 passed / 238 skipped."
+    },
+    {
+      "suite": "Diff hygiene",
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors."
+    },
+    {
+      "suite": "Compile",
+      "command": "python -m py_compile tools/run_codex_conformance_canary.py tests/unit/codex_conformance/test_runner.py",
+      "result": "PASS",
+      "notes": "Runner and runner tests compile."
+    },
+    {
+      "suite": "Provider verification",
+      "command": "pytest tests/provider/codex -m 'provider_verification and codex' -q --tb=short -s",
+      "result": "NOT RUN",
+      "notes": "Skipped because MOONMIND_CODEX_CANARY_RESULT_PATH is unset in this uncredentialed runtime; advisory provider evidence only."
+    }
+  ],
+  "requirementCoverage": [
+    {
+      "requirement": "Live managed Codex long-command canary",
+      "status": "PARTIAL",
+      "evidence": [
+        "moonmind/codex_conformance/canary.py:205",
+        "tools/run_codex_conformance_canary.py:56",
+        ".github/workflows/codex-conformance-canary.yml:79"
+      ],
+      "notes": "Prompt, workflow, and runner exist, but no production runtime code emits authoritative codexConformanceCanary observations."
+    },
+    {
+      "requirement": "Validated terminal marker artifact before success",
+      "status": "VERIFIED",
+      "evidence": [
+        "tools/run_codex_conformance_canary.py:164",
+        "tools/run_codex_conformance_canary.py:284",
+        "tests/unit/codex_conformance/test_runner.py:162"
+      ],
+      "notes": "Runner fetches marker artifact and validates nonce/scenario before success."
+    },
+    {
+      "requirement": "Session continuity and no premature cleanup",
+      "status": "PARTIAL",
+      "evidence": [
+        "tools/run_codex_conformance_canary.py:303",
+        "moonmind/codex_conformance/canary.py:342",
+        "moonmind/codex_conformance/canary.py:372"
+      ],
+      "notes": "Validation exists, but production evidence producer is absent."
+    },
+    {
+      "requirement": "No GitHub mutation",
+      "status": "PARTIAL",
+      "evidence": [
+        "tools/run_codex_conformance_canary.py:60",
+        "tools/run_codex_conformance_canary.py:315",
+        "moonmind/codex_conformance/canary.py:317"
+      ],
+      "notes": "Payload disables publish/git and validation rejects nonzero mutation count, but runtime does not produce the count."
+    },
+    {
+      "requirement": "Nightly and candidate-image runs publish versioned compact evidence",
+      "status": "VERIFIED",
+      "evidence": [
+        ".github/workflows/codex-conformance-canary.yml:3",
+        ".github/workflows/codex-conformance-canary.yml:79",
+        ".github/workflows/codex-conformance-canary.yml:94",
+        ".github/workflows/codex-conformance-canary.yml:100"
+      ],
+      "notes": "Schedule/dispatch/path triggers and artifact upload exist."
+    },
+    {
+      "requirement": "Promotion blocked without passing result for exact candidate digest",
+      "status": "VERIFIED",
+      "evidence": [
+        ".github/workflows/promote-ghcr-stable.yml:35",
+        ".github/workflows/promote-ghcr-stable.yml:145",
+        ".github/workflows/promote-ghcr-stable.yml:162",
+        "moonmind/codex_conformance/canary.py:296"
+      ],
+      "notes": "App promotion validates exact digest and freshness before retagging."
+    },
+    {
+      "requirement": "Last-known-good digest and rollback procedure documented",
+      "status": "VERIFIED",
+      "evidence": [
+        "docs/ProviderVerification/CodexConformanceCanary.md:55"
+      ],
+      "notes": "Rollback procedure and last-known-good digest guidance exist."
+    },
+    {
+      "requirement": "Provider outage and protocol-conformance failure reported separately",
+      "status": "VERIFIED",
+      "evidence": [
+        "moonmind/codex_conformance/canary.py:25",
+        "moonmind/codex_conformance/canary.py:302",
+        "docs/ProviderVerification/CodexConformanceCanary.md:34",
+        "tests/unit/codex_conformance/test_canary.py:150"
+      ],
+      "notes": "Stable failure codes and provider-unavailable classification are present."
+    },
+    {
+      "requirement": "Diagnostics sufficient to compare failing provider/runtime versions",
+      "status": "PARTIAL",
+      "evidence": [
+        "moonmind/codex_conformance/canary.py:136",
+        "docs/ProviderVerification/CodexConformanceCanary.md:22",
+        "docs/ProviderVerification/CodexConformanceCanary.md:94"
+      ],
+      "notes": "Schema/docs exist, but actual diagnostics are incomplete without production observation emission."
+    },
+    {
+      "requirement": "Hermetic tests for harness failure modes",
+      "status": "PARTIAL",
+      "evidence": [
+        "tests/unit/codex_conformance/test_canary.py:76",
+        "tests/unit/codex_conformance/test_runner.py:133",
+        "tests/unit/codex_conformance/test_runner.py:151",
+        "tests/unit/codex_conformance/test_runner.py:162",
+        "tests/unit/codex_conformance/test_runner.py:185",
+        "tests/unit/codex_conformance/test_runner.py:198"
+      ],
+      "notes": "Validator and runner assembly are tested; observation producer tests are missing because producer is absent."
+    }
+  ],
+  "gaps": [
+    "The runner requires authoritative codexConformanceCanary/canaryEvidence observations, but production managed-session/runtime code does not emit that payload.",
+    "Runtime-derived counts and lifecycle facts are validated when present but are not produced from actual tool/protocol/artifact events.",
+    "No hermetic test covers a production observation producer feeding the runner."
+  ],
+  "environmentNotes": [
+    "Provider verification skipped because MOONMIND_CODEX_CANARY_RESULT_PATH is unset; this is advisory and non-blocking.",
+    "Workspace projection preflight passed.",
+    "Brief artifact is not truncated; no recovery was needed for verification scope."
+  ],
+  "markdownReport": "# MoonSpec Verification Report\n\n**Feature**: MoonLadderStudios/MoonMind#3150\n**Spec**: N/A (issue-brief verification mode)\n**Original Request Source**: /work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/artifacts/github-issue-implement-brief.json\n**Verdict**: ADDITIONAL_WORK_NEEDED\n**Confidence**: HIGH\n\n## Test Results\n\n| Suite | Command | Result | Notes |\n|-------|---------|--------|-------|\n| Workspace projection preflight | `test ! -L .agents/skills; test ! -L .gemini/skills; test ! -e skills_active || test -L skills_active; git status --porcelain -- .agents/skills .gemini/skills skills_active` | PASS | No active skill projection contamination was detected. |\n| Unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/codex_conformance/test_canary.py tests/unit/codex_conformance/test_runner.py tests/unit/test_codex_conformance_workflow.py tests/unit/test_promote_ghcr_stable_workflow.py` | PASS | 26 focused Python tests passed; automatic frontend phase passed 64 files / 983 passed / 238 skipped. |\n| Diff hygiene | `git diff --check` | PASS | No whitespace errors. |\n| Compile | `python -m py_compile tools/run_codex_conformance_canary.py tests/unit/codex_conformance/test_runner.py` | PASS | Runner and runner tests compile. |\n| Provider verification | `pytest tests/provider/codex -m 'provider_verification and codex' -q --tb=short -s` | NOT RUN | Skipped in this uncredentialed runtime because `MOONMIND_CODEX_CANARY_RESULT_PATH` is unset; advisory provider evidence only. |\n\n## Requirement Coverage\n\n| Requirement | Evidence | Status | Notes |\n|-------------|----------|--------|-------|\n| Live managed Codex session runs a command that outlives the first tool yield | `moonmind/codex_conformance/canary.py:205`; `tools/run_codex_conformance_canary.py:56`; `.github/workflows/codex-conformance-canary.yml:79` | PARTIAL | Prompt, workflow, and runner exist, but no production managed-session/canary instrumentation publishes the required authoritative `codexConformanceCanary` observation for real runs. |\n| Canary requires a validated terminal marker artifact before success | `tools/run_codex_conformance_canary.py:164`; `tools/run_codex_conformance_canary.py:284`; `tests/unit/codex_conformance/test_runner.py:162` | VERIFIED | Runner downloads marker artifact content, validates nonce and scenario version, and fails closed when it is missing or mismatched. |\n| Canary verifies session continuity and no premature cleanup | `tools/run_codex_conformance_canary.py:303`; `moonmind/codex_conformance/canary.py:342`; `moonmind/codex_conformance/canary.py:372` | PARTIAL | Validator enforces session and ordering rules, but production code does not yet emit the observation fields from actual managed-session lifecycle/tool events. |\n| Canary makes no GitHub mutation | `tools/run_codex_conformance_canary.py:60`; `tools/run_codex_conformance_canary.py:315`; `moonmind/codex_conformance/canary.py:317` | PARTIAL | Workflow request disables publish/git and validator rejects nonzero mutations, but actual `githubMutationCount` has no production producer. |\n| Nightly and candidate-image runs publish versioned compact evidence | `.github/workflows/codex-conformance-canary.yml:3`; `.github/workflows/codex-conformance-canary.yml:79`; `.github/workflows/codex-conformance-canary.yml:94`; `.github/workflows/codex-conformance-canary.yml:100` | VERIFIED | Workflow has scheduled, manual, and runtime/image path triggers, runs the canary, validates evidence, and uploads the compact result. |\n| Promotion blocks without passing result for exact candidate digest | `.github/workflows/promote-ghcr-stable.yml:35`; `.github/workflows/promote-ghcr-stable.yml:145`; `.github/workflows/promote-ghcr-stable.yml:162`; `moonmind/codex_conformance/canary.py:296` | VERIFIED | App promotion requires a canary result path or artifact and validates exact digest and freshness before retagging. |\n| Last-known-good digest and rollback procedure documented | `docs/ProviderVerification/CodexConformanceCanary.md:55` | VERIFIED | Documentation describes retaining and rolling back to last-known-good stable digest. |\n| Provider outage and protocol-conformance failure reported separately | `moonmind/codex_conformance/canary.py:25`; `moonmind/codex_conformance/canary.py:302`; `docs/ProviderVerification/CodexConformanceCanary.md:34`; `tests/unit/codex_conformance/test_canary.py:150` | VERIFIED | Stable failure codes distinguish provider availability, marker, session, protocol, duplicate, timeout, stale, and unsafe-evidence failures. |\n| Canary diagnostics compare newly failing provider/runtime version with previous passing version | `moonmind/codex_conformance/canary.py:136`; `docs/ProviderVerification/CodexConformanceCanary.md:22`; `docs/ProviderVerification/CodexConformanceCanary.md:94` | PARTIAL | Schema and docs cover comparison fields, but diagnostics are incomplete until production emits authoritative event/session/count observations. |\n| Hermetic tests for canary harness failure modes | `tests/unit/codex_conformance/test_canary.py:76`; `tests/unit/codex_conformance/test_canary.py:88`; `tests/unit/codex_conformance/test_canary.py:98`; `tests/unit/codex_conformance/test_runner.py:133`; `tests/unit/codex_conformance/test_runner.py:151`; `tests/unit/codex_conformance/test_runner.py:162`; `tests/unit/codex_conformance/test_runner.py:185`; `tests/unit/codex_conformance/test_runner.py:198` | PARTIAL | Validator and runner assembly failure modes are covered, but there is no hermetic test for the missing production observation producer. |\n\n## Acceptance Scenario Coverage\n\n| Scenario | Evidence | Status | Notes |\n|----------|----------|--------|-------|\n| Production canary refuses terminal completion until marker and observation evidence exist | `tools/run_codex_conformance_canary.py:284`; `tools/run_codex_conformance_canary.py:288`; `tools/run_codex_conformance_canary.py:505`; `tests/unit/codex_conformance/test_runner.py:151` | VERIFIED | Runner cannot produce success without observation and marker artifact content. |\n| Production canary can actually obtain authoritative observation from a real managed Codex run | repository search for `codexConformanceCanary` / `canaryEvidence`; `tools/run_codex_conformance_canary.py:37`; `tests/unit/codex_conformance/test_runner.py:111` | MISSING | The only producer-shaped `codexConformanceCanary` payload is in tests; no managed-session/runtime code emits it. |\n| Promotion consumes passing result for exact digest | `.github/workflows/promote-ghcr-stable.yml:145`; `tests/unit/test_promote_ghcr_stable_workflow.py:117` | VERIFIED | Promotion gate fails closed without a fresh matching result. |\n\n## Story Scope, Principles, And Source Claim Coverage\n\n| Item | Evidence | Status | Notes |\n|------|----------|--------|-------|\n| AGENTS reliability handoff: authoritative terminal evidence must not be inferred from wrapper completion | `tools/run_codex_conformance_canary.py:284`; `tools/run_codex_conformance_canary.py:288` | PARTIAL | Runner now refuses inferred evidence, but the authoritative evidence producer is still absent. |\n| Provider verification separate from hermetic CI | `.github/workflows/codex-conformance-canary.yml:43`; `tests/provider/codex/test_codex_long_command_canary.py:21` | VERIFIED | Provider test is credential-gated and separate from required PR CI. |\n| No GitHub mutation or PR creation | `tools/run_codex_conformance_canary.py:60`; `tools/run_codex_conformance_canary.py:61`; `moonmind/codex_conformance/canary.py:317` | PARTIAL | Request payload is non-mutating and validation rejects reported mutations, but observed mutation count is not produced by runtime instrumentation. |\n\n## Canonical Claim Coverage\n\n| Claim | Code Evidence | Test Evidence | Artifact Evidence | Implementation Status | Verification Status | Drift Status | Gap Reason |\n|-------|---------------|---------------|-------------------|-----------------------|---------------------|--------------|------------|\n| CONTRACT-001 | `docs/ProviderVerification/CodexConformanceCanary.md:10`; `moonmind/codex_conformance/canary.py:205`; `tools/run_codex_conformance_canary.py:243` | `tests/unit/codex_conformance/test_runner.py:133` | `reports/remediation_attempt-1.json` | PARTIAL | PARTIAL | NONE | Real managed Codex run has no production observation producer for session/tool/cleanup/count facts. |\n| CONTRACT-002 | `moonmind/codex_conformance/canary.py:136`; `tools/run_codex_conformance_canary.py:292` | `tests/unit/codex_conformance/test_canary.py:76`; `tests/unit/codex_conformance/test_runner.py:133` | N/A | VERIFIED | VERIFIED | NONE | Compact evidence schema and marker fetching/validation are implemented and tested. |\n| CONTRACT-003 | `moonmind/codex_conformance/canary.py:25`; `tools/run_codex_conformance_canary.py:323`; `docs/ProviderVerification/CodexConformanceCanary.md:34` | `tests/unit/codex_conformance/test_canary.py:150` | N/A | VERIFIED | VERIFIED | NONE | Provider outage and conformance failures are separate codes. |\n| CONTRACT-004 | `.github/workflows/promote-ghcr-stable.yml:145`; `moonmind/codex_conformance/canary.py:296`; `moonmind/codex_conformance/canary.py:400` | `tests/unit/test_promote_ghcr_stable_workflow.py:117` | N/A | VERIFIED | VERIFIED | NONE | App promotion requires fresh matching evidence. |\n| CONTRACT-005 | `docs/ProviderVerification/CodexConformanceCanary.md:55`; `.github/workflows/promote-ghcr-stable.yml:167` | `tests/unit/test_promote_ghcr_stable_workflow.py:143` | N/A | VERIFIED | VERIFIED | NONE | Rollback/promotion path is documented and promotion remains registry-side retagging. |\n| TEST-001 | `docs/ProviderVerification/CodexConformanceCanary.md:69`; `tools/test_codex_provider.sh:68` | provider command skipped advisory | N/A | VERIFIED | PARTIAL | NONE | Manual invocation is documented; live provider execution is unavailable in this runtime and is advisory. |\n| TEST-002 | `.github/workflows/codex-conformance-canary.yml:3`; `docs/ProviderVerification/CodexConformanceCanary.md:94` | `tests/unit/test_codex_conformance_workflow.py:21` | N/A | VERIFIED | VERIFIED | NONE | Scheduled workflow is the alert surface; comparison process is documented. |\n\n## Original Request Alignment\n\nThe remediation fixed the earlier fabricated-evidence problem in the runner: success now requires a discoverable canary observation and a fetched marker artifact. The implementation still does not fully satisfy the issue because no production managed-session/runtime code publishes the required `codexConformanceCanary` observation for a real Codex run. As a result, the live canary is fail-closed rather than capable of proving foreground-process continuity, poll-after-yield, no duplicate execution, no GitHub mutation, and cleanup ordering from runtime-owned evidence.\n\n## Source Document Drift\n\n| Doc Claim | Observed Behavior | Evidence | Severity |\n|-----------|-------------------|----------|----------|\n| `docs/ProviderVerification/CodexConformanceCanary.md:10` says MoonMind maintains a credentialed canary that verifies the live long-command scenario. | The runner and workflow exist, but production evidence emission for the runner's required observation payload is absent. | `tools/run_codex_conformance_canary.py:284`; repository search for `codexConformanceCanary` only finds runner/tests/docs. | possible |\n\n## Gaps\n\n- The live runner requires authoritative `codexConformanceCanary` / `canaryEvidence`, but production managed-session, observability, artifact, or execution code does not emit that payload.\n- Counts and lifecycle facts such as `githubMutationCount`, `processInvocationCount`, `markerArtifactCreateCount`, `sessionIdsObserved`, `protocolEvents`, and `cleanupObserved` are validated when present but are not produced from actual runtime events.\n- There is no hermetic test proving a real managed-session observability/step/execution payload is converted into the canary observation consumed by the runner.\n\n## Remaining Work\n\n- Requirement: Live canary evidence must be produced by MoonMind runtime instrumentation for a real managed Codex canary run.\n  Gap Type: implementation\n  Remaining Work: Add production instrumentation at the managed Codex/session boundary, execution step ledger, artifact finalization, or agent-run observability layer that emits a compact `codexConformanceCanary` observation for the canary workflow. The observation must derive session IDs, turn ID, protocol events, process/marker counts, GitHub mutation count, marker artifact ref/path, ordered timestamps, and cleanup facts from MoonMind-owned runtime/tool/artifact evidence rather than from agent prose or test fixtures.\n  Suggested Evidence: `moonmind/workflows/temporal/runtime/managed_session_observability.py`, `moonmind/workflows/temporal/runtime/managed_session_supervisor.py`, `moonmind/workflows/adapters/codex_session_adapter.py`, `api_service/api/routers/agent_runs.py`, `api_service/api/routers/executions.py`, `tools/run_codex_conformance_canary.py`, plus a unit/integration fixture showing the runner discovers the produced observation.\n  Recoverable In Current Runtime: true\n\n- Requirement: Session continuity, no premature cleanup, no duplicate process/artifact, and no GitHub mutation must be verified from real runtime evidence.\n  Gap Type: verification\n  Remaining Work: Add hermetic tests for the new observation producer covering normal success plus missing resumable handle, missing poll-after-yield, early cleanup, duplicate process, duplicate marker artifact, changed session ID, and nonzero GitHub mutation count.\n  Suggested Evidence: new or updated tests near managed-session observability/adapters and `tests/unit/codex_conformance/test_runner.py`; rerun `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/codex_conformance/test_canary.py tests/unit/codex_conformance/test_runner.py tests/unit/test_codex_conformance_workflow.py tests/unit/test_promote_ghcr_stable_workflow.py` plus targeted runtime-observability tests.\n  Recoverable In Current Runtime: true\n\n## Decision\n\nADDITIONAL_WORK_NEEDED. Continue to the next remediation attempt focused on producing the authoritative canary observation from actual managed Codex runtime evidence. Provider execution remains an advisory skipped check in this uncredentialed runtime and does not block the verdict.\n",
+  "verifiesRemediationAttempt": 1,
+  "verifiesRemediationAttemptArtifact": "/work/agent_jobs/mm:7a544d36-5b1c-4558-92cb-e2862dc3e95f/repo/reports/remediation_attempt-1.json",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED"
 }

@@ -1,50 +1,55 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MoonLadderStudios/MoonMind#3141",
-  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "issue_ref": "MoonLadderStudios/MoonMind#3150",
+  "source_verdict_artifact": "artifacts/github-issue-implement-verify.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Closed the bounded verification gaps by aligning non-allow-listed terminal reasons with execution_error, preserving the actionable_comments user_error case, and adding explicit missing-result/no-attempt continuation coverage.",
+  "summary": "Replaced hardcoded Codex canary runner evidence with fail-closed assembly from observed execution context and a fetched marker artifact. Added hermetic runner tests for marker retrieval, authoritative observation requirements, duplicate execution counts, missing protocol evidence, and nonce validation.",
   "changed_files": [
-    "tests/unit/workflows/adapters/test_managed_agent_adapter.py",
-    "reports/remediation_attempt-1.json"
+    "tools/run_codex_conformance_canary.py",
+    "tests/unit/codex_conformance/test_runner.py"
   ],
-  "gap_statuses": [
+  "gap_status": [
     {
-      "requirement": "user_error is emitted only from a validated terminal result with an explicitly user-actionable reason",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": "Updated ci_failures, merge_conflicts, and free-form hard-failure expectations to execution_error; actionable_comments/manual_review remains explicitly asserted as user_error."
+      "requirement": "Live canary evidence must prove the long-running command, resumable handle, poll, marker creation, turn completion, and cleanup order from real managed-session evidence.",
+      "status": "addressed",
+      "notes": "The runner no longer fabricates duration, protocol events, process counts, marker counts, session ids, or cleanup state from terminal status. It now collects a codexConformanceCanary/canaryEvidence observation from execution detail, step ledger, linked artifacts, or agent-run observability and fails closed when that authoritative observation is absent."
     },
     {
-      "requirement": "Add unit tests for all seven named scenarios",
-      "gap_type": "verification",
-      "status": "fixed",
-      "evidence": "Added result-level no-terminal/no-attempt coverage asserting INCOMPLETE_TERMINAL_CONTRACT, missingEvidence, absent latestAttemptRef, and continue_same_session; existing attempt-present coverage asserts retry_new_session. Existing focused tests cover malformed, stale, actionable manual review, hard execution failure, and canonical serialization."
+      "requirement": "The canary requires a validated terminal marker artifact before success.",
+      "status": "addressed",
+      "notes": "The runner now downloads the marker artifact through /api/artifacts/{artifact_id}/download, parses the actual JSON content, validates nonce and scenario version before evidence assembly, and emits CANARY_TERMINAL_MARKER_MISSING when marker evidence cannot be read or matched."
     },
     {
-      "requirement": "Relevant focused tests pass",
-      "gap_type": "environment",
-      "status": "fixed",
-      "evidence": "Restored the declared pytest dependencies in the runtime and reran the exact verification command successfully."
+      "requirement": "The canary verifies no GitHub mutation, duplicate process, duplicate artifact, and no premature cleanup.",
+      "status": "addressed",
+      "notes": "githubMutationCount, processInvocationCount, markerArtifactCreateCount, sessionIdsObserved, cleanupObserved, and cleanupSessionId now come from the canary observation payload and are validated by the existing canary validator instead of constants/defaults."
+    },
+    {
+      "requirement": "Hermetic tests for the canary harness failure modes.",
+      "status": "addressed",
+      "notes": "Added tests/unit/codex_conformance/test_runner.py with fake execution API and artifact responses covering success, missing authoritative observation, missing marker artifact, marker nonce mismatch, duplicate process count, and missing resumable-handle protocol evidence."
+    },
+    {
+      "requirement": "Credentialed provider canary execution.",
+      "status": "not_run_advisory",
+      "notes": "The verifier marked provider execution advisory in this runtime because MOONMIND_CODEX_CANARY_RESULT_PATH/credentials are unavailable. No provider-side command was run during remediation."
     }
   ],
   "targeted_checks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/codex_conformance/test_canary.py tests/unit/codex_conformance/test_runner.py tests/unit/test_codex_conformance_workflow.py tests/unit/test_promote_ghcr_stable_workflow.py",
       "result": "PASS",
-      "notes": "220 Python tests passed with 23 non-blocking warnings; automatic frontend phase passed 64 files with 980 tests passed and 238 skipped."
+      "notes": "26 focused Python tests passed; wrapper frontend phase also passed 64 files / 983 passed / 238 skipped."
     },
     {
       "command": "git diff --check",
-      "result": "PASS",
-      "notes": "No whitespace errors."
+      "result": "PASS"
+    },
+    {
+      "command": "python -m py_compile tools/run_codex_conformance_canary.py tests/unit/codex_conformance/test_runner.py",
+      "result": "PASS"
     }
   ],
-  "remaining_work": [],
-  "scope_controls": {
-    "pull_request_created": false,
-    "github_issue_status_changed": false,
-    "scope_broadened": false
-  }
+  "remaining_known_gaps": []
 }
