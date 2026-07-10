@@ -708,11 +708,15 @@ def _load_pr_resolver_terminal_result(
         # Filesystems and the run store do not share guaranteed sub-second clock
         # precision. Allow a narrow boundary tolerance while still rejecting
         # artifacts left by an earlier execution.
-        if not_before is not None and timestamp < (
-            not_before.astimezone(UTC) - timedelta(seconds=1)
-        ):
-            failures.append(f"{provenance}: stale terminal artifact")
-            continue
+        if not_before is not None:
+            cutoff = (
+                not_before
+                if not_before.tzinfo is not None
+                else not_before.replace(tzinfo=UTC)
+            )
+            if timestamp < (cutoff.astimezone(UTC) - timedelta(seconds=1)):
+                failures.append(f"{provenance}: stale terminal artifact")
+                continue
         return _PrResolverEvidence(payload, provenance, tuple(failures))
     return _PrResolverEvidence(None, None, tuple(failures))
 

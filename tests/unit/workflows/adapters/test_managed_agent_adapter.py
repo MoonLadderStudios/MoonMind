@@ -119,6 +119,24 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
     )
 
 
+def test_pr_resolver_treats_naive_terminal_cutoff_as_utc(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"merged","finished_at":"2026-07-10T12:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    terminal = _load_pr_resolver_terminal_result(
+        str(tmp_path), not_before=datetime(2026, 7, 10, 11, 59, 59)
+    )
+
+    assert terminal.payload is not None
+    assert terminal.payload["status"] == "merged"
+
+
 def test_pr_resolver_rejects_unrecognized_terminal_evidence(tmp_path: Path) -> None:
     resolver = tmp_path / "var" / "pr_resolver"
     resolver.mkdir(parents=True)
