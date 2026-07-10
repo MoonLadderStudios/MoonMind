@@ -317,7 +317,7 @@ Bad examples:
 
 ## Source Acceptance Matrix
 
-When the request is backed by a source document, issue, or external acceptance record, write `artifacts/moonspec/source-acceptance.json` using `"schemaVersion": "v1"`. Preserve source rows such as `SRC-AC-*`, implementation surfaces such as `SRC-SURFACE-*`, negative constraints such as `SRC-NEG-*`, and expected tests such as `SRC-TEST-*`. Mark rows with `repoVerifiable: false` when they require manual, provider, or external evidence, and include `statusHint` only as advisory input for assessment.
+When the request is backed by a source document, issue, or external acceptance record, write `artifacts/moonspec/source-acceptance.json` using `"schemaVersion": "v1"` and a `featureId` that matches the active feature directory. Preserve source rows such as `SRC-AC-*`, implementation surfaces such as `SRC-SURFACE-*`, negative constraints such as `SRC-NEG-*`, and expected tests such as `SRC-TEST-*`. Mark rows with `repoVerifiable: false` when they require manual, provider, or external evidence, and include `statusHint` only as advisory input for assessment.
 
 ## Report And Post-Spec Hooks
 

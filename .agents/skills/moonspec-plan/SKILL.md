@@ -94,7 +94,7 @@ For shell arguments containing single quotes, use shell-safe escaping such as `'
 Read:
 
 - `FEATURE_SPEC`
-- `artifacts/moonspec/source-acceptance.json` and `artifacts/moonspec/acceptance-assessment.json` when present. Treat `VERIFIED` source acceptance rows as regression constraints and use the assessment backlog for planned work.
+- `artifacts/moonspec/source-acceptance.json` and `artifacts/moonspec/acceptance-assessment.json` when present and their `featureId` matches the active feature. Treat `VERIFIED` source acceptance rows as regression constraints and use the matching assessment backlog for planned work.
 - `AGENTS.md` when present, especially project principles, testing discipline, and repo constraints
 - `IMPL_PLAN`
 - Relevant implementation files, tests, contracts, fixtures, migrations, and public interfaces for the story

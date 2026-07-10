@@ -13,4 +13,4 @@ handoffs:
 $ARGUMENTS
 ```
 
-Run `moonspec-assess`. Read `artifacts/moonspec/source-acceptance.json` when it exists and write `artifacts/moonspec/acceptance-assessment.json` before planning.
+Run `moonspec-assess`. Read `artifacts/moonspec/source-acceptance.json` only when its `featureId` matches the active feature, then write `artifacts/moonspec/acceptance-assessment.json` with the same `featureId` before planning. If no matching source acceptance matrix exists, report that assessment is not applicable and do not block planning.
