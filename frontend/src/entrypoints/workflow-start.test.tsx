@@ -18645,10 +18645,10 @@ describe("Task Create runtime switch layout stability", () => {
 
     expect(request.payload.task.runtime).toMatchObject({
       mode: "codex_cli",
-      modelTier: 1,
-      tierFallback: "clamp",
       profileId: "profile:codex-default",
     });
+    expect(request.payload.task.runtime).not.toHaveProperty("modelTier");
+    expect(request.payload.task.runtime).not.toHaveProperty("tierFallback");
     expect(request.payload.task.runtime).not.toHaveProperty("model");
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
   });

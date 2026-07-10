@@ -629,6 +629,9 @@ export function previewModelTier(
   profile: ProviderProfile | undefined,
   requestedTierValue: string,
 ): ModelTierPreview | null {
+  if (typeof requestedTierValue !== "string") {
+    return null;
+  }
   const requestedTier = Number.parseInt(requestedTierValue.trim(), 10);
   if (!Number.isInteger(requestedTier) || requestedTier < 1) {
     return null;
@@ -2160,11 +2163,11 @@ function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
   return steps.some(
     (step) =>
       Boolean(step.skillArgs.trim()) ||
-      Boolean(step.runtimeMode.trim()) ||
-      Boolean(step.runtimeModel.trim()) ||
-      Boolean(step.runtimeEffort.trim()) ||
-      Boolean(step.runtimeProviderProfile.trim()) ||
-      Boolean(step.runtimeModelTier.trim()) ||
+      Boolean((step.runtimeMode || "").trim()) ||
+      Boolean((step.runtimeModel || "").trim()) ||
+      Boolean((step.runtimeEffort || "").trim()) ||
+      Boolean((step.runtimeProviderProfile || "").trim()) ||
+      Boolean((step.runtimeModelTier || "").trim()) ||
       step.runtimeTierFallback === "strict",
   );
 }
@@ -5876,7 +5879,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ),
   );
   const [effortManualOverride, setEffortManualOverride] = useState(false);
-  const [modelTier, setModelTier] = useState("1");
+  const [modelTier, setModelTier] = useState("");
   const [tierFallback, setTierFallback] = useState<TierFallbackMode>("clamp");
   const [repository, setRepository] = useState(initialRepository);
   const [providerProfile, setProviderProfile] = useState("");
@@ -6251,6 +6254,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (runtimeChanged || profileChanged) {
       setModelManualOverride(false);
       setEffortManualOverride(false);
+      setModel("");
+      setEffort("");
     }
 
     if (runtimeChanged) {
@@ -8475,11 +8480,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   }
 
   function stepRuntimePayload(step: StepState): Record<string, string | number> | null {
-    const mode = step.runtimeMode.trim();
-    const modelValue = step.runtimeModel.trim();
-    const effortValue = step.runtimeEffort.trim();
-    const profileId = step.runtimeProviderProfile.trim();
-    const modelTierValue = step.runtimeModelTier.trim();
+    const mode = (step.runtimeMode || "").trim();
+    const modelValue = (step.runtimeModel || "").trim();
+    const effortValue = (step.runtimeEffort || "").trim();
+    const profileId = (step.runtimeProviderProfile || "").trim();
+    const modelTierValue = (step.runtimeModelTier || "").trim();
     const modelTier = Number.parseInt(modelTierValue, 10);
     const hasModelTier = Number.isInteger(modelTier) && modelTier >= 1;
     const tierFallback = step.runtimeTierFallback === "strict" ? "strict" : "clamp";
@@ -9633,14 +9638,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    const submittedModelTier = Number.parseInt(modelTier.trim(), 10);
-    if (!Number.isInteger(submittedModelTier) || submittedModelTier < 1) {
+    const submittedModelTierValue = modelTier.trim();
+    const submittedModelTier = Number.parseInt(submittedModelTierValue, 10);
+    const hasSubmittedModelTier = submittedModelTierValue !== "";
+    if (
+      hasSubmittedModelTier &&
+      (!Number.isInteger(submittedModelTier) || submittedModelTier < 1)
+    ) {
       setSubmitMessage("Model tier must be a positive number.");
       clearSubmitBusy();
       return;
     }
     const invalidStepRuntime = submissionSteps.find((step) => {
-      const stepRuntime = step.runtimeMode.trim().toLowerCase();
+      const stepRuntime = (step.runtimeMode || "").trim().toLowerCase();
       return stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime);
     });
     if (invalidStepRuntime) {
@@ -9652,7 +9662,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
     const invalidStepModelTier = submissionSteps.find((step) => {
-      const value = step.runtimeModelTier.trim();
+      const value = (step.runtimeModelTier || "").trim();
       if (!value) {
         return false;
       }
@@ -10630,8 +10640,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       proposeTasks,
       runtime: {
         mode: normalizedRuntime,
-        modelTier: submittedModelTier,
-        tierFallback,
+        ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
+        ...(hasSubmittedModelTier || tierFallback === "strict" ? { tierFallback } : {}),
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
