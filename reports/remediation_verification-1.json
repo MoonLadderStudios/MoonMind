@@ -1,223 +1,40 @@
 {
   "artifact_type": "remediation.verification",
-  "skill": "moonspec-verify",
-  "mode": "issue_brief",
-  "verification_target": "issue_brief",
   "attempt": 1,
-  "maxAttempts": 6,
-  "verifiesRemediationAttempt": 1,
-  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "verificationArtifact": "artifacts/jira-implement-verify.json",
-  "sourceBriefArtifact": "artifacts/jira-implement-brief.json",
-  "sourceAssessmentArtifact": "artifacts/jira-implement-assessment.json",
-  "issueProvider": "jira",
-  "issueRef": "MM-1172",
-  "issueUrl": "https://moonladder.atlassian.net/browse/MM-1172",
-  "branch": "run-jira-implement-for-mm-1172-expose-pr-f0c41c59",
-  "baseRef": "origin/main",
-  "headCommit": "ed194f39bccf5923db0760231c4e864ad2a57b86",
-  "verdict": "FULLY_IMPLEMENTED",
-  "authoritativeVerdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "remediation_attempt": 1,
+  "remediation_attempt_artifact": "reports/remediation_attempt-1.json",
+  "authoritative_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "verification_target": "issue_brief",
+  "issue_ref": "MoonLadderStudios/MoonMind#3140",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "confidence": "HIGH",
-  "briefTruncated": false,
-  "summary": "Remediation verification attempt 1 of 6 verifies remediation attempt 1 for Jira MM-1172. Direct production-code inspection and focused unit evidence show Provider Profile tier fields, response compatibility fields, advisory preview endpoint behavior, shared backend resolver parity, launch-time authoritative re-resolution, and stale preview mismatch recording are implemented. Every repo-verifiable in-scope requirement is VERIFIED. The stale prior MM-1146 remediation verification artifact has been replaced with this MM-1172 result.",
-  "requirementCoverage": [
-    {
-      "requirement": "Provider Profile create/update accepts model_tiers and default_model_tier.",
-      "status": "VERIFIED",
-      "evidence": [
-        "api_service/api/routers/provider_profiles.py:76",
-        "api_service/api/routers/provider_profiles.py:165",
-        "api_service/api/routers/provider_profiles.py:431",
-        "api_service/db/models.py:2407",
-        "api_service/migrations/versions/335_mm1172_provider_profile_model_tiers.py:55",
-        "tests/unit/api_service/api/routers/test_provider_profiles.py:672"
-      ],
-      "notes": "Create and update schemas accept tier policy, persistence and migration add fields, and API tests cover create/update validation."
-    },
-    {
-      "requirement": "Provider Profile responses include tier policy plus compatibility fields during migration.",
-      "status": "VERIFIED",
-      "evidence": [
-        "api_service/api/routers/provider_profiles.py:238",
-        "api_service/api/routers/provider_profiles.py:1690",
-        "tests/unit/api_service/api/routers/test_provider_profiles.py:713"
-      ],
-      "notes": "Response model and row serialization include default_model/default_effort/model_overrides plus model_tiers/default_model_tier."
-    },
-    {
-      "requirement": "The preview endpoint returns requested tier, effective tier, model, effort, and fallback reason for each requested step.",
-      "status": "VERIFIED",
-      "evidence": [
-        "api_service/api/routers/provider_profiles.py:280",
-        "api_service/api/routers/provider_profiles.py:604",
-        "tests/unit/api_service/api/routers/test_provider_profiles.py:720"
-      ],
-      "notes": "Preview response model and endpoint return requestedTier, effectiveTier, model, effort, and fallbackReason per step."
-    },
-    {
-      "requirement": "Preview output is advisory and does not replace launch-time backend resolution.",
-      "status": "VERIFIED",
-      "evidence": [
-        "docs/Security/ProviderProfileModelEffortTiers.md:414",
-        "api_service/api/routers/provider_profiles.py:624",
-        "api_service/api/routers/executions.py:9818",
-        "api_service/api/routers/executions.py:9863",
-        "tests/unit/api/routers/test_executions.py:5462"
-      ],
-      "notes": "Preview endpoint is advisory, and launch paths call resolve_model_effort again using current profile policy; test coverage submits stale tierPreview and verifies current backend resolution wins."
-    },
-    {
-      "requirement": "Backend can detect and record preview mismatch when submitted preview state differs from current profile policy.",
-      "status": "VERIFIED",
-      "evidence": [
-        "moonmind/workflows/executions/model_resolver.py:307",
-        "moonmind/workflows/executions/model_resolver.py:73",
-        "api_service/api/routers/executions.py:9914",
-        "tests/unit/workflows/executions/test_model_resolver.py:320",
-        "tests/unit/api/routers/test_executions.py:5525"
-      ],
-      "notes": "Resolver compares advisory preview fields to authoritative resolution and exposes previewMismatch in metadata; execution tests assert previewMismatch true in stored launch parameters."
-    },
-    {
-      "requirement": "Use backend resolver logic for preview parity.",
-      "status": "VERIFIED",
-      "evidence": [
-        "api_service/api/routers/provider_profiles.py:627",
-        "moonmind/workflows/executions/model_resolver.py:111",
-        "tests/unit/workflows/executions/test_model_resolver.py:265"
-      ],
-      "notes": "Provider profile preview calls the same resolve_model_effort backend resolver used by launch paths."
-    },
-    {
-      "requirement": "Do not require presets to name concrete models for preview.",
-      "status": "VERIFIED",
-      "evidence": [
-        "api_service/api/routers/provider_profiles.py:280",
-        "api_service/api/routers/provider_profiles.py:604",
-        "tests/unit/api_service/api/routers/test_provider_profiles.py:703"
-      ],
-      "notes": "Preview accepts step id and modelTier without concrete model strings."
-    }
-  ],
-  "canonicalClaimCoverage": [
-    {
-      "claim": "CLAIM-docs-security-providerprofilemodelefforttiers-006 / DESIGN-REQ-003",
-      "implementationStatus": "VERIFIED",
-      "verificationStatus": "VERIFIED",
-      "driftStatus": "NONE",
-      "codeEvidence": [
-        "docs/Security/ProviderProfileModelEffortTiers.md:414",
-        "api_service/api/routers/provider_profiles.py:238",
-        "api_service/api/routers/provider_profiles.py:604"
-      ],
-      "testEvidence": [
-        "tests/unit/api_service/api/routers/test_provider_profiles.py:672"
-      ],
-      "artifactEvidence": [
-        "artifacts/jira-implement-brief.json",
-        "artifacts/jira-implement-assessment.json",
-        "reports/remediation_attempt-1.json"
-      ],
-      "gapReason": ""
-    },
-    {
-      "claim": "CLAIM-docs-security-providerprofilemodelefforttiers-010 / DESIGN-REQ-012 / DESIGN-REQ-013",
-      "implementationStatus": "VERIFIED",
-      "verificationStatus": "VERIFIED",
-      "driftStatus": "NONE",
-      "codeEvidence": [
-        "docs/Security/ProviderProfileModelEffortTiers.md:456",
-        "docs/Security/ProviderProfileModelEffortTiers.md:768",
-        "moonmind/workflows/executions/model_resolver.py:307",
-        "api_service/api/routers/executions.py:9914"
-      ],
-      "testEvidence": [
-        "tests/unit/workflows/executions/test_model_resolver.py:320",
-        "tests/unit/api/routers/test_executions.py:5462"
-      ],
-      "artifactEvidence": [
-        "artifacts/jira-implement-brief.json",
-        "artifacts/jira-implement-assessment.json",
-        "reports/remediation_attempt-1.json"
-      ],
-      "gapReason": ""
-    }
-  ],
+  "summary": "Remediation attempt 1 passes the focused adapter suite and closes the previously reported freshness and established-shape failures, but terminal validation still accepts a parseable payload with no recognized terminal status/disposition because an empty string is compared to None.",
   "testResults": [
     {
-      "suite": "Unit",
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/workflows/executions/test_model_resolver.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_managed_agent_adapter.py",
       "result": "PASS",
-      "notes": "82 Python tests passed. The runner UI phase also completed successfully for this command with 60 files passed, 942 tests passed, 238 skipped."
+      "notes": "78 Python tests passed; frontend phase passed 972 tests with 238 skipped."
     },
     {
-      "suite": "Unit",
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py",
-      "result": "PASS_WITH_NON_BLOCKING_UNRELATED_UI_FAILURE",
-      "notes": "The MM-1172 controlling Python suite passed with 357 tests passed. The same shared runner then executed its broad frontend phase and failed 2 unrelated recurring-schedules dashboard tests in frontend/src/entrypoints/dashboard.test.tsx. Those tests are outside the changed backend/API scope and do not identify an in-scope MM-1172 implementation defect."
-    },
-    {
-      "suite": "Diff Check",
       "command": "git diff --check",
-      "result": "PASS",
-      "notes": "No whitespace errors reported."
-    },
-    {
-      "suite": "Integration",
-      "command": "./tools/test_integration.sh targeted integration_ci",
-      "result": "NOT RUN",
-      "notes": "Not selected for this issue-brief verification after focused repo-local API/resolver/execution unit coverage passed; any broader integration check would be advisory unless selected by runtime infrastructure impact."
+      "result": "PASS"
     }
   ],
-  "workspaceProjectionPreflight": {
-    "result": "CLEAN",
-    "detail": ".agents/skills and .gemini/skills are not projection symlinks; skills_active is absent or symlink-compatible; git status showed no tracked projection contamination for those paths."
-  },
-  "disclosedScopeExclusions": [
+  "remainingWork": [
     {
-      "item": "Automatic frontend runner failures in recurring schedules dashboard tests",
-      "reason": "The shared unit runner executed broad frontend tests after the targeted backend Python tests passed. The two failing tests are outside MM-1172 acceptance criteria, assessment backlog, and changed backend/API files.",
-      "type": "non_blocking_unrelated_test_failure"
-    }
-  ],
-  "environmentNotes": [
-    {
-      "tooling": "MoonMind RAG retrieved context",
-      "status": "NOT RUN",
-      "gatesVerdict": false,
-      "reason": "Retrieved context was delivered in degraded local fallback mode and was not needed; verification relied on direct repository inspection and focused repo-local tests."
+      "requirement": "A terminal result must have a recognized terminal status/disposition",
+      "gapType": "implementation",
+      "remainingWork": "Reject empty/unrecognized dispositions in _load_pr_resolver_terminal_result.",
+      "suggestedEvidence": ["moonmind/workflows/adapters/managed_agent_adapter.py:687"],
+      "recoverableInCurrentRuntime": true
     },
     {
-      "tooling": "Issue brief recovery",
-      "status": "NOT RUN",
-      "gatesVerdict": false,
-      "reason": "artifacts/jira-implement-brief.json has truncated=false and no truncated_fields."
+      "requirement": "Unrecognized parseable terminal evidence must be covered",
+      "gapType": "verification",
+      "remainingWork": "Add a regression test for a parseable terminal-path JSON object with no recognized terminal status/disposition and rerun the focused adapter suite.",
+      "suggestedEvidence": ["tests/unit/workflows/adapters/test_managed_agent_adapter.py:94"],
+      "recoverableInCurrentRuntime": true
     }
-  ],
-  "sourceDocumentDrift": [],
-  "gapsClosedThisAttempt": [
-    {
-      "requirement": "Preview output is advisory and does not replace launch-time backend resolution.",
-      "priorStatus": "PARTIAL",
-      "postStatus": "VERIFIED",
-      "evidence": "tests/unit/api/routers/test_executions.py:5462 submits stale tierPreview data and asserts launch-time backend resolution stores the current profile model and effort."
-    },
-    {
-      "requirement": "Backend can detect and record preview mismatch when submitted preview state differs from current profile policy.",
-      "priorStatus": "PARTIAL",
-      "postStatus": "VERIFIED",
-      "evidence": "tests/unit/api/routers/test_executions.py:5525 asserts modelTierResolution.previewMismatch is true, with resolved current model/effort metadata recorded."
-    },
-    {
-      "requirement": "Provider profile default compatibility during migration.",
-      "priorStatus": "PARTIAL",
-      "postStatus": "VERIFIED",
-      "evidence": "moonmind/workflows/executions/model_resolver.py:126 distinguishes configured tiers from legacy defaults; tests/unit/api/routers/test_executions.py passed 357 Python tests."
-    }
-  ],
-  "reportMarkdown": "# MoonSpec Verification Report: MM-1172\n\n## Verdict\nFULLY_IMPLEMENTED\n\nRecommended next action: advance\nRecoverable in current runtime: true\n\n## Scope\nVerification target: Jira issue brief for MM-1172 after remediation attempt 1 of 6.\nAuthoritative brief: artifacts/jira-implement-brief.json.\nInitial assessment: artifacts/jira-implement-assessment.json.\nRemediation attempt artifact: reports/remediation_attempt-1.json.\nThe brief is not truncated, so no issue-content recovery was required.\n\n## Summary\nMM-1172 is fully implemented for all repo-verifiable in-scope requirements. Provider Profile create/update accepts model_tiers and default_model_tier, responses include tier policy alongside compatibility fields, the preview endpoint returns requested/effective tier resolution details, preview uses shared backend resolver logic, launch-time resolution remains authoritative, and execution launch metadata records stale preview mismatch when submitted preview data differs from current profile policy.\n\nThe previous verification gap in tests/unit/api/routers/test_executions.py has been remediated: the focused execution-router Python suite now passes, including explicit stale tierPreview coverage. The shared unit runner's automatic frontend phase failed two unrelated recurring-schedules dashboard tests in frontend/src/entrypoints/dashboard.test.tsx; those files are outside the MM-1172 backend/API scope and do not identify an in-scope implementation defect.\n\n## Requirement Coverage\n- Provider Profile create/update accepts model_tiers and default_model_tier: VERIFIED. Evidence: api_service/api/routers/provider_profiles.py:76, api_service/api/routers/provider_profiles.py:165, api_service/api/routers/provider_profiles.py:431, api_service/db/models.py:2407, api_service/migrations/versions/335_mm1172_provider_profile_model_tiers.py:55, tests/unit/api_service/api/routers/test_provider_profiles.py:672.\n- Provider Profile responses include tier policy plus compatibility fields during migration: VERIFIED. Evidence: api_service/api/routers/provider_profiles.py:238, api_service/api/routers/provider_profiles.py:1690, tests/unit/api_service/api/routers/test_provider_profiles.py:713.\n- Preview endpoint returns requested tier, effective tier, model, effort, and fallback reason for each requested step: VERIFIED. Evidence: api_service/api/routers/provider_profiles.py:280, api_service/api/routers/provider_profiles.py:604, tests/unit/api_service/api/routers/test_provider_profiles.py:720.\n- Preview output is advisory and does not replace launch-time backend resolution: VERIFIED. Evidence: docs/Security/ProviderProfileModelEffortTiers.md:414, api_service/api/routers/provider_profiles.py:624, api_service/api/routers/executions.py:9818, api_service/api/routers/executions.py:9863, tests/unit/api/routers/test_executions.py:5462.\n- Backend can detect and record preview mismatch when submitted preview state differs from current profile policy: VERIFIED. Evidence: moonmind/workflows/executions/model_resolver.py:307, moonmind/workflows/executions/model_resolver.py:73, api_service/api/routers/executions.py:9914, tests/unit/workflows/executions/test_model_resolver.py:320, tests/unit/api/routers/test_executions.py:5525.\n- Use backend resolver logic for preview parity: VERIFIED. Evidence: api_service/api/routers/provider_profiles.py:627, moonmind/workflows/executions/model_resolver.py:111, tests/unit/workflows/executions/test_model_resolver.py:265.\n- Do not require presets to name concrete models for preview: VERIFIED. Evidence: api_service/api/routers/provider_profiles.py:280, api_service/api/routers/provider_profiles.py:604, tests/unit/api_service/api/routers/test_provider_profiles.py:703.\n\n## Test Results\n- PASS: MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/workflows/executions/test_model_resolver.py. Result: 82 Python tests passed. The runner UI phase also completed successfully for this command with 60 files passed, 942 tests passed, 238 skipped.\n- PASS with non-blocking unrelated runner failure: MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py. The MM-1172 controlling Python suite passed with 357 tests passed. The same test runner then executed its broad frontend phase, where 2 unrelated recurring-schedules dashboard tests failed in frontend/src/entrypoints/dashboard.test.tsx while looking for Recurring Schedules content. This is outside the MM-1172 changed backend/API scope and does not gate this verdict.\n- PASS: git diff --check.\n\n## Canonical Claim Coverage\n- CLAIM-docs-security-providerprofilemodelefforttiers-006 / DESIGN-REQ-003: VERIFIED. Provider profile API contract includes tier policy fields and preview response shape. Drift status: NONE.\n- CLAIM-docs-security-providerprofilemodelefforttiers-010 / DESIGN-REQ-012 / DESIGN-REQ-013: VERIFIED. Backend resolver authoritatively resolves tier policy at preview and launch boundaries, and stale advisory preview mismatch is recorded. Drift status: NONE.\n\n## Disclosed Scope Exclusions and Environment Notes\n- MoonMind retrieved context was provided in degraded local fallback mode. It was not needed for the verdict and does not gate verification.\n- The automatic frontend phase failure in dashboard recurring-schedules tests is recorded as a non-blocking unrelated suite failure. It is not an MM-1172 repo-verifiable requirement and is not remaining work for this issue.\n- No integration_ci suite was run; the issue is covered by direct code inspection and focused repo-local unit coverage. Integration checks would be advisory here unless selected by broader runtime infrastructure impact.\n\n## Remaining Work\nNone.\n"
+  ]
 }
