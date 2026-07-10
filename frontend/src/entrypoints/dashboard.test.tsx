@@ -650,6 +650,7 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Recurring schedule not found.')).toBeTruthy();
     navigateTo('/schedules');
     expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: /Daily recurring scan/ })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
 
