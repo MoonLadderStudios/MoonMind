@@ -1,8 +1,8 @@
 # Recurring Schedules Page
 
-Status: Desired-state product and implementation contract  
-Owners: MoonMind Engineering  
-Last updated: 2026-07-10  
+Status: Desired-state product and implementation contract
+Owners: MoonMind Engineering
+Last updated: 2026-07-10
 Canonical for: Recurring dashboard route, recurring schedule table, recurring schedule sidebar, schedule detail workspace composition, shell/workspace list display behavior for recurring schedules, and the product boundary between recurring schedules and one-off scheduled workflow executions
 
 **Implementation tracking:** rollout task lists, issue links, PR breakdowns, and local handoff notes belong in GitHub issues, `docs/tmp/`, or gitignored implementation notes. This document defines the durable desired-state UI and product contract for the Recurring schedules page.

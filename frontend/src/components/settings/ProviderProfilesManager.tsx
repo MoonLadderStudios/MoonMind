@@ -11,6 +11,8 @@ export interface ProviderProfile {
   default_model?: string | null;
   default_effort?: string | null;
   model_overrides?: Record<string, string> | null;
+  model_tiers?: ProviderModelEffortTier[] | null;
+  default_model_tier?: number | null;
   credential_source: string;
   runtime_materialization_mode: string;
   volume_ref?: string | null;
@@ -32,6 +34,14 @@ export interface ProviderProfile {
   clear_env_keys?: string[] | null;
   account_label?: string | null;
   readiness?: ProviderProfileReadiness | null;
+}
+
+export interface ProviderModelEffortTier {
+  label?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  parameters?: Record<string, unknown> | null;
+  annotations?: Record<string, unknown> | null;
 }
 
 interface ProviderReadinessCheck {
@@ -146,6 +156,21 @@ interface OAuthSessionState {
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
 const PROVIDER_PROFILE_REFRESH_STORAGE_KEY = 'moonmind:provider-profile-updated';
+
+function providerProfileModelTiers(profile: ProviderProfile): ProviderModelEffortTier[] {
+  if (Array.isArray(profile.model_tiers) && profile.model_tiers.length > 0) {
+    return profile.model_tiers;
+  }
+  return [
+    {
+      label: 'Default',
+      model: profile.default_model ?? null,
+      effort: profile.default_effort ?? null,
+      parameters: {},
+      annotations: {},
+    },
+  ];
+}
 
 function oauthSessionStateFromResponse(
   session: OAuthSessionResponse,
@@ -1287,6 +1312,8 @@ export function ProviderProfilesManager({
                 const authModel = providerAuthModel(profile);
                 const canStartOAuth = authModel.kind === 'codex_oauth';
                 const activationLabel = activationStatusLabel(profile);
+                const modelTiers = providerProfileModelTiers(profile);
+                const defaultModelTier = profile.default_model_tier || 1;
                 const enableAllowed = mayEnableFromSettings(profile);
                 const claudeReadiness =
                   authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
@@ -1336,6 +1363,28 @@ export function ProviderProfilesManager({
                         Overrides: {Object.keys(profile.model_overrides).join(', ')}
                       </div>
                     ) : null}
+                    <div className="mt-2 space-y-1" aria-label={`${profile.profile_id} model tier mapping`}>
+                      {modelTiers.map((tier, tierIndex) => {
+                        const tierNumber = tierIndex + 1;
+                        return (
+                          <div
+                            key={`${profile.profile_id}-tier-${tierNumber}`}
+                            className="text-xs text-slate-600 dark:text-slate-300"
+                          >
+                            <span className="font-medium">
+                              Tier {tierNumber}
+                              {tierNumber === defaultModelTier ? ' default' : ''}
+                            </span>
+                            {' · '}
+                            {tier.label || `Tier ${tierNumber}`}
+                            {' · '}
+                            {tier.model || 'runtime default model'}
+                            {' · '}
+                            {tier.effort || 'runtime default effort'}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"

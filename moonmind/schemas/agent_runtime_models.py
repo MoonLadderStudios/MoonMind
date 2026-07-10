@@ -701,6 +701,18 @@ class AgentRunResult(BaseModel):
             )
         return self
 
+class ProviderModelEffortTier(BaseModel):
+    """Profile-local model/effort tier policy entry."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    label: str | None = Field(None, alias="label")
+    model: str | None = Field(None, alias="model")
+    effort: str | None = Field(None, alias="effort")
+    parameters: dict[str, Any] = Field(default_factory=dict, alias="parameters")
+    annotations: dict[str, Any] = Field(default_factory=dict, alias="annotations")
+
+
 class ManagedAgentProviderProfile(BaseModel):
     """Named managed-runtime provider profile contract.
 
@@ -845,6 +857,17 @@ class ManagedAgentProviderProfile(BaseModel):
             )
         if self.enabled:
             self.disabled_reason = None
+
+        if not self.model_tiers:
+            self.model_tiers = [
+                ProviderModelEffortTier(
+                    label="Default",
+                    model=self.default_model,
+                    effort=self.default_effort,
+                )
+            ]
+        if self.default_model_tier > len(self.model_tiers):
+            raise ValueError("defaultModelTier must reference a configured model tier")
 
         validate_codex_oauth_profile_refs(
             runtime_id=self.runtime_id,
@@ -2071,6 +2094,7 @@ __all__ = [
     "MoonMindOpsRuntime",
     "MoonMindOpsRuntimeOperation",
     "ProfileSelector",
+    "ProviderModelEffortTier",
     "ProviderCapabilityDescriptor",
     "TERMINAL_AGENT_RUN_STATES",
     "WorkspaceMode",

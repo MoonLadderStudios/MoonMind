@@ -352,3 +352,38 @@ def test_mm786_flat_steps_preserve_per_step_runtime_selection() -> None:
         "model": "claude-sonnet-4-5",
         "effort": "low",
     }
+
+
+def test_mm1173_flat_steps_preserve_model_tier_intent() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload(
+            {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "modelTier": 1,
+                    "tierFallback": "clamp",
+                },
+                "steps": [
+                    {
+                        "id": "tiered-implementation-step",
+                        "instructions": "Run this step with implementation tier intent.",
+                        "runtime": {
+                            "mode": "codex_cli",
+                            "profileId": "codex_openai_api",
+                            "modelTier": 3,
+                            "tierFallback": "strict",
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+
+    runtime = result["workflow"]["steps"][0]["runtime"]
+    assert runtime["mode"] == "codex_cli"
+    assert runtime["providerProfile"] == "codex_openai_api"
+    assert runtime["modelTier"] == 3
+    assert runtime["tierFallback"] == "strict"
+    assert runtime["model"] is None
+    assert runtime["effort"] is None

@@ -1,8 +1,8 @@
 # Workflow List Display Modes
 
-Status: Proposed declarative UI contract  
-Owners: MoonMind Engineering  
-Last updated: 2026-07-10  
+Status: Proposed declarative UI contract
+Owners: MoonMind Engineering
+Last updated: 2026-07-10
 Canonical for: Workflows/Create list display modes, shell/workspace list-mode control, workflow sidebar/table visual continuity, and first-workflow selection fallback when the list is hidden
 
 **Implementation tracking:** Rollout task lists, ticket breakdowns, and local handoff notes belong under `docs/tmp/`, Jira, or gitignored implementation notes. This document defines the durable product and UI contract for the shared workflow-list display system.

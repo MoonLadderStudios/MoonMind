@@ -129,10 +129,6 @@ def _validate_profile_tier_policy(row: ManagedAgentProviderProfile) -> None:
     row.model_tiers = model_tiers
     row.default_model_tier = default_model_tier
 
-# ---------------------------------------------------------------------------
-# Request / Response schemas
-# ---------------------------------------------------------------------------
-
 class ProviderProfileCreate(BaseModel):
     profile_id: str = Field(..., max_length=128)
     runtime_id: str = Field(..., max_length=64)
@@ -710,6 +706,21 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+    try:
+        model_tiers, default_model_tier = coerce_model_effort_tier_policy(
+            model_tiers=profile.model_tiers,
+            default_model_tier=profile.default_model_tier,
+            legacy_default_model=profile.default_model,
+            legacy_default_effort=profile.default_effort,
+            empty_as_missing=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+    profile.model_tiers = model_tiers
+    profile.default_model_tier = default_model_tier
 
     if profile.enabled:
         if profile.auth_state != ProviderProfileAuthState.CONNECTED:

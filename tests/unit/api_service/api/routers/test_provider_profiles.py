@@ -915,6 +915,28 @@ async def test_create_provider_profile_rejects_overlong_default_effort(
 
 
 @pytest.mark.asyncio
+async def test_create_provider_profile_rejects_default_tier_outside_configured_tiers(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "invalid_default_model_tier",
+        "runtime_id": "codex_cli",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://invalid_default_model_tier"},
+        "model_tiers": [
+            {"label": "Only tier", "model": "gpt-5.5", "effort": "medium"},
+        ],
+        "default_model_tier": 2,
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_mm1169_create_provider_profile_persists_explicit_model_tiers(
     client_app: AsyncClient, _module_db
 ) -> None:

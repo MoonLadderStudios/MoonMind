@@ -1,8 +1,8 @@
 # Collection Workspace Layout
 
-Status: **Target Architecture**  
-Owners: MoonMind Engineering  
-Last updated: 2026-07-10  
+Status: **Target Architecture**
+Owners: MoonMind Engineering
+Last updated: 2026-07-10
 Canonical for: dashboard application rail placement, reusable collection sidebars, far-left workspace geometry, and the shared Workflow/Recurring entity-detail frame
 
 **Implementation tracking:** implementation checklists belong in GitHub issues or `docs/tmp/`. This document defines durable desired state.

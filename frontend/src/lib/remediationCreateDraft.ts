@@ -25,6 +25,8 @@ export type RemediationCreateDraft = {
     mode?: string;
     model?: string;
     effort?: string;
+    modelTier?: number;
+    tierFallback?: 'clamp' | 'strict';
     profileId?: string;
   };
   instructions?: string;

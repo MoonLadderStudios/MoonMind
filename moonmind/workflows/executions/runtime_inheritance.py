@@ -186,6 +186,8 @@ def has_explicit_child_runtime(
             "mode",
             "model",
             "effort",
+            "modelTier",
+            "tierFallback",
             "providerProfileRef",
             "providerProfile",
             "profileId",
