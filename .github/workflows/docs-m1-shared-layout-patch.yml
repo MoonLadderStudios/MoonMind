@@ -32,7 +32,20 @@ jobs:
           cat .github/docs-patch-parts/part-*.py > /tmp/docs_patch.py
           python -m py_compile /tmp/docs_patch.py
           python /tmp/docs_patch.py
-          git checkout HEAD -- .github/docs-patch-parts .github/workflows/docs-m1-shared-layout-patch.yml
+
+      - name: Restore temporary transport files
+        shell: bash
+        run: |
+          git checkout HEAD -- \
+            .github/workflows/docs-m1-shared-layout-patch.yml \
+            .github/docs-patch-parts/part-00.py \
+            .github/docs-patch-parts/part-01.py \
+            .github/docs-patch-parts/part-02.py \
+            .github/docs-patch-parts/part-03.py \
+            .github/docs-patch-parts/part-04.py \
+            .github/docs-patch-parts/part-05.py \
+            .github/docs-patch-parts/part-06.py \
+            .github/docs-patch-parts/part-07.py
 
       - name: Commit documentation
         shell: bash
