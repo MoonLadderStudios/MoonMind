@@ -391,7 +391,7 @@ async def test_pr_resolver_continuation_obeys_deadline_and_cancellation(
     await continuation_started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
