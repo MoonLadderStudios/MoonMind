@@ -14281,6 +14281,57 @@ describe("Task Create MM-641 authoring validation", () => {
     const task = (request.payload as { task: Record<string, unknown> }).task;
     expect(task.git).toEqual({ branch: "feature/pasted-while-loading" });
   });
+
+  it("remembers the Propose Tasks selection across Create page mounts", async () => {
+    const preferenceKey = "moonmind.workflow-start.propose-tasks";
+    const { unmount } = renderWithClient(
+      <WorkflowStartPage payload={mockPayload} />,
+    );
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "Propose follow-up work",
+    });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(checkbox);
+    await waitFor(() => {
+      expect(window.localStorage.getItem(preferenceKey)).toBe("true");
+    });
+
+    unmount();
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const proposeCheckbox = await screen.findByRole("checkbox", {
+      name: "Propose follow-up work",
+    });
+    expect(proposeCheckbox.getAttribute("name")).toBe("proposeTasks");
+    expect((proposeCheckbox as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("does not overwrite the Propose Tasks server default on initial mount", async () => {
+    const preferenceKey = "moonmind.workflow-start.propose-tasks";
+    const payload = {
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            defaultProposeTasks: true,
+          },
+        },
+      },
+    } as BootPayload;
+
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "Propose follow-up work",
+    });
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
+    expect(window.localStorage.getItem(preferenceKey)).toBeNull();
+  });
 });
 
 describe("Task Create submit arrow animation", () => {
