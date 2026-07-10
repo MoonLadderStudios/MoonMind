@@ -530,8 +530,20 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["cooldown_after_429_seconds"] == 120
     assert payload["max_lease_duration_seconds"] == 900
     assert payload["model_tiers"] == [
-        {"label": "Plan", "model": "gpt-5-mini", "effort": "low"},
-        {"label": "Build", "model": "gpt-5.5", "effort": "high"},
+        {
+            "label": "Plan",
+            "model": "gpt-5-mini",
+            "effort": "low",
+            "parameters": {},
+            "annotations": {},
+        },
+        {
+            "label": "Build",
+            "model": "gpt-5.5",
+            "effort": "high",
+            "parameters": {},
+            "annotations": {},
+        },
     ]
     assert payload["default_model_tier"] == 2
     assert payload["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
