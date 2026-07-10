@@ -94,6 +94,13 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
 
 
+def resolved_host_runner_token(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return the embedded host/runner auth token configured service-side."""
+
+    source = env if env is not None else os.environ
+    return _clean(source.get("OMNIGENT_HOST_RUNNER_TOKEN"))
+
+
 def resolved_proxy_forward_headers(
     *, env: Mapping[str, Any] | None = None
 ) -> frozenset[str]:
@@ -120,6 +127,7 @@ __all__ = [
     "is_omnigent_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",
+    "resolved_host_runner_token",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -261,6 +261,25 @@ class OmnigentBridgeSessionStore:
                 agent_run_id=row.moonmind_agent_run_id,
             )
 
+    async def get_session_by_provider_session_id(
+        self, session_id: str
+    ) -> OmnigentBridgeSession | None:
+        """Return the bridge row bound to one provider/host session id."""
+
+        key = (session_id or "").strip()
+        if not key:
+            return None
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.omnigent_session_id == key)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            return _detached(session, row)
+
     async def get_bridge_session_owner(
         self, bridge_session_id: str
     ) -> BridgeSessionBinding | None:
@@ -496,6 +515,63 @@ class OmnigentBridgeSessionStore:
             rows = list(result.scalars().all())
             for row in rows:
                 session.expunge(row)
+            return rows
+
+    async def append_events(
+        self,
+        bridge_session_id: str,
+        events: Sequence[dict[str, Any]],
+    ) -> list[OmnigentBridgeSessionEvent]:
+        """Append normalized events to one bridge session's event index.
+
+        Used by the embedded host-facing protocol facade so proxy and embedded
+        modes feed the same MoonMind-facing session/event projection (§19.10).
+        """
+
+        key = (bridge_session_id or "").strip()
+        if not key:
+            raise OmnigentIdempotencyError("missing Omnigent bridge session id")
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == key)
+                .with_for_update()
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            max_sequence_result = await session.execute(
+                select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == key
+                )
+            )
+            next_sequence = int(max_sequence_result.scalar() or 0) + 1
+            prepared_events: list[dict[str, Any]] = []
+            for offset, event in enumerate(events):
+                prepared = dict(event)
+                prepared["sequence"] = next_sequence + offset
+                prepared_events.append(prepared)
+            rows = _build_event_rows(key, prepared_events)
+            for event_row in rows:
+                session.add(event_row)
+            next_status = None
+            for event in prepared_events:
+                normalized = _string_or_none(event.get("normalizedStatus"))
+                if normalized is None:
+                    continue
+                coalesced = coalesce_bridge_status(normalized)
+                if next_status in _TERMINAL_STATUSES and coalesced not in _TERMINAL_STATUSES:
+                    continue
+                next_status = coalesced
+            if next_status is not None and not (
+                row.status in _TERMINAL_STATUSES and next_status not in _TERMINAL_STATUSES
+            ):
+                row.status = next_status
+            await session.commit()
+            for event_row in rows:
+                await session.refresh(event_row)
+                session.expunge(event_row)
             return rows
 
     async def _get(

@@ -492,6 +492,39 @@ async def test_unique_idempotency_key_enforced(store):
             await session.commit()
 
 
+@pytest.mark.asyncio
+async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(store):
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    await store.append_events(
+        row.bridge_session_id,
+        [
+            {"eventType": "response.delta", "normalizedStatus": "running"},
+            {"eventType": "response.completed", "normalizedStatus": "completed"},
+        ],
+    )
+    after_terminal = await store.get_bridge_session(row.bridge_session_id)
+    assert after_terminal is not None
+    assert after_terminal.status == "completed"
+
+    await store.append_events(
+        row.bridge_session_id,
+        [{"eventType": "stream.done", "normalizedStatus": "running"}],
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2, 3]
+    final = await store.get_bridge_session(row.bridge_session_id)
+    assert final is not None
+    assert final.status == "completed"
+
+
 # --- session.created journal (MM-1155, §8.2 step 6) -------------------------
 
 
