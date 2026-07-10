@@ -38,6 +38,7 @@ from moonmind.auth.env_shaping import (
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ProfileResolutionError,
+    _derive_pr_resolver_metadata,
     _load_pr_resolver_diagnostics,
     _load_pr_resolver_terminal_result,
     _pr_resolver_status,
@@ -117,6 +118,33 @@ def test_pr_resolver_rejects_malformed_and_stale_terminal_evidence(
         "var/pr_resolver/result.json: malformed JSON object",
         "artifacts/pr_resolver_result.json: stale terminal artifact",
     )
+
+
+def test_pr_resolver_metadata_distinguishes_invalid_stale_and_missing(
+    tmp_path: Path,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    result_path = resolver / "result.json"
+    result_path.write_text("not json", encoding="utf-8")
+    invalid = _derive_pr_resolver_metadata(str(tmp_path))
+    assert invalid["failureCode"] == "TERMINAL_ARTIFACT_INVALID"
+
+    result_path.write_text(
+        '{"status":"failed","timestamp":"2020-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+    stale = _derive_pr_resolver_metadata(
+        str(tmp_path), not_before=datetime.now(tz=UTC) - timedelta(minutes=1)
+    )
+    assert stale["failureCode"] == "TERMINAL_ARTIFACT_STALE"
+
+    result_path.unlink()
+    missing = _derive_pr_resolver_metadata(str(tmp_path), merge_gate_owned=True)
+    assert missing["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert missing["retryRecommendation"] == "continue_same_session"
 
 
 def test_pr_resolver_treats_naive_terminal_cutoff_as_utc(tmp_path: Path) -> None:
@@ -2769,9 +2797,15 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
         "run-result-pr-missing-artifact", pr_resolver_expected=True
     )
 
-    assert result.failure_class == "user_error"
-    assert "pr-resolver result artifact missing" in (result.summary or "")
+    assert result.failure_class == "execution_error"
+    assert "pr-resolver execution incomplete" in (result.summary or "")
     assert "reported status 'blocked'" not in (result.summary or "")
+    assert result.retry_recommendation == "retry_new_session"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+    assert result.metadata["contractId"] == "pr-resolver.v1"
+    assert result.metadata["terminalResultPresent"] is False
+    assert result.metadata["missingEvidence"] == ["var/pr_resolver/result.json"]
+    assert result.metadata["latestAttemptRef"].endswith("attempt-1.json")
     assert result.metadata["prResolverLatestAttempt"]["reason"] == "ci_running"
     assert "mergeAutomationDisposition" not in result.metadata
 
