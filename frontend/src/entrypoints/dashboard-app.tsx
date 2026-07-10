@@ -683,6 +683,20 @@ function DashboardNavigation({
   }, [location.pathname, location.search]);
 
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const mobileNavigation = window.matchMedia('(max-width: 1180px)');
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (!event.matches) {
+        setOpen(false);
+      }
+    };
+    mobileNavigation.addEventListener('change', closeOnDesktop);
+    return () => mobileNavigation.removeEventListener('change', closeOnDesktop);
+  }, []);
+
+  useEffect(() => {
     if (!open) {
       return undefined;
     }

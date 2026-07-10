@@ -413,16 +413,46 @@ describe('Dashboard shared entry', () => {
   });
 
   it('MM-1192 closes the mobile navigation backdrop and restores the trigger', async () => {
-    window.history.replaceState({}, '', '/skills');
+    window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    const trigger = await screen.findByRole('button', { name: 'Toggle navigation menu' });
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
 
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(document.body.style.overflow).toBe('');
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('MM-1192 clears mobile navigation modal state at the desktop breakpoint', async () => {
+    let onChange: ((event: MediaQueryListEvent) => void) | undefined;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => ({
+        matches: true,
+        media: '(max-width: 1180px)',
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          onChange = listener;
+        },
+        removeEventListener: vi.fn(),
+      })),
+    });
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const trigger = screen.getByRole('button', { name: 'Toggle navigation menu' });
+    fireEvent.click(trigger);
+    expect(document.body.style.overflow).toBe('hidden');
+
+    onChange?.({ matches: false } as MediaQueryListEvent);
+
+    await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+    expect(document.body.style.overflow).toBe('');
+    expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
   });
 
   it('MM-1167 switches the full-screen workflow list to the sidebar when navigating to Create', async () => {
