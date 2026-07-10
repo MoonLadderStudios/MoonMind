@@ -35,6 +35,12 @@ from moonmind.auth.secret_refs import (
     SecretReferenceError,
     parse_secret_ref,
 )
+from moonmind.provider_profiles.model_tiers import (
+    ProviderModelEffortTier,
+    coerce_model_effort_tier_policy,
+    is_single_runtime_default_model_effort_tier,
+    legacy_default_model_effort_tier,
+)
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.utils.logging import (
     redact_profile_file_templates,
@@ -131,9 +137,9 @@ class ProviderProfileCreate(BaseModel):
     provider_label: Optional[str] = None
     default_model: Optional[str] = None
     default_effort: Optional[str] = Field(default=None, max_length=64)
+    model_tiers: Optional[list[ProviderModelEffortTier]] = None
+    default_model_tier: Optional[int] = Field(default=None, ge=1)
     model_overrides: Optional[dict[str, str]] = None
-    model_tiers: list[dict[str, Any]] = Field(default_factory=_default_model_tiers)
-    default_model_tier: int = Field(default=1, ge=1)
     
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: str = Field(..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
@@ -228,9 +234,9 @@ class ProviderProfileUpdate(BaseModel):
     provider_label: Optional[str] = None
     default_model: Optional[str] = None
     default_effort: Optional[str] = Field(default=None, max_length=64)
-    model_overrides: Optional[dict[str, str]] = None
-    model_tiers: Optional[list[dict[str, Any]]] = None
+    model_tiers: Optional[list[ProviderModelEffortTier]] = None
     default_model_tier: Optional[int] = Field(default=None, ge=1)
+    model_overrides: Optional[dict[str, str]] = None
     credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
     volume_ref: Optional[str] = None
@@ -315,9 +321,9 @@ class ProviderProfileResponse(BaseModel):
     provider_label: Optional[str]
     default_model: Optional[str] = None
     default_effort: Optional[str] = None
+    model_tiers: list[ProviderModelEffortTier]
+    default_model_tier: int
     model_overrides: dict[str, str] = Field(default_factory=dict)
-    model_tiers: list[dict[str, Any]] = Field(default_factory=_default_model_tiers)
-    default_model_tier: int = 1
     credential_source: str
     runtime_materialization_mode: str
     volume_ref: Optional[str]
@@ -480,6 +486,19 @@ async def create_profile(
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
     if existing:
         raise HTTPException(status_code=409, detail="Profile already exists")
+    try:
+        model_tiers, default_model_tier = coerce_model_effort_tier_policy(
+            model_tiers=(
+                [tier.model_dump(mode="json") for tier in body.model_tiers]
+                if body.model_tiers is not None
+                else None
+            ),
+            default_model_tier=body.default_model_tier,
+            legacy_default_model=body.default_model,
+            legacy_default_effort=body.default_effort,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     profile = ManagedAgentProviderProfile(
         profile_id=body.profile_id,
@@ -488,9 +507,9 @@ async def create_profile(
         provider_label=body.provider_label,
         default_model=body.default_model,
         default_effort=body.default_effort,
+        model_tiers=model_tiers,
+        default_model_tier=default_model_tier,
         model_overrides=body.model_overrides,
-        model_tiers=body.model_tiers,
-        default_model_tier=body.default_model_tier,
         credential_source=ProviderCredentialSource(body.credential_source),
         runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
         volume_ref=body.volume_ref,
@@ -578,6 +597,66 @@ async def update_profile(
 
     update_data = body.model_dump(exclude_unset=True)
     requested_is_default = update_data.pop("is_default", None)
+    model_tiers_supplied = "model_tiers" in update_data
+    default_model_tier_supplied = "default_model_tier" in update_data
+    legacy_default_supplied = (
+        "default_model" in update_data or "default_effort" in update_data
+    )
+    should_refresh_single_default_tier = (
+        legacy_default_supplied
+        and not model_tiers_supplied
+        and not default_model_tier_supplied
+        and (
+            is_single_runtime_default_model_effort_tier(profile.model_tiers)
+            or (
+                isinstance(profile.model_tiers, list)
+                and len(profile.model_tiers) == 1
+                and profile.default_model_tier == 1
+                and profile.model_tiers[0]
+                == legacy_default_model_effort_tier(
+                    legacy_default_model=profile.default_model,
+                    legacy_default_effort=profile.default_effort,
+                )
+            )
+        )
+    )
+    if (
+        model_tiers_supplied
+        or default_model_tier_supplied
+        or should_refresh_single_default_tier
+    ):
+        raw_model_tiers = update_data.pop("model_tiers", None)
+        raw_default_model_tier = update_data.pop("default_model_tier", None)
+        legacy_default_model = update_data.get(
+            "default_model",
+            profile.default_model,
+        )
+        legacy_default_effort = update_data.get(
+            "default_effort",
+            profile.default_effort,
+        )
+        try:
+            model_tiers, default_model_tier = coerce_model_effort_tier_policy(
+                model_tiers=(
+                    raw_model_tiers
+                    if model_tiers_supplied
+                    else None
+                    if should_refresh_single_default_tier
+                    else profile.model_tiers
+                ),
+                default_model_tier=(
+                    raw_default_model_tier
+                    if default_model_tier_supplied
+                    else profile.default_model_tier
+                ),
+                legacy_default_model=legacy_default_model,
+                legacy_default_effort=legacy_default_effort,
+                empty_as_missing=should_refresh_single_default_tier,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        profile.model_tiers = model_tiers
+        profile.default_model_tier = default_model_tier
     for key, value in update_data.items():
         if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)
@@ -1695,6 +1774,13 @@ def _row_to_dict(
         managed_secret_statuses=managed_secret_statuses,
         secret_ref_results=secret_ref_results,
     )
+    model_tiers, default_model_tier = coerce_model_effort_tier_policy(
+        model_tiers=row.model_tiers,
+        default_model_tier=row.default_model_tier,
+        legacy_default_model=row.default_model,
+        legacy_default_effort=row.default_effort,
+        empty_as_missing=True,
+    )
     payload = {
         "profile_id": row.profile_id,
         "runtime_id": row.runtime_id,
@@ -1702,9 +1788,9 @@ def _row_to_dict(
         "provider_label": row.provider_label,
         "default_model": row.default_model,
         "default_effort": row.default_effort,
+        "model_tiers": model_tiers,
+        "default_model_tier": default_model_tier,
         "model_overrides": row.model_overrides or {},
-        "model_tiers": row.model_tiers or _default_model_tiers(),
-        "default_model_tier": row.default_model_tier or 1,
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
         "volume_ref": row.volume_ref,

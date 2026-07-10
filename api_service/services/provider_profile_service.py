@@ -16,6 +16,7 @@ from api_service.db.models import (
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
+from moonmind.provider_profiles.model_tiers import coerce_model_effort_tier_policy
 from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,14 @@ def _manager_profile_payload(
     *,
     managed_secret_statuses: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    model_tiers, default_model_tier = coerce_model_effort_tier_policy(
+        model_tiers=row.model_tiers,
+        default_model_tier=row.default_model_tier,
+        legacy_default_model=row.default_model,
+        legacy_default_effort=row.default_effort,
+        empty_as_missing=True,
+    )
+    redacted_model_tiers = redact_sensitive_payload(model_tiers)
     return {
         "profile_id": row.profile_id,
         "is_default": row.is_default,
@@ -108,6 +117,8 @@ def _manager_profile_payload(
         "provider_label": row.provider_label,
         "default_model": row.default_model,
         "default_effort": row.default_effort,
+        "model_tiers": redacted_model_tiers,
+        "default_model_tier": default_model_tier,
         "model_overrides": row.model_overrides or {},
         "model_tiers": row.model_tiers or [],
         "default_model_tier": row.default_model_tier or 1,

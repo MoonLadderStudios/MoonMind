@@ -2936,6 +2936,9 @@ class TemporalArtifactActivities:
         from api_service.services.provider_profile_service import (
             _managed_secret_statuses_for_profiles,
         )
+        from moonmind.provider_profiles.model_tiers import (
+            coerce_model_effort_tier_policy,
+        )
 
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile).where(
@@ -2971,6 +2974,13 @@ class TemporalArtifactActivities:
                 if isinstance(command_behavior, dict)
                 else None
             )
+            model_tiers, default_model_tier = coerce_model_effort_tier_policy(
+                model_tiers=row.model_tiers,
+                default_model_tier=row.default_model_tier,
+                legacy_default_model=row.default_model,
+                legacy_default_effort=row.default_effort,
+                empty_as_missing=True,
+            )
             profiles.append(
                 {
                     "profile_id": row.profile_id,
@@ -2994,6 +3004,8 @@ class TemporalArtifactActivities:
                     "billing": billing_metadata or pricing_metadata or {},
                     "default_model": row.default_model,
                     "default_effort": row.default_effort,
+                    "model_tiers": model_tiers,
+                    "default_model_tier": default_model_tier,
                     "model_overrides": row.model_overrides or {},
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
