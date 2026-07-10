@@ -25,7 +25,7 @@ Use this document for Recurring schedules page behavior.
 
 Use related docs for shared concepts and adjacent surfaces:
 
-- `docs/UI/CollectionWorkspaceLayout.md` — canonical far-left application rail, shared collection-sidebar primitive, and Workflow/Recurring detail frame.
+- `docs/UI/CollectionWorkspaceLayout.md` — canonical masthead navigation, shared collection-sidebar primitive, and Workflow/Recurring detail frame.
 - `docs/UI/WorkflowsListPage.md` — reference for the full Workflows table visual rhythm, filtering posture, loading states, mobile cards, pagination, and row scanning behavior.
 - `docs/UI/WorkflowListDisplayModes.md` — reference for the shell/workspace list display radio group, the three-mode list model, and sidebar-as-table-slice visual contract.
 - `docs/UI/WorkflowWorkspaceSidebar.md` — reference for desktop list-to-detail workspace composition and route-owned sidebars.
@@ -167,7 +167,7 @@ Default behavior:
 The list display selector belongs to the current Recurring collection's shell/workspace utility region. It remains adjacent to route and collection context without becoming a centered masthead element or moving into page content, the Recurring sidebar, or the table toolbar.
 
 ```text
-[Application rail] [Recurring sidebar when visible] [Recurring utility + primary pane]
+[Masthead navigation] [Recurring sidebar when visible] [Recurring utility + primary pane]
 ```
 
 Recurring-specific control contract:
@@ -210,7 +210,7 @@ The default `/schedules` page should be a full-width table view, visually close 
 Desired layout:
 
 ```text
-Far-left application rail │ Recurring page
+Masthead navigation │ Recurring page
                           │ Page header / route context
                           │ Recurring table control band
                           │   [+] Total Active Next 24h Attention [optional refresh/live]
@@ -222,7 +222,7 @@ Rules:
 
 1. Leave deliberate space between the page header/route context and the table.
 2. Use that space for the compact create action and summary metrics.
-3. The `+` action should be visually near the summary strip, not buried inside the application rail or global shell.
+3. The `+` action should be visually near the summary strip, not buried inside the masthead or global shell.
 4. The table should use the wide data-panel layout because it is a multi-column scanning surface.
 5. The full table should occupy the available dashboard content width.
 6. The page should not render a selected detail pane in table mode.
@@ -383,7 +383,7 @@ Suggested shape:
 Rules:
 
 1. The sidebar uses the shared `CollectionSidebar` shell, header, filter, row metrics, selected/focus states, divider, scrolling, and localized state components.
-2. It is the first content-region column immediately right of the far-left application rail and is never wrapped inside the detail frame or a centered page container.
+2. It is the first content-region column immediately right of the masthead navigation and is never wrapped inside the detail frame or a centered page container.
 3. Sidebar rows link to `/schedules/{definitionId}`.
 4. The active schedule row exposes `aria-current="page"`.
 5. The sidebar has an accessible name such as `Recurring schedule navigation`.
@@ -418,7 +418,7 @@ Default desktop layout:
 
 ```text
 ┌──────────────────┬──────────────────────────┬──────────────────────────────────────────┐
-│ Application rail │ Recurring sidebar        │ Shared entity-detail frame               │
+│ Masthead navigation │ Recurring sidebar        │ Shared entity-detail frame               │
 │ viewport far-left│ content-region far-left  │ breadcrumb, title/state/actions          │
 │                  │                          │ summary/facts, tabs, main, optional rail │
 └──────────────────┴──────────────────────────┴──────────────────────────────────────────┘
@@ -673,7 +673,7 @@ Switching between full table and sidebar/detail should feel like changing how mu
 Rules:
 
 1. Avoid large page-slide animations.
-2. Preserve `DashboardShell`, application-rail, and collection-utility continuity.
+2. Preserve `DashboardShell`, masthead, and collection-utility continuity.
 3. Header row height should remain stable between table and sidebar.
 4. Sidebar row height should match or intentionally derive from the table first-column row height.
 5. Preserve selected schedule identity across mode changes.

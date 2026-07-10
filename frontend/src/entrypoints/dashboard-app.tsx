@@ -662,10 +662,18 @@ function CollectionListDisplayModeControl({
   );
 }
 
-function ApplicationRail({
+function DashboardNavigation({
   uiInfo,
+  listDisplayAccessibleName,
+  listDisplayMode,
+  listDisplayStatus,
+  onListDisplayModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
+  listDisplayAccessibleName?: string | undefined;
+  listDisplayMode: CollectionListDisplayMode | null;
+  listDisplayStatus?: string | null | undefined;
+  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -735,7 +743,7 @@ function ApplicationRail({
   }, [open]);
 
   return (
-    <aside className="application-rail" aria-label="Application rail">
+    <header className="masthead">
       <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
         <img
           className="masthead-logo"
@@ -749,6 +757,15 @@ function ApplicationRail({
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
+
+      {listDisplayMode ? (
+        <CollectionListDisplayModeControl
+          {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+          effectiveMode={listDisplayMode}
+          status={listDisplayStatus}
+          onSelect={onListDisplayModeSelect}
+        />
+      ) : null}
 
       <button
         ref={menuButtonRef}
@@ -775,7 +792,7 @@ function ApplicationRail({
         />
       ) : null}
 
-      <div className="application-rail-nav">
+      <div className="masthead-nav">
         <nav
           ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
@@ -853,14 +870,14 @@ function ApplicationRail({
         </nav>
       </div>
 
-      <div className="application-rail-utilities">
-        {buildId ? (
+      {buildId ? (
+        <div className="masthead-title-meta">
           <div className="version-badge" title="MoonMind image version">
             <span className="version-badge-value">v{buildId}</span>
           </div>
-        ) : null}
-      </div>
-    </aside>
+        </div>
+      ) : null}
+    </header>
   );
 }
 
@@ -884,40 +901,36 @@ function AppShell({
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
-        <ApplicationRail uiInfo={uiInfo} />
-        <div className="dashboard-content">
-          <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-            <p>
-              <span className="worker-pause-label" data-worker-pause-status>
-                Workers: Running
-              </span>
-              <span className="worker-pause-reason" data-worker-pause-reason />
-              <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-                Manage operations
-              </Link>
-            </p>
-          </section>
+        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+          <p>
+            <span className="worker-pause-label" data-worker-pause-status>
+              Workers: Running
+            </span>
+            <span className="worker-pause-reason" data-worker-pause-reason />
+            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+              Manage operations
+            </Link>
+          </p>
+        </section>
 
-          {listDisplayMode ? (
-            <div className="dashboard-collection-utilities">
-              <CollectionListDisplayModeControl
-                {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-                effectiveMode={listDisplayMode}
-                status={listDisplayStatus}
-                onSelect={onListDisplayModeSelect}
-              />
-            </div>
-          ) : null}
-
-          <div
-            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-          >
-            <DashboardAlerts />
-          </div>
-          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-            {children}
-          </section>
+        <div className="dashboard-shell-full">
+          <DashboardNavigation
+            uiInfo={uiInfo}
+            listDisplayAccessibleName={listDisplayAccessibleName}
+            listDisplayMode={listDisplayMode}
+            listDisplayStatus={listDisplayStatus}
+            onListDisplayModeSelect={onListDisplayModeSelect}
+          />
         </div>
+
+        <div
+          className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+        >
+          <DashboardAlerts />
+        </div>
+        <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+          {children}
+        </section>
       </main>
     </DashboardLiveUpdateProvider>
   );

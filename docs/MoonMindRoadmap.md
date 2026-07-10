@@ -67,26 +67,26 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 ---
 
-## Milestone 1 — Dashboard Navigation, Shared Sidebars & Detail Frames 🚧
+## Milestone 1 — Shared Collection Sidebars & Detail Frames 🚧
 
-**Goal:** Establish one far-left application rail, one reusable collection-sidebar system for Workflows, Recurring, and Skills, and one shared detail-frame language for Workflow and recurring schedule detail pages.
+**Goal:** Re-purpose the Workflow sidebar as one reusable contextual collection-sidebar system for Workflows, Recurring, and Skills, and establish one shared detail-frame language for Workflow and recurring schedule detail pages.
 
-**Why it matters:** Operators should experience MoonMind as one console. Top-level navigation must stay at the viewport edge; local collection navigation must start at the content edge; and related detail pages must reuse recognizable structure instead of inheriting centered wrappers or page-specific shells.
+**Why it matters:** Operators should have one contextual entity list beside the active workspace, never a page-navigation sidebar beside a collection sidebar. Top-level navigation remains in the masthead.
 
 ### Remaining work
 
-- [ ] **1.0 Declarative design first** — make `docs/UI/CollectionWorkspaceLayout.md` canonical for far-left shell geometry, shared collection sidebars, and the Workflow/Recurring entity-detail frame; reconcile `docs/UI/DashboardSPAArchitecture.md`, `docs/UI/DashboardDesignSystem.md`, `docs/UI/WorkflowListDisplayModes.md`, `docs/UI/WorkflowWorkspaceSidebar.md`, `docs/UI/RecurringSchedulesPage.md`, `docs/UI/SkillsTabDesign.md`, `docs/UI/WorkflowDetailsPage.md`, and `docs/UI/RecurringScheduleDetailsPage.md` before implementation.
-- [ ] **1.1 Far-left application shell** — replace centered/header-only primary navigation with a responsive application rail at the viewport's far-left edge, containing Workflows, Create, Recurring, Skills, RAG/Manifests, Omnigent Agents, Omnigent Policies, Remediation, Artifacts/Observability, and Settings.
-- [ ] **1.2 Reusable collection workspace** — implement a parent layout whose optional collection sidebar is the first column immediately right of the application rail and whose primary pane fills the remaining width; never wrap the split workspace in a centered/max-width page container.
+- [ ] **1.0 Declarative design first** — make `docs/UI/CollectionWorkspaceLayout.md` canonical for shared collection sidebars and the Workflow/Recurring entity-detail frame; reconcile the related UI documents before implementation.
+- [ ] **1.1 Masthead navigation** — retain responsive top-level page navigation in the masthead; do not introduce a page-navigation sidebar.
+- [ ] **1.2 Reusable collection workspace** — implement a parent layout whose optional collection sidebar lists entities from the active collection and whose primary pane fills the remaining width; never render two adjacent sidebars.
 - [ ] **1.3 Shared sidebar component system** — provide common header, filter, row metrics, active/focus states, pinned-current row, divider, scrolling, loading/empty/error states, accessibility, and responsive behavior with entity-specific adapters.
 - [ ] **1.4 Required collection sidebars** — use the shared primitive for Workflow detail/Create, Recurring detail, and Skills preview/create; Recurring lists schedules only, Skills lists skills only, and desktop Skills keeps its sidebar present.
 - [ ] **1.5 Shared Workflow/Recurring detail frame** — reuse breadcrumb/header, status and action placement, summary/facts strip, tabs/sections, main slab, optional facts rail, and loading/error/responsive patterns while retaining entity-specific content.
 - [ ] **1.6 Reusable list display modes** — generalize Workflows/Recurring `hidden`, `sidebar`, and `table` behavior with per-collection preferences and route-owned coercion; place controls in the shell/workspace utility area rather than a centered masthead.
 - [ ] **1.7 Full-page list and route inventory** — classify each major page and harden full-page list routes for workflows, recurring schedules, skills, manifests/RAG sources, Omnigent agents/policies, remediations, and artifacts/reports.
 - [ ] **1.8 Preferences, responsiveness, and accessibility** — prevent preference cross-talk, preserve deep links and selection, provide deterministic focus, and collapse to an accessible drawer or list-to-detail flow where three columns do not fit.
-- [ ] **1.9 UI regression coverage** — test far-left geometry, common sidebar anatomy, required Recurring/Skills sidebars, shared Workflow/Recurring detail regions, direct deep links, localized failures, and mobile accessibility.
+- [ ] **1.9 UI regression coverage** — test masthead navigation, single-sidebar geometry, common sidebar anatomy, required Recurring/Skills sidebars, shared detail regions, direct deep links, localized failures, and mobile accessibility.
 
-**Done means:** every major area is reachable from one far-left application rail; Workflow, Recurring, and Skills use the same sidebar shell at the content edge; Workflow and recurring schedule detail pages share a recognizable detail frame; no split workspace is centered with a large left margin; and routes, preferences, accessibility, and mobile fallbacks remain correct.
+**Done means:** every major area is reachable from masthead navigation; Workflow, Recurring, and Skills reuse one contextual sidebar shell without a neighboring page-nav sidebar; Workflow and recurring schedule detail pages share a recognizable detail frame; and routes, preferences, accessibility, and mobile fallbacks remain correct.
 
 ---
 
