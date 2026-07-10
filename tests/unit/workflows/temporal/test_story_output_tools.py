@@ -3264,8 +3264,54 @@ async def test_create_jira_issues_linear_blocker_chain_orders_by_declared_depend
     assert jira["linkCount"] == 2
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_linear_blocker_chain_fans_out_declared_dependencies():
+    """Fan-out dependencies link each prerequisite directly, not an adjacent chain.
+
+    STORY-002 and STORY-003 both depend only on STORY-001. A dependency-ordered
+    adjacent chain (001 -> 002 -> 003) would fabricate a false ``002 blocks 003``
+    link and never link STORY-001 to STORY-003, so each story must instead be
+    blocked by the stories it actually declares as prerequisites.
+    """
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+            "stories": [
+                {"id": "STORY-001", "summary": "First"},
+                {"id": "STORY-002", "summary": "Second", "dependencies": ["STORY-001"]},
+                {"id": "STORY-003", "summary": "Third", "dependencies": ["STORY-001"]},
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    jira = result.outputs["jira"]
+    # STORY-001 (MM-1) directly blocks both dependents; no fabricated MM-2 -> MM-3.
+    assert [
+        (req.blocks_issue_key, req.blocked_issue_key) for req in service.link_requests
+    ] == [
+        ("MM-1", "MM-2"),
+        ("MM-1", "MM-3"),
+    ]
+    assert jira["dependencyChainComplete"] is True
+    assert jira["linkCount"] == 2
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_linear_blocker_chain_survives_dependency_cycle():
-    """A dependency cycle falls back to list order instead of failing."""
+    """A dependency cycle emits one deterministic link instead of failing.
+
+    STORY-001 and STORY-002 declare each other as prerequisites. Only a single
+    link is created (no reciprocal ``Blocks`` pair): the first story processed
+    (STORY-001) is blocked by the prerequisite it declares (STORY-002 / MM-2).
+    """
     service = _FakeJiraService()
 
     result = await create_jira_issues_from_stories(
@@ -3289,7 +3335,7 @@ async def test_create_jira_issues_linear_blocker_chain_survives_dependency_cycle
     jira = result.outputs["jira"]
     assert [
         (req.blocks_issue_key, req.blocked_issue_key) for req in service.link_requests
-    ] == [("MM-1", "MM-2")]
+    ] == [("MM-2", "MM-1")]
     assert jira["linkCount"] == 1
 
 @pytest.mark.asyncio
@@ -4385,6 +4431,70 @@ async def test_create_jira_implement_tasks_orders_dependsOn_by_declared_dependen
     assert orchestration["tasks"][0]["dependsOn"] == []
     assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
     assert orchestration["tasks"][2]["dependsOn"] == ["mm:story-2"]
+
+
+@pytest.mark.asyncio
+async def test_create_jira_implement_tasks_fans_out_dependsOn_by_declared_dependencies():
+    """Fan-out dependencies make each task depend on its declared prerequisites.
+
+    STORY-002 and STORY-003 both depend only on STORY-001. The downstream chain
+    must make both depend on STORY-001's workflow rather than chaining STORY-003
+    onto STORY-002 (its predecessor in the list), which would fabricate a
+    dependency STORY-003 never declared.
+    """
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_implement_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {
+                        "storyId": "STORY-001",
+                        "storyIndex": 1,
+                        "summary": "First",
+                        "issueKey": "MM-1",
+                    },
+                    {
+                        "storyId": "STORY-002",
+                        "storyIndex": 2,
+                        "summary": "Second",
+                        "issueKey": "MM-2",
+                        "dependencies": ["STORY-001"],
+                    },
+                    {
+                        "storyId": "STORY-003",
+                        "storyIndex": 3,
+                        "summary": "Third",
+                        "issueKey": "MM-3",
+                        "dependencies": ["STORY-001"],
+                    },
+                ]
+            },
+            "task": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            },
+            "traceability": {"sourceIssueKey": "MM-404"},
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = result.outputs["jiraOrchestration"]
+    assert orchestration["dependencyCount"] == 2
+    assert [task["jiraIssueKey"] for task in orchestration["tasks"]] == [
+        "MM-1",
+        "MM-2",
+        "MM-3",
+    ]
+    assert orchestration["tasks"][0]["dependsOn"] == []
+    # Both dependents point at STORY-001 (mm:story-1), not the adjacent task.
+    assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
+    assert orchestration["tasks"][2]["dependsOn"] == ["mm:story-1"]
+    assert {
+        (dependency["fromStoryId"], dependency["toStoryId"])
+        for dependency in orchestration["dependencies"]
+    } == {("STORY-001", "STORY-002"), ("STORY-001", "STORY-003")}
 
 
 @pytest.mark.asyncio

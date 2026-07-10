@@ -1530,6 +1530,35 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
     failures: list[dict[str, Any]] = []
     skipped_stories: list[dict[str, Any]] = []
     previous_workflow_id = ""
+    previous_story_id = ""
+    # Map declared story IDs to their created workflow IDs so each downstream
+    # task depends on the stories it declares as prerequisites (matching the Jira
+    # blocker chain). ``issue_mappings`` is already ordered prerequisites-first by
+    # ``_issue_mappings_from_inputs`` so every prerequisite is created first.
+    workflow_id_by_story: dict[str, str] = {}
+    mapping_story_ids = {
+        _string(mapping.get("storyId") or mapping.get("story_id"))
+        for mapping in issue_mappings
+        if _string(mapping.get("storyId") or mapping.get("story_id"))
+    }
+
+    def _declared_prerequisites(mapping: Mapping[str, Any], story_id: str) -> list[str]:
+        return [
+            dep
+            for dep in _story_dependency_ids(mapping)
+            if dep in mapping_story_ids and dep != story_id
+        ]
+
+    # When no story declares a resolvable dependency, keep the historical linear
+    # chain so dependency-free breakdowns still block each later story by the one
+    # before it.
+    declared_dependencies = any(
+        _declared_prerequisites(
+            mapping,
+            _string(mapping.get("storyId") or mapping.get("story_id")),
+        )
+        for mapping in issue_mappings
+    )
 
     for index, mapping in enumerate(issue_mappings, start=1):
         story_id = _string(mapping.get("storyId") or mapping.get("story_id")) or f"STORY-{index:03d}"
@@ -1552,7 +1581,17 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
             skipped_stories.append({**base_result, "summary": summary})
             continue
 
-        depends_on = [previous_workflow_id] if previous_workflow_id else []
+        if declared_dependencies:
+            depends_on_pairs = [
+                (dep, workflow_id_by_story[dep])
+                for dep in _declared_prerequisites(mapping, story_id)
+                if dep in workflow_id_by_story
+            ]
+        elif previous_workflow_id:
+            depends_on_pairs = [(previous_story_id, previous_workflow_id)]
+        else:
+            depends_on_pairs = []
+        depends_on = [workflow_id for _dep_story_id, workflow_id in depends_on_pairs]
         title, task = _downstream_task_payload(
             mapping=mapping,
             task_payload=task_payload,
@@ -1637,17 +1676,20 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
             "idempotencyKey": idempotency_key,
         }
         tasks.append(task_result)
-        if depends_on:
+        for dep_story_id, dep_workflow_id in depends_on_pairs:
             dependencies.append(
                 {
-                    "fromWorkflowId": depends_on[0],
+                    "fromWorkflowId": dep_workflow_id,
                     "toWorkflowId": workflow_id,
-                    "fromStoryId": tasks[-2]["storyId"] if len(tasks) > 1 else "",
+                    "fromStoryId": dep_story_id,
                     "toStoryId": story_id,
                     "status": "created",
                 }
             )
+        if story_id:
+            workflow_id_by_story[story_id] = workflow_id
         previous_workflow_id = workflow_id
+        previous_story_id = story_id
 
     if not issue_mappings:
         status = "no_downstream_tasks"
@@ -2512,6 +2554,50 @@ def _order_issue_mappings_by_dependencies(
             break
     return ordered
 
+def _dependency_link_pairs(
+    ordered_mappings: Sequence[Mapping[str, Any]],
+) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    """Return ``(blocker, blocked)`` mapping pairs for the linear blocker chain.
+
+    Each story is linked to the stories it declares as prerequisites, so a
+    fan-out breakdown (for example STORY-002 and STORY-003 both depending only on
+    STORY-001) produces the direct ``001 blocks 002`` and ``001 blocks 003``
+    links instead of a misleading ``001 -> 002 -> 003`` adjacent chain that would
+    fabricate ``002 blocks 003`` and drop the real ``001 blocks 003`` edge. When
+    no story declares a resolvable dependency, fall back to linking each story to
+    the immediately preceding one so dependency-free breakdowns keep the
+    historical linear chain. A declared cycle emits a single deterministic link
+    per story pair rather than reciprocal ``Blocks`` links.
+    """
+
+    mapping_by_id: dict[str, Mapping[str, Any]] = {}
+    for mapping in ordered_mappings:
+        story_id = _string(mapping.get("storyId"))
+        if story_id and story_id not in mapping_by_id:
+            mapping_by_id[story_id] = mapping
+
+    def _prerequisites(mapping: Mapping[str, Any]) -> list[str]:
+        story_id = _string(mapping.get("storyId"))
+        return [
+            dep
+            for dep in _story_dependency_ids(mapping)
+            if dep in mapping_by_id and dep != story_id
+        ]
+
+    if not any(_prerequisites(mapping) for mapping in ordered_mappings):
+        return list(zip(ordered_mappings, ordered_mappings[1:]))
+
+    pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    for mapping in ordered_mappings:
+        story_id = _string(mapping.get("storyId"))
+        for dep in _prerequisites(mapping):
+            if (dep, story_id) in seen or (story_id, dep) in seen:
+                continue
+            seen.add((dep, story_id))
+            pairs.append((mapping_by_id[dep], mapping))
+    return pairs
+
 async def _create_dependency_links(
     *,
     service: JiraToolService,
@@ -2525,7 +2611,7 @@ async def _create_dependency_links(
 
     ordered_mappings = _order_issue_mappings_by_dependencies(issue_mappings)
     link_results: list[dict[str, Any]] = []
-    for previous, current in zip(ordered_mappings, ordered_mappings[1:]):
+    for previous, current in _dependency_link_pairs(ordered_mappings):
         blocks_issue_key = _string(previous.get("issueKey"))
         blocked_issue_key = _string(current.get("issueKey"))
         base_result = {
