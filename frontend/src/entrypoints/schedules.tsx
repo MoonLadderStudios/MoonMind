@@ -1172,8 +1172,8 @@ function ScheduleDetailPage({
       pinnedSchedule={schedule}
       onRetry={onSidebarRetry}
     >
-    <EntityDetailFrame entity="recurring">
-    <div className="schedules-page schedules-detail-page stack">
+    <EntityDetailFrame entity="recurring" main={(
+      <div className="schedules-page schedules-detail-page stack">
       <header className="toolbar schedules-toolbar">
         <div className="schedules-detail-title">
           <nav className="page-meta" aria-label="Breadcrumb">
@@ -1594,8 +1594,8 @@ function ScheduleDetailPage({
         </div>
         <pre className="schedules-json-block">{formatJsonValue(schedule.target)}</pre>
       </section>
-    </div>
-    </EntityDetailFrame>
+      </div>
+    )} />
     </RecurringScheduleWorkspace>
   );
 }
