@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -16,6 +16,8 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.schemas.temporal_artifact_models import (
+    ArtifactCollectionResponse,
+    ArtifactCollectionRowModel,
     ArtifactExecutionLinkModel,
     ArtifactListResponse,
     ArtifactMetadataModel,
@@ -332,6 +334,67 @@ async def complete_artifact_upload(
         _raise_temporal_artifact_http(exc)
         raise
     return ArtifactRefModel(**asdict(build_artifact_ref(artifact)))
+
+@router.get("/api/artifacts/collection", response_model=ArtifactCollectionResponse)
+async def list_artifact_collection(
+    category: Literal["artifacts", "reports", "observability"] = Query("artifacts"),
+    q: str | None = Query(None, max_length=120),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    principal: str = Depends(_resolve_principal),
+    service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+) -> ArtifactCollectionResponse:
+    """List authorized evidence without storage paths, principals, or bodies."""
+    rows, total = await service.list_authorized_collection(
+        principal=principal,
+        category=category,
+        query=q,
+        offset=offset,
+        limit=limit,
+    )
+    items: list[ArtifactCollectionRowModel] = []
+    for artifact, links in rows:
+        category_prefixes = {
+            "reports": ("report.",),
+            "observability": (
+                "output.logs",
+                "debug.",
+                "observability.",
+                "runtime.stderr",
+                "runtime.diagnostics",
+            ),
+            "artifacts": (),
+        }
+        prefixes = category_prefixes[category]
+        link = next(
+            (item for item in links if not prefixes or item.link_type.startswith(prefixes)),
+            links[0] if links else None,
+        )
+        artifact_id = artifact.artifact_id
+        items.append(
+            ArtifactCollectionRowModel(
+                artifact_id=artifact_id,
+                created_at=artifact.created_at,
+                content_type=artifact.content_type,
+                size_bytes=artifact.size_bytes,
+                status=artifact.status,
+                retention_class=artifact.retention_class,
+                link_type=link.link_type if link else None,
+                label=link.label if link else None,
+                workflow_id=link.workflow_id if link else None,
+                run_id=link.run_id if link else None,
+                download_url=f"/api/artifacts/{artifact_id}/download",
+            )
+        )
+    return ArtifactCollectionResponse(
+        category=category,
+        items=items,
+        total=total,
+        offset=offset,
+        limit=limit,
+        refreshed_at=datetime.now(UTC),
+    )
+
 
 @router.get("/api/artifacts/{artifact_id}", response_model=ArtifactMetadataModel)
 async def get_artifact_metadata(

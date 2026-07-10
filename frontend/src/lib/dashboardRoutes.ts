@@ -2,8 +2,10 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { WORKFLOW_DETAIL_SUPPORTED_SUBROUTES } from './workflowDetailRoutes';
 
 export type DashboardPage =
+  | 'artifacts'
   | 'index-health'
   | 'manifests'
+  | 'omnigent-inventory'
   | 'oauth-terminal'
   | 'remediations'
   | 'schedules'
@@ -107,6 +109,9 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/workflows') {
     return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
+  if (path === '/artifacts' || path === '/observability') {
+    return { page: 'artifacts', dataWidePanel: true, currentPath: path };
+  }
   if (path === '/workflows/new') {
     return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
@@ -120,10 +125,13 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
     return { page: 'skills', dataWidePanel: false, currentPath: path };
   }
   if (path === '/schedules' || isDetailPath(path, 'schedules')) {
-    return { page: 'schedules', dataWidePanel: false, currentPath: path };
+    return { page: 'schedules', dataWidePanel: true, currentPath: path };
   }
   if (path === '/manifests' || isDetailPath(path, 'manifests')) {
-    return { page: 'manifests', dataWidePanel: false, currentPath: path };
+    return { page: 'manifests', dataWidePanel: true, currentPath: path };
+  }
+  if (path === '/omnigent/agents' || path === '/omnigent/policies') {
+    return { page: 'omnigent-inventory', dataWidePanel: true, currentPath: path };
   }
   if (path === '/index-health') {
     return { page: 'index-health', dataWidePanel: true, currentPath: path };
@@ -180,6 +188,7 @@ export function payloadForDashboardRoute(
   layout.dataWidePanel = route.dataWidePanel;
   initialData.dashboardConfig = nextDashboardConfig;
   initialData.layout = layout;
+  initialData.uiEndpoints = objectValue(uiInfo?.endpoints) ?? {};
 
   if (route.page === 'settings') {
     initialData.workerPause = objectValue(uiInfo?.workerPause) ?? initialData.workerPause ?? {

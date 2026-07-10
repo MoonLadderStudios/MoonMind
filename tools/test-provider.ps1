@@ -6,6 +6,12 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $composeFile = Join-Path $repoRoot "docker-compose.test.yaml"
 $networkName = if ($env:MOONMIND_DOCKER_NETWORK) { $env:MOONMIND_DOCKER_NETWORK } else { "local-network" }
+$testComposeProjectName = if ($env:MOONMIND_TEST_COMPOSE_PROJECT_NAME) { $env:MOONMIND_TEST_COMPOSE_PROJECT_NAME } else { "moonmind-test" }
+
+if ($testComposeProjectName -notmatch '^moonmind-test(?:-[a-z0-9][a-z0-9_-]*)?$') {
+    Write-Error "MOONMIND_TEST_COMPOSE_PROJECT_NAME must be 'moonmind-test' or start with 'moonmind-test-'."
+    exit 2
+}
 
 if (-not $env:JULES_API_KEY) {
     Write-Error "Error: JULES_API_KEY must be set to run live Jules provider verification."
@@ -52,9 +58,9 @@ if ($LASTEXITCODE -ne 0) {
 function Run-Compose {
     param([string[]]$ComposeArgs)
     if ($composeDriver -eq "docker") {
-        & docker @("compose", "-f", $composeFile, "--project-directory", $repoRoot) + $ComposeArgs
+        & docker @("compose", "--project-name", $testComposeProjectName, "-f", $composeFile, "--project-directory", $repoRoot) + $ComposeArgs
     } else {
-        & "docker-compose" @("-f", $composeFile, "--project-directory", $repoRoot) + $ComposeArgs
+        & "docker-compose" @("--project-name", $testComposeProjectName, "-f", $composeFile, "--project-directory", $repoRoot) + $ComposeArgs
     }
 }
 

@@ -1064,6 +1064,25 @@ async def remediations_route(
         user=_user,
     )
 
+
+@router.get("/artifacts", response_class=HTMLResponse)
+@router.get("/observability", response_class=HTMLResponse)
+async def artifact_collection_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the capability-gated artifact and observability collection shell."""
+    current_path = request.url.path
+    return await _render_react_page(
+        request,
+        "artifacts",
+        current_path,
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
 @router.get("/workers")
 async def task_workers_route(
     request: Request,
@@ -1114,6 +1133,24 @@ async def oauth_terminal_route(
         "oauth-terminal",
         current_path,
         initial_data={"sessionId": session_id},
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+
+@router.get("/omnigent/agents", response_class=HTMLResponse)
+@router.get("/omnigent/policies", response_class=HTMLResponse)
+async def omnigent_inventory_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve reloadable capability-gated Omnigent inventory routes."""
+    return await _render_react_page(
+        request,
+        "omnigent-inventory",
+        request.url.path,
         data_wide_panel=True,
         session=session,
         user=_user,
@@ -1199,6 +1236,19 @@ async def get_dashboard_ui_info(
     )
     dashboard_config.pop("initialPath", None)
     system_config = dict(dashboard_config.get("system") or {})
+    from api_service.api.routers.omnigent_bridge import (
+        OMNIGENT_BRIDGE_MOUNT_PATH,
+        get_bridge_config,
+    )
+    from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
+    from moonmind.omnigent.settings import build_omnigent_gate
+
+    bridge_config = get_bridge_config()
+    omnigent_agents_available = (
+        bridge_config.enabled
+        and bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
+        and build_omnigent_gate().enabled
+    )
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
         features={
@@ -1212,6 +1262,10 @@ async def get_dashboard_ui_info(
             "settings": True,
             "oauthTerminal": True,
             "remediationCollection": True,
+            "omnigentAgents": omnigent_agents_available,
+            # No authorized policy inventory read contract exists yet. Advertising
+            # this explicitly keeps the rail and route free of dead links.
+            "omnigentPolicies": False,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1226,10 +1280,16 @@ async def get_dashboard_ui_info(
             "workflowUpdatesStream": "/api/workflows/updates/stream",
             "workflowEventsStream": "/api/workflows/{workflowId}/events/stream",
             "artifacts": "/api/artifacts",
+            "artifactCollection": "/api/artifacts/collection",
             "skills": "/api/workflows/skills",
             "schedules": "/api/recurring-workflows",
             "settings": "/api/settings",
             "remediations": "/api/executions/remediations",
+            **(
+                {"omnigentAgents": f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"}
+                if omnigent_agents_available
+                else {}
+            ),
         },
         dashboardConfig=dashboard_config,
         settingsPermissions=sorted(settings_permissions_for_user(_user)),

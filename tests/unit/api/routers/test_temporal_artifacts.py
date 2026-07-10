@@ -103,6 +103,28 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
         yield test_client, mock_service
     app.dependency_overrides.clear()
 
+
+def test_artifact_collection_returns_compact_safe_rows() -> None:
+    for test_client, service in _client_with_service():
+        artifact = _build_artifact()
+        link = _build_link(artifact.artifact_id)
+        service.list_authorized_collection.return_value = ([(artifact, [link])], 1)
+
+        response = test_client.get("/api/artifacts/collection?category=artifacts")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        row = body["items"][0]
+        assert row["artifact_id"] == artifact.artifact_id
+        assert row["workflow_id"] == "wf-1"
+        assert "view_url" not in row
+        assert row["download_url"].endswith("/download")
+        assert "storage_key" not in row
+        assert "created_by_principal" not in row
+        assert "sha256" not in row
+        service.list_authorized_collection.assert_awaited_once()
+
 def test_create_artifact_returns_upload_descriptor() -> None:
     """Create endpoint should return ArtifactRef + upload details."""
 

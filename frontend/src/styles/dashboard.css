@@ -705,6 +705,40 @@ h1 {
   }
 }
 
+.evidence-workspace {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.25rem;
+}
+
+.evidence-workspace > header nav,
+.evidence-collection__pagination,
+.evidence-collection__header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.evidence-workspace > header nav { justify-content: flex-start; }
+.evidence-collection {
+  border: 1px solid rgb(var(--mm-border) / 0.8);
+  border-radius: 1rem;
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+.evidence-collection__header h2 { margin: 0; }
+.evidence-collection__header p { margin: 0.25rem 0 0; }
+.evidence-collection__filter { display: grid; gap: 0.35rem; max-width: 28rem; }
+.evidence-collection__table-wrap { overflow-x: auto; }
+.evidence-collection table { border-collapse: collapse; min-width: 52rem; width: 100%; }
+.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; }
+.evidence-collection td small { display: block; margin-top: 0.25rem; }
+.evidence-collection td a + a { margin-left: 0.75rem; }
+.evidence-collection__pagination > div { display: flex; gap: 0.5rem; }
+
 .loading {
   color: rgb(var(--mm-muted));
 }
@@ -9155,3 +9189,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     background-position: 50% 50%, 50% 50%;
   }
 }
+.omnigent-inventory {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.5rem;
+}
+
+.omnigent-inventory__toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.omnigent-inventory label,
+.omnigent-inventory td strong,
+.omnigent-inventory td small { display: block; }
+.omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; }
+.omnigent-inventory__table-wrap { margin-top: 1rem; overflow-x: auto; }
+.omnigent-inventory table { border-collapse: collapse; width: 100%; }
+.omnigent-inventory th,
+.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }

@@ -261,6 +261,8 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert payload["apiBase"] == "/api"
     assert payload["features"]["workflowLiveUpdates"] is True
     assert payload["features"]["remediationCollection"] is True
+    assert isinstance(payload["features"]["omnigentAgents"], bool)
+    assert payload["features"]["omnigentPolicies"] is False
     assert payload["endpoints"]["workflows"] == "/api/executions"
     assert payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"
     assert payload["endpoints"]["remediations"] == "/api/executions/remediations"
@@ -281,11 +283,15 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         "/workflows/new",
         "/manifests",
         "/index-health",
+        "/artifacts",
+        "/observability",
         "/schedules",
         "/skills",
         "/settings",
         "/oauth-terminal",
         "/remediations",
+        "/omnigent/agents",
+        "/omnigent/policies",
     ):
         response = client.get(path)
         assert response.status_code == 200
