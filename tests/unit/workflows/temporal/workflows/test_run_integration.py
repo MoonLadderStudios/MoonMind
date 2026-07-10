@@ -3296,6 +3296,38 @@ def test_moonspec_contract_repair_feedback_for_degraded_verify_output(
     )
 
 
+def test_moonspec_contract_repair_reexecutes_from_fresh_source_without_checkpoint(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    now = datetime.now(timezone.utc)
+    node_id = "verify-final"
+    mock_run_workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": node_id, "title": "Verify completion"}],
+        dependency_map={node_id: []},
+        updated_at=now,
+    )
+    mock_run_workflow._mark_step_running(node_id, updated_at=now)
+
+    mock_run_workflow._prepare_moonspec_contract_repair_attempt(node_id)
+    mock_run_workflow._mark_step_running(node_id, updated_at=now)
+
+    source_execution = mock_run_workflow._step_execution_source_identity(
+        node_id,
+        attempt=2,
+    )
+    workspace = mock_run_workflow._step_execution_workspace(
+        node_id,
+        attempt=2,
+        source_execution_ordinal=source_execution,
+    )
+
+    assert workspace["policy"] == "fresh_branch_from_source"
+    assert workspace["evidenceRequired"] is False
+    assert workspace["evidenceAccepted"] is True
+    assert workspace["sourceExecutionOrdinal"] == source_execution
+    assert not mock_run_workflow._workspace_policy_launch_blocked(workspace)
+
+
 def test_moonspec_gate_draft_publish_qualification(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

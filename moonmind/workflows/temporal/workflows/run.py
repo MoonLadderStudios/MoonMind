@@ -558,6 +558,9 @@ RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
     "run-moonspec-title-remediation-detection-v1"
 )
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
+RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
+    "run-moonspec-gate-contract-repair-fresh-source-v1"
+)
 RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-gate-environment-draft-publish-v1"
 )
@@ -1109,6 +1112,7 @@ class MoonMindRunWorkflow:
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
         self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
+        self._fresh_source_step_execution_attempts: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
         self._step_execution_context_projections: dict[
@@ -2097,6 +2101,36 @@ class MoonMindRunWorkflow:
     def _step_execution_launch_block_key(logical_step_id: str, attempt: int) -> str:
         return f"{logical_step_id}:{attempt}"
 
+    def _prepare_moonspec_contract_repair_attempt(
+        self,
+        logical_step_id: str,
+    ) -> None:
+        """Allow the next read-only verifier attempt to start from source state.
+
+        MoonSpec contract repair re-runs verification only; it does not continue
+        source mutation from the previous verifier process. Managed agent runs
+        already launch with fresh agent context against the workflow's durable
+        branch, so requiring a mutable-workspace checkpoint here prevents the
+        bounded repair from running without adding safety.
+        """
+
+        current_attempt = self._step_execution_for(logical_step_id) or 0
+        next_attempt = current_attempt + 1
+        self._fresh_source_step_execution_attempts.add(
+            self._step_execution_launch_block_key(logical_step_id, next_attempt)
+        )
+
+    def _step_execution_uses_fresh_source(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> bool:
+        return (
+            self._step_execution_launch_block_key(logical_step_id, attempt)
+            in self._fresh_source_step_execution_attempts
+        )
+
     def _record_workspace_policy_launch_block(
         self,
         logical_step_id: str,
@@ -2161,7 +2195,10 @@ class MoonMindRunWorkflow:
             logical_step_id
         ) or self._previous_step_checkpoint_refs.get(logical_step_id)
         boundary_refs = self._step_checkpoint_refs_by_boundary.get(logical_step_id, {})
-        if attempt > 1:
+        if attempt > 1 and not self._step_execution_uses_fresh_source(
+            logical_step_id,
+            attempt=attempt,
+        ):
             workspace = workspace_policy_metadata(
                 policy="continue_from_previous_execution",
                 checkpoint_ref=checkpoint_ref,
@@ -2175,6 +2212,12 @@ class MoonMindRunWorkflow:
             checkpoint_ref=checkpoint_ref,
             checkpoint_valid=None,
         )
+        if attempt > 1:
+            workspace["sourceExecutionOrdinal"] = (
+                dict(source_execution_ordinal)
+                if source_execution_ordinal
+                else None
+            )
         self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
         return workspace
 
@@ -8399,6 +8442,10 @@ class MoonMindRunWorkflow:
                         < _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
                     ):
                         moonspec_contract_repair_attempts += 1
+                        if workflow.patched(
+                            RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH
+                        ):
+                            self._prepare_moonspec_contract_repair_attempt(node_id)
                         self._upsert_step_check(
                             node_id,
                             kind="moonspec_gate_contract",
