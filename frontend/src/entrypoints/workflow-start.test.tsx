@@ -387,6 +387,27 @@ describe("WorkflowStartPage workflow list display modes", () => {
     expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
     expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
   });
+
+  it("guards ordinary dashboard links when the Create draft has changed", async () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this draft before leaving." } });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const link = document.createElement("a");
+    link.href = "/settings";
+    document.body.appendChild(link);
+    expect(link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }))).toBe(false);
+    expect(confirmSpy).toHaveBeenCalledWith("Leave Create? Unsaved workflow draft changes may be lost.");
+    link.remove();
+  });
+
+  it("registers browser-exit protection only after the Create draft changes", async () => {
+    renderWorkflowStartPage({ ...mockPayload, initialData: { ...(mockPayload.initialData as Record<string, unknown>), workflowListDisplayMode: "hidden" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Protect this browser exit." } });
+    expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
+  });
 });
 
 const mockDashboardConfig = {

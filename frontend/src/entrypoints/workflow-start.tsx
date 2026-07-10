@@ -6031,16 +6031,44 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         event.preventDefault();
       }
     };
+    const confirmDraftNavigation = (): boolean =>
+      !workflowStartFormChanged(initialRouteGuardSnapshotRef.current) ||
+      window.confirm("Leave Create? Unsaved workflow draft changes may be lost.");
+    const handleDocumentNavigation = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented || event.button !== 0 || event.metaKey ||
+        event.ctrlKey || event.shiftKey || event.altKey
+      ) return;
+      const target = event.target;
+      const anchor = target instanceof Element ? target.closest("a[href]") : null;
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+      const destination = new URL(anchor.href, window.location.href);
+      const current = new URL(window.location.href);
+      if (destination.origin !== current.origin || destination.href === current.href) return;
+      if (!confirmDraftNavigation()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!workflowStartFormChanged(initialRouteGuardSnapshotRef.current)) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
     window.addEventListener(
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       handleRouteChangeRequest,
     );
+    document.addEventListener("click", handleDocumentNavigation, true);
+    window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.clearTimeout(timerId);
       window.removeEventListener(
         WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
         handleRouteChangeRequest,
       );
+      document.removeEventListener("click", handleDocumentNavigation, true);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, []);
 
