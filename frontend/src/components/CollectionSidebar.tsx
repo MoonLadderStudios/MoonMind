@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
 
 export type CollectionSidebarRow = {
   id: string;
@@ -6,6 +6,17 @@ export type CollectionSidebarRow = {
   primaryText: string;
   metadata?: ReactNode;
 };
+
+export type CollectionSidebarLinkRenderer = (
+  row: CollectionSidebarRow,
+  props: {
+    className: string;
+    children: ReactNode;
+    'aria-current': 'page' | undefined;
+    'data-active': 'true' | 'false';
+    'data-pinned': 'true' | 'false';
+  },
+) => ReactElement;
 
 export function CollectionSidebar({
   landmarkLabel,
@@ -25,6 +36,10 @@ export function CollectionSidebar({
   errorCopy,
   currentRowCopy,
   rowFocusAttribute,
+  renderLink,
+  headerContent,
+  filterValue,
+  onFilterChange,
 }: {
   landmarkLabel: string;
   tableLabel: string;
@@ -43,8 +58,14 @@ export function CollectionSidebar({
   errorCopy: string;
   currentRowCopy: string;
   rowFocusAttribute?: string;
+  renderLink?: CollectionSidebarLinkRenderer;
+  headerContent?: ReactNode;
+  filterValue?: string;
+  onFilterChange?: (value: string) => void;
 }) {
-  const [filter, setFilter] = useState('');
+  const [internalFilter, setInternalFilter] = useState('');
+  const filter = filterValue ?? internalFilter;
+  const setFilter = onFilterChange ?? setInternalFilter;
   const normalizedFilter = filter.trim().toLocaleLowerCase();
   const filteredRows = useMemo(() => rows.filter((row) => (
     !normalizedFilter
@@ -56,23 +77,26 @@ export function CollectionSidebar({
 
   const renderRow = (row: CollectionSidebarRow, pinned = false) => {
     const focusProps = rowFocusAttribute ? { [rowFocusAttribute]: row.id } : {};
+    const linkProps = {
+      className: `workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`,
+      children: (
+        <>
+          <span className="workflow-workspace-sidebar-row-main">
+            {pinned ? <span className="workflow-workspace-sidebar-kicker">{currentRowCopy}</span> : null}
+            <span className="workflow-workspace-sidebar-title">{row.primaryText}</span>
+          </span>
+          {row.metadata ? <span className="collection-sidebar-row-meta">{row.metadata}</span> : null}
+        </>
+      ),
+      'aria-current': row.id === activeId ? 'page' as const : undefined,
+      'data-active': row.id === activeId ? 'true' as const : 'false' as const,
+      'data-pinned': pinned ? 'true' as const : 'false' as const,
+      ...focusProps,
+    };
     return (
       <div key={`${pinned ? 'pinned-' : ''}${row.id}`} role="row" className={`workflow-workspace-sidebar-row-frame${pinned ? ' workflow-workspace-sidebar-row-frame-pinned' : ''}`}>
         <div role="cell" className="workflow-workspace-sidebar-cell">
-          <a
-            href={row.href}
-            className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-            aria-current={row.id === activeId ? 'page' : undefined}
-            data-active={row.id === activeId ? 'true' : 'false'}
-            data-pinned={pinned ? 'true' : 'false'}
-            {...focusProps}
-          >
-            <span className="workflow-workspace-sidebar-row-main">
-              {pinned ? <span className="workflow-workspace-sidebar-kicker">{currentRowCopy}</span> : null}
-              <span className="workflow-workspace-sidebar-title">{row.primaryText}</span>
-            </span>
-            {row.metadata ? <span className="collection-sidebar-row-meta">{row.metadata}</span> : null}
-          </a>
+          {renderLink ? renderLink(row, linkProps) : <a href={row.href} {...linkProps} />}
         </div>
       </div>
     );
@@ -81,7 +105,7 @@ export function CollectionSidebar({
   return (
     <aside className="collection-sidebar workflow-workspace-sidebar" aria-label={landmarkLabel}>
       <div role="table" aria-label={tableLabel} className="workflow-workspace-sidebar-table">
-        <div role="rowgroup" className="workflow-workspace-sidebar-header">
+        {headerContent ?? <div role="rowgroup" className="workflow-workspace-sidebar-header">
           <div role="row" className="workflow-workspace-sidebar-header-row">
             <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
               <span className="workflow-workspace-sidebar-header-title">{header}</span>
@@ -91,7 +115,7 @@ export function CollectionSidebar({
               </label>
             </div>
           </div>
-        </div>
+        </div>}
         {isLoading ? <SidebarState>{loadingCopy}</SidebarState> : null}
         {error ? (
           <SidebarState role="status">
