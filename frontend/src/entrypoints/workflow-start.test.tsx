@@ -8,7 +8,13 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
@@ -122,14 +128,17 @@ describe("previewModelTier", () => {
       model: "gpt-5.5",
       effort: "xhigh",
       fallbackReason: "requested_tier_above_configured_range",
-      warning: "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
+      warning:
+        "Requested Tier 3, used Tier 2 because the selected profile only defines 2 tiers.",
     });
   });
 });
 
 function renderWorkflowStartPage(payload: BootPayload) {
   return renderWithClient(
-    <MemoryRouter initialEntries={[`${window.location.pathname}${window.location.search}`]}>
+    <MemoryRouter
+      initialEntries={[`${window.location.pathname}${window.location.search}`]}
+    >
       <WorkflowStartPage payload={payload} />
     </MemoryRouter>,
   );
@@ -207,28 +216,30 @@ describe("WorkflowStartPage loading placeholders", () => {
       "Task Edit",
       "/workflows/new?editExecutionId=mm%3Aloading-draft",
     );
-    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.startsWith("/api/executions/mm%3Aloading-draft")) {
-        return new Promise(() => {}) as Promise<Response>;
-      }
-      if (url.startsWith("/api/workflows/skills")) {
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/executions/mm%3Aloading-draft")) {
+          return new Promise(() => {}) as Promise<Response>;
+        }
+        if (url.startsWith("/api/workflows/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [],
+          } as Response);
+        }
         return Promise.resolve({
           ok: true,
-          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+          json: async () => ({}),
         } as Response);
-      }
-      if (url.startsWith("/api/v1/provider-profiles")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({}),
-      } as Response);
-    });
+      });
   });
 
   afterEach(() => {
@@ -246,15 +257,21 @@ describe("WorkflowStartPage loading placeholders", () => {
     };
 
     renderWorkflowStartPage({
-          ...mockPayload,
-          initialData: {
-            dashboardConfig,
-          },
-        });
+      ...mockPayload,
+      initialData: {
+        dashboardConfig,
+      },
+    });
 
     expect(screen.getByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
-    expect(screen.getByText("Workflow start editable draft loading placeholder").closest('[role="status"]')).toBeTruthy();
-    expect(screen.getByTestId("loading-placeholder-form-controls")).toBeTruthy();
+    expect(
+      screen
+        .getByText("Workflow start editable draft loading placeholder")
+        .closest('[role="status"]'),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("loading-placeholder-form-controls"),
+    ).toBeTruthy();
   });
 });
 
@@ -263,39 +280,41 @@ describe("WorkflowStartPage workflow list display modes", () => {
 
   beforeEach(() => {
     window.history.pushState({}, "Create Workflow", "/workflows/new");
-    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.startsWith("/api/executions?")) {
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.startsWith("/api/executions?")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  workflowId: "mm:create-sidebar",
+                  title: "Sidebar workflow",
+                  status: "completed",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/workflows/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] }, legacyItems: [] }),
+          } as Response);
+        }
+        if (url.includes("/api/v1/provider-profiles")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => [],
+          } as Response);
+        }
         return Promise.resolve({
           ok: true,
-          json: async () => ({
-            items: [
-              {
-                workflowId: "mm:create-sidebar",
-                title: "Sidebar workflow",
-                status: "completed",
-              },
-            ],
-          }),
+          json: async () => ({}),
         } as Response);
-      }
-      if (url.startsWith("/api/workflows/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: { worker: [] }, legacyItems: [] }),
-        } as Response);
-      }
-      if (url.includes("/api/v1/provider-profiles")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => [],
-        } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({}),
-      } as Response);
-    });
+      });
   });
 
   afterEach(() => {
@@ -304,43 +323,51 @@ describe("WorkflowStartPage workflow list display modes", () => {
 
   it("renders Create without a workflow list in hidden mode", () => {
     renderWorkflowStartPage({
-          ...mockPayload,
-          initialData: {
-            ...(mockPayload.initialData as Record<string, unknown>),
-            workflowListDisplayMode: "hidden",
-          },
-        });
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        workflowListDisplayMode: "hidden",
+      },
+    });
 
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
-    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "Workflow navigation" }),
+    ).toBeNull();
   });
 
   it("renders Create with the workflow list as a sidebar in sidebar mode", async () => {
     renderWorkflowStartPage({
-          ...mockPayload,
-          initialData: {
-            ...(mockPayload.initialData as Record<string, unknown>),
-            workflowListDisplayMode: "sidebar",
-          },
-        });
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        workflowListDisplayMode: "sidebar",
+      },
+    });
 
-    const sidebar = await screen.findByRole("complementary", { name: "Workflow navigation" });
-    expect((await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })).getAttribute("href")).toBe(
-      "/workflows/mm%3Acreate-sidebar?source=temporal",
-    );
+    const sidebar = await screen.findByRole("complementary", {
+      name: "Workflow navigation",
+    });
+    expect(
+      (
+        await within(sidebar).findByRole("link", { name: /Sidebar workflow/i })
+      ).getAttribute("href"),
+    ).toBe("/workflows/mm%3Acreate-sidebar?source=temporal");
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
   });
 
   it("keeps Create form state mounted when toggling between sidebar and hidden modes", async () => {
     const view = renderWorkflowStartPage({
-          ...mockPayload,
-          initialData: {
-            ...(mockPayload.initialData as Record<string, unknown>),
-            workflowListDisplayMode: "sidebar",
-          },
-        });
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        workflowListDisplayMode: "sidebar",
+      },
+    });
 
-    expect(await screen.findByRole("complementary", { name: "Workflow navigation" })).toBeTruthy();
+    expect(
+      await screen.findByRole("complementary", { name: "Workflow navigation" }),
+    ).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Preserve this draft while toggling the list." },
     });
@@ -359,33 +386,93 @@ describe("WorkflowStartPage workflow list display modes", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
-    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
-      "Preserve this draft while toggling the list.",
-    );
-    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
+    expect(
+      screen.queryByRole("complementary", { name: "Workflow navigation" }),
+    ).toBeNull();
+    expect(
+      (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+    ).toBe("Preserve this draft while toggling the list.");
+    expect(
+      document
+        .querySelector(".workflow-start-workspace")
+        ?.getAttribute("data-sidebar-collapsed"),
+    ).toBe("true");
   });
 
   it("does not render the Create sidebar when workflow navigation is disabled", () => {
     renderWorkflowStartPage({
-          ...mockPayload,
-          initialData: {
-            ...(mockPayload.initialData as Record<string, unknown>),
-            dashboardConfig: {
-              ...mockDashboardConfig,
-              features: {
-                temporalDashboard: {
-                  listEnabled: false,
-                },
-              },
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          features: {
+            temporalDashboard: {
+              listEnabled: false,
             },
-            workflowListDisplayMode: "sidebar",
           },
-        });
+        },
+        workflowListDisplayMode: "sidebar",
+      },
+    });
 
     expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
-    expect(screen.queryByRole("complementary", { name: "Workflow navigation" })).toBeNull();
-    expect(document.querySelector(".workflow-start-workspace")?.getAttribute("data-sidebar-collapsed")).toBe("true");
+    expect(
+      screen.queryByRole("complementary", { name: "Workflow navigation" }),
+    ).toBeNull();
+    expect(
+      document
+        .querySelector(".workflow-start-workspace")
+        ?.getAttribute("data-sidebar-collapsed"),
+    ).toBe("true");
+  });
+
+  it("guards ordinary dashboard links when the Create draft has changed", async () => {
+    renderWorkflowStartPage({
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        workflowListDisplayMode: "hidden",
+      },
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Keep this draft before leaving." },
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const link = document.createElement("a");
+    link.href = "/settings";
+    document.body.appendChild(link);
+
+    const allowed = link.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
+
+    expect(allowed).toBe(false);
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Leave Create? Unsaved workflow draft changes may be lost.",
+    );
+    link.remove();
+  });
+
+  it("registers browser-exit protection only after the Create draft changes", async () => {
+    renderWorkflowStartPage({
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as Record<string, unknown>),
+        workflowListDisplayMode: "hidden",
+      },
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    const cleanExit = new Event("beforeunload", { cancelable: true });
+    expect(window.dispatchEvent(cleanExit)).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Protect this browser exit." },
+    });
+    const dirtyExit = new Event("beforeunload", { cancelable: true });
+    expect(window.dispatchEvent(dirtyExit)).toBe(false);
   });
 });
 
@@ -497,14 +584,19 @@ function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
 }
 
 async function clickApplyButton() {
-  const button = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
+  const button = screen.getByRole("button", {
+    name: "Apply",
+  }) as HTMLButtonElement;
   await waitFor(() => {
     expect(button.disabled).toBe(false);
   });
   fireEvent.click(button);
 }
 
-function getStepTypeRadio(step: HTMLElement, label: "Skill" | "Tool" | "Preset") {
+function getStepTypeRadio(
+  step: HTMLElement,
+  label: "Skill" | "Tool" | "Preset",
+) {
   return within(step).getByRole("radio", {
     name: label,
   }) as HTMLInputElement;
@@ -541,7 +633,9 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
-function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayload {
+function withRuntimeCommandPreview(
+  payload: BootPayload = mockPayload,
+): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
       system?: Record<string, unknown>;
@@ -556,11 +650,7 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
         ...initialData.dashboardConfig,
         system: {
           ...system,
-          supportedAgentRuntimes: [
-            "codex_cli",
-            "claude_code",
-            "codex_cloud",
-          ],
+          supportedAgentRuntimes: ["codex_cli", "claude_code", "codex_cloud"],
           runtimeCommandPreview: {
             hintCatalogVersion: "2026-05-13",
             runtimes: {
@@ -589,7 +679,8 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
               simplify: {
                 label: "Simplify",
                 aliases: ["/simplify"],
-                description: "Ask the selected runtime to simplify the implementation.",
+                description:
+                  "Ask the selected runtime to simplify the implementation.",
               },
             },
           },
@@ -599,7 +690,9 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
   };
 }
 
-function withRepositoryOptions(payload: BootPayload = mockPayload): BootPayload {
+function withRepositoryOptions(
+  payload: BootPayload = mockPayload,
+): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
       system?: Record<string, unknown>;
@@ -716,7 +809,9 @@ function withDisabledAttachmentPolicy(
   };
 }
 
-function withoutDefaultRepository(payload: BootPayload = mockPayload): BootPayload {
+function withoutDefaultRepository(
+  payload: BootPayload = mockPayload,
+): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
       system?: Record<string, unknown>;
@@ -797,7 +892,10 @@ function withJiraSessionMemory(
   };
 }
 
-function collectObjectKeys(value: unknown, keys = new Set<string>()): Set<string> {
+function collectObjectKeys(
+  value: unknown,
+  keys = new Set<string>(),
+): Set<string> {
   if (!value || typeof value !== "object") {
     return keys;
   }
@@ -870,7 +968,7 @@ describe("WorkflowStart schedule mode entry", () => {
             json: async () => ({ items: [] }),
           } as Response);
         }
-      if (url.includes("/api/v1/provider-profiles")) {
+        if (url.includes("/api/v1/provider-profiles")) {
           return Promise.resolve({
             ok: true,
             json: async () => [],
@@ -930,7 +1028,6 @@ describe("WorkflowStart schedule mode entry", () => {
     )) as HTMLSelectElement;
     expect(scheduleMode.value).toBe("immediate");
   });
-
 });
 
 describe("WorkflowStart CSS Layout", () => {
@@ -978,7 +1075,10 @@ describe.skip("Task Create Entrypoint", () => {
   let artifactCreateResponseOverride: Response | null;
   let dashboardCss: string;
 
-  function renderForEdit(executionId: string, payload: BootPayload = mockPayload) {
+  function renderForEdit(
+    executionId: string,
+    payload: BootPayload = mockPayload,
+  ) {
     window.history.pushState(
       {},
       "Task Edit",
@@ -1113,10 +1213,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (
-          path === "/api/presets/speckit-demo" &&
-          init?.method === "DELETE"
-        ) {
+        if (path === "/api/presets/speckit-demo" && init?.method === "DELETE") {
           return Promise.resolve({
             ok: true,
             status: 204,
@@ -1133,9 +1230,7 @@ describe.skip("Task Create Entrypoint", () => {
             text: async () => "",
           } as Response);
         }
-        if (
-          url.startsWith("/api/presets/speckit-demo?scope=global")
-        ) {
+        if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1157,9 +1252,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (
-          url.startsWith("/api/presets/objective-demo?scope=global")
-        ) {
+        if (url.startsWith("/api/presets/objective-demo?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1194,11 +1287,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (
-          url.startsWith(
-            "/api/presets/speckit-demo:expand?scope=global",
-          )
-        ) {
+        if (url.startsWith("/api/presets/speckit-demo:expand?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1226,11 +1315,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (
-          url.startsWith(
-            "/api/presets/objective-demo:expand?scope=global",
-          )
-        ) {
+        if (url.startsWith("/api/presets/objective-demo:expand?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1258,11 +1343,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (
-          url.startsWith(
-            "/api/presets/pr-resolver:expand?scope=global",
-          )
-        ) {
+        if (url.startsWith("/api/presets/pr-resolver:expand?scope=global")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1311,7 +1392,11 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => items,
           } as Response);
         }
-        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow")) {
+        if (
+          url.startsWith(
+            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
+          )
+        ) {
           const depItems = Array.from({ length: 12 }, (_, i) => ({
             taskId: `mm:dep-${i + 1}`,
             workflowType: "MoonMind.UserWorkflow",
@@ -1381,7 +1466,9 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/executions/mm%3Amerge-automation-edit?source=temporal") {
+        if (
+          url === "/api/executions/mm%3Amerge-automation-edit?source=temporal"
+        ) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1574,7 +1661,10 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/executions/mm%3Aregular-draft-artifact-edit?source=temporal") {
+        if (
+          url ===
+          "/api/executions/mm%3Aregular-draft-artifact-edit?source=temporal"
+        ) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1677,7 +1767,9 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/executions/mm%3Amerge-automation-rerun?source=temporal") {
+        if (
+          url === "/api/executions/mm%3Amerge-automation-rerun?source=temporal"
+        ) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1712,7 +1804,10 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/executions/mm%3Atarget-only-branch-rerun?source=temporal") {
+        if (
+          url ===
+          "/api/executions/mm%3Atarget-only-branch-rerun?source=temporal"
+        ) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1978,9 +2073,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (
-          url === "/api/executions/mm%3Amalformed-artifact?source=temporal"
-        ) {
+        if (url === "/api/executions/mm%3Amalformed-artifact?source=temporal") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -2306,7 +2399,8 @@ describe.skip("Task Create Entrypoint", () => {
               JSON.stringify({
                 detail: {
                   code: "invalid_update_request",
-                  message: "Task input validation failed: target branch is invalid.",
+                  message:
+                    "Task input validation failed: target branch is invalid.",
                 },
               }),
           } as Response);
@@ -2486,7 +2580,8 @@ describe.skip("Task Create Entrypoint", () => {
                   primarySkill: {
                     name: "speckit-orchestrate",
                     inputs: {
-                      request: "Preserve target-only legacy branch as metadata.",
+                      request:
+                        "Preserve target-only legacy branch as metadata.",
                     },
                   },
                   appliedTemplates: [],
@@ -2632,7 +2727,8 @@ describe.skip("Task Create Entrypoint", () => {
                         slug: "jira-breakdown-orchestrate",
                         version: "1",
                         inputs: {
-                          feature_request: "Break down the Grid UI overlay plan.",
+                          feature_request:
+                            "Break down the Grid UI overlay plan.",
                           jira_project_key: "MM",
                           jira_issue_type: "Story",
                           jira_dependency_mode: "linear_blocker_chain",
@@ -2841,7 +2937,11 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               items: [
-                { id: "84", name: "Hyphenated Delivery", projectKey: "MY-PROJ" },
+                {
+                  id: "84",
+                  name: "Hyphenated Delivery",
+                  projectKey: "MY-PROJ",
+                },
               ],
             }),
           } as Response);
@@ -2862,7 +2962,11 @@ describe.skip("Task Create Entrypoint", () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              board: { id: "84", name: "Hyphenated Delivery", projectKey: "MY-PROJ" },
+              board: {
+                id: "84",
+                name: "Hyphenated Delivery",
+                projectKey: "MY-PROJ",
+              },
               columns: [{ id: "selected", name: "Selected", count: 1 }],
             }),
           } as Response);
@@ -3169,7 +3273,9 @@ describe.skip("Task Create Entrypoint", () => {
   it("renders the create submit action as an icon-only right-pointing arrow with a stable label", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const createButton = await screen.findByRole("button", { name: "Start Workflow" });
+    const createButton = await screen.findByRole("button", {
+      name: "Start Workflow",
+    });
     const arrow = createButton.querySelector<HTMLElement>(
       "[data-submit-arrow='right']",
     );
@@ -3194,13 +3300,17 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(await screen.findByText("Step 1")).toBeTruthy();
     expect(
-      screen.queryByText("Primary step must include instructions or an explicit skill."),
+      screen.queryByText(
+        "Primary step must include instructions or an explicit skill.",
+      ),
     ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     const createButton = screen.getByRole("button", { name: "Start Workflow" });
-    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    expect(
+      createButton.querySelector("[data-submit-arrow='right']"),
+    ).not.toBeNull();
     expect(createButton.getAttribute("aria-busy")).toBe("false");
     expect(
       await screen.findByText(
@@ -3215,8 +3325,12 @@ describe.skip("Task Create Entrypoint", () => {
   it("keeps create page authoring controls available with the arrow submit action", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const createButton = await screen.findByRole("button", { name: "Start Workflow" });
-    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    const createButton = await screen.findByRole("button", {
+      name: "Start Workflow",
+    });
+    expect(
+      createButton.querySelector("[data-submit-arrow='right']"),
+    ).not.toBeNull();
     expect(screen.getByRole("button", { name: "Add Step" })).toBeTruthy();
     expect(screen.getByLabelText("Runtime")).toBeTruthy();
     expect(screen.getByLabelText("Publish Mode")).toBeTruthy();
@@ -3585,7 +3699,8 @@ describe.skip("Task Create Entrypoint", () => {
           draft: {
             taskShape: "inline_instructions",
             task: {
-              instructions: "This snapshot lost structured attachment bindings.",
+              instructions:
+                "This snapshot lost structured attachment bindings.",
             },
           },
           attachmentRefs: [
@@ -3600,7 +3715,9 @@ describe.skip("Task Create Entrypoint", () => {
           ],
         },
       ),
-    ).toThrow("Attachment bindings could not be reconstructed from this execution.");
+    ).toThrow(
+      "Attachment bindings could not be reconstructed from this execution.",
+    );
   });
 
   it("fails reconstruction when a repeated artifact loses one target binding", () => {
@@ -3659,7 +3776,9 @@ describe.skip("Task Create Entrypoint", () => {
           ],
         },
       ),
-    ).toThrow("Attachment bindings could not be reconstructed from this execution.");
+    ).toThrow(
+      "Attachment bindings could not be reconstructed from this execution.",
+    );
   });
 
   it("reconstructs primary skill from object-shaped task skill selectors", () => {
@@ -4113,7 +4232,9 @@ describe.skip("Task Create Entrypoint", () => {
           },
         },
       }),
-    ).toThrow("Workflow instructions could not be reconstructed from this execution.");
+    ).toThrow(
+      "Workflow instructions could not be reconstructed from this execution.",
+    );
   });
 
   it("loads edit mode from an active Temporal execution and prefills the shared form", async () => {
@@ -4125,14 +4246,16 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
       ).toBe("Rebuild the Temporal task draft.");
-      expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(
-        "claude_code",
-      );
+      expect(
+        (screen.getByLabelText("Runtime") as HTMLSelectElement).value,
+      ).toBe("claude_code");
       expect(
         (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
       ).toBe("profile:claude-default");
@@ -4145,9 +4268,9 @@ describe.skip("Task Create Entrypoint", () => {
       expect(
         (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
       ).toBe("MoonLadderStudios/MoonMind");
-      expect(
-        (screen.getByLabelText("Branch") as HTMLInputElement).value,
-      ).toBe("main");
+      expect((screen.getByLabelText("Branch") as HTMLInputElement).value).toBe(
+        "main",
+      );
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("branch");
@@ -4162,7 +4285,9 @@ describe.skip("Task Create Entrypoint", () => {
   it("loads every step when editing a multi-step Temporal execution", async () => {
     renderForEdit("mm:multi-step-edit");
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     await waitFor(() => {
       const instructions = screen.getAllByLabelText(
         "Instructions",
@@ -4187,7 +4312,8 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(getStepTypeRadio(step, "Preset").checked).toBe(true);
       expect(
-        (within(step).getByLabelText("Preset Template") as HTMLSelectElement).value,
+        (within(step).getByLabelText("Preset Template") as HTMLSelectElement)
+          .value,
       ).toBe("global::::speckit-demo");
     });
 
@@ -4215,7 +4341,9 @@ describe.skip("Task Create Entrypoint", () => {
   it("uses the target skill when the first reconstructed step is auto", async () => {
     renderForEdit("mm:auto-primary-skill");
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
@@ -4239,7 +4367,8 @@ describe.skip("Task Create Entrypoint", () => {
     });
     const updateCall = fetchSpy.mock.calls
       .filter(
-        ([url]) => String(url) === "/api/executions/mm%3Amulti-step-edit/update",
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Amulti-step-edit/update",
       )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
@@ -4284,7 +4413,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Start New Run" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
@@ -4316,7 +4447,9 @@ describe.skip("Task Create Entrypoint", () => {
       "Instructions",
     )) as HTMLTextAreaElement;
     await waitFor(() => {
-      expect(instructions.value).toBe("Rerun from artifact-backed instructions.");
+      expect(instructions.value).toBe(
+        "Rerun from artifact-backed instructions.",
+      );
     });
     fireEvent.change(instructions, {
       target: { value: "Rerun with reviewed Temporal inputs." },
@@ -4330,11 +4463,14 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     const updateCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/executions/mm%3Arerun-123/update")
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Arerun-123/update",
+      )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
     const artifactCreateCall = fetchSpy.mock.calls.find(
-      ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
+      ([url, init]) =>
+        String(url) === "/api/artifacts" && init?.method === "POST",
     );
     expect(artifactCreateCall).toBeUndefined();
     expect(request).toMatchObject({
@@ -4348,12 +4484,15 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(
       fetchSpy.mock.calls.some(
-        ([url, init]) => String(url) === "/api/executions" && init?.method === "POST",
+        ([url, init]) =>
+          String(url) === "/api/executions" && init?.method === "POST",
       ),
     ).toBe(false);
     expect(navigateTo).not.toHaveBeenCalled();
     expect(
-      await screen.findByText("Rerun was requested and the latest execution view is ready."),
+      await screen.findByText(
+        "Rerun was requested and the latest execution view is ready.",
+      ),
     ).toBeTruthy();
     expect(screen.getByRole("status").className).toContain("notice");
     expect(screen.getByRole("status").className).toContain("ok");
@@ -4375,7 +4514,9 @@ describe.skip("Task Create Entrypoint", () => {
       "Instructions",
     )) as HTMLTextAreaElement;
     await waitFor(() => {
-      expect(instructions.value).toBe("Rerun from artifact-backed instructions.");
+      expect(instructions.value).toBe(
+        "Rerun from artifact-backed instructions.",
+      );
     });
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
 
@@ -4386,7 +4527,9 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     const updateCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/executions/mm%3Arerun-123/update")
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Arerun-123/update",
+      )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
     expect(request).toEqual({
@@ -4473,7 +4616,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     const instructions = screen.getAllByLabelText(
       "Instructions",
     )[0] as HTMLTextAreaElement;
@@ -4483,7 +4628,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(instructions, {
       target: { value: "MM-644 edited retry instructions." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Run edited workflow" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Run edited workflow" }),
+    );
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -4492,7 +4639,9 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     const updateCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update")
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update",
+      )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
 
@@ -4520,7 +4669,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Compare Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Compare Workflow" }),
+    ).toBeTruthy();
     expect(
       await screen.findByText(
         "You are starting a comparison run. Choose a different runtime or model to compare results with the source run.",
@@ -4529,7 +4680,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Runtime"), {
       target: { value: "claude_code" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Start Comparison Run" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start Comparison Run" }),
+    );
 
     await waitFor(() => {
       expect(
@@ -4557,9 +4710,12 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("reports current hint catalog version drift without mutating source-run command metadata", () => {
-    const warnings = buildRuntimeCommandVersionWarnings(historicalRuntimeCommand, {
-      hintCatalogVersion: "2026-05-13",
-    });
+    const warnings = buildRuntimeCommandVersionWarnings(
+      historicalRuntimeCommand,
+      {
+        hintCatalogVersion: "2026-05-13",
+      },
+    );
 
     expect(warnings).toEqual([
       "Runtime command hint catalog version changed from 2026-05-12 to 2026-05-13.",
@@ -4578,7 +4734,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Start New Run" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         screen.getByText(
@@ -4613,11 +4771,14 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Start New Run" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(
-          ([url]) => String(url) === "/api/artifacts/complex-rerun-snapshot/download",
+          ([url]) =>
+            String(url) === "/api/artifacts/complex-rerun-snapshot/download",
         ),
       ).toBeTruthy();
       expect(
@@ -4639,7 +4800,9 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     const updateCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update")
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Acomplex-rerun/update",
+      )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
 
@@ -4720,7 +4883,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Start New Run" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getAllByLabelText("Instructions")[0] as HTMLTextAreaElement)
@@ -4729,12 +4894,14 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(
       fetchSpy.mock.calls.some(
-        ([url]) => String(url) === "/api/artifacts/valid-skill-snapshot/download",
+        ([url]) =>
+          String(url) === "/api/artifacts/valid-skill-snapshot/download",
       ),
     ).toBe(true);
     expect(
       fetchSpy.mock.calls.some(
-        ([url]) => String(url) === "/api/artifacts/expired-valid-input/download",
+        ([url]) =>
+          String(url) === "/api/artifacts/expired-valid-input/download",
       ),
     ).toBe(false);
     expect(
@@ -4778,7 +4945,9 @@ describe.skip("Task Create Entrypoint", () => {
       "Task Rerun",
       "/workflows/new?rerunExecutionId=mm%3Acustom-endpoints",
     );
-    const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    const customPayload = JSON.parse(
+      JSON.stringify(mockPayload),
+    ) as BootPayload;
     (
       customPayload.initialData as {
         dashboardConfig: {
@@ -4802,7 +4971,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={customPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Start New Run" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Start New Run" }),
+    ).toBeTruthy();
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
@@ -4823,7 +4994,9 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("submits edit updates through the configured Temporal update route", async () => {
-    const customPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    const customPayload = JSON.parse(
+      JSON.stringify(mockPayload),
+    ) as BootPayload;
     (
       customPayload.initialData as {
         dashboardConfig: {
@@ -4865,7 +5038,8 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     const updateCall = fetchSpy.mock.calls.find(
-      ([url]) => String(url) === "/gateway/api/executions/mm%3Acustom-edit/updates",
+      ([url]) =>
+        String(url) === "/gateway/api/executions/mm%3Acustom-edit/updates",
     );
     const request = JSON.parse(String(updateCall?.[1]?.body));
     expect(request).toMatchObject({
@@ -4881,7 +5055,9 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("shows a feature-disabled error without loading execution detail", async () => {
-    const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    const disabledPayload = JSON.parse(
+      JSON.stringify(mockPayload),
+    ) as BootPayload;
     (
       disabledPayload.initialData as {
         dashboardConfig: {
@@ -4897,12 +5073,16 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(
-        ([url]) => String(url) === "/api/executions/mm%3Aedit-123?source=temporal",
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aedit-123?source=temporal",
       ),
     ).toBe(false);
     expect(
-      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save Changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -4915,8 +5095,11 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save Changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -4929,8 +5112,11 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save Changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -4947,8 +5133,11 @@ describe.skip("Task Create Entrypoint", () => {
       await screen.findByText("This execution does not currently allow rerun."),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Start New Run",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -4967,8 +5156,11 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Start New Run",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -4979,14 +5171,21 @@ describe.skip("Task Create Entrypoint", () => {
       "/workflows/new?rerunExecutionId=mm%3Amalformed-artifact",
     );
 
-    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const { unmount } = renderWithClient(
+      <WorkflowStartPage payload={mockPayload} />,
+    );
 
     expect(
-      await screen.findByText("Workflow input artifact did not contain valid JSON."),
+      await screen.findByText(
+        "Workflow input artifact did not contain valid JSON.",
+      ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Start New Run",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
 
     unmount();
@@ -4998,8 +5197,11 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "Save Changes",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -5180,7 +5382,9 @@ describe.skip("Task Create Entrypoint", () => {
       "Instructions",
     )) as HTMLTextAreaElement;
     await waitFor(() => {
-      expect(instructions.value).toBe("Rerun from artifact-backed instructions.");
+      expect(instructions.value).toBe(
+        "Rerun from artifact-backed instructions.",
+      );
     });
     fireEvent.change(instructions, {
       target: { value: "Edited artifact-backed instructions." },
@@ -5297,7 +5501,8 @@ describe.skip("Task Create Entrypoint", () => {
     });
     const updateCall = fetchSpy.mock.calls
       .filter(
-        ([url]) => String(url) === "/api/executions/mm%3Aattachment-edit/update",
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aattachment-edit/update",
       )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
@@ -5345,8 +5550,9 @@ describe.skip("Task Create Entrypoint", () => {
       expect(instructions.value).toBe("Preserve the existing attachments.");
     });
 
-    const objectiveItem = (await screen.findByText("objective.png (1.2 KB)"))
-      .closest("li") as HTMLElement;
+    const objectiveItem = (
+      await screen.findByText("objective.png (1.2 KB)")
+    ).closest("li") as HTMLElement;
     fireEvent.click(
       within(objectiveItem).getByRole("button", {
         name: "Remove objective attachment objective.png",
@@ -5362,7 +5568,8 @@ describe.skip("Task Create Entrypoint", () => {
     });
     const updateCall = fetchSpy.mock.calls
       .filter(
-        ([url]) => String(url) === "/api/executions/mm%3Aattachment-edit/update",
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aattachment-edit/update",
       )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
@@ -5387,7 +5594,9 @@ describe.skip("Task Create Entrypoint", () => {
       expect(instructions.value).toBe("Preserve the existing attachments.");
     });
 
-    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
+    const attachmentInput = await screen.findByLabelText(
+      "Step 1 attachment file picker",
+    );
     fireEvent.change(attachmentInput, {
       target: {
         files: [
@@ -5428,7 +5637,8 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     const artifactCreateCall = fetchSpy.mock.calls.find(
-      ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
+      ([url, init]) =>
+        String(url) === "/api/artifacts" && init?.method === "POST",
     );
     expect(artifactCreateCall).toBeTruthy();
     const artifactUploadCall = fetchSpy.mock.calls.find(
@@ -5523,10 +5733,13 @@ describe.skip("Task Create Entrypoint", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    expect(await screen.findByText("Artifact storage is unavailable.")).toBeTruthy();
+    expect(
+      await screen.findByText("Artifact storage is unavailable."),
+    ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(
-        ([url]) => String(url) === "/api/executions/mm%3Aartifact-failure/update",
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aartifact-failure/update",
       ),
     ).toBe(false);
     expect(telemetryEvents).toEqual(
@@ -5551,13 +5764,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     const heading = await screen.findByRole("heading", { level: 2 });
     expect(WORKFLOW_START_HEADING_QUOTES).toContain(heading.textContent);
-    expect(
-      heading.closest(".workflow-start-page"),
-    ).not.toBeNull();
+    expect(heading.closest(".workflow-start-page")).not.toBeNull();
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run end-to-end regression flow." },
@@ -5573,7 +5782,9 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     const createButton = screen.getByRole("button", { name: "Start Workflow" });
-    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    expect(
+      createButton.querySelector("[data-submit-arrow='right']"),
+    ).not.toBeNull();
     fireEvent.click(createButton);
 
     await waitFor(() => {
@@ -5630,7 +5841,9 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
     const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
-    expect(repositoryInput.getAttribute("list")).toBe("queue-repository-options");
+    expect(repositoryInput.getAttribute("list")).toBe(
+      "queue-repository-options",
+    );
 
     const datalist = document.querySelector<HTMLDataListElement>(
       "#queue-repository-options",
@@ -5657,14 +5870,18 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(repositoryInput, {
       target: { value: "Octo/Repo" },
     });
-    expect(window.localStorage.getItem("moonmind.workflow-start.last-repository-option"))
-      .toBe("Octo/Repo");
+    expect(
+      window.localStorage.getItem(
+        "moonmind.workflow-start.last-repository-option",
+      ),
+    ).toBe("Octo/Repo");
 
     unmount();
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
-      .toBe("Octo/Repo");
+    expect(
+      ((await screen.findByLabelText(/GitHub Repo/)) as HTMLInputElement).value,
+    ).toBe("Octo/Repo");
   });
 
   it("clears the remembered repository option for custom repository entries", async () => {
@@ -5680,8 +5897,11 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Custom/Repo" },
     });
 
-    expect(window.localStorage.getItem("moonmind.workflow-start.last-repository-option"))
-      .toBeNull();
+    expect(
+      window.localStorage.getItem(
+        "moonmind.workflow-start.last-repository-option",
+      ),
+    ).toBeNull();
   });
 
   it("ignores remembered repository values that are not current options", async () => {
@@ -5692,16 +5912,15 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
-      .toBe("MoonLadderStudios/MoonMind");
+    expect(
+      ((await screen.findByLabelText(/GitHub Repo/)) as HTMLInputElement).value,
+    ).toBe("MoonLadderStudios/MoonMind");
   });
 
   it("submits a selected repository option without changing unrelated draft fields", async () => {
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run repository dropdown regression." },
@@ -5744,9 +5963,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits an authored MM-564 Skill step with agentic controls", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -5890,14 +6107,10 @@ describe.skip("Task Create Entrypoint", () => {
   it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     expect(
-      within(primaryStep as HTMLElement).queryByLabelText(
-        /skill args/i,
-      ),
+      within(primaryStep as HTMLElement).queryByLabelText(/skill args/i),
     ).toBeNull();
     expect(
       within(primaryStep as HTMLElement).queryByLabelText(
@@ -5914,13 +6127,13 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
     expect(
-      within(primaryStep as HTMLElement).queryByLabelText(
-        /skill args/i,
-      ),
+      within(primaryStep as HTMLElement).queryByLabelText(/skill args/i),
     ).toBeNull();
 
     const advancedToggle = screen.getByLabelText("Advanced mode");
-    expect(advancedToggle.closest('[data-canonical-create-section="Submit"]')).not.toBeNull();
+    expect(
+      advancedToggle.closest('[data-canonical-create-section="Submit"]'),
+    ).not.toBeNull();
     fireEvent.click(advancedToggle);
 
     expect(
@@ -5971,9 +6184,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("preserves and validates advanced skill fields after toggling advanced mode off and on", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -6048,9 +6259,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     fireEvent.click(screen.getByLabelText("Advanced mode"));
@@ -6094,11 +6303,7 @@ describe.skip("Task Create Entrypoint", () => {
       type: "skill",
       name: "auto",
     });
-    expect(payload.requiredCapabilities).toEqual([
-      "codex_cli",
-      "git",
-      "gh",
-    ]);
+    expect(payload.requiredCapabilities).toEqual(["codex_cli", "git", "gh"]);
   });
 
   it("uploads a step attachment as a structured step input without rewriting instructions", async () => {
@@ -6107,7 +6312,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
+    const attachmentInput = await screen.findByLabelText(
+      "Step 1 attachment file picker",
+    );
     const file = new File(["fake image"], "wireframe.png", {
       type: "image/png",
     });
@@ -6189,13 +6396,13 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Create a text-only task while image inputs are disabled." },
+      target: {
+        value: "Create a text-only task while image inputs are disabled.",
+      },
     });
 
     expect(screen.queryByLabelText("Step 1 attachment file picker")).toBeNull();
-    expect(
-      screen.queryByLabelText("Instructions attachments"),
-    ).toBeNull();
+    expect(screen.queryByLabelText("Instructions attachments")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -6213,11 +6420,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
 
     expect(await screen.findByText("Images (optional)")).toBeTruthy();
-    expect(
-      await screen.findByText(
-        "Instructions Images",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Instructions Images")).toBeTruthy();
   });
 
   it("reports attachment validation failures at the affected target before upload", async () => {
@@ -6255,17 +6458,20 @@ describe.skip("Task Create Entrypoint", () => {
       "Up to 4 files across all steps, 1.0 MB each, 2.0 MB total.";
     expect(screen.queryByText(limitMessage)).toBeNull();
 
-    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
-      target: {
-        files: [
-          new File(["one"], "one.png", { type: "image/png" }),
-          new File(["two"], "two.png", { type: "image/png" }),
-          new File(["three"], "three.png", { type: "image/png" }),
-          new File(["four"], "four.png", { type: "image/png" }),
-          new File(["five"], "five.png", { type: "image/png" }),
-        ],
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: {
+          files: [
+            new File(["one"], "one.png", { type: "image/png" }),
+            new File(["two"], "two.png", { type: "image/png" }),
+            new File(["three"], "three.png", { type: "image/png" }),
+            new File(["four"], "four.png", { type: "image/png" }),
+            new File(["five"], "five.png", { type: "image/png" }),
+          ],
+        },
       },
-    });
+    );
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText(limitMessage)).toBeTruthy();
@@ -6279,11 +6485,14 @@ describe.skip("Task Create Entrypoint", () => {
       "This older workflow used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.";
     expect(await screen.findByText(legacyWarning)).toBeTruthy();
 
-    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
-      target: {
-        files: [new File(["one"], "one.png", { type: "image/png" })],
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: {
+          files: [new File(["one"], "one.png", { type: "image/png" })],
+        },
       },
-    });
+    );
 
     expect(await screen.findByText("one.png")).toBeTruthy();
     expect(screen.getByText(legacyWarning)).toBeTruthy();
@@ -6291,20 +6500,22 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps step upload failures target-scoped with retry and remove actions", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/artifacts/art-001/content") {
-        return Promise.resolve({
-          ok: false,
-          status: 500,
-          text: async () =>
-            JSON.stringify({
-              detail: { message: "Object storage rejected the upload." },
-            }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/artifacts/art-001/content") {
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            text: async () =>
+              JSON.stringify({
+                detail: { message: "Object storage rejected the upload." },
+              }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -6314,9 +6525,12 @@ describe.skip("Task Create Entrypoint", () => {
     const file = new File(["fake image"], "wireframe.png", {
       type: "image/png",
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
-      target: { files: [file] },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: { files: [file] },
+      },
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -6441,12 +6655,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review objective context." },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Use the product sketch as objective context." },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Use the product sketch as objective context." },
+    });
     const objectiveInput = await screen.findByLabelText(
       "Instructions attachments",
     );
@@ -6471,7 +6682,9 @@ describe.skip("Task Create Entrypoint", () => {
     const artifactCreateCall = fetchSpy.mock.calls.find(
       ([url, init]) =>
         String(url) === "/api/artifacts" &&
-        String(init?.body || "").includes("workflow-console-objective-attachment"),
+        String(init?.body || "").includes(
+          "workflow-console-objective-attachment",
+        ),
     );
     expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
       content_type: "image/png",
@@ -6493,9 +6706,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(payload.task.instructions).toBe(
       "Use the product sketch as objective context.",
     );
-    expect(payload.task.instructions).not.toContain(
-      "Step input attachments:",
-    );
+    expect(payload.task.instructions).not.toContain("Step input attachments:");
     expect(payload.task.inputAttachments).toEqual([
       {
         artifactId: "art-001",
@@ -6516,9 +6727,12 @@ describe.skip("Task Create Entrypoint", () => {
     const firstFile = new File(["first image"], "primary.png", {
       type: "image/png",
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
-      target: { files: [firstFile] },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: { files: [firstFile] },
+      },
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
     const stepTwo = (await screen.findByText("Step 2")).closest("section");
@@ -6532,9 +6746,12 @@ describe.skip("Task Create Entrypoint", () => {
     const secondFile = new File(["second image"], "second.png", {
       type: "image/png",
     });
-    fireEvent.change(await screen.findByLabelText("Step 2 attachment file picker"), {
-      target: { files: [secondFile] },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Step 2 attachment file picker"),
+      {
+        target: { files: [secondFile] },
+      },
+    );
 
     const stepOne = screen.getByText("Step 1").closest("section");
     expect(stepOne).not.toBeNull();
@@ -6663,7 +6880,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
+    const attachmentInput = await screen.findByLabelText(
+      "Step 1 attachment file picker",
+    );
     fireEvent.change(attachmentInput, {
       target: {
         files: [
@@ -6678,7 +6897,9 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(additionalStep).not.toBeNull();
     fireEvent.change(
-      within(additionalStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      within(additionalStep as HTMLElement).getByLabelText(
+        /Skill \(optional\)/,
+      ),
       {
         target: { value: "pr-resolver" },
       },
@@ -6718,7 +6939,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
+    const attachmentInput = await screen.findByLabelText(
+      "Step 1 attachment file picker",
+    );
     fireEvent.change(attachmentInput, {
       target: {
         files: [
@@ -6744,82 +6967,79 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it(
-    "retries transient step attachment completion conflicts before creating the task",
-    async () => {
-      let completeAttempts = 0;
-      const originalRetryDelays = [...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
-      const defaultFetch = fetchSpy.getMockImplementation();
+  it("retries transient step attachment completion conflicts before creating the task", async () => {
+    let completeAttempts = 0;
+    const originalRetryDelays = [...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
+    const defaultFetch = fetchSpy.getMockImplementation();
 
-      try {
-        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
-          0,
-          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
-          1,
-          1,
-        );
-        fetchSpy.mockImplementation(
-          (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = String(input);
-            if (url === "/api/artifacts/art-001/complete") {
-              completeAttempts += 1;
-              if (completeAttempts < 3) {
-                return Promise.resolve({
-                  ok: false,
-                  status: 409,
-                  text: async () =>
-                    JSON.stringify({
-                      detail: {
-                        code: "artifact_state_error",
-                        message: "artifact upload is not complete",
-                      },
-                    }),
-                } as Response);
-              }
+    try {
+      ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+        0,
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+        1,
+        1,
+      );
+      fetchSpy.mockImplementation(
+        (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url === "/api/artifacts/art-001/complete") {
+            completeAttempts += 1;
+            if (completeAttempts < 3) {
+              return Promise.resolve({
+                ok: false,
+                status: 409,
+                text: async () =>
+                  JSON.stringify({
+                    detail: {
+                      code: "artifact_state_error",
+                      message: "artifact upload is not complete",
+                    },
+                  }),
+              } as Response);
             }
-            return (
-              defaultFetch?.(input, init) ??
-              Promise.reject(new Error("Unhandled fetch"))
-            );
-          },
-        );
+          }
+          return (
+            defaultFetch?.(input, init) ??
+            Promise.reject(new Error("Unhandled fetch"))
+          );
+        },
+      );
 
-        renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
-        fireEvent.change(await screen.findByLabelText("Instructions"), {
-          target: { value: "Review the provided screenshot." },
-        });
-        const attachmentInput =
-          await screen.findByLabelText("Step 1 attachment file picker");
-        fireEvent.change(attachmentInput, {
-          target: {
-            files: [
-              new File(["fake image"], "wireframe.png", { type: "image/png" }),
-            ],
-          },
-        });
-        fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Review the provided screenshot." },
+      });
+      const attachmentInput = await screen.findByLabelText(
+        "Step 1 attachment file picker",
+      );
+      fireEvent.change(attachmentInput, {
+        target: {
+          files: [
+            new File(["fake image"], "wireframe.png", { type: "image/png" }),
+          ],
+        },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-        await waitFor(
-          () => {
-            expect(completeAttempts).toBe(3);
-            expect(fetchSpy).toHaveBeenCalledWith(
-              "/api/executions",
-              expect.objectContaining({ method: "POST" }),
-            );
-          },
-          { timeout: 9000 },
-        );
-      } finally {
-        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
-          0,
-          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
-          ...originalRetryDelays,
-        );
-      }
-    },
-    10000,
-  );
+      await waitFor(
+        () => {
+          expect(completeAttempts).toBe(3);
+          expect(fetchSpy).toHaveBeenCalledWith(
+            "/api/executions",
+            expect.objectContaining({ method: "POST" }),
+          );
+        },
+        { timeout: 9000 },
+      );
+    } finally {
+      ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+        0,
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+        ...originalRetryDelays,
+      );
+    }
+  }, 10000);
 
   it("submits selected task dependencies from the picker", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -6877,9 +7097,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={payload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     const publishSelect = screen.getByLabelText(
@@ -6940,9 +7158,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={payload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     const skillSelect = within(primaryStep as HTMLElement).getByLabelText(
@@ -6989,9 +7205,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={payload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     const publishSelect = screen.getByLabelText(
@@ -7032,35 +7246,37 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("defaults publish mode to none when selecting the Jira Breakdown preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-breakdown",
-                scope: "global",
-                title: "Jira Breakdown",
-                description: "Create Jira stories from a breakdown.",
-                latestVersion: "1",
-                version: "1",
-              },
-              {
-                slug: "moonspec-orchestrate",
-                scope: "global",
-                title: "MoonSpec Orchestrate",
-                description: "Keep the default preset off Jira Breakdown.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-breakdown",
+                  scope: "global",
+                  title: "Jira Breakdown",
+                  description: "Create Jira stories from a breakdown.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+                {
+                  slug: "moonspec-orchestrate",
+                  scope: "global",
+                  title: "MoonSpec Orchestrate",
+                  description: "Keep the default preset off Jira Breakdown.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -7096,35 +7312,37 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("defaults parent publish mode to none while keeping controls active for the Jira Breakdown and Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-breakdown-orchestrate",
-                scope: "global",
-                title: "Jira Breakdown and Orchestrate",
-                description: "Create dependent Jira Orchestrate tasks.",
-                latestVersion: "1",
-                version: "1",
-              },
-              {
-                slug: "moonspec-orchestrate",
-                scope: "global",
-                title: "MoonSpec Orchestrate",
-                description: "Default preset.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-breakdown-orchestrate",
+                  scope: "global",
+                  title: "Jira Breakdown and Orchestrate",
+                  description: "Create dependent Jira Orchestrate tasks.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+                {
+                  slug: "moonspec-orchestrate",
+                  scope: "global",
+                  title: "MoonSpec Orchestrate",
+                  description: "Default preset.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -7146,9 +7364,9 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("none");
     });
-    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).disabled).toBe(
-      false,
-    );
+    expect(
+      (screen.getByLabelText("GitHub Repo") as HTMLInputElement).disabled,
+    ).toBe(false);
     expect(
       (screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled,
     ).toBe(false);
@@ -7156,72 +7374,72 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("hides internal Source Design Path and Constraints inputs for the Jira Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-orchestrate",
-                scope: "global",
-                title: "Jira Orchestrate",
-                description: "Run MoonSpec from a Jira issue.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith("/api/presets/jira-orchestrate?scope=global")
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "jira-orchestrate",
-            scope: "global",
-            title: "Jira Orchestrate",
-            description: "Run MoonSpec from a Jira issue.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "jira_issue_key",
-                label: "Jira Issue Key",
-                type: "text",
-                required: true,
-              },
-              {
-                name: "orchestration_mode",
-                label: "Orchestration Mode",
-                type: "enum",
-                required: true,
-                default: "docs",
-                options: ["runtime", "docs"],
-              },
-              {
-                name: "source_design_path",
-                label: "Source Design Path",
-                type: "text",
-                required: false,
-                default: "",
-              },
-              {
-                name: "constraints",
-                label: "Constraints",
-                type: "textarea",
-                required: false,
-                default: "",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-orchestrate",
+                  scope: "global",
+                  title: "Jira Orchestrate",
+                  description: "Run MoonSpec from a Jira issue.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "jira-orchestrate",
+              scope: "global",
+              title: "Jira Orchestrate",
+              description: "Run MoonSpec from a Jira issue.",
+              latestVersion: "1",
+              version: "1",
+              inputs: [
+                {
+                  name: "jira_issue_key",
+                  label: "Jira Issue Key",
+                  type: "text",
+                  required: true,
+                },
+                {
+                  name: "orchestration_mode",
+                  label: "Orchestration Mode",
+                  type: "enum",
+                  required: true,
+                  default: "docs",
+                  options: ["runtime", "docs"],
+                },
+                {
+                  name: "source_design_path",
+                  label: "Source Design Path",
+                  type: "text",
+                  required: false,
+                  default: "",
+                },
+                {
+                  name: "constraints",
+                  label: "Constraints",
+                  type: "textarea",
+                  required: false,
+                  default: "",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -7235,92 +7453,96 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       await within(presetSection).findByLabelText("Jira Issue Key"),
     ).not.toBeNull();
-    expect(within(presetSection).queryByLabelText("Orchestration Mode")).toBeNull();
-    expect(within(presetSection).queryByLabelText("Source Design Path")).toBeNull();
+    expect(
+      within(presetSection).queryByLabelText("Orchestration Mode"),
+    ).toBeNull();
+    expect(
+      within(presetSection).queryByLabelText("Source Design Path"),
+    ).toBeNull();
     expect(within(presetSection).queryByLabelText("Constraints")).toBeNull();
-    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe(
-      "pr",
-    );
-    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled).toBe(
-      false,
-    );
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+    ).toBe("pr");
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).disabled,
+    ).toBe(false);
   });
 
   it("hides stale Orchestration Mode input for the MoonSpec Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "moonspec-orchestrate",
-                scope: "global",
-                title: "MoonSpec Orchestrate",
-                description: "Run MoonSpec.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith("/api/presets/moonspec-orchestrate?scope=global")
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "moonspec-orchestrate",
-            scope: "global",
-            title: "MoonSpec Orchestrate",
-            description: "Run MoonSpec.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "feature_request",
-                label: "Feature Request",
-                type: "markdown",
-                required: true,
-              },
-              {
-                name: "orchestration_mode",
-                label: "Orchestration Mode",
-                type: "enum",
-                required: true,
-                default: "docs",
-                options: ["runtime", "docs"],
-              },
-              {
-                name: "constraints",
-                label: "Constraints",
-                type: "textarea",
-                required: false,
-                default: "",
-              },
-            ],
-            inputSchema: {
-              type: "object",
-              required: ["feature_request"],
-              properties: {
-                feature_request: {
-                  type: "string",
-                  title: "Feature Request",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "moonspec-orchestrate",
+                  scope: "global",
+                  title: "MoonSpec Orchestrate",
+                  description: "Run MoonSpec.",
+                  latestVersion: "1",
+                  version: "1",
                 },
-                constraints: {
-                  type: "string",
-                  title: "Constraints",
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/moonspec-orchestrate?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "moonspec-orchestrate",
+              scope: "global",
+              title: "MoonSpec Orchestrate",
+              description: "Run MoonSpec.",
+              latestVersion: "1",
+              version: "1",
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Feature Request",
+                  type: "markdown",
+                  required: true,
+                },
+                {
+                  name: "orchestration_mode",
+                  label: "Orchestration Mode",
+                  type: "enum",
+                  required: true,
+                  default: "docs",
+                  options: ["runtime", "docs"],
+                },
+                {
+                  name: "constraints",
+                  label: "Constraints",
+                  type: "textarea",
+                  required: false,
+                  default: "",
+                },
+              ],
+              inputSchema: {
+                type: "object",
+                required: ["feature_request"],
+                properties: {
+                  feature_request: {
+                    type: "string",
+                    title: "Feature Request",
+                  },
+                  constraints: {
+                    type: "string",
+                    title: "Constraints",
+                  },
                 },
               },
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -7331,89 +7553,95 @@ describe.skip("Task Create Entrypoint", () => {
         "global::::moonspec-orchestrate",
       );
     });
-    expect(within(presetSection).queryByLabelText("Feature Request")).toBeNull();
-    expect(within(presetSection).queryByLabelText("Orchestration Mode")).toBeNull();
-    expect(await within(presetSection).findByLabelText("Constraints")).not.toBeNull();
+    expect(
+      within(presetSection).queryByLabelText("Feature Request"),
+    ).toBeNull();
+    expect(
+      within(presetSection).queryByLabelText("Orchestration Mode"),
+    ).toBeNull();
+    expect(
+      await within(presetSection).findByLabelText("Constraints"),
+    ).not.toBeNull();
   });
 
   it("allows Jira Orchestrate preset runs to use PR merge automation", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-orchestrate",
-                scope: "global",
-                title: "Jira Orchestrate",
-                description: "Run MoonSpec from a Jira issue.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "jira-orchestrate",
-            scope: "global",
-            title: "Jira Orchestrate",
-            description: "Run MoonSpec from a Jira issue.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "jira_issue_key",
-                label: "Jira Issue Key",
-                type: "text",
-                required: true,
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith(
-          "/api/presets/jira-orchestrate:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:jira-orchestrate:1",
-                title: "Move Jira issue",
-                instructions: "Transition THOR-352 to In Progress.",
-                tool: { type: "skill", name: "jira-issue-updater" },
-              },
-            ],
-            appliedTemplate: {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-orchestrate",
+                  scope: "global",
+                  title: "Jira Orchestrate",
+                  description: "Run MoonSpec from a Jira issue.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
               slug: "jira-orchestrate",
+              scope: "global",
+              title: "Jira Orchestrate",
+              description: "Run MoonSpec from a Jira issue.",
+              latestVersion: "1",
               version: "1",
-              inputs: { jira_issue_key: "THOR-352" },
-              stepIds: ["tpl:jira-orchestrate:1"],
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              inputs: [
+                {
+                  name: "jira_issue_key",
+                  label: "Jira Issue Key",
+                  type: "text",
+                  required: true,
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (
+          url.startsWith("/api/presets/jira-orchestrate:expand?scope=global")
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:jira-orchestrate:1",
+                  title: "Move Jira issue",
+                  instructions: "Transition THOR-352 to In Progress.",
+                  tool: { type: "skill", name: "jira-issue-updater" },
+                },
+              ],
+              appliedTemplate: {
+                slug: "jira-orchestrate",
+                version: "1",
+                inputs: { jira_issue_key: "THOR-352" },
+                stepIds: ["tpl:jira-orchestrate:1"],
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const presetSection = screen.getByLabelText("Task Presets");
     await within(presetSection).findByLabelText("Jira Issue Key");
-    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe(
-      "pr",
-    );
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+    ).toBe("pr");
 
     fireEvent.change(within(presetSection).getByLabelText("Jira Issue Key"), {
       target: { value: "THOR-352" },
@@ -7453,7 +7681,10 @@ describe.skip("Task Create Entrypoint", () => {
     expect(payload.publishMode).toBe("pr");
     expect(task.publish).toMatchObject({ mode: "pr" });
     expect(payload.mergeAutomation).toEqual({ enabled: true });
-    expect(task.tool).toMatchObject({ type: "skill", name: "jira-issue-updater" });
+    expect(task.tool).toMatchObject({
+      type: "skill",
+      name: "jira-issue-updater",
+    });
     expect(task.skill).toMatchObject({ id: "jira-issue-updater" });
     expect(task.skills).toEqual({ include: [{ name: "jira-issue-updater" }] });
     expect(task.appliedStepTemplates).toEqual([
@@ -7463,67 +7694,67 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("shows only PR publish choices for the Jira Breakdown and Orchestrate preset inputs", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-breakdown-orchestrate",
-                scope: "global",
-                title: "Jira Breakdown and Orchestrate",
-                description: "Create dependent Jira Orchestrate tasks.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "jira-breakdown-orchestrate",
-            scope: "global",
-            title: "Jira Breakdown and Orchestrate",
-            description: "Create dependent Jira Orchestrate tasks.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "feature_request",
-                label: "Declarative Design Path or Text",
-                type: "markdown",
-                required: true,
-              },
-              {
-                name: "jira_project_key",
-                label: "Jira Project Key",
-                type: "text",
-                required: true,
-                default: "MM",
-              },
-              {
-                name: "publish_mode",
-                label: "Publish Mode",
-                type: "enum",
-                required: true,
-                default: "pr_with_merge_automation",
-                options: ["pr", "pr_with_merge_automation"],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-breakdown-orchestrate",
+                  scope: "global",
+                  title: "Jira Breakdown and Orchestrate",
+                  description: "Create dependent Jira Orchestrate tasks.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (
+          url.startsWith("/api/presets/jira-breakdown-orchestrate?scope=global")
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "jira-breakdown-orchestrate",
+              scope: "global",
+              title: "Jira Breakdown and Orchestrate",
+              description: "Create dependent Jira Orchestrate tasks.",
+              latestVersion: "1",
+              version: "1",
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Declarative Design Path or Text",
+                  type: "markdown",
+                  required: true,
+                },
+                {
+                  name: "jira_project_key",
+                  label: "Jira Project Key",
+                  type: "text",
+                  required: true,
+                  default: "MM",
+                },
+                {
+                  name: "publish_mode",
+                  label: "Publish Mode",
+                  type: "enum",
+                  required: true,
+                  default: "pr_with_merge_automation",
+                  options: ["pr", "pr_with_merge_automation"],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -7537,103 +7768,102 @@ describe.skip("Task Create Entrypoint", () => {
       "Publish Mode",
     )) as HTMLSelectElement;
     expect(presetPublishSelect.value).toBe("pr_with_merge_automation");
-    expect(Array.from(presetPublishSelect.options).map((option) => option.text)).toEqual([
-      "PR",
-      "PR with Merge Automation",
-    ]);
+    expect(
+      Array.from(presetPublishSelect.options).map((option) => option.text),
+    ).toEqual(["PR", "PR with Merge Automation"]);
     expect(within(presetSection).queryByLabelText("Repository")).toBeNull();
     expect(within(presetSection).queryByLabelText("Runtime Mode")).toBeNull();
   });
 
   it("passes a preset-selected Jira board into Jira Breakdown expansion", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-breakdown",
-                scope: "global",
-                title: "Jira Breakdown",
-                description: "Create Jira stories from a breakdown.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/jira-breakdown?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "jira-breakdown",
-            scope: "global",
-            title: "Jira Breakdown",
-            description: "Create Jira stories from a breakdown.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "feature_request",
-                label: "Declarative Design Path or Text",
-                type: "markdown",
-                required: true,
-              },
-              {
-                name: "jira_project_key",
-                label: "Jira Project Key",
-                type: "text",
-                required: true,
-                default: "ENG",
-              },
-              {
-                name: "jira_board_id",
-                label: "Jira Board",
-                type: "jira_board",
-                required: false,
-                default: "42",
-              },
-              {
-                name: "jira_dependency_mode",
-                label: "Jira Dependency Mode",
-                type: "enum",
-                required: true,
-                default: "none",
-                options: ["none", "linear_blocker_chain"],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith("/api/presets/jira-breakdown:expand?scope=global")
-      ) {
-        const body = JSON.parse(String(init?.body || "{}"));
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:jira-breakdown:1:01",
-                title: "Create Jira stories",
-                instructions: `Selected Jira board ID: ${body.inputs.jira_board_id}`,
-              },
-            ],
-            appliedTemplate: {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-breakdown",
+                  scope: "global",
+                  title: "Jira Breakdown",
+                  description: "Create Jira stories from a breakdown.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/jira-breakdown?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
               slug: "jira-breakdown",
+              scope: "global",
+              title: "Jira Breakdown",
+              description: "Create Jira stories from a breakdown.",
+              latestVersion: "1",
               version: "1",
-              inputs: body.inputs,
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Declarative Design Path or Text",
+                  type: "markdown",
+                  required: true,
+                },
+                {
+                  name: "jira_project_key",
+                  label: "Jira Project Key",
+                  type: "text",
+                  required: true,
+                  default: "ENG",
+                },
+                {
+                  name: "jira_board_id",
+                  label: "Jira Board",
+                  type: "jira_board",
+                  required: false,
+                  default: "42",
+                },
+                {
+                  name: "jira_dependency_mode",
+                  label: "Jira Dependency Mode",
+                  type: "enum",
+                  required: true,
+                  default: "none",
+                  options: ["none", "linear_blocker_chain"],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/jira-breakdown:expand?scope=global")) {
+          const body = JSON.parse(String(init?.body || "{}"));
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:jira-breakdown:1:01",
+                  title: "Create Jira stories",
+                  instructions: `Selected Jira board ID: ${body.inputs.jira_board_id}`,
+                },
+              ],
+              appliedTemplate: {
+                slug: "jira-breakdown",
+                version: "1",
+                inputs: body.inputs,
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
@@ -7646,10 +7876,9 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBe(true);
     });
     fireEvent.change(boardSelect, { target: { value: "7" } });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      { target: { value: "docs/Design.md" } },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "docs/Design.md" },
+    });
     await clickApplyButton();
 
     await waitFor(() => {
@@ -7666,102 +7895,103 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("preserves typed preset text spacing and submits unchecked boolean inputs", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "option-demo",
-                scope: "global",
-                title: "Option Demo",
-                description: "Preset options.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/option-demo?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "option-demo",
-            scope: "global",
-            title: "Option Demo",
-            description: "Preset options.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "feature_request",
-                label: "Feature Request",
-                type: "markdown",
-                required: true,
-              },
-              {
-                name: "notes",
-                label: "Notes",
-                type: "text",
-                required: false,
-              },
-              {
-                name: "enabled",
-                label: "Enabled",
-                type: "boolean",
-                required: false,
-                default: true,
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/option-demo:expand?scope=global")) {
-        const body = JSON.parse(String(init?.body || "{}"));
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:option-demo:1:01",
-                title: "Options",
-                instructions: JSON.stringify(body.inputs),
-              },
-            ],
-            appliedTemplate: {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "option-demo",
+                  scope: "global",
+                  title: "Option Demo",
+                  description: "Preset options.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/option-demo?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
               slug: "option-demo",
+              scope: "global",
+              title: "Option Demo",
+              description: "Preset options.",
+              latestVersion: "1",
               version: "1",
-              inputs: body.inputs,
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Feature Request",
+                  type: "markdown",
+                  required: true,
+                },
+                {
+                  name: "notes",
+                  label: "Notes",
+                  type: "text",
+                  required: false,
+                },
+                {
+                  name: "enabled",
+                  label: "Enabled",
+                  type: "boolean",
+                  required: false,
+                  default: true,
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/option-demo:expand?scope=global")) {
+          const body = JSON.parse(String(init?.body || "{}"));
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:option-demo:1:01",
+                  title: "Options",
+                  instructions: JSON.stringify(body.inputs),
+                },
+              ],
+              appliedTemplate: {
+                slug: "option-demo",
+                version: "1",
+                inputs: body.inputs,
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const notesInput = (await screen.findByLabelText("Notes")) as HTMLInputElement;
+    const notesInput = (await screen.findByLabelText(
+      "Notes",
+    )) as HTMLInputElement;
     fireEvent.change(notesInput, { target: { value: "hello " } });
     expect(notesInput.value).toBe("hello ");
     const enabledInput = screen.getByLabelText("Enabled") as HTMLInputElement;
     expect(enabledInput.checked).toBe(true);
     fireEvent.click(enabledInput);
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      { target: { value: "Build configurable options." } },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Build configurable options." },
+    });
     await clickApplyButton();
 
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
-        String(url).startsWith(
-          "/api/presets/option-demo:expand?scope=global",
-        ),
+        String(url).startsWith("/api/presets/option-demo:expand?scope=global"),
       );
       expect(expandCall).toBeTruthy();
       const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
@@ -7772,130 +8002,132 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("clears remembered preset input values when switching presets", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "preset-a",
-                scope: "global",
-                title: "Preset A",
-                description: "First preset.",
-                latestVersion: "1",
-                version: "1",
-                inputs: [
-                  {
-                    name: "preset_a_input",
-                    label: "Preset A Input",
-                    type: "text",
-                    required: false,
-                  },
-                ],
-              },
-              {
-                slug: "preset-b",
-                scope: "global",
-                title: "Preset B",
-                description: "Second preset.",
-                latestVersion: "1",
-                version: "1",
-                inputs: [
-                  {
-                    name: "preset_b_input",
-                    label: "Preset B Input",
-                    type: "text",
-                    required: false,
-                  },
-                ],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/preset-a?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "preset-a",
-            scope: "global",
-            title: "Preset A",
-            description: "First preset.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "feature_request",
-                label: "Feature Request",
-                type: "markdown",
-                required: true,
-              },
-              {
-                name: "jira_dependency_mode",
-                label: "Jira Dependency Mode",
-                type: "enum",
-                required: true,
-                default: "linear_blocker_chain",
-                options: ["linear_blocker_chain", "none"],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/preset-b?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "preset-b",
-            scope: "global",
-            title: "Preset B",
-            description: "Second preset.",
-            latestVersion: "1",
-            version: "1",
-            inputs: [
-              {
-                name: "feature_request",
-                label: "Feature Request",
-                type: "markdown",
-                required: true,
-              },
-              {
-                name: "jira_dependency_mode",
-                label: "Jira Dependency Mode",
-                type: "enum",
-                required: true,
-                default: "none",
-                options: ["linear_blocker_chain", "none"],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/preset-b:expand?scope=global")) {
-        const body = JSON.parse(String(init?.body || "{}"));
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:preset-b:1:01",
-                title: "Preset B",
-                instructions: body.inputs.jira_dependency_mode,
-              },
-            ],
-            appliedTemplate: {
-              slug: "preset-b",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "preset-a",
+                  scope: "global",
+                  title: "Preset A",
+                  description: "First preset.",
+                  latestVersion: "1",
+                  version: "1",
+                  inputs: [
+                    {
+                      name: "preset_a_input",
+                      label: "Preset A Input",
+                      type: "text",
+                      required: false,
+                    },
+                  ],
+                },
+                {
+                  slug: "preset-b",
+                  scope: "global",
+                  title: "Preset B",
+                  description: "Second preset.",
+                  latestVersion: "1",
+                  version: "1",
+                  inputs: [
+                    {
+                      name: "preset_b_input",
+                      label: "Preset B Input",
+                      type: "text",
+                      required: false,
+                    },
+                  ],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/preset-a?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "preset-a",
+              scope: "global",
+              title: "Preset A",
+              description: "First preset.",
+              latestVersion: "1",
               version: "1",
-              inputs: body.inputs,
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Feature Request",
+                  type: "markdown",
+                  required: true,
+                },
+                {
+                  name: "jira_dependency_mode",
+                  label: "Jira Dependency Mode",
+                  type: "enum",
+                  required: true,
+                  default: "linear_blocker_chain",
+                  options: ["linear_blocker_chain", "none"],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/preset-b?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "preset-b",
+              scope: "global",
+              title: "Preset B",
+              description: "Second preset.",
+              latestVersion: "1",
+              version: "1",
+              inputs: [
+                {
+                  name: "feature_request",
+                  label: "Feature Request",
+                  type: "markdown",
+                  required: true,
+                },
+                {
+                  name: "jira_dependency_mode",
+                  label: "Jira Dependency Mode",
+                  type: "enum",
+                  required: true,
+                  default: "none",
+                  options: ["linear_blocker_chain", "none"],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/preset-b:expand?scope=global")) {
+          const body = JSON.parse(String(init?.body || "{}"));
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:preset-b:1:01",
+                  title: "Preset B",
+                  instructions: body.inputs.jira_dependency_mode,
+                },
+              ],
+              appliedTemplate: {
+                slug: "preset-b",
+                version: "1",
+                inputs: body.inputs,
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -7915,13 +8147,13 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, { target: { value: "global::::preset-b" } });
     await waitFor(() => {
       expect(
-        (screen.getByLabelText("Jira Dependency Mode") as HTMLSelectElement).value,
+        (screen.getByLabelText("Jira Dependency Mode") as HTMLSelectElement)
+          .value,
       ).toBe("none");
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      { target: { value: "Build the second preset." } },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Build the second preset." },
+    });
     await clickApplyButton();
 
     await waitFor(() => {
@@ -7936,31 +8168,35 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("preserves draft publish mode in edit mode when Jira Breakdown is the selected preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "jira-breakdown",
-                scope: "global",
-                title: "Jira Breakdown",
-                description: "Create Jira stories from a breakdown.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "jira-breakdown",
+                  scope: "global",
+                  title: "Jira Breakdown",
+                  description: "Create Jira stories from a breakdown.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderForEdit("mm:edit-123");
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
       expect((presetSelect as HTMLSelectElement).value).toBe(
@@ -7977,9 +8213,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits publish mode auto when the selected primary skill is pr-resolver", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
@@ -8015,9 +8249,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits manually selected publish mode auto for an auto-capable skill", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
@@ -8155,9 +8387,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("omits merge automation when a resolver skill is selected", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(await screen.findByLabelText("Publish Mode"), {
       target: { value: "pr_with_merge_automation" },
@@ -8264,9 +8494,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
@@ -8314,9 +8542,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(await screen.findByPlaceholderText("owner/repo")).not.toBeNull();
     expect(await screen.findByLabelText("Provider profile")).not.toBeNull();
-    expect(
-      await screen.findByLabelText("Instructions"),
-    ).not.toBeNull();
+    expect(await screen.findByLabelText("Instructions")).not.toBeNull();
     expect(await screen.findByLabelText("Branch")).not.toBeNull();
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
     expect(await screen.findByDisplayValue("3")).not.toBeNull();
@@ -8357,14 +8583,18 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(saveButton.querySelector("svg")).not.toBeNull();
     expect(saveButton.textContent).toBe("");
-    expect(deleteButton.getAttribute("title")).toBe("Choose a preset to delete");
+    expect(deleteButton.getAttribute("title")).toBe(
+      "Choose a preset to delete",
+    );
     expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
     expect(deleteButton.querySelector("svg")).not.toBeNull();
     expect(deleteButton.textContent).toBe("");
   });
 
   it("hides preset write actions when template saving is disabled", async () => {
-    const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    const disabledPayload = JSON.parse(
+      JSON.stringify(mockPayload),
+    ) as BootPayload;
     (
       disabledPayload.initialData as {
         dashboardConfig: {
@@ -8382,8 +8612,9 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       within(presetsSection).queryByRole("button", { name: "Delete preset" }),
     ).toBeNull();
-    expect(within(presetsSection).getByRole("button", { name: "Apply" }))
-      .toBeTruthy();
+    expect(
+      within(presetsSection).getByRole("button", { name: "Apply" }),
+    ).toBeTruthy();
   });
 
   it("disables preset deletion for global presets", async () => {
@@ -8441,7 +8672,9 @@ describe.skip("Task Create Entrypoint", () => {
         }),
       );
     });
-    expect(await screen.findByText("Deleted preset 'Personal Demo'.")).toBeTruthy();
+    expect(
+      await screen.findByText("Deleted preset 'Personal Demo'."),
+    ).toBeTruthy();
   });
 
   it("saves presets via the save preset dialog", async () => {
@@ -8487,7 +8720,9 @@ describe.skip("Task Create Entrypoint", () => {
       screen.getByRole("button", { name: "Add Step" }).getAttribute("title"),
     ).toBe("Add another workflow step");
     expect(
-      screen.getByRole("button", { name: "Start Workflow" }).getAttribute("title"),
+      screen
+        .getByRole("button", { name: "Start Workflow" })
+        .getAttribute("title"),
     ).toBe("Start this workflow");
   });
 
@@ -8537,8 +8772,9 @@ describe.skip("Task Create Entrypoint", () => {
       name: "Browse Jira issue",
     });
     await waitFor(() => {
-      expect(within(dialog).getByRole("button", { name: "To Do 1" }))
-        .toBeTruthy();
+      expect(
+        within(dialog).getByRole("button", { name: "To Do 1" }),
+      ).toBeTruthy();
     });
 
     expectAllButtonsHaveTitles(dialog);
@@ -8548,13 +8784,15 @@ describe.skip("Task Create Entrypoint", () => {
         .getAttribute("title"),
     ).toBe("Close Jira browser");
     expect(
-      within(dialog).getByRole("button", { name: "To Do 1" }).getAttribute("title"),
+      within(dialog)
+        .getByRole("button", { name: "To Do 1" })
+        .getAttribute("title"),
     ).toBe("Show Jira issues in To Do");
     expect(
-      within(dialog).getByRole("button", { name: /ENG-101/ }).getAttribute("title"),
-    ).toBe(
-      "Import Jira issue ENG-101 into Instructions",
-    );
+      within(dialog)
+        .getByRole("button", { name: /ENG-101/ })
+        .getAttribute("title"),
+    ).toBe("Import Jira issue ENG-101 into Instructions");
   });
 
   it("exposes the canonical Create page section order in create mode", async () => {
@@ -8608,18 +8846,16 @@ describe.skip("Task Create Entrypoint", () => {
   it("offers one Step Type control with Tool Skill and Preset choices", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
 
     const stepType = within(step).getByRole("group", {
       name: "Step Type",
     });
-    expect(stepType.querySelector("legend")?.classList.contains("sr-only")).toBe(
-      true,
-    );
+    expect(
+      stepType.querySelector("legend")?.classList.contains("sr-only"),
+    ).toBe(true);
     expect(
       Array.from(stepType.querySelectorAll("label")).map((option) =>
         option.textContent?.trim(),
@@ -8628,32 +8864,28 @@ describe.skip("Task Create Entrypoint", () => {
     expect(getStepTypeRadio(step, "Skill").checked).toBe(true);
     expect(getStepTypeRadio(step, "Tool")).toBeTruthy();
     expect(getStepTypeRadio(step, "Preset")).toBeTruthy();
-    expect(
-      within(step).getByLabelText(/Skill \(optional\)/),
-    ).toBeTruthy();
+    expect(within(step).getByLabelText(/Skill \(optional\)/)).toBeTruthy();
   });
 
   it("presents concise Step Type helper copy for Tool Skill and Preset", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
     const skillRadio = getStepTypeRadio(step, "Skill");
     const toolRadio = getStepTypeRadio(step, "Tool");
     const presetRadio = getStepTypeRadio(step, "Preset");
 
-    expect(skillRadio.closest(".segmented-control-item")?.getAttribute("title")).toBe(
-      "Skill asks an agent to perform work using reusable behavior.",
-    );
-    expect(toolRadio.closest(".segmented-control-item")?.getAttribute("title")).toBe(
-      "Tool runs a typed integration or system operation directly.",
-    );
-    expect(presetRadio.closest(".segmented-control-item")?.getAttribute("title")).toBe(
-      "Preset inserts a reusable set of configured steps.",
-    );
+    expect(
+      skillRadio.closest(".segmented-control-item")?.getAttribute("title"),
+    ).toBe("Skill asks an agent to perform work using reusable behavior.");
+    expect(
+      toolRadio.closest(".segmented-control-item")?.getAttribute("title"),
+    ).toBe("Tool runs a typed integration or system operation directly.");
+    expect(
+      presetRadio.closest(".segmented-control-item")?.getAttribute("title"),
+    ).toBe("Preset inserts a reusable set of configured steps.");
     expect(
       within(step).queryByText(
         "Skill asks an agent to perform work using reusable behavior.",
@@ -8666,12 +8898,12 @@ describe.skip("Task Create Entrypoint", () => {
   it("switches Step Type configuration areas while preserving instructions", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
-    const instructions = within(step).getByLabelText("Instructions") as HTMLTextAreaElement;
+    const instructions = within(step).getByLabelText(
+      "Instructions",
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(instructions, {
       target: { value: "Keep this Step Type instruction." },
@@ -8688,9 +8920,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(instructions.value).toBe("Keep this Step Type instruction.");
     expect(within(step).getByLabelText("Preset Template")).toBeTruthy();
     expect(within(step).queryByRole("button", { name: "Preview" })).toBeNull();
-    expect(
-      within(step).getByRole("button", { name: "Expand" }),
-    ).toBeTruthy();
+    expect(within(step).getByRole("button", { name: "Expand" })).toBeTruthy();
     expect(within(step).queryByLabelText(/Skill \(optional\)/)).toBeNull();
     expect(within(step).queryByLabelText("Tool ID")).toBeNull();
   });
@@ -8738,51 +8968,53 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("renders step preset options from catalog rows without detail requests", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "preset-a",
-                scope: "global",
-                title: "Preset A",
-                description: "First preset.",
-                latestVersion: "1",
-                version: "1",
-                inputs: [
-                  {
-                    name: "preset_a_input",
-                    label: "Preset A Input",
-                    type: "text",
-                    required: true,
-                  },
-                ],
-              },
-              {
-                slug: "preset-b",
-                scope: "global",
-                title: "Preset B",
-                description: "Second preset.",
-                latestVersion: "1",
-                version: "1",
-                inputs: [
-                  {
-                    name: "preset_b_input",
-                    label: "Preset B Input",
-                    type: "text",
-                    required: true,
-                  },
-                ],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "preset-a",
+                  scope: "global",
+                  title: "Preset A",
+                  description: "First preset.",
+                  latestVersion: "1",
+                  version: "1",
+                  inputs: [
+                    {
+                      name: "preset_a_input",
+                      label: "Preset A Input",
+                      type: "text",
+                      required: true,
+                    },
+                  ],
+                },
+                {
+                  slug: "preset-b",
+                  scope: "global",
+                  title: "Preset B",
+                  description: "Second preset.",
+                  latestVersion: "1",
+                  version: "1",
+                  inputs: [
+                    {
+                      name: "preset_b_input",
+                      label: "Preset B Input",
+                      type: "text",
+                      required: true,
+                    },
+                  ],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -8810,81 +9042,84 @@ describe.skip("Task Create Entrypoint", () => {
       expect(within(step).getByLabelText("Preset B Input")).toBeTruthy();
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) =>
-        String(url).startsWith("/api/presets/preset-a?scope=global") ||
-        String(url).startsWith("/api/presets/preset-b?scope=global"),
+      fetchSpy.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/presets/preset-a?scope=global") ||
+          String(url).startsWith("/api/presets/preset-b?scope=global"),
       ),
     ).toBe(false);
   });
 
   it("loads preset detail before expanding summary-only catalog rows", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "summary-preset",
-                scope: "global",
-                title: "Summary Preset",
-                description: "Summary-only catalog row.",
-                latestVersion: "1",
-                version: "1",
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/summary-preset?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "summary-preset",
-            scope: "global",
-            title: "Summary Preset",
-            description: "Loaded detail.",
-            latestVersion: "1",
-            version: "1",
-            inputSchema: {
-              type: "object",
-              required: ["feature_request"],
-              properties: {
-                feature_request: {
-                  type: "string",
-                  title: "Feature Request",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "summary-preset",
+                  scope: "global",
+                  title: "Summary Preset",
+                  description: "Summary-only catalog row.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/summary-preset?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "summary-preset",
+              scope: "global",
+              title: "Summary Preset",
+              description: "Loaded detail.",
+              latestVersion: "1",
+              version: "1",
+              inputSchema: {
+                type: "object",
+                required: ["feature_request"],
+                properties: {
+                  feature_request: {
+                    type: "string",
+                    title: "Feature Request",
+                  },
                 },
               },
-            },
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets/summary-preset:expand?scope=global")) {
-        const body = JSON.parse(String(init?.body || "{}")) as {
-          inputs?: Record<string, unknown>;
-        };
-        expect(body.inputs?.feature_request).toBe("Build summary fallback.");
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:summary-preset:1:01",
-                title: "Generated",
-                instructions: "Generated from detail.",
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/summary-preset:expand?scope=global")) {
+          const body = JSON.parse(String(init?.body || "{}")) as {
+            inputs?: Record<string, unknown>;
+          };
+          expect(body.inputs?.feature_request).toBe("Build summary fallback.");
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:summary-preset:1:01",
+                  title: "Generated",
+                  instructions: "Generated from detail.",
+                },
+              ],
+              appliedTemplate: {
+                slug: "summary-preset",
+                version: "1",
               },
-            ],
-            appliedTemplate: {
-              slug: "summary-preset",
-              version: "1",
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -8892,7 +9127,9 @@ describe.skip("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -8905,7 +9142,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
-    expect(await screen.findByDisplayValue("Generated from detail.")).toBeTruthy();
+    expect(
+      await screen.findByDisplayValue("Generated from detail."),
+    ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) =>
         String(url).startsWith("/api/presets/summary-preset?scope=global"),
@@ -8920,7 +9159,9 @@ describe.skip("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -8930,62 +9171,69 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
-    expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
-    expect(screen.getByDisplayValue("Write a plan for the task builder recovery.")).toBeTruthy();
+    expect(
+      await screen.findByDisplayValue(
+        "Clarify the {{ inputs.feature_name }} scope.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Write a plan for the task builder recovery."),
+    ).toBeTruthy();
     expect(screen.queryByLabelText("Step Preset")).toBeNull();
 
     const firstGeneratedStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(firstGeneratedStep).getByLabelText("Instructions"), {
-      target: { value: "Edited generated step." },
-    });
+    fireEvent.change(
+      within(firstGeneratedStep).getByLabelText("Instructions"),
+      {
+        target: { value: "Edited generated step." },
+      },
+    );
     expect(screen.getByDisplayValue("Edited generated step.")).toBeTruthy();
   });
 
   it("submits preset-generated tool steps with their executable tool binding after apply", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:speckit-demo:1.2.3:01",
-                title: "Fetch Jira issue",
-                instructions: "Fetch MM-558.",
-                tool: {
-                  type: "tool",
-                  id: "jira.get_issue",
-                  inputs: { issueKey: "MM-558" },
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets/speckit-demo:expand?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:speckit-demo:1.2.3:01",
+                  title: "Fetch Jira issue",
+                  instructions: "Fetch MM-558.",
+                  tool: {
+                    type: "tool",
+                    id: "jira.get_issue",
+                    inputs: { issueKey: "MM-558" },
+                  },
                 },
-              },
-              {
-                id: "tpl:speckit-demo:1.2.3:02",
-                title: "Implement issue",
-                instructions: "Implement MM-558.",
-                skill: {
-                  id: "moonspec-orchestrate",
-                  args: { issueKey: "MM-558" },
+                {
+                  id: "tpl:speckit-demo:1.2.3:02",
+                  title: "Implement issue",
+                  instructions: "Implement MM-558.",
+                  skill: {
+                    id: "moonspec-orchestrate",
+                    args: { issueKey: "MM-558" },
+                  },
                 },
+              ],
+              appliedTemplate: {
+                slug: "speckit-demo",
+                version: "1.2.3",
               },
-            ],
-            appliedTemplate: {
-              slug: "speckit-demo",
-              version: "1.2.3",
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -8993,7 +9241,9 @@ describe.skip("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -9032,20 +9282,18 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps the draft unchanged when step preset expansion fails", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: false,
-          text: async () => "Generated step validation failed.",
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets/speckit-demo:expand?scope=global")) {
+          return Promise.resolve({
+            ok: false,
+            text: async () => "Generated step validation failed.",
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -9056,7 +9304,9 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Keep authored preset step." },
     });
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -9072,7 +9322,11 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByDisplayValue("Keep authored preset step.")).toBeTruthy();
-    expect(screen.queryByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeNull();
+    expect(
+      screen.queryByDisplayValue(
+        "Clarify the {{ inputs.feature_name }} scope.",
+      ),
+    ).toBeNull();
   });
 
   it("blocks submission while unresolved preset steps remain", async () => {
@@ -9089,9 +9343,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
-      await screen.findByText(
-        "Expand Preset steps before submitting.",
-      ),
+      await screen.findByText("Expand Preset steps before submitting."),
     ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
@@ -9101,9 +9353,8 @@ describe.skip("Task Create Entrypoint", () => {
   it("expands a step preset from the step editor without using Task Presets", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const presetManagementSection = await screen.findByLabelText(
-      "Preset Management",
-    );
+    const presetManagementSection =
+      await screen.findByLabelText("Preset Management");
     expect(
       within(presetManagementSection).queryByRole("button", { name: "Apply" }),
     ).toBeNull();
@@ -9112,7 +9363,9 @@ describe.skip("Task Create Entrypoint", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -9122,12 +9375,14 @@ describe.skip("Task Create Entrypoint", () => {
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
-    expect(await screen.findByDisplayValue("Clarify the {{ inputs.feature_name }} scope.")).toBeTruthy();
+    expect(
+      await screen.findByDisplayValue(
+        "Clarify the {{ inputs.feature_name }} scope.",
+      ),
+    ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) =>
-        String(url).startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        ),
+        String(url).startsWith("/api/presets/speckit-demo:expand?scope=global"),
       ),
     ).toBe(true);
   });
@@ -9135,9 +9390,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("visibly discards incompatible Skill fields after changing Step Type", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     const step = primaryStep as HTMLElement;
 
@@ -9260,7 +9513,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
-      await screen.findByText("Step 1 Tool Inputs must be valid JSON object text."),
+      await screen.findByText(
+        "Step 1 Tool Inputs must be valid JSON object text.",
+      ),
     ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
@@ -9277,12 +9532,16 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.queryByLabelText("Preset Template")).toBeNull();
     expect(screen.queryByText("Browse Jira issue")).toBeNull();
     expect(screen.queryByLabelText(/attachments/i)).toBeNull();
-    expect(screen.getByRole("button", { name: "Start Workflow" })).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Start Workflow" }),
+    ).not.toBeNull();
   });
 
   it("does not let Jira import bypass repository validation", async () => {
     renderWithClient(
-      <WorkflowStartPage payload={withJiraIntegration(withoutDefaultRepository())} />,
+      <WorkflowStartPage
+        payload={withJiraIntegration(withoutDefaultRepository())}
+      />,
     );
 
     const stepInstructions = await screen.findByLabelText("Instructions");
@@ -9294,7 +9553,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Complete Jira issue ENG-202: Build browser shell",
@@ -9314,19 +9575,24 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("does not let image upload bypass repository validation or upload artifacts first", async () => {
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withoutDefaultRepository())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withoutDefaultRepository())}
+      />,
     );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
-      target: {
-        files: [
-          new File(["fake image"], "wireframe.png", { type: "image/png" }),
-        ],
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: {
+          files: [
+            new File(["fake image"], "wireframe.png", { type: "image/png" }),
+          ],
+        },
       },
-    });
+    );
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
@@ -9353,12 +9619,12 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
@@ -9410,12 +9676,12 @@ describe.skip("Task Create Entrypoint", () => {
     if (!floatingBar) {
       throw new Error("Expected one floating launch rail");
     }
-    expect(floatingBar.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
-    expect(within(floatingBar).getByRole("button", { name: "Start Workflow" })).toBe(
-      createButton,
-    );
+    expect(
+      floatingBar.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
+    expect(
+      within(floatingBar).getByRole("button", { name: "Start Workflow" }),
+    ).toBe(createButton);
     expect(createButton.getAttribute("title")).toBe("Start this workflow");
   });
 
@@ -9424,7 +9690,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     const instructions = await screen.findByLabelText("Instructions");
     expect(instructions.closest(".queue-floating-bar")).toBeNull();
-    expect(instructions.classList.contains("queue-step-instructions")).toBe(true);
+    expect(instructions.classList.contains("queue-step-instructions")).toBe(
+      true,
+    );
     expect(dashboardCss).toMatch(
       /\.queue-step-instructions,\s*\.queue-step-skill-args\s*\{[^}]*background:\s*var\(--mm-input-well\);/s,
     );
@@ -9444,8 +9712,9 @@ describe.skip("Task Create Entrypoint", () => {
     expect(stepsSection).not.toBeNull();
     expect(stepsSection?.classList.contains("card")).toBe(true);
     expect(
-      Array.from(document.querySelectorAll<HTMLElement>(".queue-step-section"))
-        .some((element) => element.classList.contains("card")),
+      Array.from(
+        document.querySelectorAll<HTMLElement>(".queue-step-section"),
+      ).some((element) => element.classList.contains("card")),
     ).toBe(false);
 
     const submitSection = document.querySelector<HTMLElement>(
@@ -9466,33 +9735,37 @@ describe.skip("Task Create Entrypoint", () => {
     expect(stepExtension).not.toBeNull();
     expect(floatingBar).not.toBeNull();
     expect(floatingBarRow).not.toBeNull();
-    expect(addStepButton.closest('[data-canonical-create-section="Steps"]')).toBe(
-      stepsSection,
-    );
-    expect(addStepButton.classList.contains("queue-step-extension-button")).toBe(
-      true,
-    );
+    expect(
+      addStepButton.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
+    expect(
+      addStepButton.classList.contains("queue-step-extension-button"),
+    ).toBe(true);
     expect(floatingBar?.classList.contains("queue-step-submit-actions")).toBe(
       true,
     );
     expect(repoInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
-    expect(branchSelect.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(branchSelect.closest(".queue-floating-bar-row")).toBe(
+      floatingBarRow,
+    );
     expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
       floatingBarRow,
     );
     expect(reportToggle.closest(".queue-floating-bar")).toBeNull();
-    expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
     expect(
-      reportToggle.closest('[data-canonical-create-section="Execution controls"]'),
+      createButton.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
+    expect(
+      reportToggle.closest(
+        '[data-canonical-create-section="Execution controls"]',
+      ),
     ).not.toBeNull();
     expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
-    expect(branchSelect.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
+    expect(
+      branchSelect.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
     ).toBe(submitSection);
@@ -9511,7 +9784,9 @@ describe.skip("Task Create Entrypoint", () => {
       publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
     ).toBeNull();
     expect(
-      publishModeSelect.closest('[data-canonical-create-section="Execution context"]'),
+      publishModeSelect.closest(
+        '[data-canonical-create-section="Execution context"]',
+      ),
     ).toBeNull();
     expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
@@ -9554,28 +9829,36 @@ describe.skip("Task Create Entrypoint", () => {
   it("applies the liquid glass treatment to the bottom submission controls without changing accessible controls", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const createButton = await screen.findByRole("button", { name: "Start Workflow" });
-    const floatingBar = createButton.closest<HTMLElement>(".queue-floating-bar");
+    const createButton = await screen.findByRole("button", {
+      name: "Start Workflow",
+    });
+    const floatingBar = createButton.closest<HTMLElement>(
+      ".queue-floating-bar",
+    );
 
     expect(floatingBar).not.toBeNull();
-    expect(floatingBar?.classList.contains("queue-floating-bar--liquid-glass")).toBe(
-      true,
-    );
-    expect(within(floatingBar as HTMLElement).getByLabelText("GitHub Repo")).toBe(
-      screen.getByLabelText("GitHub Repo"),
-    );
+    expect(
+      floatingBar?.classList.contains("queue-floating-bar--liquid-glass"),
+    ).toBe(true);
+    expect(
+      within(floatingBar as HTMLElement).getByLabelText("GitHub Repo"),
+    ).toBe(screen.getByLabelText("GitHub Repo"));
     expect(within(floatingBar as HTMLElement).getByLabelText("Branch")).toBe(
       screen.getByLabelText("Branch"),
     );
-    expect(within(floatingBar as HTMLElement).getByLabelText("Publish Mode")).toBe(
-      screen.getByLabelText("Publish Mode"),
-    );
     expect(
-      within(floatingBar as HTMLElement).queryByLabelText("Produce report artifact"),
+      within(floatingBar as HTMLElement).getByLabelText("Publish Mode"),
+    ).toBe(screen.getByLabelText("Publish Mode"));
+    expect(
+      within(floatingBar as HTMLElement).queryByLabelText(
+        "Produce report artifact",
+      ),
     ).toBeNull();
-    expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Start Workflow" })).toBe(
-      createButton,
-    );
+    expect(
+      within(floatingBar as HTMLElement).getByRole("button", {
+        name: "Start Workflow",
+      }),
+    ).toBe(createButton);
   });
 
   it("keeps the bottom submission controls present during liquid glass initialization", () => {
@@ -9633,7 +9916,6 @@ describe.skip("Task Create Entrypoint", () => {
     );
   });
 
-
   it("loads branches through MoonMind and submits one authored branch", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -9687,27 +9969,29 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps the branch field empty when repository defaults are available", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/github/branches?repository=MoonLadderStudios%2FOtherRepo",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              { value: "develop", label: "develop", source: "github" },
-              { value: "release", label: "release", source: "github" },
-            ],
-            defaultBranch: "develop",
-            error: null,
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.startsWith(
+            "/api/github/branches?repository=MoonLadderStudios%2FOtherRepo",
+          )
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { value: "develop", label: "develop", source: "github" },
+                { value: "release", label: "release", source: "github" },
+              ],
+              defaultBranch: "develop",
+              error: null,
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -9747,20 +10031,22 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("submits the fetched default branch even when it is not in the loaded options", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/github/branches")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [{ value: "release", label: "release", source: "github" }],
-            defaultBranch: "trunk",
-            error: null,
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [{ value: "release", label: "release", source: "github" }],
+              defaultBranch: "trunk",
+              error: null,
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -9824,13 +10110,15 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps branch loading text inside the dropdown only", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/github/branches")) {
-        return new Promise<Response>(() => {});
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/github/branches")) {
+          return new Promise<Response>(() => {});
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -9839,7 +10127,9 @@ describe.skip("Task Create Entrypoint", () => {
     )) as HTMLInputElement;
 
     await waitFor(() => {
-      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+      expect(branchInput.getAttribute("placeholder")).toBe(
+        "Loading branches...",
+      );
       expect(branchInput.getAttribute("title")).toBe(
         "Loading branches for the selected repository...",
       );
@@ -9858,17 +10148,19 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("shows branch loading text below the dropdown when a selected branch is hidden during reload", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/github/branches?repository=MoonLadderStudios%2FOtherRepo",
-        )
-      ) {
-        return new Promise<Response>(() => {});
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.startsWith(
+            "/api/github/branches?repository=MoonLadderStudios%2FOtherRepo",
+          )
+        ) {
+          return new Promise<Response>(() => {});
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -9933,7 +10225,9 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBe(true);
     expect(
-      screen.queryByText("Branch lookup requires a valid GitHub repository value."),
+      screen.queryByText(
+        "Branch lookup requires a valid GitHub repository value.",
+      ),
     ).toBeNull();
   });
 
@@ -9959,9 +10253,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       urls.every(
         (url) =>
-          url.startsWith("/api/") ||
-          url.startsWith("/api?") ||
-          url === "/api",
+          url.startsWith("/api/") || url.startsWith("/api?") || url === "/api",
       ),
     ).toBe(true);
     expect(
@@ -9981,10 +10273,7 @@ describe.skip("Task Create Entrypoint", () => {
       const labels = Array.from(
         (providerSelect as HTMLSelectElement).options,
       ).map((option) => option.text);
-      expect(labels).toEqual([
-        "Codex Default (Default)",
-        "Codex Secondary",
-      ]);
+      expect(labels).toEqual(["Codex Default (Default)", "Codex Secondary"]);
       expect((providerSelect as HTMLSelectElement).value).toBe(
         "profile:codex-default",
       );
@@ -10081,7 +10370,11 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => providerProfileItems,
           } as Response);
         }
-        if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow")) {
+        if (
+          url.startsWith(
+            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
+          )
+        ) {
           const depItems = Array.from({ length: 12 }, (_, i) => ({
             taskId: `mm:dep-${i + 1}`,
             workflowType: "MoonMind.UserWorkflow",
@@ -10205,142 +10498,143 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
-  it(
-    "retries transient artifact completion conflicts before creating the task",
-    async () => {
-      let completeAttempts = 0;
-      const originalRetryDelays = [...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
+  it("retries transient artifact completion conflicts before creating the task", async () => {
+    let completeAttempts = 0;
+    const originalRetryDelays = [...ARTIFACT_COMPLETE_RETRY_DELAYS_MS];
 
-      try {
-        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
-          0,
-          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
-          1,
-          1,
-          1,
-          1,
-          1,
-        );
-        fetchSpy.mockImplementation(
-          (input: RequestInfo | URL, init?: RequestInit) => {
-            const url = String(input);
-            if (url.includes("/api/v1/provider-profiles")) {
+    try {
+      ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+        0,
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+        1,
+        1,
+        1,
+        1,
+        1,
+      );
+      fetchSpy.mockImplementation(
+        (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes("/api/v1/provider-profiles")) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => [],
+            } as Response);
+          }
+          if (url === "/api/artifacts") {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                artifact_ref: {
+                  artifact_id: "art-001",
+                },
+                upload: {
+                  mode: "single_put",
+                  upload_url: "/api/artifacts/art-001/content",
+                  expires_at: "2026-04-02T00:00:00Z",
+                  max_size_bytes: 100000,
+                  required_headers: {},
+                },
+              }),
+            } as Response);
+          }
+          if (url === "/api/artifacts/art-001/content") {
+            return Promise.resolve({
+              ok: true,
+              text: async () => "",
+            } as Response);
+          }
+          if (url === "/api/artifacts/art-001/complete") {
+            completeAttempts += 1;
+            if (completeAttempts < 5) {
               return Promise.resolve({
-                ok: true,
-                json: async () => [],
-              } as Response);
-            }
-            if (url === "/api/artifacts") {
-              return Promise.resolve({
-                ok: true,
-                json: async () => ({
-                  artifact_ref: {
-                    artifact_id: "art-001",
-                  },
-                  upload: {
-                    mode: "single_put",
-                    upload_url: "/api/artifacts/art-001/content",
-                    expires_at: "2026-04-02T00:00:00Z",
-                    max_size_bytes: 100000,
-                    required_headers: {},
-                  },
-                }),
-              } as Response);
-            }
-            if (url === "/api/artifacts/art-001/content") {
-              return Promise.resolve({
-                ok: true,
-                text: async () => "",
-              } as Response);
-            }
-            if (url === "/api/artifacts/art-001/complete") {
-              completeAttempts += 1;
-              if (completeAttempts < 5) {
-                return Promise.resolve({
-                  ok: false,
-                  status: 409,
-                  text: async () =>
-                    JSON.stringify({
-                      detail: {
-                        code: "artifact_state_error",
-                        message: "artifact upload is not complete",
-                      },
-                    }),
-                } as Response);
-              }
-              return Promise.resolve({
-                ok: true,
-                json: async () => ({ artifact_id: "art-001" }),
-              } as Response);
-            }
-            if (url === "/api/artifacts/art-001/links") {
-              return Promise.resolve({
-                ok: true,
-                json: async () => ({ artifact_id: "art-001" }),
-              } as Response);
-            }
-            if (url.startsWith("/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow")) {
-              const depItems = Array.from({ length: 12 }, (_, i) => ({
-                taskId: `mm:dep-${i + 1}`,
-                workflowType: "MoonMind.UserWorkflow",
-                entry: "user_workflow",
-                title: i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
-                state: i % 3 === 0 ? "completed" : "executing",
-              }));
-              return Promise.resolve({
-                ok: true,
-                json: async () => ({
-                  items: depItems,
-                }),
-              } as Response);
-            }
-            if (url === "/api/executions") {
-              return Promise.resolve({
-                ok: true,
-                json: async () => ({
-                  workflowId: "mm:workflow-123",
-                  runId: "run-123",
-                  namespace: "moonmind",
-                  redirectPath: "/workflows/mm:workflow-123?source=temporal",
-                }),
+                ok: false,
+                status: 409,
+                text: async () =>
+                  JSON.stringify({
+                    detail: {
+                      code: "artifact_state_error",
+                      message: "artifact upload is not complete",
+                    },
+                  }),
               } as Response);
             }
             return Promise.resolve({
-              ok: false,
-              status: 404,
-              statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
-              text: async () => "Unhandled fetch",
+              ok: true,
+              json: async () => ({ artifact_id: "art-001" }),
             } as Response);
-          },
-        );
+          }
+          if (url === "/api/artifacts/art-001/links") {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ artifact_id: "art-001" }),
+            } as Response);
+          }
+          if (
+            url.startsWith(
+              "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
+            )
+          ) {
+            const depItems = Array.from({ length: 12 }, (_, i) => ({
+              taskId: `mm:dep-${i + 1}`,
+              workflowType: "MoonMind.UserWorkflow",
+              entry: "user_workflow",
+              title:
+                i === 0 ? "Build shared schema" : `Dependency task ${i + 1}`,
+              state: i % 3 === 0 ? "completed" : "executing",
+            }));
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                items: depItems,
+              }),
+            } as Response);
+          }
+          if (url === "/api/executions") {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                workflowId: "mm:workflow-123",
+                runId: "run-123",
+                namespace: "moonmind",
+                redirectPath: "/workflows/mm:workflow-123?source=temporal",
+              }),
+            } as Response);
+          }
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            statusText: `Unhandled fetch for ${url} ${String(init?.method || "GET")}`,
+            text: async () => "Unhandled fetch",
+          } as Response);
+        },
+      );
 
-        renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-        fireEvent.change(await screen.findByLabelText("Instructions"), {
-          target: { value: "Large instructions ".repeat(1000) },
-        });
-        fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Large instructions ".repeat(1000) },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-        await waitFor(
-          () => {
-            expect(completeAttempts).toBe(5);
-            expect(fetchSpy).toHaveBeenCalledWith(
-              "/api/executions",
-              expect.objectContaining({ method: "POST" }),
-            );
-          },
-          { timeout: 9000 },
-        );
-      } finally {
-        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
-          0,
-          ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
-          ...originalRetryDelays,
-        );
-      }
-    },
-    10000,
-  );
+      await waitFor(
+        () => {
+          expect(completeAttempts).toBe(5);
+          expect(fetchSpy).toHaveBeenCalledWith(
+            "/api/executions",
+            expect.objectContaining({ method: "POST" }),
+          );
+        },
+        { timeout: 9000 },
+      );
+    } finally {
+      ARTIFACT_COMPLETE_RETRY_DELAYS_MS.splice(
+        0,
+        ARTIFACT_COMPLETE_RETRY_DELAYS_MS.length,
+        ...originalRetryDelays,
+      );
+    }
+  }, 10000);
 
   it("uploads oversized step instructions as a JSON artifact and strips inline step text", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -10406,62 +10700,60 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("applies a preset into task steps and submits them", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:speckit-demo:1.2.3:01",
-                title: "Clarify spec",
-                instructions: "Clarify the {{ inputs.feature_name }} scope.",
-                jiraOrchestration: {},
-                skill: {
-                  id: "speckit-clarify",
-                  args: { feature: "Task Create" },
-                },
-              },
-              {
-                id: "tpl:speckit-demo:1.2.3:02",
-                title: "Plan implementation",
-                instructions: "Write a plan for the task builder recovery.",
-                storyOutput: {
-                  mode: "jira",
-                  jira: {
-                    projectKey: "MM",
-                    issueTypeName: "Story",
-                    dependencyMode: "linear_blocker_chain",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets/speckit-demo:expand?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:speckit-demo:1.2.3:01",
+                  title: "Clarify spec",
+                  instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                  jiraOrchestration: {},
+                  skill: {
+                    id: "speckit-clarify",
+                    args: { feature: "Task Create" },
                   },
                 },
-                jiraOrchestration: {
-                  task: {
-                    repository: "MoonLadderStudios/MoonMind",
-                    runtime: { mode: "codex_cli" },
-                    publish: {
-                      mode: "pr",
-                      mergeAutomation: { enabled: true },
+                {
+                  id: "tpl:speckit-demo:1.2.3:02",
+                  title: "Plan implementation",
+                  instructions: "Write a plan for the task builder recovery.",
+                  storyOutput: {
+                    mode: "jira",
+                    jira: {
+                      projectKey: "MM",
+                      issueTypeName: "Story",
+                      dependencyMode: "linear_blocker_chain",
                     },
                   },
-                  traceability: { sourceIssueKey: "MM-404" },
+                  jiraOrchestration: {
+                    task: {
+                      repository: "MoonLadderStudios/MoonMind",
+                      runtime: { mode: "codex_cli" },
+                      publish: {
+                        mode: "pr",
+                        mergeAutomation: { enabled: true },
+                      },
+                    },
+                    traceability: { sourceIssueKey: "MM-404" },
+                  },
                 },
+              ],
+              appliedTemplate: {
+                slug: "speckit-demo",
+                version: "1.2.3",
               },
-            ],
-            appliedTemplate: {
-              slug: "speckit-demo",
-              version: "1.2.3",
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -10478,12 +10770,9 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "global::::speckit-demo" },
     });
 
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
 
     await clickApplyButton();
 
@@ -10509,16 +10798,16 @@ describe.skip("Task Create Entrypoint", () => {
       .filter(([url]) => String(url) === "/api/executions")
       .at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
-    expect(request.payload.task.instructions).toBe('Task Create');
+    expect(request.payload.task.instructions).toBe("Task Create");
     // Address: Copilot r3034495957 — assert skills and derived title in preset-submit.
     // The applied preset slug is the workflow-level primary skill even when
     // the first preset step has its own explicit execution skill.
     expect(request.payload.task.skills).toEqual({
       include: [{ name: "speckit-demo" }],
     });
-    expect(request.payload.task.title).toBe('Task Create');
-    expect(request.payload.task.tool.name).toBe('speckit-demo');
-    expect(request.payload.task.skill.id).toBe('speckit-demo');
+    expect(request.payload.task.title).toBe("Task Create");
+    expect(request.payload.task.tool.name).toBe("speckit-demo");
+    expect(request.payload.task.skill.id).toBe("speckit-demo");
     expect(request.payload.task.steps).toEqual([
       {
         id: "tpl:speckit-demo:1.2.3:01",
@@ -10570,62 +10859,58 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("does not autofill required repository template input from instructions", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith("/api/presets/speckit-demo?scope=global")
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "speckit-demo",
-            scope: "global",
-            title: "Spec Kit Demo",
-            description: "Seed a repository-aware flow.",
-            latestVersion: "1.2.3",
-            version: "1.2.3",
-            inputs: [
-              {
-                name: "feature_name",
-                label: "Feature Name",
-                type: "text",
-                required: true,
-              },
-              {
-                name: "repository",
-                label: "Repository",
-                type: "text",
-                required: true,
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:speckit-demo:1.2.3:01",
-                title: "Clarify spec",
-                instructions: "Clarify the requested scope.",
-              },
-            ],
-            appliedTemplate: {
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
               slug: "speckit-demo",
+              scope: "global",
+              title: "Spec Kit Demo",
+              description: "Seed a repository-aware flow.",
+              latestVersion: "1.2.3",
               version: "1.2.3",
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              inputs: [
+                {
+                  name: "feature_name",
+                  label: "Feature Name",
+                  type: "text",
+                  required: true,
+                },
+                {
+                  name: "repository",
+                  label: "Repository",
+                  type: "text",
+                  required: true,
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/speckit-demo:expand?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:speckit-demo:1.2.3:01",
+                  title: "Clarify spec",
+                  instructions: "Clarify the requested scope.",
+                },
+              ],
+              appliedTemplate: {
+                slug: "speckit-demo",
+                version: "1.2.3",
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(
       <WorkflowStartPage payload={withoutDefaultRepository(mockPayload)} />,
@@ -10643,12 +10928,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Route Jira child tasks correctly." },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Route Jira child tasks correctly." },
+    });
     await clickApplyButton();
 
     await waitFor(() => {
@@ -10662,9 +10944,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const expandCall = fetchSpy.mock.calls
       .filter(([url]) =>
-        String(url).startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        ),
+        String(url).startsWith("/api/presets/speckit-demo:expand?scope=global"),
       )
       .at(-1);
     const request = JSON.parse(String(expandCall?.[1]?.body));
@@ -10696,7 +10976,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(screen.getByDisplayValue("Keep this authored step.")).toBeTruthy();
     expect(
-      screen.queryByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+      screen.queryByDisplayValue(
+        "Clarify the {{ inputs.feature_name }} scope.",
+      ),
     ).toBeNull();
     expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
   });
@@ -10716,23 +10998,17 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
 
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create with revised objective" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create with revised objective" },
+    });
 
     expect(
       screen.getByText(
@@ -10760,12 +11036,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -10774,14 +11047,9 @@ describe.skip("Task Create Entrypoint", () => {
     const objectiveFile = new File(["objective image"], "objective.png", {
       type: "image/png",
     });
-    fireEvent.change(
-      await screen.findByLabelText(
-        "Instructions attachments",
-      ),
-      {
-        target: { files: [objectiveFile] },
-      },
-    );
+    fireEvent.change(await screen.findByLabelText("Instructions attachments"), {
+      target: { files: [objectiveFile] },
+    });
 
     expect(screen.getByRole("button", { name: "Reapply preset" })).toBeTruthy();
     expect(
@@ -10844,21 +11112,21 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
     );
 
     const file = new File(["step image"], "step.png", { type: "image/png" });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
-      target: { files: [file] },
-    });
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: { files: [file] },
+      },
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -10888,52 +11156,48 @@ describe.skip("Task Create Entrypoint", () => {
         ],
       }),
     );
-    expect([undefined, null, ""]).toContain(
-      request.payload.task.steps[0]?.id,
-    );
+    expect([undefined, null, ""]).toContain(request.payload.task.steps[0]?.id);
   });
 
   it("preserves template step identity when template attachments remain unchanged", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
-      ) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            steps: [
-              {
-                id: "tpl:speckit-demo:1.2.3:01",
-                title: "Clarify spec",
-                instructions: "Clarify the {{ inputs.feature_name }} scope.",
-                inputAttachments: [
-                  {
-                    artifactId: "art-template",
-                    filename: "template.png",
-                    contentType: "image/png",
-                    sizeBytes: 10,
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets/speckit-demo:expand?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:speckit-demo:1.2.3:01",
+                  title: "Clarify spec",
+                  instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                  inputAttachments: [
+                    {
+                      artifactId: "art-template",
+                      filename: "template.png",
+                      contentType: "image/png",
+                      sizeBytes: 10,
+                    },
+                  ],
+                  skill: {
+                    id: "speckit-clarify",
+                    args: { feature: "Task Create" },
                   },
-                ],
-                skill: {
-                  id: "speckit-clarify",
-                  args: { feature: "Task Create" },
                 },
+              ],
+              appliedTemplate: {
+                slug: "speckit-demo",
+                version: "1.2.3",
               },
-            ],
-            appliedTemplate: {
-              slug: "speckit-demo",
-              version: "1.2.3",
-            },
-            warnings: [],
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+              warnings: [],
+            }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -10949,12 +11213,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -11028,9 +11289,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     fireEvent.change(
@@ -11062,9 +11321,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save preset" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Save preset" }));
 
     await waitFor(() => {
       expect(
@@ -11088,9 +11345,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const primaryStep = (await screen.findByText("Step 1")).closest(
-      "section",
-    );
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
     expect(primaryStep).not.toBeNull();
 
     fireEvent.change(
@@ -11117,9 +11372,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save preset" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Save preset" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -11187,7 +11440,9 @@ describe.skip("Task Create Entrypoint", () => {
     // The list should have exactly ONE entry.
     const list = document.getElementById("queue-dependency-list");
     expect(list).toBeTruthy();
-    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(
+      1,
+    );
 
     // Add a second dependency to verify the list grows.
     fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
@@ -11195,7 +11450,9 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     await waitFor(() => {
-      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(2);
+      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(
+        2,
+      );
     });
   });
 
@@ -11217,7 +11474,9 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       const list = document.getElementById("queue-dependency-list");
       expect(list).toBeTruthy();
-      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(10);
+      expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(
+        10,
+      );
     });
 
     // Try to add an 11th.
@@ -11228,36 +11487,38 @@ describe.skip("Task Create Entrypoint", () => {
     // Still 10 items.
     const list = document.getElementById("queue-dependency-list");
     expect(list).toBeTruthy();
-    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(10);
+    expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(
+      10,
+    );
 
     // Limit-exceeded message should be visible.
-    expect(
-      screen.getByText(/at most 10 direct dependencies/),
-    ).toBeTruthy();
+    expect(screen.getByText(/at most 10 direct dependencies/)).toBeTruthy();
   });
 
   it("keeps manual task submission available when dependency options fail to load", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (
-        url.startsWith(
-          "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
-        )
-      ) {
-        return Promise.resolve({
-          ok: false,
-          status: 503,
-          text: async () =>
-            JSON.stringify({
-              detail: {
-                message: "Temporal visibility is unavailable.",
-              },
-            }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (
+          url.startsWith(
+            "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.UserWorkflow&entry=user_workflow",
+          )
+        ) {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  message: "Temporal visibility is unavailable.",
+                },
+              }),
+          } as Response);
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -11267,7 +11528,9 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Create the task manually after dependency lookup fails." },
+      target: {
+        value: "Create the task manually after dependency lookup fails.",
+      },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -11325,8 +11588,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       await screen.findByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
-    expect(screen.getByText("Target: Instructions (Preset)"))
-      .toBeTruthy();
+    expect(screen.getByText("Target: Instructions (Preset)")).toBeTruthy();
   });
 
   it("opens the Jira browser from a step target", async () => {
@@ -11369,50 +11631,55 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("renders Jira board items for task, bug, and sub-task issue types", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/boards/42/issues") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            boardId: "42",
-            columns: [
-              { id: "todo", name: "To Do", count: 2 },
-              { id: "doing", name: "Doing", count: 1 },
-            ],
-            itemsByColumn: {
-              todo: [
-                {
-                  issueKey: "ENG-301",
-                  summary: "Fix import bug",
-                  issueType: "Bug",
-                  statusName: "Selected",
-                  assignee: "Ada",
-                },
-                {
-                  issueKey: "ENG-302",
-                  summary: "Wire task import",
-                  issueType: "Task",
-                  statusName: "Selected",
-                  assignee: "Grace",
-                },
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/boards/42/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "42",
+              columns: [
+                { id: "todo", name: "To Do", count: 2 },
+                { id: "doing", name: "Doing", count: 1 },
               ],
-              doing: [
-                {
-                  issueKey: "ENG-303",
-                  summary: "Update browser copy",
-                  issueType: "Sub-task",
-                  statusName: "In Progress",
-                  assignee: "Lin",
-                },
-              ],
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              itemsByColumn: {
+                todo: [
+                  {
+                    issueKey: "ENG-301",
+                    summary: "Fix import bug",
+                    issueType: "Bug",
+                    statusName: "Selected",
+                    assignee: "Ada",
+                  },
+                  {
+                    issueKey: "ENG-302",
+                    summary: "Wire task import",
+                    issueType: "Task",
+                    statusName: "Selected",
+                    assignee: "Grace",
+                  },
+                ],
+                doing: [
+                  {
+                    issueKey: "ENG-303",
+                    summary: "Update browser copy",
+                    issueType: "Sub-task",
+                    statusName: "In Progress",
+                    assignee: "Lin",
+                  },
+                ],
+              },
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -11435,50 +11702,55 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("uses validated Jira issue columns as the count source of truth", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/boards/42/columns") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            board: { id: "42", name: "Delivery", projectKey: "ENG" },
-            columns: [
-              { id: "todo", name: "To Do", count: 7 },
-              { id: "doing", name: "Doing", count: 9 },
-              { id: "", count: 3 },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/boards/42/issues") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            boardId: "42",
-            columns: [
-              { id: "todo", name: "To Do" },
-              { id: "doing", name: "Doing", count: 2 },
-              { id: 17, name: "Invalid" },
-              { id: "missing-name", count: 1 },
-            ],
-            itemsByColumn: {
-              todo: [
-                {
-                  issueKey: "ENG-101",
-                  summary: "Plan controls",
-                  issueType: "Story",
-                  statusName: "Selected",
-                  assignee: "Ada",
-                },
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/boards/42/columns") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              board: { id: "42", name: "Delivery", projectKey: "ENG" },
+              columns: [
+                { id: "todo", name: "To Do", count: 7 },
+                { id: "doing", name: "Doing", count: 9 },
+                { id: "", count: 3 },
               ],
-              doing: [],
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/boards/42/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "42",
+              columns: [
+                { id: "todo", name: "To Do" },
+                { id: "doing", name: "Doing", count: 2 },
+                { id: 17, name: "Invalid" },
+                { id: "missing-name", count: 1 },
+              ],
+              itemsByColumn: {
+                todo: [
+                  {
+                    issueKey: "ENG-101",
+                    summary: "Plan controls",
+                    issueType: "Story",
+                    statusName: "Selected",
+                    assignee: "Ada",
+                  },
+                ],
+                doing: [],
+              },
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -11506,7 +11778,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     const requestUrls = fetchSpy.mock.calls.map(([input]) => String(input));
     expect(requestUrls).toContain("/api/jira/boards/42/columns?projectKey=ENG");
@@ -11518,23 +11792,28 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("shows project load failures only inside the Jira browser and keeps manual editing available", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/jira/projects") {
-        return Promise.resolve({
-          ok: false,
-          status: 503,
-          text: async () =>
-            JSON.stringify({
-              detail: {
-                code: "jira_provider_unavailable",
-                message: "Jira is unavailable.",
-              },
-            }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  code: "jira_provider_unavailable",
+                  message: "Jira is unavailable.",
+                },
+              }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
@@ -11556,22 +11835,32 @@ describe.skip("Task Create Entrypoint", () => {
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Write the task manually after Jira failed.",
     );
-    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Start Workflow",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
   });
 
   it("renders empty Jira browser states with manual continuation guidance", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/jira/projects/ENG/boards") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [] }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects/ENG/boards") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -11590,16 +11879,21 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("renders empty Jira projects with manual continuation guidance", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/jira/projects") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ items: [] }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -11618,30 +11912,35 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("renders empty Jira columns and issue lists with manual continuation guidance", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/boards/42/columns") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            board: { id: "42", name: "Delivery", projectKey: "ENG" },
-            columns: [{ id: "todo", name: "To Do", count: 0 }],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/boards/42/issues") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            boardId: "42",
-            columns: [{ id: "todo", name: "To Do", count: 0 }],
-            itemsByColumn: { todo: [] },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/boards/42/columns") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              board: { id: "42", name: "Delivery", projectKey: "ENG" },
+              columns: [{ id: "todo", name: "To Do", count: 0 }],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/boards/42/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "42",
+              columns: [{ id: "todo", name: "To Do", count: 0 }],
+              itemsByColumn: { todo: [] },
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -11660,30 +11959,35 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("renders empty Jira columns with manual continuation guidance", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/boards/42/columns") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            board: { id: "42", name: "Delivery", projectKey: "ENG" },
-            columns: [],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/boards/42/issues") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            boardId: "42",
-            columns: [],
-            itemsByColumn: {},
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/boards/42/columns") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              board: { id: "42", name: "Delivery", projectKey: "ENG" },
+              columns: [],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/boards/42/issues") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              boardId: "42",
+              columns: [],
+              itemsByColumn: {},
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -11824,9 +12128,9 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect((projectSelect as HTMLSelectElement).value).toBe("");
     });
-    expect(
-      (screen.getByLabelText("Board") as HTMLSelectElement).value,
-    ).toBe("");
+    expect((screen.getByLabelText("Board") as HTMLSelectElement).value).toBe(
+      "",
+    );
 
     fireEvent.change(projectSelect, { target: { value: "ENG" } });
     const boardSelect = screen.getByLabelText("Board");
@@ -11843,9 +12147,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("appends Jira issue text immediately when an issue is selected", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issues for preset instructions",
@@ -11855,7 +12157,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
@@ -11869,9 +12173,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
-    const presetInstructions = screen.getByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = screen.getByLabelText("Instructions");
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
     });
@@ -11887,7 +12189,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
@@ -11899,30 +12203,33 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("keeps issue-detail failures local and leaves import actions unavailable", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: false,
-          status: 502,
-          text: async () =>
-            JSON.stringify({
-              detail: {
-                code: "jira_browser_request_failed",
-                message: "Jira issue detail failed.",
-              },
-            }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: false,
+            status: 502,
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  code: "jira_browser_request_failed",
+                  message: "Jira issue detail failed.",
+                },
+              }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
-    const presetInstructions = screen.getByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = screen.getByLabelText("Instructions");
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
     });
@@ -11947,8 +12254,12 @@ describe.skip("Task Create Entrypoint", () => {
       (screen.getByRole("button", { name: /ENG-202/ }) as HTMLButtonElement)
         .disabled,
     ).toBe(false);
-    expect(screen.queryByRole("button", { name: "Replace target text" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Append to target text" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Replace target text" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Append to target text" }),
+    ).toBeNull();
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
@@ -11961,36 +12272,14 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     let issueDetailRequests = 0;
     const freshIssue = { resolve: null as (() => void) | null };
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        issueDetailRequests += 1;
-        if (issueDetailRequests === 1) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              issueKey: "ENG-202",
-              url: "https://jira.example.test/browse/ENG-202",
-              summary: "Build browser shell",
-              issueType: "Story",
-              column: { id: "doing", name: "Doing" },
-              status: { id: "3", name: "In Progress" },
-              descriptionText: "Let operators browse Jira stories.",
-              acceptanceCriteriaText:
-                "Given a board, users can select a story preview.",
-              recommendedImports: {
-                presetInstructions:
-                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-                stepInstructions:
-                  "Complete Jira issue ENG-202: Build browser shell",
-              },
-            }),
-          } as Response);
-        }
-        return new Promise<Response>((resolve) => {
-          freshIssue.resolve = () => {
-            resolve({
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          issueDetailRequests += 1;
+          if (issueDetailRequests === 1) {
+            return Promise.resolve({
               ok: true,
               json: async () => ({
                 issueKey: "ENG-202",
@@ -11999,27 +12288,52 @@ describe.skip("Task Create Entrypoint", () => {
                 issueType: "Story",
                 column: { id: "doing", name: "Doing" },
                 status: { id: "3", name: "In Progress" },
-                descriptionText: "Fresh Jira issue details.",
+                descriptionText: "Let operators browse Jira stories.",
                 acceptanceCriteriaText:
                   "Given a board, users can select a story preview.",
                 recommendedImports: {
                   presetInstructions:
-                    "ENG-202: Build browser shell\n\nFresh Jira issue details.",
+                    "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
                   stepInstructions:
                     "Complete Jira issue ENG-202: Build browser shell",
                 },
               }),
             } as Response);
-          };
-        });
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+          }
+          return new Promise<Response>((resolve) => {
+            freshIssue.resolve = () => {
+              resolve({
+                ok: true,
+                json: async () => ({
+                  issueKey: "ENG-202",
+                  url: "https://jira.example.test/browse/ENG-202",
+                  summary: "Build browser shell",
+                  issueType: "Story",
+                  column: { id: "doing", name: "Doing" },
+                  status: { id: "3", name: "In Progress" },
+                  descriptionText: "Fresh Jira issue details.",
+                  acceptanceCriteriaText:
+                    "Given a board, users can select a story preview.",
+                  recommendedImports: {
+                    presetInstructions:
+                      "ENG-202: Build browser shell\n\nFresh Jira issue details.",
+                    stepInstructions:
+                      "Complete Jira issue ENG-202: Build browser shell",
+                  },
+                }),
+              } as Response);
+            };
+          });
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issues for preset instructions",
@@ -12028,7 +12342,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     fireEvent.change(presetInstructions, {
       target: { value: "Reset instructions." },
@@ -12046,14 +12362,18 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(freshIssue.resolve).not.toBeNull();
     });
-    expect(screen.getByRole("dialog", { name: "Browse Jira issue" })).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Browse Jira issue" }),
+    ).toBeTruthy();
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Reset instructions.",
     );
 
     freshIssue.resolve?.();
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Reset instructions.\n\n---\n\nENG-202: Build browser shell\n\nFresh Jira issue details.",
@@ -12064,9 +12384,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
-    const presetInstructions = screen.getByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = screen.getByLabelText("Instructions");
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
     });
@@ -12082,9 +12400,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
@@ -12097,9 +12416,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("appends Jira import text to preset instructions", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
     fireEvent.change(presetInstructions, {
       target: { value: "Keep existing preset instructions." },
     });
@@ -12112,9 +12429,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell\n\nLet operators browse Jira stories.",
@@ -12125,9 +12443,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const primaryStep = await screen.findByLabelText("Instructions");
-    const presetInstructions = screen.getByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = screen.getByLabelText("Instructions");
     fireEvent.change(primaryStep, {
       target: { value: "Keep primary instructions." },
     });
@@ -12154,9 +12470,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect((primaryStep as HTMLTextAreaElement).value).toBe(
       "Keep primary instructions.",
@@ -12197,7 +12514,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect((primaryStep as HTMLTextAreaElement).value).toBe(
@@ -12227,7 +12546,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
@@ -12247,7 +12568,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
     expect(screen.queryByLabelText("Import mode")).toBeNull();
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
@@ -12257,30 +12580,35 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("uses an unnamed Jira issue fallback when issue title metadata is empty", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "",
-            url: "https://jira.example.test/browse/ENG-202",
-            summary: "",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "",
-            acceptanceCriteriaText: "",
-            recommendedImports: {
-              presetInstructions: "",
-              stepInstructions: "",
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "",
+              acceptanceCriteriaText: "",
+              recommendedImports: {
+                presetInstructions: "",
+                stepInstructions: "",
+              },
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
@@ -12301,36 +12629,39 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("preserves existing target text when selected Jira import text is empty", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            url: "https://jira.example.test/browse/ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "",
-            acceptanceCriteriaText: "",
-            recommendedImports: {
-              presetInstructions: "",
-              stepInstructions: "",
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "",
+              acceptanceCriteriaText: "",
+              recommendedImports: {
+                presetInstructions: "",
+                stepInstructions: "",
+              },
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
-    const presetInstructions = screen.getByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = screen.getByLabelText("Instructions");
     fireEvent.change(stepInstructions, {
       target: { value: "Keep existing step instructions." },
     });
@@ -12351,7 +12682,6 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBeNull();
     });
 
-
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell",
     );
@@ -12369,9 +12699,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("imports selected Jira text in the standard preset format", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -12381,7 +12709,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
@@ -12403,12 +12733,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -12422,9 +12749,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect(
       screen.getByText(
@@ -12436,12 +12764,9 @@ describe.skip("Task Create Entrypoint", () => {
       screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
     ).toBeTruthy();
 
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     expect(
       screen.queryByText(
         "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
@@ -12466,12 +12791,9 @@ describe.skip("Task Create Entrypoint", () => {
     });
     const importedText =
       "ENG-202: Build browser shell\n\nLet operators browse Jira stories.";
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: importedText },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: importedText },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -12485,9 +12807,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect(
       screen.getByText(
@@ -12510,12 +12833,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -12529,9 +12849,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -12555,9 +12876,7 @@ describe.skip("Task Create Entrypoint", () => {
           "Write a plan for the task builder recovery.\n\n---\n\nComplete Jira issue ENG-202: Build browser shell",
       }),
     ]);
-    expect([undefined, null, ""]).toContain(
-      request.payload.task.steps[1]?.id,
-    );
+    expect([undefined, null, ""]).toContain(request.payload.task.steps[1]?.id);
   });
 
   it("warns before importing Jira text into a template-bound step", async () => {
@@ -12574,12 +12893,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -12600,9 +12916,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect(
       screen.queryByText(
@@ -12622,14 +12939,14 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
-
     expect(
-      screen.getByLabelText(
-        "Jira import provenance for Instructions",
-      ).textContent,
+      screen.getByLabelText("Jira import provenance for Instructions")
+        .textContent,
     ).toBe("Jira: ENG-202");
     await waitFor(() => {
       expect(
@@ -12645,9 +12962,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect(
       screen.getByLabelText("Jira import provenance for Step 1 instructions")
@@ -12658,54 +12976,62 @@ describe.skip("Task Create Entrypoint", () => {
   it("keeps a reopened Jira browser open after a slow image import finishes", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     const imageDownload: { resolve: (() => void) | null } = { resolve: null };
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            url: "https://jira.example.test/browse/ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            acceptanceCriteriaText:
-              "Given a board, users can select a story preview.",
-            recommendedImports: {
-              presetInstructions:
-                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-              stepInstructions:
-                "Complete Jira issue ENG-202: Build browser shell",
-            },
-            attachments: [
-              {
-                id: "img-1",
-                filename: "wireframe.png",
-                contentType: "image/png",
-                sizeBytes: 10,
-                downloadUrl: "/api/jira/attachments/wireframe.png",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              acceptanceCriteriaText:
+                "Given a board, users can select a story preview.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
               },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/attachments/wireframe.png") {
-        return new Promise<Response>((resolve) => {
-          imageDownload.resolve = () => {
-            resolve({
-              ok: true,
-              blob: async () => new Blob(["fake image"], { type: "image/png" }),
-            } as Response);
-          };
-        });
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              attachments: [
+                {
+                  id: "img-1",
+                  filename: "wireframe.png",
+                  contentType: "image/png",
+                  sizeBytes: 10,
+                  downloadUrl: "/api/jira/attachments/wireframe.png",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/attachments/wireframe.png") {
+          return new Promise<Response>((resolve) => {
+            imageDownload.resolve = () => {
+              resolve({
+                ok: true,
+                blob: async () =>
+                  new Blob(["fake image"], { type: "image/png" }),
+              } as Response);
+            };
+          });
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withJiraIntegration())}
+      />,
     );
 
     fireEvent.click(
@@ -12716,7 +13042,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     await waitFor(() => {
@@ -12749,52 +13077,57 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("imports Jira text and images into the objective target from the issue browser", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            recommendedImports: {
-              presetInstructions:
-                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-              stepInstructions:
-                "Complete Jira issue ENG-202: Build browser shell",
-            },
-            attachments: [
-              {
-                id: "img-1",
-                filename: "wireframe.png",
-                contentType: "image/png",
-                sizeBytes: 10,
-                downloadUrl: "/api/jira/attachments/wireframe.png",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
               },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/attachments/wireframe.png") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["fake image"], { type: "image/png" }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              attachments: [
+                {
+                  id: "img-1",
+                  filename: "wireframe.png",
+                  contentType: "image/png",
+                  sizeBytes: 10,
+                  downloadUrl: "/api/jira/attachments/wireframe.png",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/attachments/wireframe.png") {
+          return Promise.resolve({
+            ok: true,
+            blob: async () => new Blob(["fake image"], { type: "image/png" }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withJiraIntegration())}
+      />,
     );
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
     fireEvent.change(presetInstructions, {
       target: { value: "Keep objective text." },
     });
@@ -12804,12 +13137,15 @@ describe.skip("Task Create Entrypoint", () => {
       }),
     );
     expect(
-      (await screen.findByLabelText("Import target") as HTMLSelectElement).value,
+      ((await screen.findByLabelText("Import target")) as HTMLSelectElement)
+        .value,
     ).toBe("preset-text");
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
@@ -12820,50 +13156,59 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("imports Jira text and images into a step target from the issue browser", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            recommendedImports: {
-              presetInstructions:
-                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-              stepInstructions:
-                "Complete Jira issue ENG-202: Build browser shell",
-            },
-            attachments: [
-              {
-                id: "img-1",
-                filename: "wireframe.png",
-                contentType: "image/png",
-                sizeBytes: 10,
-                downloadUrl: "/api/jira/attachments/wireframe.png",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
               },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/attachments/wireframe.png") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["fake image"], { type: "image/png" }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              attachments: [
+                {
+                  id: "img-1",
+                  filename: "wireframe.png",
+                  contentType: "image/png",
+                  sizeBytes: 10,
+                  downloadUrl: "/api/jira/attachments/wireframe.png",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/attachments/wireframe.png") {
+          return Promise.resolve({
+            ok: true,
+            blob: async () => new Blob(["fake image"], { type: "image/png" }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withJiraIntegration())}
+      />,
     );
 
-    const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
+    const stepInstructions = await screen.findByLabelText(
+      "Step 1 Instructions",
+    );
     fireEvent.change(stepInstructions, {
       target: { value: "Keep step text." },
     });
@@ -12875,7 +13220,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
@@ -12887,48 +13234,55 @@ describe.skip("Task Create Entrypoint", () => {
   it("imports Jira images automatically when importing into text targets", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     let attachmentDownloads = 0;
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            recommendedImports: {
-              presetInstructions:
-                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-              stepInstructions:
-                "Complete Jira issue ENG-202: Build browser shell",
-            },
-            attachments: [
-              {
-                id: "img-1",
-                filename: "wireframe.png",
-                contentType: "image/png",
-                sizeBytes: 10,
-                downloadUrl: "/api/jira/attachments/wireframe.png",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
               },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/attachments/wireframe.png") {
-        attachmentDownloads += 1;
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["fake image"], { type: "image/png" }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              attachments: [
+                {
+                  id: "img-1",
+                  filename: "wireframe.png",
+                  contentType: "image/png",
+                  sizeBytes: 10,
+                  downloadUrl: "/api/jira/attachments/wireframe.png",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/attachments/wireframe.png") {
+          attachmentDownloads += 1;
+          return Promise.resolve({
+            ok: true,
+            blob: async () => new Blob(["fake image"], { type: "image/png" }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withJiraIntegration())}
+      />,
     );
 
     fireEvent.click(
@@ -12939,7 +13293,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     fireEvent.click(
@@ -12950,74 +13306,83 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect(attachmentDownloads).toBe(2);
     expect(await screen.findAllByText("wireframe.png")).toHaveLength(2);
     expect(
-      (screen.getByLabelText(
-        "Instructions",
-      ) as HTMLTextAreaElement).value,
-    ).toBe("ENG-202: Build browser shell\n\nLet operators browse Jira stories.");
-    expect((screen.getByLabelText("Step 1 Instructions") as HTMLTextAreaElement).value).toBe(
-      "Complete Jira issue ENG-202: Build browser shell",
+      (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
+    ).toBe(
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
+    expect(
+      (screen.getByLabelText("Step 1 Instructions") as HTMLTextAreaElement)
+        .value,
+    ).toBe("Complete Jira issue ENG-202: Build browser shell");
   });
 
   it("imports Jira images when preset target text is unchanged", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     let attachmentDownloads = 0;
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            recommendedImports: {
-              presetInstructions:
-                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-              stepInstructions:
-                "Complete Jira issue ENG-202: Build browser shell",
-            },
-            attachments: [
-              {
-                id: "img-1",
-                filename: "wireframe.png",
-                contentType: "image/png",
-                sizeBytes: 10,
-                downloadUrl: "/api/jira/attachments/wireframe.png",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
               },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/attachments/wireframe.png") {
-        attachmentDownloads += 1;
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["fake image"], { type: "image/png" }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              attachments: [
+                {
+                  id: "img-1",
+                  filename: "wireframe.png",
+                  contentType: "image/png",
+                  sizeBytes: 10,
+                  downloadUrl: "/api/jira/attachments/wireframe.png",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/attachments/wireframe.png") {
+          attachmentDownloads += 1;
+          return Promise.resolve({
+            ok: true,
+            blob: async () => new Blob(["fake image"], { type: "image/png" }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withJiraIntegration())}
+      />,
     );
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
     fireEvent.change(presetInstructions, {
       target: {
-        value: "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+        value:
+          "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
       },
     });
     fireEvent.click(
@@ -13031,7 +13396,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect(attachmentDownloads).toBe(1);
@@ -13043,47 +13410,54 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("detaches template step identity and records provenance after Jira step attachment import", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            recommendedImports: {
-              presetInstructions:
-                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
-              stepInstructions:
-                "Complete Jira issue ENG-202: Build browser shell",
-            },
-            attachments: [
-              {
-                id: "img-1",
-                filename: "wireframe.png",
-                contentType: "image/png",
-                sizeBytes: 10,
-                downloadUrl: "/api/jira/attachments/wireframe.png",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
               },
-            ],
-          }),
-        } as Response);
-      }
-      if (path === "/api/jira/attachments/wireframe.png") {
-        return Promise.resolve({
-          ok: true,
-          blob: async () => new Blob(["fake image"], { type: "image/png" }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+              attachments: [
+                {
+                  id: "img-1",
+                  filename: "wireframe.png",
+                  contentType: "image/png",
+                  sizeBytes: 10,
+                  downloadUrl: "/api/jira/attachments/wireframe.png",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (path === "/api/jira/attachments/wireframe.png") {
+          return Promise.resolve({
+            ok: true,
+            blob: async () => new Blob(["fake image"], { type: "image/png" }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(
-      <WorkflowStartPage payload={withAttachmentPolicy(withJiraIntegration())} />,
+      <WorkflowStartPage
+        payload={withAttachmentPolicy(withJiraIntegration())}
+      />,
     );
 
     const presetSelect = await screen.findByLabelText("Preset");
@@ -13097,12 +13471,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Instructions"),
-      {
-        target: { value: "Task Create" },
-      },
-    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Task Create" },
+    });
     await clickApplyButton();
     await screen.findByDisplayValue(
       "Clarify the {{ inputs.feature_name }} scope.",
@@ -13116,7 +13487,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     expect(await screen.findByText("wireframe.png")).toBeTruthy();
@@ -13158,7 +13531,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     await waitFor(() => {
@@ -13212,9 +13587,7 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
     fireEvent.click(await screen.findByRole("button", { name: "Selected 0" }));
-    fireEvent.click(
-      await screen.findByRole("button", { name: /MY-PROJ-123/ }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: /MY-PROJ-123/ }));
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),
@@ -13241,9 +13614,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("clears Jira provenance chips when imported text is manually edited", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const presetInstructions = await screen.findByLabelText(
-      "Instructions",
-    );
+    const presetInstructions = await screen.findByLabelText("Instructions");
     const stepInstructions = screen.getByLabelText("Step 1 Instructions");
 
     fireEvent.click(
@@ -13254,22 +13625,19 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
-
     expect(
-      screen.getByLabelText(
-        "Jira import provenance for Instructions",
-      ),
+      screen.getByLabelText("Jira import provenance for Instructions"),
     ).toBeTruthy();
     fireEvent.change(presetInstructions, {
       target: { value: "Manual preset instructions." },
     });
     expect(
-      screen.queryByLabelText(
-        "Jira import provenance for Instructions",
-      ),
+      screen.queryByLabelText("Jira import provenance for Instructions"),
     ).toBeNull();
     await waitFor(() => {
       expect(
@@ -13285,9 +13653,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect(
       screen.getByLabelText("Jira import provenance for Step 1 instructions"),
@@ -13311,9 +13680,10 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-
 
     expect(
       screen.getByLabelText("Jira import provenance for Step 1 instructions"),
@@ -13326,30 +13696,35 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("does not render a Jira provenance chip when the imported issue has no issue key", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const path = url.split("?")[0];
-      if (path === "/api/jira/issues/ENG-202") {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            issueKey: "",
-            url: "https://jira.example.test/browse/ENG-202",
-            summary: "Build browser shell",
-            issueType: "Story",
-            column: { id: "doing", name: "Doing" },
-            status: { id: "3", name: "In Progress" },
-            descriptionText: "Let operators browse Jira stories.",
-            acceptanceCriteriaText: "",
-            recommendedImports: {
-              presetInstructions: "Let operators browse Jira stories.",
-              stepInstructions: "Complete the Jira browser story.",
-            },
-          }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const path = url.split("?")[0];
+        if (path === "/api/jira/issues/ENG-202") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              acceptanceCriteriaText: "",
+              recommendedImports: {
+                presetInstructions: "Let operators browse Jira stories.",
+                stepInstructions: "Complete the Jira browser story.",
+              },
+            }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
     fireEvent.click(
@@ -13360,14 +13735,13 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
-
     expect(
-      screen.queryByLabelText(
-        "Jira import provenance for Instructions",
-      ),
+      screen.queryByLabelText("Jira import provenance for Instructions"),
     ).toBeNull();
   });
 
@@ -13382,7 +13756,9 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
 
     await waitFor(() => {
@@ -13413,29 +13789,34 @@ describe.skip("Task Create Entrypoint", () => {
 
   it("submits a manual task with unchanged payload shape after Jira failure", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/jira/projects") {
-        return Promise.resolve({
-          ok: false,
-          status: 503,
-          text: async () =>
-            JSON.stringify({
-              detail: {
-                code: "jira_provider_unavailable",
-                message: "Jira is unavailable.",
-              },
-            }),
-        } as Response);
-      }
-      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/jira/projects") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            text: async () =>
+              JSON.stringify({
+                detail: {
+                  code: "jira_provider_unavailable",
+                  message: "Jira is unavailable.",
+                },
+              }),
+          } as Response);
+        }
+        return (
+          defaultFetch?.(input, init) ??
+          Promise.reject(new Error("fetch missing"))
+        );
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const stepInstructions = await screen.findByLabelText("Step 1 Instructions");
-    const presetInstructions = screen.getByLabelText(
-      "Instructions",
+    const stepInstructions = await screen.findByLabelText(
+      "Step 1 Instructions",
     );
+    const presetInstructions = screen.getByLabelText("Instructions");
     fireEvent.change(presetInstructions, {
       target: { value: "Manual objective after Jira failure." },
     });
@@ -13527,10 +13908,15 @@ describe.skip("Task Create Entrypoint", () => {
       expect((boardSelect as HTMLSelectElement).value).toBe("42");
     });
     expect(
-      window.sessionStorage.getItem("moonmind.workflow-start.jira.last-project-key"),
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-project-key",
+      ),
     ).toBeNull();
-    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
-      .toBeNull();
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-board-id",
+      ),
+    ).toBeNull();
   });
 
   it("does not write or restore Jira project and board session memory when disabled", async () => {
@@ -13562,8 +13948,11 @@ describe.skip("Task Create Entrypoint", () => {
 
     window.sessionStorage.clear();
     fireEvent.change(boardSelect, { target: { value: "7" } });
-    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
-      .toBeNull();
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-board-id",
+      ),
+    ).toBeNull();
   });
 
   it("clears remembered Jira project and board when selections are manually cleared", async () => {
@@ -13592,19 +13981,31 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(projectSelect, { target: { value: "" } });
-    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-project-key"))
-      .toBeNull();
-    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
-      .toBeNull();
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-project-key",
+      ),
+    ).toBeNull();
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-board-id",
+      ),
+    ).toBeNull();
 
     fireEvent.change(projectSelect, { target: { value: "ENG" } });
     fireEvent.change(boardSelect, { target: { value: "7" } });
-    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
-      .toBe("7");
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-board-id",
+      ),
+    ).toBe("7");
 
     fireEvent.change(boardSelect, { target: { value: "" } });
-    expect(window.sessionStorage.getItem("moonmind.workflow-start.jira.last-board-id"))
-      .toBeNull();
+    expect(
+      window.sessionStorage.getItem(
+        "moonmind.workflow-start.jira.last-board-id",
+      ),
+    ).toBeNull();
   });
 
   it("keeps Jira browsing and manual task creation available when session storage fails", async () => {
@@ -13643,7 +14044,9 @@ describe.skip("Task Create Entrypoint", () => {
       expect(
         await screen.findByRole("dialog", { name: "Browse Jira issue" }),
       ).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Close Jira browser" }),
+      );
       fireEvent.change(screen.getByLabelText("Instructions"), {
         target: { value: "Create this task manually." },
       });
@@ -13707,8 +14110,9 @@ describe.skip("Task Create Entrypoint", () => {
         "Failed to load Jira projects. You can continue creating the workflow manually. Jira unavailable",
       ),
     ).toBeTruthy();
-    expect(screen.getByRole("dialog", { name: "Browse Jira issue" }))
-      .toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Browse Jira issue" }),
+    ).toBeTruthy();
     expect(screen.getByLabelText("Instructions")).toBeTruthy();
   });
 
@@ -13949,24 +14353,30 @@ describe("Task Create MM-641 authoring validation", () => {
       floatingBarRow,
     );
     expect(createButton.closest(".queue-floating-bar")).toBe(floatingBar);
-    expect(createButton.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(createButton.closest(".queue-floating-bar-row")).toBe(
+      floatingBarRow,
+    );
     expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
-    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
+    expect(
+      branchInput.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
     ).toBe(submitSection);
-    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
-    expect(branchInput.closest('[data-canonical-create-section="Steps"]')).toBeNull();
+    expect(
+      repoInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBeNull();
+    expect(
+      branchInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBeNull();
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
     ).toBeNull();
-    expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
+    expect(
+      createButton.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
     expect(stepsSection).not.toBeNull();
   });
 
@@ -13998,7 +14408,9 @@ describe("Task Create MM-641 authoring validation", () => {
         '[data-canonical-create-section="Execution controls"]',
       ) as HTMLElement;
 
-    const view = renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+    const view = renderWithClient(
+      <WorkflowStartPage payload={withAttachmentPolicy()} />,
+    );
     await screen.findByLabelText("Instructions");
 
     const advancedToggle = within(findExecutionControls()).getByLabelText(
@@ -14009,20 +14421,26 @@ describe("Task Create MM-641 authoring validation", () => {
 
     fireEvent.click(advancedToggle);
     expect(
-      (within(findExecutionControls()).getByLabelText("Advanced mode") as HTMLInputElement)
-        .checked,
+      (
+        within(findExecutionControls()).getByLabelText(
+          "Advanced mode",
+        ) as HTMLInputElement
+      ).checked,
     ).toBe(true);
-    expect(window.localStorage.getItem("moonmind.dashboard.preferences")).toContain(
-      '"createExpertMode":true',
-    );
+    expect(
+      window.localStorage.getItem("moonmind.dashboard.preferences"),
+    ).toContain('"createExpertMode":true');
 
     // Simulate a reload: a fresh mount reads the persisted expert default.
     view.unmount();
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
     await screen.findByLabelText("Instructions");
     expect(
-      (within(findExecutionControls()).getByLabelText("Advanced mode") as HTMLInputElement)
-        .checked,
+      (
+        within(findExecutionControls()).getByLabelText(
+          "Advanced mode",
+        ) as HTMLInputElement
+      ).checked,
     ).toBe(true);
   });
 
@@ -14167,9 +14585,9 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
-    expect(branchInput.closest('[data-canonical-create-section="Submit"]')).toBe(
-      submitSection,
-    );
+    expect(
+      branchInput.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
     ).toBe(submitSection);
@@ -14197,11 +14615,18 @@ describe("Task Create MM-641 authoring validation", () => {
     });
     const step = (await screen.findByText("Step 1")).closest("section");
     expect(step).not.toBeNull();
-    fireEvent.change(within(step as HTMLElement).getByLabelText("Instructions"), {
-      target: { value: "Move repository branch publish controls into Steps." },
-    });
     fireEvent.change(
-      within(step as HTMLElement).getByLabelText("Step 1 attachment file picker"),
+      within(step as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: {
+          value: "Move repository branch publish controls into Steps.",
+        },
+      },
+    );
+    fireEvent.change(
+      within(step as HTMLElement).getByLabelText(
+        "Step 1 attachment file picker",
+      ),
       {
         target: {
           files: [new File(["wireframe"], "mm641.png", { type: "image/png" })],
@@ -14241,13 +14666,15 @@ describe("Task Create MM-641 authoring validation", () => {
 
   it("lets users paste a branch while branch options are still loading", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/github/branches")) {
-        return new Promise<Response>(() => {});
-      }
-      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/github/branches")) {
+          return new Promise<Response>(() => {});
+        }
+        return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -14256,7 +14683,9 @@ describe("Task Create MM-641 authoring validation", () => {
     )) as HTMLInputElement;
 
     await waitFor(() => {
-      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+      expect(branchInput.getAttribute("placeholder")).toBe(
+        "Loading branches...",
+      );
       expect(branchInput.disabled).toBe(false);
     });
 
@@ -14417,17 +14846,19 @@ describe("Task Create submit arrow animation", () => {
     const originalSetTimeout = window.setTimeout.bind(window);
     const setTimeoutSpy = vi
       .spyOn(window, "setTimeout")
-      .mockImplementation((handler: TimerHandler, timeout?: number, ...args) => {
-        if (timeout === 230) {
-          scheduledArrowClear = () => {
-            if (typeof handler === "function") {
-              handler(...args);
-            }
-          };
-          return 1;
-        }
-        return originalSetTimeout(handler, timeout, ...args);
-      });
+      .mockImplementation(
+        (handler: TimerHandler, timeout?: number, ...args) => {
+          if (timeout === 230) {
+            scheduledArrowClear = () => {
+              if (typeof handler === "function") {
+                handler(...args);
+              }
+            };
+            return 1;
+          }
+          return originalSetTimeout(handler, timeout, ...args);
+        },
+      );
     const fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL) => {
@@ -14436,7 +14867,9 @@ describe("Task Create submit arrow animation", () => {
           case url.startsWith("/api/workflows/skills"):
             return Promise.resolve({
               ok: true,
-              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+              json: async () => ({
+                items: { worker: ["speckit-orchestrate"] },
+              }),
             } as Response);
           case url.startsWith("/api/presets"):
             return Promise.resolve({
@@ -14459,14 +14892,18 @@ describe("Task Create submit arrow animation", () => {
             } as Response);
         }
       });
-    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const { unmount } = renderWithClient(
+      <WorkflowStartPage payload={mockPayload} />,
+    );
 
     try {
       fireEvent.change(await screen.findByLabelText("Instructions"), {
         target: { value: "Run end-to-end regression flow." },
       });
 
-      const createButton = screen.getByRole("button", { name: "Start Workflow" });
+      const createButton = screen.getByRole("button", {
+        name: "Start Workflow",
+      });
       const arrow = createButton.querySelector<HTMLElement>(
         "[data-submit-arrow='right']",
       );
@@ -14545,7 +14982,9 @@ describe("Task Create submit arrow animation", () => {
           case url.startsWith("/api/workflows/skills"):
             return Promise.resolve({
               ok: true,
-              json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
+              json: async () => ({
+                items: { worker: ["speckit-orchestrate"] },
+              }),
             } as Response);
           case url.startsWith("/api/presets"):
             return Promise.resolve({
@@ -14584,14 +15023,18 @@ describe("Task Create submit arrow animation", () => {
     vi.mocked(navigateTo).mockImplementation(() => {
       throw new Error("Navigation blocked.");
     });
-    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const { unmount } = renderWithClient(
+      <WorkflowStartPage payload={mockPayload} />,
+    );
 
     try {
       fireEvent.change(await screen.findByLabelText("Instructions"), {
         target: { value: "Run end-to-end regression flow." },
       });
 
-      const createButton = screen.getByRole("button", { name: "Start Workflow" });
+      const createButton = screen.getByRole("button", {
+        name: "Start Workflow",
+      });
       fireEvent.click(createButton);
 
       await waitFor(() => {
@@ -14721,11 +15164,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
-    if (
-      url.startsWith(
-        "/api/presets/mm-578-preset:expand?scope=global",
-      )
-    ) {
+    if (url.startsWith("/api/presets/mm-578-preset:expand?scope=global")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -14767,18 +15206,12 @@ describe("Task Create MM-578 Preset expansion", () => {
           appliedTemplate: {
             slug: "mm-578-preset",
             version: "1",
-            stepIds: [
-              "tpl:mm-578-preset:1:01",
-              "tpl:mm-578-preset:1:02",
-            ],
+            stepIds: ["tpl:mm-578-preset:1:01", "tpl:mm-578-preset:1:02"],
             composition: {
               slug: "mm-578-preset",
               version: "1",
               path: ["mm-578-preset"],
-              stepIds: [
-                "tpl:mm-578-preset:1:01",
-                "tpl:mm-578-preset:1:02",
-              ],
+              stepIds: ["tpl:mm-578-preset:1:01", "tpl:mm-578-preset:1:02"],
               includes: [],
             },
             authoredPresets: [
@@ -14852,10 +15285,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
-    if (
-      url ===
-      "/api/executions/mm%3Acanonical-preset-edit?source=temporal"
-    ) {
+    if (url === "/api/executions/mm%3Acanonical-preset-edit?source=temporal") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -14923,7 +15353,9 @@ describe("Task Create MM-578 Preset expansion", () => {
     if (url === "/api/executions/mm%3Aauto-preset-edit/update") {
       return Promise.resolve({
         ok: true,
-        json: async () => ({ execution: { workflowId: "mm:auto-preset-edit" } }),
+        json: async () => ({
+          execution: { workflowId: "mm:auto-preset-edit" },
+        }),
       } as Response);
     }
     if (url === "/api/executions/mm%3Acanonical-preset-edit/update") {
@@ -14946,7 +15378,9 @@ describe("Task Create MM-578 Preset expansion", () => {
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
-    fetchSpy = vi.spyOn(window, "fetch").mockImplementation(mockMm578PresetFetch);
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation(mockMm578PresetFetch);
   });
 
   afterEach(() => {
@@ -14994,11 +15428,7 @@ describe("Task Create MM-578 Preset expansion", () => {
           }),
         } as Response);
       }
-      if (
-        url.startsWith(
-          "/api/presets/jira-orchestrate:expand?scope=global",
-        )
-      ) {
+      if (url.startsWith("/api/presets/jira-orchestrate:expand?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -15060,7 +15490,10 @@ describe("Task Create MM-578 Preset expansion", () => {
     const task = payload.task as Record<string, unknown>;
     expect(payload.publishMode).toBe("pr");
     expect(task.publish).toEqual({ mode: "pr" });
-    expect(task.tool).toMatchObject({ type: "skill", name: "jira-issue-updater" });
+    expect(task.tool).toMatchObject({
+      type: "skill",
+      name: "jira-issue-updater",
+    });
     expect(task.skill).toMatchObject({ id: "jira-issue-updater" });
     expect(task.skills).toEqual({ include: [{ name: "jira-issue-updater" }] });
     expect(task.appliedStepTemplates).toEqual([
@@ -15089,9 +15522,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate?scope=global",
-        )
+        url.startsWith("/api/presets/jira-breakdown-orchestrate?scope=global")
       ) {
         return Promise.resolve({
           ok: true,
@@ -15194,8 +15625,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     await waitFor(() => {
       expect(
         Array.from(stepPresetSelect.options).some(
-          (option) =>
-            option.text === "Jira Breakdown and Orchestrate (Global)",
+          (option) => option.text === "Jira Breakdown and Orchestrate (Global)",
         ),
       ).toBe(true);
     });
@@ -15225,9 +15655,12 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
     expect(task.publish).toMatchObject({ mode: "none" });
     expect(
-      ((task.steps as Array<Record<string, unknown>>)[2]?.jiraOrchestration as {
-        task?: { publish?: Record<string, unknown> };
-      }).task?.publish,
+      (
+        (task.steps as Array<Record<string, unknown>>)[2]
+          ?.jiraOrchestration as {
+          task?: { publish?: Record<string, unknown> };
+        }
+      ).task?.publish,
     ).toEqual({ mode: "pr", mergeAutomation: { enabled: true } });
   });
 
@@ -15252,9 +15685,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate?scope=global",
-        )
+        url.startsWith("/api/presets/jira-breakdown-orchestrate?scope=global")
       ) {
         return Promise.resolve({
           ok: true,
@@ -15339,8 +15770,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     await waitFor(() => {
       expect(
         Array.from(stepPresetSelect.options).some(
-          (option) =>
-            option.text === "Jira Breakdown and Orchestrate (Global)",
+          (option) => option.text === "Jira Breakdown and Orchestrate (Global)",
         ),
       ).toBe(true);
     });
@@ -15394,9 +15824,8 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("expands generated preset steps into editable executable steps", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const presetManagementSection = await screen.findByLabelText(
-      "Preset Management",
-    );
+    const presetManagementSection =
+      await screen.findByLabelText("Preset Management");
     expect(
       within(presetManagementSection).queryByRole("button", { name: "Apply" }),
     ).toBeNull();
@@ -15408,7 +15837,9 @@ describe("Task Create MM-578 Preset expansion", () => {
       target: { value: "Keep authored MM-578 preset placeholder." },
     });
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -15437,10 +15868,15 @@ describe("Task Create MM-578 Preset expansion", () => {
     const firstGeneratedStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.change(within(firstGeneratedStep).getByLabelText("Step 1 Instructions"), {
-      target: { value: "Edited generated MM-578 step." },
-    });
-    expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
+    fireEvent.change(
+      within(firstGeneratedStep).getByLabelText("Step 1 Instructions"),
+      {
+        target: { value: "Edited generated MM-578 step." },
+      },
+    );
+    expect(
+      screen.getByDisplayValue("Edited generated MM-578 step."),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -15470,7 +15906,9 @@ describe("Task Create MM-578 Preset expansion", () => {
       "section",
     ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -15546,10 +15984,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       slug: "mm-578-preset",
       composition: {
         slug: "mm-578-preset",
-        stepIds: [
-          "tpl:mm-578-preset:1:01",
-          "tpl:mm-578-preset:1:02",
-        ],
+        stepIds: ["tpl:mm-578-preset:1:01", "tpl:mm-578-preset:1:02"],
       },
       authoredPresets: [
         {
@@ -15665,8 +16100,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       latestCreateTaskSteps().map((entry) => [
         entry.id,
         entry.type,
-        (entry.source as Record<string, unknown> | undefined)
-          ?.originalStepId,
+        (entry.source as Record<string, unknown> | undefined)?.originalStepId,
       ]),
     ).toEqual([
       ["tpl:mm-578-preset:1:01", "tool", "fetch-jira-issue"],
@@ -15682,11 +16116,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     let expansionCount = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
-      ) {
+      if (url.startsWith("/api/presets/mm-578-preset:expand?scope=global")) {
         expansionCount += 1;
         if (expansionCount === 1) {
           return Promise.resolve({
@@ -15768,7 +16198,9 @@ describe("Task Create MM-578 Preset expansion", () => {
 
     await waitFor(() => {
       expect(
-        fetchSpy.mock.calls.filter(([url]) => String(url) === "/api/executions"),
+        fetchSpy.mock.calls.filter(
+          ([url]) => String(url) === "/api/executions",
+        ),
       ).toHaveLength(1);
     });
   });
@@ -15781,7 +16213,9 @@ describe("Task Create MM-578 Preset expansion", () => {
     );
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
@@ -15803,7 +16237,8 @@ describe("Task Create MM-578 Preset expansion", () => {
     });
     const updateCall = fetchSpy.mock.calls
       .filter(
-        ([url]) => String(url) === "/api/executions/mm%3Aauto-preset-edit/update",
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aauto-preset-edit/update",
       )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body || "{}")) as {
@@ -15815,10 +16250,9 @@ describe("Task Create MM-578 Preset expansion", () => {
     };
     expect(request.updateName).toBe("UpdateInputs");
     expect(request.parametersPatch?.task).toBeUndefined();
-    expect(request.parametersPatch?.workflow?.steps?.map((entry) => entry.type)).toEqual([
-      "tool",
-      "skill",
-    ]);
+    expect(
+      request.parametersPatch?.workflow?.steps?.map((entry) => entry.type),
+    ).toEqual(["tool", "skill"]);
     expect(
       request.parametersPatch?.workflow?.steps?.some(
         (entry) => entry.type === "preset",
@@ -15834,7 +16268,9 @@ describe("Task Create MM-578 Preset expansion", () => {
     );
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Edit Workflow" }),
+    ).toBeTruthy();
     const firstStep = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
@@ -15904,11 +16340,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("blocks submit-time expansion warnings that require manual review", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
-      ) {
+      if (url.startsWith("/api/presets/mm-578-preset:expand?scope=global")) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -15958,9 +16390,12 @@ describe("Task Create MM-578 Preset expansion", () => {
     ) as HTMLElement;
     await chooseMm578Preset(step);
     const file = new File(["image"], "evidence.png", { type: "image/png" });
-    fireEvent.change(within(step).getByLabelText("Step 1 attachment file picker"), {
-      target: { files: [file] },
-    });
+    fireEvent.change(
+      within(step).getByLabelText("Step 1 attachment file picker"),
+      {
+        target: { files: [file] },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
@@ -15979,11 +16414,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     const expansionResolvers: Array<(response: Response) => void> = [];
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
-      ) {
+      if (url.startsWith("/api/presets/mm-578-preset:expand?scope=global")) {
         return new Promise<Response>((resolve) => {
           expansionResolvers.push(resolve);
         });
@@ -16050,11 +16481,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("keeps drafts unchanged on expansion failure and blocks unresolved Preset submission", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
-      ) {
+      if (url.startsWith("/api/presets/mm-578-preset:expand?scope=global")) {
         return Promise.resolve({
           ok: false,
           text: async () => "Generated step validation failed.",
@@ -16072,7 +16499,9 @@ describe("Task Create MM-578 Preset expansion", () => {
       target: { value: "Keep authored MM-578 preset step." },
     });
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16110,13 +16539,18 @@ describe("Task Create MM-578 Preset expansion", () => {
 describe("Task Create schema-driven capability inputs", () => {
   let fetchSpy: MockInstance;
 
-  function mockSchemaCapabilityFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  function mockSchemaCapabilityFetch(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> {
     const url = String(input);
     if (url.startsWith("/api/workflows/skills")) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
-          items: { worker: ["schema.skill", "schema.other", "no-schema.skill"] },
+          items: {
+            worker: ["schema.skill", "schema.other", "no-schema.skill"],
+          },
           legacyItems: [
             {
               id: "schema.skill",
@@ -16534,7 +16968,9 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/github-schema-preset:expand?scope=global")) {
+    if (
+      url.startsWith("/api/presets/github-schema-preset:expand?scope=global")
+    ) {
       const payload = JSON.parse(String(init?.body || "{}")) as {
         inputs?: Record<string, unknown>;
       };
@@ -16546,10 +16982,18 @@ describe("Task Create schema-driven capability inputs", () => {
               id: "tpl:github-schema-preset:1:01",
               title: "Use GitHub issue",
               instructions: "Use GitHub issue.",
-              tool: { type: "tool", id: "github.load_issue_preset_brief", inputs: payload.inputs },
+              tool: {
+                type: "tool",
+                id: "github.load_issue_preset_brief",
+                inputs: payload.inputs,
+              },
             },
           ],
-          appliedTemplate: { slug: "github-schema-preset", version: "1", inputs: payload.inputs },
+          appliedTemplate: {
+            slug: "github-schema-preset",
+            version: "1",
+            inputs: payload.inputs,
+          },
           capabilities: ["gh"],
           warnings: [],
         }),
@@ -16626,7 +17070,9 @@ describe("Task Create schema-driven capability inputs", () => {
     window.sessionStorage.clear();
     window.localStorage.clear();
     vi.mocked(navigateTo).mockReset();
-    fetchSpy = vi.spyOn(window, "fetch").mockImplementation(mockSchemaCapabilityFetch);
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation(mockSchemaCapabilityFetch);
   });
 
   afterEach(() => {
@@ -16646,9 +17092,13 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("renders jira.issue-picker from preset schema metadata and expands safe value", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16663,7 +17113,9 @@ describe("Task Create schema-driven capability inputs", () => {
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url, request]) => {
-          if (!String(url).startsWith("/api/presets/jira-schema-preset:expand")) {
+          if (
+            !String(url).startsWith("/api/presets/jira-schema-preset:expand")
+          ) {
             return false;
           }
           const payload = JSON.parse(String(request?.body || "{}")) as {
@@ -16677,9 +17129,13 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("derives jira.issue-picker expansion inputs from imported-style step instructions", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16696,7 +17152,9 @@ describe("Task Create schema-driven capability inputs", () => {
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url, request]) => {
-          if (!String(url).startsWith("/api/presets/jira-schema-preset:expand")) {
+          if (
+            !String(url).startsWith("/api/presets/jira-schema-preset:expand")
+          ) {
             return false;
           }
           const payload = JSON.parse(String(request?.body || "{}")) as {
@@ -16708,13 +17166,15 @@ describe("Task Create schema-driven capability inputs", () => {
     });
   });
 
-
-
   it("renders github.issue-picker from schema metadata and normalizes manual issue URL", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16724,23 +17184,35 @@ describe("Task Create schema-driven capability inputs", () => {
 
     const issueInput = await within(step).findByLabelText("GitHub issue");
     fireEvent.change(issueInput, {
-      target: { value: "https://github.com/MoonLadderStudios/MoonMind/issues/123" },
+      target: {
+        value: "https://github.com/MoonLadderStudios/MoonMind/issues/123",
+      },
     });
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url, request]) => {
-          if (!String(url).startsWith("/api/presets/github-schema-preset:expand")) {
+          if (
+            !String(url).startsWith("/api/presets/github-schema-preset:expand")
+          ) {
             return false;
           }
           const payload = JSON.parse(String(request?.body || "{}")) as {
-            inputs?: { github_issue?: { repository?: string; number?: number; url?: string } };
+            inputs?: {
+              github_issue?: {
+                repository?: string;
+                number?: number;
+                url?: string;
+              };
+            };
           };
           return (
-            payload.inputs?.github_issue?.repository === "MoonLadderStudios/MoonMind" &&
+            payload.inputs?.github_issue?.repository ===
+              "MoonLadderStudios/MoonMind" &&
             payload.inputs?.github_issue?.number === 123 &&
-            payload.inputs?.github_issue?.url === "https://github.com/MoonLadderStudios/MoonMind/issues/123"
+            payload.inputs?.github_issue?.url ===
+              "https://github.com/MoonLadderStudios/MoonMind/issues/123"
           );
         }),
       ).toBe(true);
@@ -16749,9 +17221,13 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("blocks github.issue-picker expansion until a valid issue is entered", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16763,7 +17239,9 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     await waitFor(() => {
-      expect(within(step).getAllByText("A GitHub issue is required.").length).toBeGreaterThan(0);
+      expect(
+        within(step).getAllByText("A GitHub issue is required.").length,
+      ).toBeGreaterThan(0);
     });
     expect(
       fetchSpy.mock.calls.some(([url]) =>
@@ -16774,9 +17252,13 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("blocks dependent preset actions with field-addressable required errors", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16788,7 +17270,9 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     await waitFor(() => {
-      expect(within(step).getAllByText("A Jira issue is required.").length).toBeGreaterThan(0);
+      expect(
+        within(step).getAllByText("A Jira issue is required.").length,
+      ).toBeGreaterThan(0);
     });
     expect(
       fetchSpy.mock.calls.some(([url]) =>
@@ -16799,9 +17283,13 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("renders a new schema preset without capability-id-specific code", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Preset");
-    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
     await waitFor(() => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
@@ -16811,21 +17299,29 @@ describe("Task Create schema-driven capability inputs", () => {
 
     expect(await within(step).findByLabelText("Summary")).toBeTruthy();
     expect(within(step).getByLabelText("Urgent")).toBeTruthy();
-    expect((within(step).getByLabelText("Estimate") as HTMLInputElement).type).toBe("number");
+    expect(
+      (within(step).getByLabelText("Estimate") as HTMLInputElement).type,
+    ).toBe("number");
     expect(within(step).getByLabelText("Priority")).toBeTruthy();
     expect(within(step).getByText("Labels")).toBeTruthy();
     expect(within(step).getByText("JSON array of labels")).toBeTruthy();
     expect(within(step).getByText("Metadata")).toBeTruthy();
-    expect((within(step).getByLabelText("Assignee email") as HTMLInputElement).type).toBe("email");
+    expect(
+      (within(step).getByLabelText("Assignee email") as HTMLInputElement).type,
+    ).toBe("email");
     expect(within(step).getByLabelText("Mode")).toBeTruthy();
     expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
-    expect((within(step).getByLabelText("Unsafe default") as HTMLInputElement).value).toBe("");
+    expect(
+      (within(step).getByLabelText("Unsafe default") as HTMLInputElement).value,
+    ).toBe("");
     expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
   });
 
   it("renders direct skill inputs through the same schema behavior", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
@@ -16835,23 +17331,39 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).getByLabelText("Branch")).toBeTruthy();
     expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
     expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
-    expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
-    const enabledInput = within(step).getByLabelText("Enabled") as HTMLInputElement;
+    expect(
+      (within(step).getByLabelText("Effort") as HTMLInputElement).type,
+    ).toBe("number");
+    const enabledInput = within(step).getByLabelText(
+      "Enabled",
+    ) as HTMLInputElement;
     expect(enabledInput.type).toBe("checkbox");
     expect(enabledInput.checked).toBe(true);
     expect(within(step).getByLabelText("Priority")).toBeTruthy();
-    expect((within(step).getByLabelText("Labels") as HTMLSelectElement).multiple).toBe(true);
-    expect((within(step).getByLabelText("Homepage") as HTMLInputElement).type).toBe("url");
-    expect((within(step).getByLabelText("Email") as HTMLInputElement).type).toBe("email");
-    expect((within(step).getByLabelText("Due") as HTMLInputElement).type).toBe("date");
-    expect((within(step).getByLabelText("Starts at") as HTMLInputElement).type).toBe("datetime-local");
+    expect(
+      (within(step).getByLabelText("Labels") as HTMLSelectElement).multiple,
+    ).toBe(true);
+    expect(
+      (within(step).getByLabelText("Homepage") as HTMLInputElement).type,
+    ).toBe("url");
+    expect(
+      (within(step).getByLabelText("Email") as HTMLInputElement).type,
+    ).toBe("email");
+    expect((within(step).getByLabelText("Due") as HTMLInputElement).type).toBe(
+      "date",
+    );
+    expect(
+      (within(step).getByLabelText("Starts at") as HTMLInputElement).type,
+    ).toBe("datetime-local");
     expect(within(step).getByLabelText("Metadata").tagName).toBe("TEXTAREA");
     expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
   });
 
   it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
@@ -16909,7 +17421,9 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("renders schema-less skill fallback details and remains executable", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "no-schema.skill" },
@@ -16918,11 +17432,17 @@ describe("Task Create schema-driven capability inputs", () => {
       target: { value: "Run the no-schema Skill with instructions." },
     });
 
-    const fallbackNote = await within(step).findByTestId("skill-schema-fallback-0");
+    const fallbackNote = await within(step).findByTestId(
+      "skill-schema-fallback-0",
+    );
     expect(within(fallbackNote).getByText("no-schema.skill")).toBeTruthy();
-    expect(within(fallbackNote).getByText(/Instruction-driven Skill fixture/)).toBeTruthy();
     expect(
-      within(fallbackNote).getByText(/does not publish structured input fields/),
+      within(fallbackNote).getByText(/Instruction-driven Skill fixture/),
+    ).toBeTruthy();
+    expect(
+      within(fallbackNote).getByText(
+        /does not publish structured input fields/,
+      ),
     ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -16944,42 +17464,46 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("keeps unsupported skill widgets editable and submits entered values", async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/workflows/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: { worker: ["schema.skill"] },
-            legacyItems: [
-              {
-                id: "schema.skill",
-                inputSchema: {
-                  type: "object",
-                  properties: {
-                    externalLookup: {
-                      type: "string",
-                      title: "External lookup",
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/workflows/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: ["schema.skill"] },
+              legacyItems: [
+                {
+                  id: "schema.skill",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      externalLookup: {
+                        type: "string",
+                        title: "External lookup",
+                      },
                     },
                   },
-                },
-                uiSchema: {
-                  externalLookup: {
-                    widget: "remote.component",
-                    minimum: 99,
+                  uiSchema: {
+                    externalLookup: {
+                      widget: "remote.component",
+                      minimum: 99,
+                    },
                   },
+                  defaults: {},
                 },
-                defaults: {},
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return mockSchemaCapabilityFetch(input, init);
-    });
+              ],
+            }),
+          } as Response);
+        }
+        return mockSchemaCapabilityFetch(input, init);
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
@@ -17014,55 +17538,69 @@ describe("Task Create schema-driven capability inputs", () => {
   });
 
   it("offers deployment-only skills in the skill combobox", async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/workflows/skills")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: { worker: [], deployment: ["deployment.skill"] },
-            legacyItems: [
-              {
-                id: "deployment.skill",
-                inputSchema: {
-                  type: "object",
-                  properties: {
-                    repository: { type: "string", title: "Deployment repository" },
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/workflows/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: [], deployment: ["deployment.skill"] },
+              legacyItems: [
+                {
+                  id: "deployment.skill",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      repository: {
+                        type: "string",
+                        title: "Deployment repository",
+                      },
+                    },
                   },
+                  uiSchema: {},
+                  defaults: {},
                 },
-                uiSchema: {},
-                defaults: {},
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return mockSchemaCapabilityFetch(input, init);
-    });
+              ],
+            }),
+          } as Response);
+        }
+        return mockSchemaCapabilityFetch(input, init);
+      },
+    );
 
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     const skillInput = within(step).getByLabelText("Skill (optional)");
     fireEvent.pointerDown(skillInput);
 
-    expect(await screen.findByRole("option", { name: "deployment.skill" })).toBeTruthy();
+    expect(
+      await screen.findByRole("option", { name: "deployment.skill" }),
+    ).toBeTruthy();
     fireEvent.change(skillInput, {
       target: { value: "deployment.skill" },
     });
 
-    expect(await within(step).findByLabelText("Deployment repository")).toBeTruthy();
+    expect(
+      await within(step).findByLabelText("Deployment repository"),
+    ).toBeTruthy();
   });
 
   it("submits direct skill schema inputs in the skill payload", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
 
-    const repositoryInput = await within(step).findByLabelText("Repository name");
+    const repositoryInput =
+      await within(step).findByLabelText("Repository name");
     fireEvent.change(repositoryInput, {
       target: { value: "MoonLadderStudios/SchemaRepo" },
     });
@@ -17099,7 +17637,9 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("saves direct skill schema inputs in preset payloads", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Save schema-backed skill inputs." },
@@ -17153,7 +17693,9 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("clears direct skill schema values when switching skills", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
@@ -17200,13 +17742,17 @@ describe("Task Create schema-driven capability inputs", () => {
 
   it("keeps cleared optional numeric schema inputs unset", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
     selectStepType(step, "Skill");
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
 
-    const effortInput = (await within(step).findByLabelText("Effort")) as HTMLInputElement;
+    const effortInput = (await within(step).findByLabelText(
+      "Effort",
+    )) as HTMLInputElement;
     expect(effortInput.value).toBe("2");
     fireEvent.change(effortInput, { target: { value: "" } });
     expect(effortInput.value).toBe("");
@@ -17303,7 +17849,11 @@ describe("Task Create governed Tool authoring", () => {
         if (url.startsWith("/api/github/branches")) {
           return Promise.resolve({
             ok: true,
-            json: async () => ({ items: [], defaultBranch: "main", error: null }),
+            json: async () => ({
+              items: [],
+              defaultBranch: "main",
+              error: null,
+            }),
           } as Response);
         }
         if (url.startsWith("/api/presets")) {
@@ -17331,7 +17881,8 @@ describe("Task Create governed Tool authoring", () => {
               artifact_ref: { artifact_id: "art_01ACTIVEIMAGE00000000000" },
               upload: {
                 mode: "single_put",
-                upload_url: "/api/artifacts/art_01ACTIVEIMAGE00000000000/content",
+                upload_url:
+                  "/api/artifacts/art_01ACTIVEIMAGE00000000000/content",
                 required_headers: {},
               },
             }),
@@ -17341,10 +17892,16 @@ describe("Task Create governed Tool authoring", () => {
           return Promise.resolve({ ok: true } as Response);
         }
         if (url === "/api/artifacts/art_01ACTIVEIMAGE00000000000/complete") {
-          return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({}),
+          } as Response);
         }
         if (url === "/api/artifacts/art_01ACTIVEIMAGE00000000000/links") {
-          return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({}),
+          } as Response);
         }
         if (url.startsWith("/api/executions?")) {
           return Promise.resolve({
@@ -17361,7 +17918,8 @@ describe("Task Create governed Tool authoring", () => {
         return Promise.resolve({
           ok: false,
           status: 404,
-          text: async () => `Unhandled fetch ${url} ${String(init?.method || "GET")}`,
+          text: async () =>
+            `Unhandled fetch ${url} ${String(init?.method || "GET")}`,
         } as Response);
       });
   });
@@ -17380,21 +17938,24 @@ describe("Task Create governed Tool authoring", () => {
 
     expect(await within(step).findByText("Jira")).toBeTruthy();
     expect(within(step).getByText("GitHub")).toBeTruthy();
-    expect(within(step).getByRole("button", { name: /jira.get_issue/ }))
-      .toBeTruthy();
+    expect(
+      within(step).getByRole("button", { name: /jira.get_issue/ }),
+    ).toBeTruthy();
     fireEvent.change(within(step).getByLabelText("Search Tools"), {
       target: { value: "pull" },
     });
 
-    expect(within(step).queryByRole("button", { name: /jira.get_issue/ }))
-      .toBeNull();
+    expect(
+      within(step).queryByRole("button", { name: /jira.get_issue/ }),
+    ).toBeNull();
     fireEvent.click(
       within(step).getByRole("button", {
         name: /github.create_pull_request/,
       }),
     );
-    expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
-      .toBe("github.create_pull_request");
+    expect(
+      (within(step).getByLabelText("Tool ID") as HTMLInputElement).value,
+    ).toBe("github.create_pull_request");
   });
 
   it("submits trusted Tool required capabilities with manual Tool steps", async () => {
@@ -17424,8 +17985,9 @@ describe("Task Create governed Tool authoring", () => {
       await within(step).findByRole("button", { name: /jira.get_issue/ }),
     );
     await waitFor(() => {
-      expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
-        .toBe("jira.get_issue");
+      expect(
+        (within(step).getByLabelText("Tool ID") as HTMLInputElement).value,
+      ).toBe("jira.get_issue");
     });
     fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
       target: { value: '{"issueKey":"MM-944"}' },
@@ -17468,7 +18030,9 @@ describe("Task Create governed Tool authoring", () => {
         ],
       }),
     } as Response;
-    renderWithClient(<WorkflowStartPage payload={withoutDefaultRepository()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withoutDefaultRepository()} />,
+    );
 
     const step = (await screen.findByText("Step 1")).closest(
       "section",
@@ -17713,7 +18277,9 @@ describe("Task Create governed Tool authoring", () => {
       "section",
     ) as HTMLElement;
     const picker = within(step).getByLabelText("Step 1 image file picker");
-    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Add to Step 1" }),
+    );
 
     const menu = within(step).getByRole("menu", { name: "Add to step" });
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Image…" }));
@@ -17736,7 +18302,9 @@ describe("Task Create governed Tool authoring", () => {
     const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
-    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Add to Step 1" }),
+    );
 
     const menu = within(step).getByRole("menu", { name: "Add to step" });
     expect(within(menu).queryByRole("menuitem", { name: "Image…" })).toBeNull();
@@ -17786,8 +18354,9 @@ describe("Task Create governed Tool authoring", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => {
-      expect(within(step).queryByRole("menu", { name: "Add to step" }))
-        .toBeNull();
+      expect(
+        within(step).queryByRole("menu", { name: "Add to step" }),
+      ).toBeNull();
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(addToStep);
@@ -17825,7 +18394,9 @@ describe("Task Create governed Tool authoring", () => {
 
     // The publish-derived gh option is disabled in the menu so the UI never
     // silently drops a backend-required capability.
-    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Add to Step 1" }),
+    );
     expect(
       (
         within(step).getByRole("menuitem", {
@@ -17860,7 +18431,9 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.change(within(step).getByLabelText("Step 1 image file picker"), {
       target: { files: [file] },
     });
-    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Add to Step 1" }),
+    );
     fireEvent.click(within(step).getByRole("menuitem", { name: /^Docker/ }));
 
     const imageChip = await within(step).findByText("wireframe.png");
@@ -17883,46 +18456,48 @@ describe("Task Create governed Tool authoring", () => {
 
   it("renders selected preset capabilities as derived non-removable chips", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            slug: "speckit-demo",
-            scope: "global",
-            title: "Spec Kit Demo",
-            description: "Seed a two-step planning flow.",
-            latestVersion: "1.2.3",
-            version: "1.2.3",
-            requiredCapabilities: ["jira"],
-            inputs: [],
-          }),
-        } as Response);
-      }
-      if (url.startsWith("/api/presets?scope=global")) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                slug: "speckit-demo",
-                scope: "global",
-                title: "Spec Kit Demo",
-                description: "Seed a two-step planning flow.",
-                latestVersion: "1.2.3",
-                version: "1.2.3",
-                requiredCapabilities: ["jira"],
-                inputs: [],
-              },
-            ],
-          }),
-        } as Response);
-      }
-      return defaultFetch
-        ? defaultFetch(input, init)
-        : Promise.reject(new Error(`Unhandled request: ${url}`));
-    });
+    fetchSpy.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "speckit-demo",
+              scope: "global",
+              title: "Spec Kit Demo",
+              description: "Seed a two-step planning flow.",
+              latestVersion: "1.2.3",
+              version: "1.2.3",
+              requiredCapabilities: ["jira"],
+              inputs: [],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "speckit-demo",
+                  scope: "global",
+                  title: "Spec Kit Demo",
+                  description: "Seed a two-step planning flow.",
+                  latestVersion: "1.2.3",
+                  version: "1.2.3",
+                  requiredCapabilities: ["jira"],
+                  inputs: [],
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return defaultFetch
+          ? defaultFetch(input, init)
+          : Promise.reject(new Error(`Unhandled request: ${url}`));
+      },
+    );
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
@@ -17931,7 +18506,9 @@ describe("Task Create governed Tool authoring", () => {
     selectStepType(step, "Preset");
     const presetSelect = await within(step).findByLabelText("Preset Template");
     await waitFor(() => {
-      expect((presetSelect as HTMLSelectElement).options.length).toBeGreaterThan(1);
+      expect(
+        (presetSelect as HTMLSelectElement).options.length,
+      ).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
       target: { value: "global::::speckit-demo" },
@@ -17974,7 +18551,9 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Author a custom capability." },
     });
-    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(
+      within(step).getByRole("button", { name: "Add to Step 1" }),
+    );
     fireEvent.click(
       within(step).getByRole("menuitem", { name: "Custom capability…" }),
     );
@@ -18053,7 +18632,9 @@ describe("Task Create governed Tool authoring", () => {
     });
     selectStepType(step, "Tool");
     fireEvent.click(
-      await within(step).findByRole("button", { name: /jira.transition_issue/ }),
+      await within(step).findByRole("button", {
+        name: /jira.transition_issue/,
+      }),
     );
     fireEvent.change(within(step).getByLabelText("issueKey"), {
       target: { value: "MM-576" },
@@ -18062,7 +18643,8 @@ describe("Task Create governed Tool authoring", () => {
       within(step).getByRole("button", { name: "Load Jira target statuses" }),
     );
 
-    const statusSelect = await within(step).findByLabelText("Jira Target Status");
+    const statusSelect =
+      await within(step).findByLabelText("Jira Target Status");
     const transitionCall = fetchSpy.mock.calls.find(
       ([url]) => String(url) === "/mcp/tools/call",
     );
@@ -18129,8 +18711,9 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.change(within(step).getByLabelText("Tool ID"), {
       target: { value: "jira.get_issue" },
     });
-    expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
-      .toBe("jira.get_issue");
+    expect(
+      (within(step).getByLabelText("Tool ID") as HTMLInputElement).value,
+    ).toBe("jira.get_issue");
   });
 });
 
@@ -18191,7 +18774,9 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("previews known runtime commands for objective and step instructions", async () => {
-    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withRuntimeCommandPreview()} />,
+    );
 
     const primaryStep = await screen.findByText("Step 1");
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -18297,7 +18882,9 @@ describe("Task Create runtime command previews", () => {
       } as Response);
     });
 
-    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withRuntimeCommandPreview()} />,
+    );
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
     expect(
@@ -18308,7 +18895,9 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("previews unknown valid slash commands as opaque pass-through", async () => {
-    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withRuntimeCommandPreview()} />,
+    );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "/foo\nUse provider behavior." },
@@ -18320,17 +18909,23 @@ describe("Task Create runtime command previews", () => {
         "Pass-through runtime command. No local hint is available; provider behavior will decide it.",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText(/does not pass through slash commands/i)).toBeNull();
+    expect(
+      screen.queryByText(/does not pass through slash commands/i),
+    ).toBeNull();
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "/provider.command now\nUse provider behavior." },
     });
 
-    expect(await screen.findByText("Runtime command: /provider.command")).toBeTruthy();
+    expect(
+      await screen.findByText("Runtime command: /provider.command"),
+    ).toBeTruthy();
   });
 
   it("recomputes unsupported runtime warnings without mutating instructions", async () => {
-    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withRuntimeCommandPreview()} />,
+    );
 
     const instructions = await screen.findByLabelText("Instructions");
     fireEvent.change(instructions, {
@@ -18343,7 +18938,9 @@ describe("Task Create runtime command previews", () => {
     expect((instructions as HTMLTextAreaElement).value).toBe(
       "/review\nKeep this exact text.",
     );
-    expect(await screen.findByText("Unsupported runtime command: /review")).toBeTruthy();
+    expect(
+      await screen.findByText("Unsupported runtime command: /review"),
+    ).toBeTruthy();
     expect(
       screen.getByText(
         "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
@@ -18352,7 +18949,9 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("previews escaped and malformed slash text as literal without command markup", async () => {
-    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withRuntimeCommandPreview()} />,
+    );
 
     const instructions = await screen.findByLabelText("Instructions");
     fireEvent.change(instructions, {
@@ -18391,7 +18990,9 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("submits authored slash instructions without preview-only runtime command metadata", async () => {
-    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+    renderWithClient(
+      <WorkflowStartPage payload={withRuntimeCommandPreview()} />,
+    );
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "/review\nCheck this branch." },
@@ -18427,15 +19028,15 @@ describe("resolveDefaultProviderProfileId", () => {
   ];
 
   it("prefers the configured default ref over the is_default flag", () => {
-    expect(
-      resolveDefaultProviderProfileId(profiles, "claude-anthropic"),
-    ).toBe("claude-anthropic");
+    expect(resolveDefaultProviderProfileId(profiles, "claude-anthropic")).toBe(
+      "claude-anthropic",
+    );
   });
 
   it("falls back to is_default when the configured ref does not match", () => {
-    expect(
-      resolveDefaultProviderProfileId(profiles, "missing-profile"),
-    ).toBe("codex");
+    expect(resolveDefaultProviderProfileId(profiles, "missing-profile")).toBe(
+      "codex",
+    );
   });
 
   it("falls back to is_default when the configured ref is blank", () => {
@@ -18449,9 +19050,9 @@ describe("resolveDefaultProviderProfileId", () => {
       { profile_id: "claude-anthropic", is_default: false, enabled: false },
       { profile_id: "codex", is_default: true, enabled: true },
     ];
-    expect(
-      resolveDefaultProviderProfileId(disabled, "claude-anthropic"),
-    ).toBe("codex");
+    expect(resolveDefaultProviderProfileId(disabled, "claude-anthropic")).toBe(
+      "codex",
+    );
   });
 
   it("uses priority ordering when no launchable configured or default profile exists", () => {
@@ -18478,24 +19079,24 @@ describe("resolveDefaultProviderProfileId", () => {
         priority: 200,
       },
     ];
-    expect(resolveDefaultProviderProfileId(candidates, "disabled-default")).toBe(
-      "high-priority",
-    );
+    expect(
+      resolveDefaultProviderProfileId(candidates, "disabled-default"),
+    ).toBe("high-priority");
   });
 });
 
 describe("Task Create runtime switch layout stability", () => {
   let fetchSpy: MockInstance;
   let resolveClaudeProfiles:
-    | ((profiles: Array<Record<string, unknown>>) => void)
-    | null;
+    ((profiles: Array<Record<string, unknown>>) => void) | null;
 
   // The Runtime/Provider-profile row container is the parent of the wrapping
   // <label> around the Runtime <select>. Its class toggles between "grid-2"
   // (two columns / half width) and "stack" (single column / full width).
   function runtimeRowContainer(): HTMLElement {
-    const container = screen.getByLabelText("Runtime").closest("label")
-      ?.parentElement;
+    const container = screen
+      .getByLabelText("Runtime")
+      .closest("label")?.parentElement;
     expect(container).not.toBeNull();
     return container as HTMLElement;
   }
