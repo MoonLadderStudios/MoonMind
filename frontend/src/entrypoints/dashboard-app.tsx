@@ -583,7 +583,7 @@ function DashboardLiveUpdateProvider({
 }
 
 function CollectionListDisplayModeControl({
-  accessibleName = 'Workflow list display',
+  accessibleName = 'List display',
   effectiveMode,
   status,
   onSelect,
@@ -868,17 +868,17 @@ function AppShell({
   dataWidePanel,
   uiInfo,
   listDisplayAccessibleName,
-  workflowListMode,
-  workflowListDisplayStatus,
-  onWorkflowListModeSelect,
+  listDisplayMode,
+  listDisplayStatus,
+  onListDisplayModeSelect,
   children,
 }: {
   dataWidePanel: boolean;
   uiInfo: DashboardUiInfo | null;
   listDisplayAccessibleName?: string | undefined;
-  workflowListMode: CollectionListDisplayMode | null;
-  workflowListDisplayStatus?: string | null | undefined;
-  onWorkflowListModeSelect: (mode: CollectionListDisplayMode) => void;
+  listDisplayMode: CollectionListDisplayMode | null;
+  listDisplayStatus?: string | null | undefined;
+  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
   children: ReactNode;
 }) {
   return (
@@ -898,13 +898,13 @@ function AppShell({
             </p>
           </section>
 
-          {workflowListMode ? (
+          {listDisplayMode ? (
             <div className="dashboard-collection-utilities">
               <CollectionListDisplayModeControl
                 {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-                effectiveMode={workflowListMode}
-                status={workflowListDisplayStatus}
-                onSelect={onWorkflowListModeSelect}
+                effectiveMode={listDisplayMode}
+                status={listDisplayStatus}
+                onSelect={onListDisplayModeSelect}
               />
             </div>
           ) : null}
@@ -1207,9 +1207,9 @@ function RoutedDashboardPage({
         dataWidePanel={false}
         uiInfo={uiInfo}
         listDisplayAccessibleName={activeListDisplayAccessibleName}
-        workflowListMode={null}
-        workflowListDisplayStatus={resolutionStatus}
-        onWorkflowListModeSelect={handleWorkflowListModeSelect}
+        listDisplayMode={null}
+        listDisplayStatus={resolutionStatus}
+        onListDisplayModeSelect={handleWorkflowListModeSelect}
       >
         <UnknownPage page={location.pathname} />
       </AppShell>
@@ -1225,9 +1225,9 @@ function RoutedDashboardPage({
         dataWidePanel={route.dataWidePanel}
         uiInfo={uiInfo}
         listDisplayAccessibleName={activeListDisplayAccessibleName}
-        workflowListMode={activeListDisplay?.effectiveMode ?? null}
-        workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
-        onWorkflowListModeSelect={handleWorkflowListModeSelect}
+        listDisplayMode={activeListDisplay?.effectiveMode ?? null}
+        listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
+        onListDisplayModeSelect={handleWorkflowListModeSelect}
       >
         <LoadingPage />
       </AppShell>
@@ -1241,7 +1241,7 @@ function RoutedDashboardPage({
         ? routedPayload.initialData
         : {}),
       workflowListDisplayMode: resolvedDisplay.effectiveMode,
-      workflowListDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
+      listDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
     };
   }
   if (resolvedRecurringDisplay) {
@@ -1263,9 +1263,9 @@ function RoutedDashboardPage({
       dataWidePanel={layout.dataWidePanel === true}
       uiInfo={uiInfo}
       listDisplayAccessibleName={activeListDisplayAccessibleName}
-      workflowListMode={activeListDisplay?.effectiveMode ?? null}
-      workflowListDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
-      onWorkflowListModeSelect={handleWorkflowListModeSelect}
+      listDisplayMode={activeListDisplay?.effectiveMode ?? null}
+      listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
+      onListDisplayModeSelect={handleWorkflowListModeSelect}
     >
       <PageContent
         key={routeKey}
@@ -1349,8 +1349,8 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
           <AppShell
             dataWidePanel={false}
             uiInfo={uiInfo}
-            workflowListMode={null}
-            onWorkflowListModeSelect={() => undefined}
+            listDisplayMode={null}
+            onListDisplayModeSelect={() => undefined}
           >
             <UnknownPage page={window.location.pathname} />
           </AppShell>
