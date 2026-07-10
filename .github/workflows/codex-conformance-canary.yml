@@ -1,0 +1,118 @@
+name: Codex conformance canary
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      candidate_image_ref:
+        description: "Candidate image ref, e.g. ghcr.io/owner/repo:tag"
+        required: true
+        type: string
+      candidate_digest:
+        description: "Exact candidate sha256:... digest"
+        required: true
+        type: string
+  push:
+    branches: [ main ]
+    paths:
+      - "api_service/Dockerfile"
+      - "api_service/docker/**"
+      - "api_service/config.template.toml"
+      - "moonmind/workflows/adapters/codex_session_adapter.py"
+      - "moonmind/workflows/temporal/runtime/codex_session_runtime.py"
+      - "moonmind/workflows/temporal/runtime/managed_session_controller.py"
+      - "moonmind/workflows/temporal/runtime/managed_session_supervisor.py"
+      - "moonmind/codex_conformance/**"
+      - "tools/run_codex_conformance_canary.py"
+      - "tools/test_codex_provider.sh"
+      - ".github/workflows/codex-conformance-canary.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: codex-conformance-canary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  codex-canary:
+    name: Live managed Codex long-command canary
+    runs-on: ubuntu-latest
+    environment: codex-provider-verification
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set candidate metadata
+        id: candidate
+        shell: bash
+        env:
+          DISPATCH_REF: ${{ inputs.candidate_image_ref }}
+          DISPATCH_DIGEST: ${{ inputs.candidate_digest }}
+        run: |
+          candidate_ref="${DISPATCH_REF:-ghcr.io/${{ github.repository }}:latest}"
+          candidate_ref="$(printf '%s' "$candidate_ref" | tr '[:upper:]' '[:lower:]')"
+          candidate_digest="${DISPATCH_DIGEST:-}"
+          if [ -z "$candidate_digest" ]; then
+            docker buildx imagetools inspect "$candidate_ref"
+            candidate_digest="$(docker buildx imagetools inspect "$candidate_ref" --format '{{.Manifest.Digest}}')"
+          fi
+          if [ -z "$candidate_digest" ]; then
+            echo "::error::Could not resolve candidate digest for $candidate_ref"
+            exit 1
+          fi
+          echo "ref=${candidate_ref}" >> "$GITHUB_OUTPUT"
+          echo "digest=${candidate_digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: python -m pip install -e .[tests]
+
+      - name: Run live Codex canary
+        env:
+          MOONMIND_API_URL: ${{ secrets.MOONMIND_CODEX_CANARY_API_URL }}
+          MOONMIND_API_TOKEN: ${{ secrets.MOONMIND_CODEX_CANARY_API_TOKEN }}
+          MOONMIND_CODEX_CANARY_PROFILE_REF: ${{ secrets.MOONMIND_CODEX_CANARY_PROFILE_REF }}
+          MOONMIND_CODEX_CANARY_CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
+          MOONMIND_CODEX_CANARY_CANDIDATE_REF: ${{ steps.candidate.outputs.ref }}
+          CODEX_CLI_VERSION: ${{ vars.CODEX_CLI_VERSION }}
+          CODEX_APP_SERVER_VERSION: ${{ vars.CODEX_APP_SERVER_VERSION }}
+        run: |
+          python tools/run_codex_conformance_canary.py \
+            --candidate-digest "$MOONMIND_CODEX_CANARY_CANDIDATE_DIGEST" \
+            --candidate-ref "$MOONMIND_CODEX_CANARY_CANDIDATE_REF" \
+            --output artifacts/codex-conformance/canary-result.json
+
+      - name: Validate compact evidence
+        env:
+          MOONMIND_CODEX_CANARY_CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
+          MOONMIND_CODEX_CANARY_RESULT_PATH: artifacts/codex-conformance/canary-result.json
+        run: pytest tests/provider/codex -m 'provider_verification and codex' -q --tb=short -s
+
+      - name: Upload conformance result
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-conformance-${{ github.run_id }}
+          path: artifacts/codex-conformance/canary-result.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Write summary
+        shell: bash
+        run: |
+          {
+            echo "### Codex conformance canary"
+            echo ""
+            echo "- Issue: \`MoonLadderStudios/MoonMind#3150\`"
+            echo "- Candidate: \`${{ steps.candidate.outputs.ref }}\`"
+            echo "- Digest: \`${{ steps.candidate.outputs.digest }}\`"
+            echo "- Evidence artifact: \`codex-conformance-${{ github.run_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
