@@ -25,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    literal_column,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -2443,7 +2444,7 @@ class ManagedAgentProviderProfile(Base):
         JSON,
         nullable=False,
         default=_provider_profile_model_tiers_default,
-        server_default=text(
+        server_default=literal_column(
             """'[{"label":"Runtime default","model":null,"effort":null,"parameters":{},"annotations":{}}]'"""
         ),
     )
