@@ -3022,12 +3022,17 @@ class TemporalSandboxActivities:
         artifact_store: Any | None = None,
         redactor: SecretRedactor | None = None,
         workspace_root: str | Path | None = None,
+        managed_workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._artifact_store = artifact_store or InMemoryArtifactStore()
         self._redactor = redactor or SecretRedactor.from_environ()
         self._workspace_root = Path(
             workspace_root or settings.workflow.workspace_root
+        ).resolve()
+        self._managed_workspace_root = Path(
+            managed_workspace_root
+            or os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
         ).resolve()
 
     async def _put_checkpoint_bytes(
@@ -3142,7 +3147,7 @@ class TemporalSandboxActivities:
             )
             return result.model_dump(by_alias=True, mode="json")
 
-        workspace = self._resolve_workspace(
+        workspace = self._resolve_checkpoint_workspace(
             model.workspace_path or model.workspace_root_ref or "",
             must_exist=True,
         )
@@ -3846,6 +3851,22 @@ class TemporalSandboxActivities:
         if not workspace.is_relative_to(sandbox_root):
             raise TemporalActivityRuntimeError(
                 f"workspace path escapes sandbox root: {workspace}"
+            )
+        if must_exist and not workspace.exists():
+            raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
+        return workspace
+
+    def _resolve_checkpoint_workspace(
+        self, workspace_ref: str | Path, *, must_exist: bool
+    ) -> Path:
+        workspace = Path(workspace_ref).expanduser().resolve()
+        sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+        if not (
+            workspace.is_relative_to(sandbox_root)
+            or workspace.is_relative_to(self._managed_workspace_root)
+        ):
+            raise TemporalActivityRuntimeError(
+                f"workspace path escapes approved checkpoint roots: {workspace}"
             )
         if must_exist and not workspace.exists():
             raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")

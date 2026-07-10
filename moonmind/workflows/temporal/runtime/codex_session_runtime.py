@@ -166,6 +166,7 @@ class _RolloutLiveMirror:
     path: str | None = None
     offset: int = 0
     turn_started_at: float | None = None
+    last_assistant_text: str = ""
     emitted_assistant_texts: set[str] = field(default_factory=set)
     emitted_live_keys: set[str] = field(default_factory=set)
 
@@ -1325,6 +1326,8 @@ class CodexManagedSessionRuntime:
                     mirror.emitted_live_keys.add(live_key)
                     if label == "assistant":
                         normalized_text = text.removeprefix("assistant: ").strip()
+                        if normalized_text:
+                            mirror.last_assistant_text = normalized_text
                         if normalized_text in mirror.emitted_assistant_texts:
                             mirror.offset = handle.tell()
                             continue
@@ -2772,6 +2775,14 @@ class CodexManagedSessionRuntime:
         metadata: dict[str, Any] = {}
         disposition: str | None = None
         completed_turn_inspection: _CompletedTurnInspection | None = None
+        if (
+            status == "failed"
+            and error_text in _EMPTY_ASSISTANT_FAILURE_REASONS
+            and rollout_mirror.last_assistant_text
+        ):
+            status = "completed"
+            error_text = None
+            failure_class = None
         if status == "completed":
             completed_turn_inspection = self._inspect_completed_turn(
                 state=state,
@@ -2780,7 +2791,10 @@ class CodexManagedSessionRuntime:
                 client=client,
                 vendor_thread_id=vendor_thread_id,
             )
-            assistant_text = completed_turn_inspection.assistant_text
+            assistant_text = (
+                completed_turn_inspection.assistant_text
+                or rollout_mirror.last_assistant_text
+            )
             skill_outcome = self._read_skill_outcome(
                 turn_started_at=state.last_control_at
             )
