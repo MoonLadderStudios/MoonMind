@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 
@@ -205,6 +205,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
 
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   const skillsQuery = useQuery({
     queryKey: ['skills', 'detail'],
@@ -250,6 +251,13 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     setIsDrawerOpen(true);
   }, []);
 
+  const selectSkill = useCallback((skillId: string) => {
+    setSelectedSkillId(skillId);
+    setPreviewTab('rendered');
+    setMessage(null);
+    window.requestAnimationFrame(() => detailHeadingRef.current?.focus({ preventScroll: true }));
+  }, []);
+
   // Focus the first field when the drawer opens so keyboard users land inside
   // the dialog rather than the inert background.
   useEffect(() => {
@@ -263,6 +271,43 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     const firstField = root.querySelector<HTMLElement>('input, textarea, select, button');
     firstField?.focus();
   }, [isDrawerOpen]);
+
+  const handleDrawerKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeDrawer();
+      return;
+    }
+    if (event.key !== 'Tab') {
+      return;
+    }
+    const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ) ?? []).filter((element) => {
+      const isVisible = element.offsetWidth > 0 || element.offsetHeight > 0;
+      const isNotAriaHidden = element.getAttribute('aria-hidden') !== 'true';
+      const isNotTabIndexMinusOne = element.getAttribute('tabindex') !== '-1';
+      return isVisible && isNotAriaHidden && isNotTabIndexMinusOne;
+    });
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!first || !last) {
+      event.preventDefault();
+      return;
+    }
+    if (!drawerRef.current?.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [closeDrawer]);
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -366,7 +411,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
         </header>
 
         <div className="grid gap-5 sm:gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm">
+          <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm" aria-label="Skill navigation">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-base font-semibold text-slate-900 dark:text-white">Available Skills</h3>
               <button ref={drawerTriggerRef} type="button" className="secondary" onClick={openDrawer}>
@@ -386,7 +431,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
               />
             </label>
 
-            <div className="mt-4 grid gap-2" data-testid="skill-list">
+            <div className="mt-4 grid gap-2" data-testid="skill-list" aria-label="Available skills" aria-busy={skillsQuery.isLoading}>
               {skillsQuery.isLoading ? (
                 <LoadingPlaceholder
                   surface="skills"
@@ -396,29 +441,26 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   preserveContext
                 />
               ) : skillsQuery.isError ? (
-                <div className="space-y-2">
+                <div className="space-y-2" role="alert">
                   <p className="text-sm text-mm-danger">Failed to load skills.</p>
                   <button type="button" className="secondary" onClick={() => skillsQuery.refetch()}>
                     Retry
                   </button>
                 </div>
               ) : skills.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
+                <p className="text-sm text-slate-500 dark:text-slate-400" role="status">
                   No skills available yet. Create one to get started.
                 </p>
               ) : filteredSkills.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">No skills match your filter.</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400" role="status">No skills match your filter.</p>
               ) : (
                 filteredSkills.map((skillItem) => (
                   <button
                     key={skillItem.id}
                     type="button"
+                    aria-current={selectedSkillId === skillItem.id ? 'true' : 'false'}
                     className={selectedSkillId === skillItem.id ? 'queue-submit-primary' : 'secondary'}
-                    onClick={() => {
-                      setSelectedSkillId(skillItem.id);
-                      setPreviewTab('rendered');
-                      setMessage(null);
-                    }}
+                    onClick={() => selectSkill(skillItem.id)}
                   >
                     {skillItem.id}
                   </button>
@@ -434,7 +476,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
                     Skill Preview
                   </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                  <h3 ref={detailHeadingRef} tabIndex={-1} className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
                     {selectedSkill.id}
                   </h3>
                 </div>
@@ -532,12 +574,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
             aria-modal="true"
             aria-label="Create or upload skill"
             className="flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-mm-border/80 bg-[rgb(var(--mm-panel))] p-5 shadow-2xl"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.stopPropagation();
-                closeDrawer();
-              }
-            }}
+            onKeyDown={handleDrawerKeyDown}
           >
             <header className="flex items-center justify-between gap-3">
               <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Create Skill</h3>
