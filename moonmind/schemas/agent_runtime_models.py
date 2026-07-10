@@ -21,6 +21,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionBinding,
     canonical_managed_session_runtime_id,
 )
+from moonmind.provider_profiles.model_tiers import ProviderModelEffortTier
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 from moonmind.schemas.workload_models import parse_cpu_units, parse_size_bytes
 
@@ -729,9 +730,11 @@ class ManagedAgentProviderProfile(BaseModel):
     provider_label: str | None = Field(None, alias="providerLabel")
     default_model: str | None = Field(None, alias="defaultModel")
     default_effort: str | None = Field(None, alias="defaultEffort")
+    model_tiers: list[ProviderModelEffortTier] = Field(
+        default_factory=list, alias="modelTiers"
+    )
+    default_model_tier: int = Field(1, alias="defaultModelTier", ge=1)
     model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
-    model_tiers: list[ProviderModelEffortTier] = Field(default_factory=list, alias="modelTiers")
-    default_model_tier: int = Field(default=1, alias="defaultModelTier", ge=1)
 
     # -- Credential & materialization strategy (required) --
     credential_source: str = Field(..., alias="credentialSource", min_length=1)
@@ -821,6 +824,18 @@ class ManagedAgentProviderProfile(BaseModel):
             )
         if _contains_sensitive_key(self.rate_limit_policy):
             raise ValueError("rateLimitPolicy must not contain raw credential keys")
+        if not self.model_tiers:
+            self.model_tiers = [
+                ProviderModelEffortTier(
+                    label="Runtime default",
+                    model=None,
+                    effort=None,
+                    parameters={},
+                    annotations={},
+                )
+            ]
+        if self.default_model_tier > len(self.model_tiers):
+            raise ValueError("defaultModelTier must be within configured modelTiers")
 
         if self.credential_source not in self._ALLOWED_CREDENTIAL_SOURCES:
             allowed = ", ".join(sorted(self._ALLOWED_CREDENTIAL_SOURCES))
@@ -1663,8 +1678,11 @@ class ManagedRuntimeProfile(BaseModel):
     default_model: str | None = Field(None, alias="defaultModel")
     model_overrides: dict[str, str] = Field(default_factory=dict, alias="modelOverrides")
     default_effort: str | None = Field(None, alias="defaultEffort")
-    model_tiers: list[ProviderModelEffortTier] = Field(default_factory=list, alias="modelTiers")
-    default_model_tier: int = Field(default=1, alias="defaultModelTier", ge=1)
+    model_tiers: list[ProviderModelEffortTier] = Field(
+        default_factory=list,
+        alias="modelTiers",
+    )
+    default_model_tier: int = Field(1, alias="defaultModelTier", ge=1)
     default_timeout_seconds: int = Field(3600, alias="defaultTimeoutSeconds", ge=1)
     workspace_mode: WorkspaceMode = Field("tempdir", alias="workspaceMode")
     env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")

@@ -1,9 +1,9 @@
 # Recurring Schedules Page
 
-Status: Desired-state product and implementation contract  
-Owners: MoonMind Engineering  
-Last updated: 2026-07-08  
-Canonical for: Recurring dashboard route, recurring schedule table, recurring schedule sidebar, schedule detail workspace composition, masthead list display behavior for recurring schedules, and the product boundary between recurring schedules and one-off scheduled workflow executions
+Status: Desired-state product and implementation contract
+Owners: MoonMind Engineering
+Last updated: 2026-07-10
+Canonical for: Recurring dashboard route, recurring schedule table, recurring schedule sidebar, schedule detail workspace composition, shell/workspace list display behavior for recurring schedules, and the product boundary between recurring schedules and one-off scheduled workflow executions
 
 **Implementation tracking:** rollout task lists, issue links, PR breakdowns, and local handoff notes belong in GitHub issues, `docs/tmp/`, or gitignored implementation notes. This document defines the durable desired-state UI and product contract for the Recurring schedules page.
 
@@ -25,8 +25,9 @@ Use this document for Recurring schedules page behavior.
 
 Use related docs for shared concepts and adjacent surfaces:
 
+- `docs/UI/CollectionWorkspaceLayout.md` — canonical far-left application rail, shared collection-sidebar primitive, and Workflow/Recurring detail frame.
 - `docs/UI/WorkflowsListPage.md` — reference for the full Workflows table visual rhythm, filtering posture, loading states, mobile cards, pagination, and row scanning behavior.
-- `docs/UI/WorkflowListDisplayModes.md` — reference for the masthead list display radio group, the three-mode list model, and sidebar-as-table-slice visual contract.
+- `docs/UI/WorkflowListDisplayModes.md` — reference for the shell/workspace list display radio group, the three-mode list model, and sidebar-as-table-slice visual contract.
 - `docs/UI/WorkflowWorkspaceSidebar.md` — reference for desktop list-to-detail workspace composition and route-owned sidebars.
 - `docs/UI/RecurringScheduleDetailsPage.md` — earlier recurring schedule detail contract; this document narrows and extends it for the full Recurring workspace.
 - `docs/UI/WorkflowConsoleArchitecture.md` — dashboard route model and API boundary expectations.
@@ -161,14 +162,12 @@ Default behavior:
 
 ---
 
-## 6. Masthead list display radio control
+## 6. Shell/workspace list display radio control
 
-The list display selector belongs in the global dashboard masthead immediately to the right of the MoonMind brand area, following the same placement used by the Workflows list display system.
-
-Placement:
+The list display selector belongs to the current Recurring collection's shell/workspace utility region. It remains adjacent to route and collection context without becoming a centered masthead element or moving into page content, the Recurring sidebar, or the table toolbar.
 
 ```text
-[MoonMind logo + MoonMind title] [list display radio group] [route nav links] [version/meta]
+[Application rail] [Recurring sidebar when visible] [Recurring utility + primary pane]
 ```
 
 Recurring-specific control contract:
@@ -181,25 +180,26 @@ Recurring-specific control contract:
 
 Rules:
 
-1. The control is a radio group, not three unrelated buttons.
-2. On Recurring routes, expose an accessible name such as `Recurring list display`.
+1. The control is one radio group, not three unrelated buttons.
+2. On Recurring routes, expose a stable accessible name such as `Recurring list display`.
 3. Each option uses native radio semantics or `role="radio"` with `aria-checked`.
 4. The selected option reflects the resolved mode after route transitions settle.
-5. `table` always means the full Recurring table at `/schedules`.
-6. `sidebar` always means a recurring schedule sidebar beside recurring schedule detail.
-7. `hidden` keeps the current detail route and removes the recurring schedule list region.
-8. The Recurring detail page must never show the Workflows sidebar as its list display region.
-9. Keyboard users can Tab into the group and use arrow keys to move between options.
-10. Each icon-only control needs an accessible name and a visible focus state.
-11. Hover, selected, disabled, and focus states use dashboard control styling tokens.
-12. On routes that have not declared list display behavior, hide the control or disable it with a clear accessible reason. Hiding is preferred.
-13. On mobile, hide the control until mobile-specific behavior exists.
+5. Keyboard users Tab into the group and use arrow keys to move between options.
+6. Each icon-only option has an accessible name and visible focus state.
+7. Hover, selected, disabled, and focus states use the shared dashboard control tokens.
+8. `table` always means the full Recurring table at `/schedules`.
+9. `sidebar` always means a Recurring schedule sidebar beside Recurring schedule detail.
+10. `hidden` keeps the current detail route and removes only the Recurring collection sidebar.
+11. The Recurring detail page must never show Workflow rows as its list region.
+12. Recurring preference and selection state remain independent from Workflow state.
+13. Routes without declared Recurring list-display behavior hide the control.
+14. Mobile omits desktop-only modes until a mobile-specific contract exists.
 
 Implementation guidance:
 
-- Prefer generalizing the list display mode registry so Workflows and Recurring are entity-aware participants in a shared dashboard pattern.
-- Avoid duplicating separate, visually divergent radio controls for each route family.
-- Entity-specific accessible names and route resolution rules are expected; shared icons and interaction behavior are preferred.
+- Generalize the display-mode registry so Workflows and Recurring are entity-aware participants in one shell/workspace control pattern.
+- Share icons, radio semantics, focus behavior, and visual treatment while preserving entity-specific labels and route resolution.
+- Do not duplicate separate, visually divergent controls for each route family.
 
 ---
 
@@ -210,20 +210,19 @@ The default `/schedules` page should be a full-width table view, visually close 
 Desired layout:
 
 ```text
-Global masthead / nav
-
-Recurring table control band
-  [+]  Total  Active  Next 24h  Attention      [optional refresh/live state]
-
-Full recurring schedules table
-  column filters / view options / table / pagination / live-update state
+Far-left application rail │ Recurring page
+                          │ Page header / route context
+                          │ Recurring table control band
+                          │   [+] Total Active Next 24h Attention [optional refresh/live]
+                          │ Full recurring schedules table
+                          │   filters / view options / table / pagination / live state
 ```
 
 Rules:
 
-1. Leave deliberate space between the masthead/nav and the table.
+1. Leave deliberate space between the page header/route context and the table.
 2. Use that space for the compact create action and summary metrics.
-3. The `+` action should be visually near the summary strip, not buried inside the global masthead.
+3. The `+` action should be visually near the summary strip, not buried inside the application rail or global shell.
 4. The table should use the wide data-panel layout because it is a multi-column scanning surface.
 5. The full table should occupy the available dashboard content width.
 6. The page should not render a selected detail pane in table mode.
@@ -363,7 +362,7 @@ Rules:
 
 ## 11. Recurring schedule sidebar
 
-When a user opens `/schedules/{definitionId}` on desktop, the workspace should show a recurring schedule sidebar by default.
+When a user opens `/schedules/{definitionId}` on desktop, the workspace shows a recurring schedule sidebar by default.
 
 The sidebar is the collapsed table-slice version of the Recurring table. It is not a generic nav menu and not the Workflows sidebar.
 
@@ -383,47 +382,49 @@ Suggested shape:
 
 Rules:
 
-1. Sidebar rows link to `/schedules/{definitionId}`.
-2. The active schedule row exposes `aria-current="page"`.
-3. The sidebar has an accessible name such as `Recurring schedule navigation`.
-4. The sidebar list uses the same authorized recurring schedule API family as the full table when possible.
-5. The sidebar should reuse cached Recurring table data when the query matches.
-6. Sidebar failures do not block selected detail from rendering.
-7. Detail failures do not erase a successfully loaded sidebar.
-8. The sidebar header row remains visible during loading, empty, and error states.
-9. Sidebar row height should be compatible with the table's first-column row height.
-10. Status and next-run summaries may appear only if they fit the shared row height.
-11. Sidebar rows must not grow individually based on long descriptions, errors, payloads, or target metadata.
-12. Long names clamp; full names may be available through accessible text or title attributes when appropriate.
-13. Sidebar filters/search can be deferred; first implementation may show the current effective table query or a compact default authorized list.
-14. The sidebar may include a compact create affordance only if it does not duplicate or conflict with the full table create action and detail actions.
-15. Clicking a spawned workflow run inside detail navigates to the Workflow detail route and does not change the recurring sidebar selection.
+1. The sidebar uses the shared `CollectionSidebar` shell, header, filter, row metrics, selected/focus states, divider, scrolling, and localized state components.
+2. It is the first content-region column immediately right of the far-left application rail and is never wrapped inside the detail frame or a centered page container.
+3. Sidebar rows link to `/schedules/{definitionId}`.
+4. The active schedule row exposes `aria-current="page"`.
+5. The sidebar has an accessible name such as `Recurring schedule navigation`.
+6. The sidebar list uses the same authorized recurring schedule API family as the full table when possible.
+7. The sidebar should reuse cached Recurring table data when the query matches.
+8. Sidebar failures do not block selected detail from rendering.
+9. Detail failures do not erase a successfully loaded sidebar.
+10. The sidebar header row remains visible during loading, empty, and error states.
+11. Sidebar row height is compatible with the table's first-column row height.
+12. Status and next-run summaries may appear only when they fit the shared row height.
+13. Sidebar rows must not grow individually based on long descriptions, errors, payloads, or target metadata.
+14. Long names clamp; full names remain available through accessible text or title attributes when appropriate.
+15. Sidebar filtering/search may be deferred; the first implementation may show the current effective table query or a compact default authorized list.
+16. The sidebar may include a compact create affordance only when it does not duplicate or conflict with the full-table create action and detail actions.
+17. Clicking a spawned Workflow run inside detail navigates to the Workflow detail route and does not change the Recurring sidebar selection.
 
 Visual contract:
 
-1. The sidebar should read as the first-column slice of the full Recurring table.
-2. Header typography, row height, divider, hover, selected, and focus states should align with the full table.
-3. Avoid styling the sidebar as cards, a menu, or a separate navigation rail.
-4. The sidebar's right divider should align with shared table/list divider tokens.
-5. Reduced-motion users should not see large layout animations when switching between table and sidebar modes.
+1. The sidebar reads as the first-column slice of the full Recurring table.
+2. Header typography, row height, divider, hover, selected, and focus states align with the full table and the shared collection-sidebar tokens.
+3. Do not style the sidebar as cards, a menu, or a separate navigation rail.
+4. The sidebar's right divider aligns with shared table/list divider tokens.
+5. Reduced-motion users do not see large layout animations when switching between table and sidebar modes.
 
 ---
 
 ## 12. Detail page composition
 
-The Recurring detail page is a schedule-definition control surface. It should reuse the Workflow detail page composition where practical, but not imply the schedule definition is itself a workflow execution.
+The Recurring detail page is a schedule-definition control surface. It must use the shared `EntityDetailFrame` and reuse the Workflow detail composition, but not imply the schedule definition is itself a workflow execution.
 
 Default desktop layout:
 
 ```text
-┌────────────────────────────────────────────────────────────────────┐
-│ Recurring sidebar       │ Schedule detail                          │
-│                         │ Breadcrumb: Recurring / Nightly scan     │
-│                         │ Title + state + actions                  │
-│                         │ Summary cards                            │
-│                         │ Overview / Runs / Configuration / ...    │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────┬──────────────────────────┬──────────────────────────────────────────┐
+│ Application rail │ Recurring sidebar        │ Shared entity-detail frame               │
+│ viewport far-left│ content-region far-left  │ breadcrumb, title/state/actions          │
+│                  │                          │ summary/facts, tabs, main, optional rail │
+└──────────────────┴──────────────────────────┴──────────────────────────────────────────┘
 ```
+
+The Recurring sidebar and detail frame are workspace siblings. The full composition is fluid and must not be centered inside a narrower page container.
 
 Header content:
 
@@ -594,7 +595,7 @@ Full table states:
 | Loading | Preserve the control band and table frame with skeletons. |
 | Empty | Show `No recurring schedules yet.` and a create action. |
 | Filtered empty | Show that no recurring schedules match the current filters and keep filters editable. |
-| List error | Show a recoverable error in the table region; keep masthead mode selector available. |
+| List error | Show a recoverable error in the table region; keep the shell/workspace mode selector available. |
 | Permission denied | Show an access message without leaking schedule identities. |
 
 Sidebar states:
@@ -625,7 +626,7 @@ Desktop:
 
 1. `/schedules` renders full table mode.
 2. `/schedules/{definitionId}` renders sidebar plus detail by default.
-3. Masthead list display radio control is available on Recurring routes.
+3. The shell/workspace list display radio control is available on Recurring routes.
 4. Sidebar and detail scroll independently when practical.
 
 Tablet / narrow desktop:
@@ -648,20 +649,20 @@ Mobile:
 
 Rules:
 
-1. The masthead mode selector has a stable accessible name such as `Recurring list display`.
+1. The shell/workspace mode selector has a stable accessible name such as `Recurring list display`.
 2. The mode selector uses radio semantics and announces checked state.
-3. The mode selector is reachable by keyboard immediately after the MoonMind brand area.
-4. Route-changing mode switches restore focus deterministically to the page title, selected schedule row, sidebar selected row, or detail heading.
+3. The mode selector is keyboard reachable in the Recurring collection utility region after route/page context.
+4. Route-changing mode switches restore focus deterministically to the page title, selected schedule row, active sidebar row, or detail heading.
 5. The full table has an accessible name such as `Recurring schedules`.
 6. The sidebar has an accessible name such as `Recurring schedule navigation`.
 7. The sidebar header row is not announced as a selectable schedule.
 8. Active sidebar links expose `aria-current="page"`.
 9. The create button has visible text or an accessible label such as `Create recurring schedule`.
 10. Status and attention are not conveyed by color alone.
-11. Error and permission messages use appropriate live region or alert semantics when they appear after user action.
+11. Error and permission messages use appropriate live-region or alert semantics when they appear after user action.
 12. Icon-only controls have accessible names and visible focus states.
 13. Mobile users must not encounter hidden desktop-only sidebar controls in the accessibility tree.
-14. Long schedule names and IDs must remain accessible even when visually truncated.
+14. Long schedule names and IDs remain accessible even when visually truncated.
 
 ---
 
@@ -672,7 +673,7 @@ Switching between full table and sidebar/detail should feel like changing how mu
 Rules:
 
 1. Avoid large page-slide animations.
-2. Preserve dashboard shell and masthead continuity.
+2. Preserve `DashboardShell`, application-rail, and collection-utility continuity.
 3. Header row height should remain stable between table and sidebar.
 4. Sidebar row height should match or intentionally derive from the table first-column row height.
 5. Preserve selected schedule identity across mode changes.
@@ -712,9 +713,9 @@ Implementation should add or preserve tests for these behaviors:
 
 1. The visible nav/page copy uses `Recurring` or `Recurring schedules` rather than ambiguous broad `Schedules`, unless a combined Schedules design is intentionally implemented.
 2. `/schedules` resolves to full table mode on desktop.
-3. The area between masthead/nav and table includes the create action plus Total, Active, Next 24h, and Attention metrics.
+3. The area between the page header/route context and table includes the create action plus Total, Active, Next 24h, and Attention metrics.
 4. The create action has accessible text `Create recurring schedule` and points to the recurring creation flow.
-5. The masthead renders the list display radio group on Recurring routes with `No list`, `Sidebar list`, and `Full table` options.
+5. The shell/workspace utility region renders the list display radio group on Recurring routes with `No list`, `Sidebar list`, and `Full table` options.
 6. The radio group exposes an accessible name such as `Recurring list display`.
 7. Selecting `Full table` from detail navigates to `/schedules` and unmounts the detail pane.
 8. Selecting `Sidebar list` from `/schedules` opens the last selected recurring schedule or first visible recurring schedule.
@@ -729,7 +730,7 @@ Implementation should add or preserve tests for these behaviors:
 17. Run-history rows link to Workflow detail when spawned workflow IDs are available.
 18. Delete confirmation copy says prior workflow executions and artifacts remain available.
 19. Mobile does not expose non-rendered desktop sidebar controls.
-20. Keyboard users can operate the masthead radio group and receive deterministic focus after navigation.
+20. Keyboard users can operate the shell/workspace radio group and receive deterministic focus after navigation.
 21. Reduced-motion settings avoid large layout animations.
 22. Unauthorized schedules never appear in table rows, sidebar rows, first-row fallback, remembered selections, or pinned current rows.
 
@@ -745,7 +746,7 @@ Recommended implementation sequence:
 4. Build the recurring schedule sidebar using the sidebar-as-table-slice contract.
 5. Mount recurring detail beside the recurring sidebar by default on desktop.
 6. Preserve existing edit, run now, pause/resume, run history, and delete behaviors inside detail.
-7. Add tests for route/mode resolution, masthead radio semantics, summary metrics, sidebar selection, and one-off exclusion.
+7. Add tests for route/mode resolution, shell/workspace radio semantics, summary metrics, sidebar selection, and one-off exclusion.
 8. Add API follow-ups for server-side counts and sort/filter support if pagination or global sorting is introduced.
 
 This rollout should avoid changing the user's mental model all at once: keep the existing `/schedules` route and detail capabilities, then upgrade the page composition, naming, and list display behavior around them.

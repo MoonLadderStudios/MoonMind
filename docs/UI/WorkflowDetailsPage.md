@@ -16,7 +16,7 @@ The page is available from Workflows lists, Workflow notifications, remediation 
 
 The page accepts a Workflow Execution identifier and loads a single Workflow Execution detail record.
 
-Addendum: `docs/UI/WorkflowWorkspaceSidebar.md` defines the desktop workspace presentation that can host this same detail page next to the workflow sidebar. This document remains canonical for detail content, subroutes, primary actions, dialogs, logs, artifacts, and recovery behavior.
+Addendum: `docs/UI/CollectionWorkspaceLayout.md` defines the shared entity-detail frame and far-left collection geometry. `docs/UI/WorkflowWorkspaceSidebar.md` defines the desktop workspace presentation that can host this same detail page next to the workflow sidebar. This document remains canonical for detail content, subroutes, primary actions, dialogs, logs, artifacts, and recovery behavior.
 
 ## Page-level goals
 
@@ -85,7 +85,7 @@ The page contains the following major regions:
 9. Related runs
 10. Metadata and audit details
 
-Desktop layout uses a main content column and an optional right rail. Mobile layout stacks all sections vertically while preserving the header and primary actions near the top of the page.
+Desktop Workflow detail renders inside the shared `EntityDetailFrame`: breadcrumb; title/subtitle/status; primary and overflow actions; summary/facts strip; tabs/sections; main evidence slab; and optional right facts rail. The frame is the primary pane sibling of the far-left Workflow sidebar; it never owns that sidebar and the pair is never centered inside a max-width wrapper. Recurring schedule detail uses the same structural, spacing, status, action, tab, facts-rail, loading, error, and responsive primitives with a schedule adapter. Mobile stacks these regions and removes the desktop collection sidebar.
 
 ## Header
 

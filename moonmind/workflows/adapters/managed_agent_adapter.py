@@ -923,6 +923,8 @@ class ManagedAgentAdapter:
                 command_template=cmd_template,
                 default_model=profile.get("default_model") or runtime_default_model,
                 default_effort=profile.get("default_effort") or runtime_default_effort,
+                model_tiers=profile.get("model_tiers") or [],
+                default_model_tier=profile.get("default_model_tier") or 1,
                 model_overrides=profile.get("model_overrides") or {},
                 command_behavior=profile.get("command_behavior") or {},
                 env_template=profile.get("env_template") or {},

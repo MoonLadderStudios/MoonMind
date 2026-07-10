@@ -3905,7 +3905,20 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
         "moonmind.rag.context_injection.ContextInjectionService",
         _FakeContextInjectionService,
     )
-    activities = TemporalAgentRuntimeActivities()
+    class _FakeSessionController:
+        def __init__(self) -> None:
+            self.repaired_workspace_paths: list[str] = []
+
+        async def ensure_repo_artifacts_writable_by_runtime_user(
+            self,
+            workspace_path: str,
+        ) -> None:
+            self.repaired_workspace_paths.append(workspace_path)
+
+    session_controller = _FakeSessionController()
+    activities = TemporalAgentRuntimeActivities(
+        session_controller=session_controller,
+    )
 
     result = await activities.agent_runtime_prepare_turn_instructions(
         {
@@ -3923,6 +3936,7 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
 
     assert result.startswith("Injected context instruction")
     assert "Managed Codex CLI note:" in result
+    assert session_controller.repaired_workspace_paths == [str(tmp_path)]
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

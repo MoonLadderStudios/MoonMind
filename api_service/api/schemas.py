@@ -2,9 +2,20 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.statuses.temporal_status import TemporalStatusValue
+from moonmind.runtime_intent import (
+    RuntimeIntentValidationError,
+    validate_runtime_tier_intent,
+)
 
 if TYPE_CHECKING:
     pass
@@ -404,6 +415,21 @@ class PresetStepSkillSchema(BaseModel):
     permissions: dict[str, Any] = Field(default_factory=dict)
     autonomy: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("runtime", mode="before")
+    @classmethod
+    def validate_runtime_intent(cls, value: object) -> object:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            return value
+        try:
+            return validate_runtime_tier_intent(
+                value,
+                field_name="skill.runtime",
+            )
+        except RuntimeIntentValidationError as exc:
+            raise ValueError(str(exc)) from exc
 
 class PresetStepToolSchema(BaseModel):
     """Tool payload attached to a template step."""

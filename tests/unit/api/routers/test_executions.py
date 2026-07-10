@@ -5458,6 +5458,203 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     assert initial_parameters["modelSource"] == "provider_profile_default"
     app.dependency_overrides.clear()
 
+
+def test_create_task_shaped_execution_resolves_model_tier_against_profile() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                profile_id="codex-provider-profile",
+                default_model=None,
+                default_effort=None,
+                model_tiers=[
+                    {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
+                    {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+                ],
+                default_model_tier=1,
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Implement MM-1170.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                            "modelTier": 2,
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["model"] == "gpt-5.5"
+    assert initial_parameters["effort"] == "high"
+    assert initial_parameters["modelSource"] == "requested_tier"
+    assert initial_parameters["modelTierResolution"] == {
+        "requestedModelTier": 2,
+        "effectiveModelTier": 2,
+        "tierLabel": "Implement",
+        "fallbackReason": None,
+        "resolvedModel": "gpt-5.5",
+        "resolvedEffort": "high",
+        "modelSource": "requested_tier",
+        "effortSource": "requested_tier",
+        "effortApplicationStatus": "unknown",
+        "previewMismatch": False,
+        "providerProfileId": "codex-provider-profile",
+    }
+    app.dependency_overrides.clear()
+
+
+def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                profile_id="codex-provider-profile",
+                default_model="legacy-default",
+                default_model_tier=1,
+                model_tiers=[
+                    {
+                        "label": "Plan",
+                        "model": "codex-plan-current",
+                        "effort": "low",
+                    },
+                    {
+                        "label": "Implement",
+                        "model": "codex-implement-current",
+                        "effort": "high",
+                    },
+                ],
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Run with a stale advisory preview.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                            "modelTier": 2,
+                            "tierPreview": {
+                                "requestedTier": 2,
+                                "effectiveTier": 2,
+                                "model": "codex-implement-stale",
+                                "effort": "high",
+                                "fallbackReason": None,
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    initial_parameters = mock_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["model"] == "codex-implement-current"
+    assert initial_parameters["effort"] == "high"
+    assert initial_parameters["modelSource"] == "requested_tier"
+    assert initial_parameters["modelTierResolution"] == {
+        "requestedModelTier": 2,
+        "effectiveModelTier": 2,
+        "tierLabel": "Implement",
+        "fallbackReason": None,
+        "resolvedModel": "codex-implement-current",
+        "resolvedEffort": "high",
+        "modelSource": "requested_tier",
+        "effortSource": "requested_tier",
+        "effortApplicationStatus": "unknown",
+        "previewMismatch": True,
+        "providerProfileId": "codex-provider-profile",
+    }
+    app.dependency_overrides.clear()
+
+
+def test_create_task_shaped_execution_rejects_strict_unavailable_model_tier() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                profile_id="codex-provider-profile",
+                default_model=None,
+                default_effort=None,
+                model_tiers=[
+                    {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
+                    {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+                ],
+                default_model_tier=1,
+            )
+        )
+    )
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Implement MM-1170.",
+                        "runtime": {
+                            "mode": "codex",
+                            "providerProfile": "codex-provider-profile",
+                            "modelTier": 3,
+                            "tierFallback": "strict",
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "requested_model_tier_unavailable"
+    mock_service.create_execution.assert_not_awaited()
+    app.dependency_overrides.clear()
+
+
 def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -5940,6 +6137,143 @@ def test_create_task_shaped_execution_normalizes_scalar_step_runtime_fields(
     assert runtime["effort"] == "True"
     assert runtime["profileId"] == "123"
     assert runtime["providerProfile"] == "123"
+
+
+def test_mm1171_create_execution_preserves_runtime_tier_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Preserve MM-1168 tier intent",
+                    "instructions": "Run a portable tiered workflow.",
+                    "runtime": {
+                        "providerProfileRef": "codex-openai",
+                        "profileSelector": {"providerId": "openai"},
+                        "modelTier": 2,
+                        "tierFallback": "clamp",
+                    },
+                    "steps": [
+                        {
+                            "id": "implement",
+                            "instructions": "Implement.",
+                            "runtime": {
+                                "providerProfileRef": "codex-openai",
+                                "profileSelector": {"providerId": "openai"},
+                                "modelTier": 3,
+                                "tierFallback": "strict",
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["profileSelector"] == {"providerId": "openai"}
+    assert initial_parameters["runtime"]["profileSelector"] == {"providerId": "openai"}
+    workflow_runtime = initial_parameters["workflow"]["runtime"]
+    assert workflow_runtime["providerProfileRef"] == "codex-openai"
+    assert workflow_runtime["profileSelector"] == {"providerId": "openai"}
+    assert workflow_runtime["modelTier"] == 2
+    assert workflow_runtime["tierFallback"] == "clamp"
+    assert "requestedModel" not in workflow_runtime
+    assert "model" not in workflow_runtime
+
+    step_runtime = initial_parameters["workflow"]["steps"][0]["runtime"]
+    assert step_runtime["providerProfileRef"] == "codex-openai"
+    assert step_runtime["profileSelector"] == {"providerId": "openai"}
+    assert step_runtime["modelTier"] == 3
+    assert step_runtime["tierFallback"] == "strict"
+    assert "requestedModel" not in step_runtime
+
+
+def test_mm1171_create_execution_rejects_invalid_runtime_tier_intent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = lambda: None
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject bad tier",
+                    "instructions": "Run a workflow.",
+                    "runtime": {"modelTier": "2"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "modelTier" in response.json()["detail"]["message"]
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject bad fallback",
+                    "instructions": "Run a workflow.",
+                    "steps": [
+                        {
+                            "id": "verify",
+                            "instructions": "Verify.",
+                            "runtime": {"modelTier": 1, "tierFallback": "soft"},
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "tierFallback" in response.json()["detail"]["message"]
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "title": "Reject bad hard override audit",
+                    "instructions": "Run a workflow.",
+                    "runtime": {
+                        "modelTier": 1,
+                        "model": "gpt-x",
+                        "hardOverrideAudit": "yes",
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "hardOverrideAudit" in response.json()["detail"]["message"]
 
 
 def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
@@ -7922,6 +8256,48 @@ def test_create_task_shaped_recurring_schedule_preserves_runtime_selection(
     assert stored_runtime["effort"] == "xhigh"
     assert stored_runtime["profileId"] == "codex-profile"
     assert stored_runtime["providerProfile"] == "codex-profile"
+
+
+def test_create_task_shaped_recurring_schedule_rejects_invalid_step_runtime_tier(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock()
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "codex",
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "workflow": {
+                        "instructions": "Resolve Dependabot PRs.",
+                        "runtime": {"mode": "codex"},
+                        "steps": [
+                            {
+                                "id": "bad-tier",
+                                "instructions": "Run invalid tier.",
+                                "runtime": {"modelTier": "2"},
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert "payload.workflow.steps[0].runtime.modelTier" in response.json()["detail"]["message"]
+    service.create_definition.assert_not_awaited()
 
 
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(

@@ -1,13 +1,13 @@
 # Dashboard Design System
 Status: Active  
 Owners: MoonMind Engineering  
-Last updated: 2026-06-28
+Last updated: 2026-07-10
 
 ## 1. Purpose
 
 Define the desired-state design system for the MoonMind dashboard: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what the dashboard should look and feel like when it is correct.
 
-For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`. For the workflow-specific desktop sidebar/workspace addendum that applies these surface, focus, and motion rules, see `docs/UI/WorkflowWorkspaceSidebar.md`.
+For application-rail placement, shared collection sidebars, and the common entity-detail frame, see `docs/UI/CollectionWorkspaceLayout.md`. For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`. For the workflow-specific desktop sidebar/workspace addendum that applies these surface, focus, and motion rules, see `docs/UI/WorkflowWorkspaceSidebar.md`.
 
 ---
 
@@ -214,20 +214,18 @@ Best candidates for icons:
 
 The dashboard uses two desktop width modes:
 
-- **Constrained shell** for mastheads, forms, compact controls, and narrative content: roughly `1100-1280px`
+- **Constrained primary-pane shell** for page headers, forms, compact controls, and narrative content: roughly `1100-1280px`
 - **Data-wide shell** for workflow tables, evidence-heavy detail regions, and comparison views: roughly `1500-1800px` or fluid width with generous side gutters
 
 The page shell may transition between these two modes within the same route.
 
-### 7.2 Header architecture
+### 7.2 Application rail and workspace geometry
 
-The dashboard masthead uses a **three-zone layout**:
+Desktop primary navigation uses a persistent far-left application rail, not viewport-centered masthead pills. The content region begins immediately to its right. When a collection sidebar is present, it is the content region's first column and the primary pane starts immediately after it.
 
-- **Left:** brand block
-- **Center:** primary navigation pills, visually centered against the viewport
-- **Right:** utilities such as version badge, environment state, future user/system controls
+The application rail, collection sidebar, and primary pane are siblings at their respective shell/workspace layers. Do not place either rail inside a constrained or centered page shell. Constrained and data-wide widths apply only inside the primary pane.
 
-The navigation must be centered as a layout decision, not merely centered inside the leftover space beside the logo.
+The application rail and every collection sidebar share token-driven glass/matte surfaces, border light, icon sizing, hover brightening, visible focus, active state, tooltip posture, and responsive collapse behavior. Workflows, Recurring, and Skills use the same collection-sidebar component family.
 
 ### 7.3 Control deck + data slab pattern
 
@@ -383,19 +381,29 @@ Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or a
 
 ## 10. Component system
 
-### 10.1 Masthead and navigation
+### 10.1 Application rail and collection sidebars
 
-Navigation pills should feel like compact control chips rather than generic tabs.
+Top-level destinations render in the far-left application rail. The rail is a persistent shell primitive rather than a page-level card or a centered row of navigation pills.
 
-Rules:
+Application-rail rules:
 
-- active pills must be unmistakable
-- hover and active states should brighten, not darken
-- spacing between icon and label must be deliberate
-- active pills may use soft bloom and a slightly stronger shell
-- the masthead should include a refined horizon separator below it
+- active destinations must be unmistakable;
+- hover, focus, and active states brighten rather than darken;
+- icon and label spacing uses shared metrics;
+- an active destination may use controlled bloom and a slightly stronger shell;
+- the rail uses a refined edge-light or horizon separator at its content boundary;
+- version, environment, account, and settings utilities read like a consistent telemetry/utility cluster rather than leftover labels.
 
-Version badges and utility chips on the right should read like telemetry, not leftover labels.
+Collection sidebars reuse one header, filter, row, selected state, divider, scrolling container, pinned-current row, and loading/empty/error treatment. They must read as collapsed table slices rather than card stacks. Entity-specific copy and data are adapters; CSS and interaction primitives are shared.
+
+Collection-sidebar rules:
+
+- Workflows, Recurring, and Skills share width, header height, row metrics, padding, borders, focus rings, hover treatment, selected treatment, and state components;
+- header copy, row data, compact metadata, filter labels, and accessible names are supplied by the entity adapter;
+- the right divider clearly separates local collection navigation from the primary pane;
+- active state remains visible without relying on color alone;
+- the rail and sidebar remain coherent without liquidGL;
+- use glass only for bounded control shells and matte/satin row interiors for sustained scanning.
 
 ### 10.2 Buttons
 
@@ -535,7 +543,7 @@ Use subtle atmospheric separators instead of hard utilitarian dividers everywher
 
 Examples:
 
-- horizon line beneath the masthead
+- horizon or edge-light separator at the application-rail/content boundary or beneath a page header
 - soft orbital gradient behind section transitions
 - restrained border glows on major surface edges
 
@@ -582,19 +590,25 @@ Specific guidance:
 - large textareas should remain matte and comfortable for sustained reading/editing
 - small utility buttons inside step cards should align with the same button language as the rest of the system
 
-### 11.3 Workflow detail and evidence-heavy pages
+### 11.3 Workflow and recurring schedule detail pages
 
-Detail pages should keep evidence readable and structured.
+Workflow detail and Recurring schedule detail use the shared `EntityDetailFrame` defined by `docs/UI/CollectionWorkspaceLayout.md`.
 
-Desired composition:
+Shared composition includes:
 
-- concise summary header
-- compact facts rail
-- steps/evidence slabs
-- observability/log slab
-- actions in a distinct elevated or sticky control surface when needed
+- concise breadcrumb and summary header;
+- title, subtitle, identity, and status cluster;
+- primary and overflow actions in a consistent location;
+- compact summary/facts strip;
+- tabs or section navigation;
+- main data/evidence slab;
+- optional right facts rail;
+- localized loading, permission, not-found, and error states;
+- an elevated or sticky action surface when the entity needs persistent controls.
 
-Do not allow glass effects to compete with evidence density.
+Typography, spacing, status chips, action placement, tabs, facts-rail geometry, focus behavior, and responsive stacking must match. Workflow adapters supply execution progress, evidence, logs, artifacts, remediation, and recovery. Recurring adapters supply cadence, next run, policy, configuration, and run history.
+
+The collection sidebar remains a workspace sibling at the far-left content edge. It is never owned by or centered with the detail frame. Do not allow glass effects to compete with evidence density.
 
 ---
 
