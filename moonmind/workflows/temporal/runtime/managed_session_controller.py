@@ -12,6 +12,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import stat
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -2054,6 +2055,34 @@ class DockerCodexManagedSessionController:
             request=request,
             git_env=git_env,
         )
+
+    async def ensure_repo_artifacts_writable_by_runtime_user(
+        self,
+        workspace_path: str,
+    ) -> None:
+        """Normalize repo-local artifacts created after session launch."""
+
+        resolved_workspace = Path(workspace_path).expanduser().resolve()
+        if not self._is_within_workspace_root(resolved_workspace):
+            raise RuntimeError(
+                "managed session workspace path must be within the configured "
+                f"workspace root: {resolved_workspace}"
+            )
+
+        artifacts_path = resolved_workspace / "artifacts"
+        try:
+            artifacts_stat = artifacts_path.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(artifacts_stat.st_mode):
+            raise RuntimeError(
+                f"repo-local artifacts path must not be a symlink: {artifacts_path}"
+            )
+        if not stat.S_ISDIR(artifacts_stat.st_mode):
+            raise RuntimeError(
+                f"repo-local artifacts path must be a directory: {artifacts_path}"
+            )
+        self._normalize_container_path_ownership((artifacts_path,))
 
     def _collect_managed_support_paths(
         self,

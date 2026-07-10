@@ -2798,6 +2798,102 @@ async def test_controller_launch_normalizes_support_paths_before_git_failures(
     assert session_path in chown_calls
     assert artifacts_path in chown_calls
 
+
+@pytest.mark.asyncio
+async def test_controller_normalizes_repo_artifacts_created_after_session_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    context_path = workspace_path / "artifacts" / "context"
+    context_path.mkdir(parents=True)
+    context_file = context_path / "rag-context.json"
+    context_file.write_text("{}\n", encoding="utf-8")
+    chown_calls: list[tuple[Path, int, int, bool]] = []
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+
+    def _fake_chown(
+        path: str | Path,
+        uid: int,
+        gid: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        chown_calls.append((Path(path), uid, gid, follow_symlinks))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        _fake_chown,
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+    )
+
+    await controller.ensure_repo_artifacts_writable_by_runtime_user(
+        str(workspace_path)
+    )
+
+    chowned_paths = {path for path, _uid, _gid, _follow in chown_calls}
+    assert chowned_paths == {
+        workspace_path / "artifacts",
+        context_path,
+        context_file,
+    }
+    assert all(uid == 1000 and gid == 1000 for _path, uid, gid, _follow in chown_calls)
+    assert all(follow is False for _path, _uid, _gid, follow in chown_calls)
+
+
+@pytest.mark.asyncio
+async def test_controller_rejects_repo_artifacts_outside_workspace_root(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    outside_workspace = tmp_path / "outside" / "repo"
+    (outside_workspace / "artifacts").mkdir(parents=True)
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+    )
+
+    with pytest.raises(RuntimeError, match="within the configured workspace root"):
+        await controller.ensure_repo_artifacts_writable_by_runtime_user(
+            str(outside_workspace)
+        )
+
+
+@pytest.mark.asyncio
+async def test_controller_rejects_repo_artifacts_symlink(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True)
+    outside_artifacts = tmp_path / "outside-artifacts"
+    outside_artifacts.mkdir()
+    (workspace_path / "artifacts").symlink_to(
+        outside_artifacts,
+        target_is_directory=True,
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+    )
+
+    with pytest.raises(RuntimeError, match="must not be a symlink"):
+        await controller.ensure_repo_artifacts_writable_by_runtime_user(
+            str(workspace_path)
+        )
+
+
 @pytest.mark.asyncio
 async def test_controller_launch_reclones_invalid_workspace_before_target_checkout(
     tmp_path: Path,

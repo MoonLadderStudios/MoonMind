@@ -943,6 +943,13 @@ _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
 class ManagedSessionController(Protocol):
     """Remote control surface for managed session containers."""
 
+    async def ensure_repo_artifacts_writable_by_runtime_user(
+        self,
+        workspace_path: str,
+        /,
+    ) -> None:
+        pass
+
     async def launch_session(
         self, request: LaunchCodexManagedSessionRequest, /
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
@@ -8399,6 +8406,10 @@ class TemporalAgentRuntimeActivities:
                 request=request,
                 workspace_path=Path(workspace_path_raw),
             )
+            if self._session_controller is not None:
+                await self._session_controller.ensure_repo_artifacts_writable_by_runtime_user(
+                    workspace_path_raw
+                )
             instruction_ref = str(request.instruction_ref or "").strip()
             if instruction_ref:
                 prepared = self._prepare_managed_codex_turn_text(
