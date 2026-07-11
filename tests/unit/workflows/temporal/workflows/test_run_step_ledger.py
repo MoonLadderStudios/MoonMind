@@ -2926,7 +2926,7 @@ async def test_after_execution_finalization_failure_preserves_primary_outcome(
         ],
         "diagnosticsRef": "artifact://diagnostics",
         "workspaceLocator": "/work/agent_jobs/run-1/repo",
-        "recordedAt": now.isoformat(),
+        "recordedAt": "2026-06-13T12:00:00Z",
     }
     assert step["finalizationOutcome"]["status"] == expected_status
     assert step["finalizationOutcome"]["failureCode"] == (
@@ -2935,6 +2935,14 @@ async def test_after_execution_finalization_failure_preserves_primary_outcome(
     assert step["finalizationOutcome"]["phase"] == "after_execution_checkpoint"
     assert workflow._attention_required is attention_required
     assert workflow._summary.startswith("Execution succeeded; finalization failed")
+    completion = workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+    if criticality == "required":
+        assert completion[0] == "failed"
+        assert completion[2] is True
+    else:
+        assert completion[0] == "success"
 
 
 @pytest.mark.asyncio

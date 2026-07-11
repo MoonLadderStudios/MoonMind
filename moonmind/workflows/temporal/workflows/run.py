@@ -8477,6 +8477,19 @@ class MoonMindRunWorkflow:
                                     "status field"
                                 )
                             break
+                        self._record_step_result_evidence(
+                            node_id,
+                            execution_result=execution_result,
+                            updated_at=workflow.now(),
+                        )
+                        if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                            self._record_primary_execution_outcome(
+                                node_id,
+                                execution_result=execution_result,
+                                result_status=result_status,
+                                recorded_at=workflow.now(),
+                            )
+                            self._update_memo()
                     if result_status != "COMPLETED":
                         failure_message = self._activity_result_failure_message(
                             execution_result
@@ -9025,6 +9038,7 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
+            prepublication_checkpoint_failed = False
             try:
                 await self._record_canonical_step_checkpoint(
                     node_id,
@@ -9052,6 +9066,10 @@ class MoonMindRunWorkflow:
                 )
                 self._attention_required = True
                 self._update_memo()
+                prepublication_checkpoint_failed = True
+            if prepublication_checkpoint_failed:
+                break
+            publication_raised = False
             try:
                 await self._record_publish_result_from_execution(
                     parameters=parameters,
@@ -9063,6 +9081,18 @@ class MoonMindRunWorkflow:
                 self._record_publication_finalization_failure(
                     node_id,
                     exc=exc,
+                    updated_at=workflow.now(),
+                )
+                publication_raised = True
+            if (
+                not publication_raised
+                and self._publish_status == "failed"
+                and publish_status_before != "failed"
+                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+            ):
+                self._record_publication_finalization_failure(
+                    node_id,
+                    exc=RuntimeError(self._publish_reason or "Publish failed"),
                     updated_at=workflow.now(),
                 )
             if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
@@ -12712,6 +12742,24 @@ class MoonMindRunWorkflow:
     ) -> tuple[str, str, bool]:
         if self._plan_blocked_message:
             return ("failed", self._plan_blocked_message, True)
+
+        for row in self._step_ledger_rows:
+            finalization_outcome = row.get("finalizationOutcome")
+            if not isinstance(finalization_outcome, Mapping):
+                continue
+            if (
+                finalization_outcome.get("status") == "failed"
+                and finalization_outcome.get("criticality") == "required"
+            ):
+                return (
+                    "failed",
+                    self._coerce_text(
+                        finalization_outcome.get("message"), max_chars=500
+                    )
+                    or self._summary
+                    or "Required step finalization failed.",
+                    True,
+                )
 
         publish_mode = self._publish_mode(parameters)
         if self._publish_status == "skipped":
