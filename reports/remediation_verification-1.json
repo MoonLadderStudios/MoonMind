@@ -1,28 +1,20 @@
 {
-  "artifact_type": "remediation.verification",
+  "artifactType": "remediation.verification",
   "attempt": 1,
-  "remediationAttempt": 1,
-  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "authoritativeVerificationArtifact": "artifacts/jira-implement-verify.json",
-  "issueProvider": "jira",
-  "issueRef": "MM-1200",
+  "issueRef": "MM-1202",
   "verificationTarget": "issue_brief",
-  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
+  "authoritativeVerifierArtifact": "artifacts/jira-implement-verify.json",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "summary": "Remediation attempt 1 closes all verification gaps from the prior MM-1200 verdict. The whole target state is fully implemented and all controlling frontend checks pass.",
-  "testResults": [
-    {"command": "npm run ui:test -- frontend/src/entrypoints/dashboard.test.tsx frontend/src/lib/dashboardRoutes.test.ts frontend/src/styles/dashboardBrand.test.ts", "result": "PASS", "details": "3 files and 155 tests passed."},
-    {"command": "./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json", "result": "PASS"},
-    {"command": "./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src", "result": "PASS"},
-    {"command": "npm run ui:clean-dist && ./node_modules/.bin/vite build --config frontend/vite.config.ts && npm run ui:verify-manifest", "result": "PASS", "details": "Production build and manifest verification passed with an existing non-fatal chunk-size warning."}
+  "remainingWork": [
+    "Complete the executable WorkerSpec so all SDK construction inputs and diagnostics derive from one composition.",
+    "Implement trusted resolved-skill native binding independent of publish authority.",
+    "Extract and adopt one provider-neutral resolver core with cross-host parity fixtures.",
+    "Implement immutable/versioned rollout, stale-worker exclusion, and readiness-gating parent-child canary.",
+    "Add operator capability-failure classification, budget protection, diagnostics, metrics, and alerts.",
+    "Add required Temporal/Compose/replay/restart regression coverage and architecture/runbook documentation."
   ],
-  "verifiedRemediationGaps": [
-    {"requirement": "System trigger active state on every child route", "status": "VERIFIED", "evidence": "frontend/src/entrypoints/dashboard.test.tsx:427"},
-    {"requirement": "Accessible System interaction contract and mobile inline navigation", "status": "VERIFIED", "evidence": "frontend/src/entrypoints/dashboard.test.tsx:450-525"},
-    {"requirement": "System-specific desktop, mobile, focus, dark-mode, and reduced-motion styling coverage", "status": "VERIFIED", "evidence": "frontend/src/styles/dashboardBrand.test.ts:70"}
-  ],
-  "scopeLimitations": []
+  "summary": "The verified remediation attempt improves registry composition, fingerprinting, and readiness evidence but does not complete the authoritative MM-1202 target state. The complete structured findings and bounded backlog are in artifacts/jira-implement-verify.json."
 }
