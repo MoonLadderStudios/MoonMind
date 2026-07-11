@@ -14,6 +14,7 @@ from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellat
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.config.settings import settings
+    from moonmind.pr_resolver_core import classify_github_snapshot
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     from moonmind.schemas.temporal_models import (
         PRResolverStartInput,
@@ -80,39 +81,7 @@ def pr_resolver_identity_selector(
 
 def classify_pr_resolver_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Deterministically classify a captured GitHub snapshot."""
-
-    if snapshot.get("pullRequestMerged") is True:
-        return {"classification": "already_merged", "reasonCode": "already_merged"}
-    if snapshot.get("pullRequestOpen") is False:
-        return {"classification": "manual_review", "reasonCode": "pull_request_closed"}
-
-    blockers = [item for item in snapshot.get("blockers", ()) if isinstance(item, Mapping)]
-    kinds = {_text(item.get("kind")) for item in blockers}
-    summaries = " ".join(_text(item.get("summary")).lower() for item in blockers)
-
-    if "merge_conflict" in kinds or "merge_conflicts" in kinds:
-        return {"classification": "merge_conflicts", "reasonCode": "merge_conflicts"}
-    if snapshot.get("checksComplete") is True and snapshot.get("checksPassing") is False:
-        return {"classification": "ci_failures", "reasonCode": "ci_failures"}
-    if "checks_failed" in kinds:
-        return {"classification": "ci_failures", "reasonCode": "ci_failures"}
-    if "checks_running" in kinds or snapshot.get("checksComplete") is False:
-        return {"classification": "ci_running", "reasonCode": "ci_running"}
-    if "automated_review_pending" in kinds:
-        if "requested changes" in summaries or "changes requested" in summaries:
-            return {
-                "classification": "actionable_comments",
-                "reasonCode": "actionable_comments",
-            }
-        return {"classification": "review_grace", "reasonCode": "review_grace"}
-    if snapshot.get("ready") is True and not blockers:
-        return {"classification": "ready_to_merge", "reasonCode": "ready_to_merge"}
-    if blockers and all(bool(item.get("retryable", True)) for item in blockers):
-        return {
-            "classification": "mergeability_transient",
-            "reasonCode": "external_state_transient",
-        }
-    return {"classification": "manual_review", "reasonCode": "unknown_blocker"}
+    return classify_github_snapshot(snapshot)
 
 
 def blocker_progress_signature(

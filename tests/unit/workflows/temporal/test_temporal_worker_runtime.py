@@ -3828,11 +3828,14 @@ async def test_main_async_workflow_fleet(
     mock_connect,
     mock_describe,
     mock_healthcheck,
+    monkeypatch,
 ):
     # Setup mocks
     mock_healthcheck_server = MagicMock()
     mock_healthcheck_server.wait_closed = AsyncMock()
     mock_healthcheck.return_value = mock_healthcheck_server
+    monkeypatch.setenv("MOONMIND_BUILD_ID", "test-build-1202")
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_ID", "moonmind-workflow-test")
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
     mock_topology.task_queues = ["mm.workflow.user.v2", "mm.workflow"]
@@ -3887,13 +3890,15 @@ async def test_main_async_workflow_fleet(
         MoonMindMergeAutomationWorkflow,
         MoonMindPRResolverWorkflow,
     )
-    assert kwargs["activities"] == [
+    assert kwargs["activities"] == (
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
         external_adapter_execution_style,
-    ]
-    assert "deployment_config" not in kwargs
+    )
+    assert kwargs["deployment_config"].version.deployment_name == "moonmind-workflow-test"
+    assert kwargs["deployment_config"].version.build_id == "test-build-1202"
+    assert kwargs["deployment_config"].use_worker_versioning is True
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
     assert kwargs["max_concurrent_workflow_tasks"] == 7

@@ -1,0 +1,82 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 5,
+  "issue_ref": "MM-1202",
+  "source_verification_artifact": "reports/remediation_verification-4.json",
+  "source_verdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Adopted the canonical pure resolver classifier in the Temporal host, added a shared fail-closed parity corpus, and configured workflow workers with mandatory build identity and Temporal worker deployment versioning. The standalone portable orchestration host has not yet adopted the core, and real readiness canary plus fleet metrics/alerts remain bounded gaps.",
+  "changed_files": [
+    "docker-compose.yaml",
+    "moonmind/pr_resolver_core/__init__.py",
+    "moonmind/pr_resolver_core/transition.py",
+    "moonmind/workflows/temporal/worker_runtime.py",
+    "moonmind/workflows/temporal/workflows/pr_resolver.py",
+    "tests/unit/pr_resolver_core/test_transition.py",
+    "tests/unit/workflows/temporal/test_temporal_worker_runtime.py",
+    "reports/remediation_attempt-5.json"
+  ],
+  "gap_statuses": [
+    {
+      "requirement": "Shared portable resolver semantics",
+      "gap_type": "implementation",
+      "status": "partial",
+      "evidence": "Temporal classification now delegates to normalize_github_snapshot and reduce_resolver_state through classify_github_snapshot. The shared corpus covers merged, closed, conflict, CI failure/running, review actionability/grace, ready, transient, and non-retryable states. The standalone pr_resolve_orchestrate.py host still uses its existing portable contract and has not adopted the canonical core."
+    },
+    {
+      "requirement": "Immutable deployment identity and rollout safety",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": "Workflow worker startup now fails without a non-empty MOONMIND_BUILD_ID and constructs WorkerDeploymentConfig with a named WorkerDeploymentVersion, worker versioning enabled, and AUTO_UPGRADE behavior. Compose requires the build identity and supplies the stable deployment name, allowing Temporal deployment routing to exclude stale builds from new traffic."
+    },
+    {
+      "requirement": "Capability observability",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "Existing bounded readiness and failure diagnostics remain intact, but no new repetition/fleet-distribution metric or operator alert was added in attempt 5."
+    },
+    {
+      "requirement": "Readiness canary and boundary coverage",
+      "gap_type": "verification",
+      "status": "partial",
+      "evidence": "Worker construction tests now assert the real Temporal deployment configuration and the resolver parity corpus exercises the shared adapter. A harmless parent-to-MoonMind.PRResolver start on the deployed queue, Compose restart/rollout integration test, and readiness gating on that canary remain absent."
+    }
+  ],
+  "targeted_checks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest -q tests/unit/pr_resolver_core tests/unit/workflows/temporal/workflows/test_pr_resolver.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_worker_healthcheck.py --tb=short",
+      "result": "PASS",
+      "notes": "158 passed in 6.03 seconds."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest -q tests/unit/pr_resolver_core tests/unit/workflows/skills/test_native_binding.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/workflows/temporal/workflows/test_run_signals_updates.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_worker_healthcheck.py tests/unit/workflows/temporal/workflows/test_pr_resolver.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py --tb=short",
+      "result": "PASS",
+      "notes": "330 passed and 2 subtests passed in 8.39 seconds."
+    },
+    {
+      "command": "python -m compileall -q moonmind/pr_resolver_core moonmind/workflows/temporal/workflows/pr_resolver.py moonmind/workflows/temporal/worker_runtime.py",
+      "result": "PASS",
+      "notes": "Changed production modules compiled successfully."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors."
+    },
+    {
+      "command": "./tools/test_integration.sh",
+      "result": "NOT_RUN",
+      "notes": "The verifier identified the missing real canary and rollout fixtures themselves as the controlling gap; the broad Compose suite cannot supply absent boundary implementation evidence."
+    }
+  ],
+  "remaining_work": [
+    "Migrate the standalone portable resolver host to the canonical core without introducing a MoonMind runtime dependency, and run the same parity/replay corpus against both hosts.",
+    "Add bounded worker build/registry distribution and registration-mismatch repetition metrics plus an operator alert.",
+    "Implement a harmless real parent-to-MoonMind.PRResolver deployment canary that gates readiness on the same queue, build identity, and registry fingerprint.",
+    "Add Temporal/Compose entrypoint, restart, stale-worker exclusion, rollout, and replay integration coverage for the production path."
+  ],
+  "scope_controls": {
+    "pull_request_created": false,
+    "jira_status_changed": false,
+    "scope_broadened": false
+  }
+}

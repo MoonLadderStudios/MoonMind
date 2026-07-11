@@ -32,7 +32,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.common import VersioningBehavior
+from temporalio.worker import (
+    UnsandboxedWorkflowRunner,
+    Worker,
+    WorkerDeploymentConfig,
+    WorkerDeploymentVersion,
+)
 from structlog.stdlib import ProcessorFormatter
 
 from api_service.db.base import get_async_session_context
@@ -2605,6 +2611,22 @@ def _worker_concurrency_kwargs(topology) -> dict[str, int]:
         return {"max_concurrent_workflow_tasks": topology.concurrency_limit}
     return {"max_concurrent_activities": topology.concurrency_limit}
 
+
+def _workflow_deployment_config() -> WorkerDeploymentConfig:
+    """Build the versioned worker identity used to exclude stale registrations."""
+
+    deployment_id = os.environ.get("MOONMIND_DEPLOYMENT_ID", "moonmind-workflow").strip()
+    build_id = os.environ.get("MOONMIND_BUILD_ID", "").strip()
+    if not build_id or build_id.lower() == "unknown":
+        raise RuntimeError(
+            "workflow workers require a non-empty MOONMIND_BUILD_ID for versioned rollout"
+        )
+    return WorkerDeploymentConfig(
+        version=WorkerDeploymentVersion(deployment_id, build_id),
+        use_worker_versioning=True,
+        default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+    )
+
 def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
     """Apply Codex managed-runtime defaults for fleets that launch CLI tasks."""
 
@@ -2725,6 +2747,8 @@ async def main_async() -> None:
             "workflow_runner": UnsandboxedWorkflowRunner(),
             **_worker_concurrency_kwargs(topology),
         }
+        if topology.fleet == WORKFLOW_FLEET:
+            worker_kwargs["deployment_config"] = _workflow_deployment_config()
         workers = [
             Worker(
                 client,
