@@ -316,11 +316,7 @@ jobs:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
         run: |
           set -euo pipefail
-          if [[ ! -d tests/reliability ]]; then
-            echo "Reliability journey suite is not present yet; skipping until #3145 lands."
-            exit 0
-          fi
-          python -m pytest tests/reliability \
+          python -m pytest tests/integration/reliability \
             -m reliability_journey \
             -q --durations=25 \
             --junitxml=artifacts/pytest-reliability-journey.xml
@@ -329,7 +325,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p /tmp/pytest-reliability-journey
-          for path in artifacts tests/reliability/replays var/artifacts var/pr_resolver; do
+          for path in artifacts tests/integration/reliability/replays var/artifacts var/pr_resolver; do
             if [[ -e "$path" ]]; then
               cp -R --parents "$path" /tmp/pytest-reliability-journey/
             fi
