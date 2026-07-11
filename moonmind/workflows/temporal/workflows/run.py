@@ -4904,6 +4904,31 @@ class MoonMindRunWorkflow:
             self._attention_required = criticality == "required"
             self._update_memo()
             return
+        capture_outcome = self._step_checkpoint_capture_outcomes.get(logical_step_id)
+        if not checkpoint_ref and isinstance(capture_outcome, Mapping):
+            capability_criticality = str(
+                capture_outcome.get("capabilityCriticality") or criticality
+            ).strip()
+            if capability_criticality in {
+                "required",
+                "recoverability_only",
+                "unsupported",
+            }:
+                criticality = capability_criticality
+            failure_code = self._coerce_text(
+                capture_outcome.get("failureCode"), max_chars=100
+            )
+            row["finalizationOutcome"] = {
+                "status": "unsupported",
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": failure_code,
+                "retryCount": 0,
+                "checkpointRef": None,
+                "message": "Checkpoint capture is unsupported by this runtime.",
+                "updatedAt": workflow.now().isoformat(),
+            }
+            return
         row["finalizationOutcome"] = {
             "status": "succeeded" if checkpoint_ref else "unsupported",
             "phase": "after_execution_checkpoint",
