@@ -110,7 +110,7 @@ RELIABILITY_JOURNEY_PREFIXES = (
     "docker/",
     "moonmind/workflows/adapters/",
     "moonmind/workflows/temporal/",
-    "tests/reliability/",
+    "tests/integration/reliability/",
 )
 
 RELIABILITY_JOURNEY_GLOBS = (
@@ -124,7 +124,7 @@ BACKEND_PREFIXES = (
     "moonmind/",
     "tests/unit/",
     "tests/integration/",
-    "tests/reliability/",
+    "tests/integration/reliability/",
     "tests/contract/",
     "tests/api_service/",
     "tests/component/",

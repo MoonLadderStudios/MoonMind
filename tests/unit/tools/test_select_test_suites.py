@@ -79,7 +79,7 @@ def test_reliability_journey_production_seams_are_selected() -> None:
         ".agents/skills/pr-resolver/tools/orchestrate.py",
         "api_service/Dockerfile",
         "api_service/docker/install_cli_tooling.sh",
-        "tests/reliability/replays/incomplete-terminal-contract/manifest.json",
+        "tests/integration/reliability/replays/incomplete-terminal-contract/manifest.json",
         "tests/helpers/codex_session_runtime.py",
     )
 
