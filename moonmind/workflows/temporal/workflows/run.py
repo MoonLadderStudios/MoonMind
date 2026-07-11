@@ -4853,9 +4853,12 @@ class MoonMindRunWorkflow:
             "message": self._coerce_text(exc, max_chars=500),
             "updatedAt": updated_at.isoformat(),
         }
+        previous_publish_reason = self._publish_reason
         self._publish_status = "failed"
-        self._publish_reason = "Execution succeeded; finalization failed during publication."
-        self._summary = self._publish_reason
+        self._publish_reason = previous_publish_reason or (
+            "Execution succeeded; finalization failed during publication."
+        )
+        self._summary = "Execution succeeded; finalization failed during publication."
         self._attention_required = True
         self._update_memo()
 
@@ -17447,14 +17450,13 @@ class MoonMindRunWorkflow:
             "awaiting_external": self._awaiting_external,
             "waiting_reason": self._waiting_reason,
         }
-        if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
-            for row in reversed(self._step_ledger_rows):
-                if isinstance(row.get("executionOutcome"), Mapping):
-                    payload["executionOutcome"] = dict(row["executionOutcome"])
-                if isinstance(row.get("finalizationOutcome"), Mapping):
-                    payload["finalizationOutcome"] = dict(row["finalizationOutcome"])
-                if "executionOutcome" in payload or "finalizationOutcome" in payload:
-                    break
+        for row in reversed(self._step_ledger_rows):
+            if isinstance(row.get("executionOutcome"), Mapping):
+                payload["executionOutcome"] = dict(row["executionOutcome"])
+            if isinstance(row.get("finalizationOutcome"), Mapping):
+                payload["finalizationOutcome"] = dict(row["finalizationOutcome"])
+            if "executionOutcome" in payload or "finalizationOutcome" in payload:
+                break
         return payload
 
     @workflow.query
