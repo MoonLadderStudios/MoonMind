@@ -14,7 +14,13 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { ExecutionStatusPill, StepExecutionStatusPill, StepLedgerStatusPill } from '../components/ExecutionStatusPill';
+import {
+  ExecutionStatusPill,
+  StepExecutionStatusPill,
+  StepLedgerStatusPill,
+  WorkflowLifecycleStatusPill,
+} from '../components/ExecutionStatusPill';
+import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
@@ -8169,7 +8175,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
-              <ExecutionStatusPill status={execution.rawState || execution.state || execution.status} enableMotion={false} />
+              <WorkflowLifecycleStatusPill
+                status={resolveWorkflowDisplayStatus(
+                  execution.rawState,
+                  execution.state,
+                  execution.status,
+                )}
+              />
             ) : null}
           </div>
         </div>

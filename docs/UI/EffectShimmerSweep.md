@@ -178,9 +178,8 @@ layers:
 
   shared_light_field:
     role: moving luminous diagonal band with subtle trailing halo
-    gradient_token:
-      current_compatibility_name: --mm-executing-moving-light-gradient
-      preferred_future_alias: --mm-status-moving-light-gradient
+    gradient_token: --mm-status-moving-light-gradient
+    gradient_scope: declared on the shimmer host rule (`.status[data-effect="shimmer-sweep"], .status-running.is-executing`), never on `:root`, because its halo/core color inputs only exist at the pill scope
     color_inputs:
       halo: --mm-status-shimmer-halo
       core: --mm-status-shimmer-core
@@ -230,7 +229,7 @@ layers:
     keyframes: mm-executing-letter-brighten
 ```
 
-The token name `--mm-executing-moving-light-gradient` may remain for compatibility, but the colors inside that gradient should no longer be hard-coded to executing tokens. A later cleanup may add the neutral alias `--mm-status-moving-light-gradient` once tests and downstream references are migrated.
+The gradient token is `--mm-status-moving-light-gradient` and it is declared inside the shimmer host rule. Declaring it on `:root` is a regression: the halo/core custom properties it references are only defined on shimmer pills, so a root-scoped declaration computes to the guaranteed-invalid value and every consuming layer renders `background-image: none` even though the animation keeps running.
 
 ---
 
@@ -418,7 +417,7 @@ implementation_shape:
     fallback_glyphs: .status-letter-wave__glyph only under unsupported text clipping
 
   shared_animation:
-    gradient_token: --mm-executing-moving-light-gradient until neutral alias migration
+    gradient_token: --mm-status-moving-light-gradient (declared on the shimmer host rule)
     keyframes: mm-status-pill-shimmer
     duration_token: --mm-executing-sweep-cycle-duration
     timing_function: linear
@@ -605,7 +604,7 @@ effect_tokens:
   --mm-status-shimmer-core: status-derived core color
   --mm-status-shimmer-letter-halo: status-derived fallback glyph halo
   --mm-status-shimmer-letter-bright: status-derived fallback glyph bright color
-  --mm-executing-moving-light-gradient: shared halo/core linear-gradient stack using status-derived inputs
+  --mm-status-moving-light-gradient: shared halo/core linear-gradient stack using status-derived inputs (pill-scoped, never :root)
 ```
 
 The `--mm-executing-*` geometry names are retained for compatibility even though the visual effect is now status-aware. Do not rename them in isolation unless all tests and references are migrated together.

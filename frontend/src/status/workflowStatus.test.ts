@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   WORKFLOW_STATUS_KEYS,
   WORKFLOW_STATUS_TRACEABILITY,
-  formatWorkflowCompatibilityStatusLabel,
   formatWorkflowStatusLabel,
-  workflowCompatibilityStatusPillProps,
+  resolveWorkflowDisplayStatus,
   workflowStatusPillProps,
 } from './workflowStatus';
 
@@ -75,28 +74,45 @@ describe('workflow status helpers', () => {
     expect(workflowStatusPillProps('canceled')).toEqual({ className: 'status status-canceled' });
   });
 
-  it('does not accept provider, step, or legacy dashboard aliases as workflow states', () => {
+  it('does not accept provider or step statuses as workflow states', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    for (const status of ['queued', 'succeeded', 'running', 'scheduling', 'awaiting_action', 'waiting', 'no_changes']) {
+    for (const status of ['queued', 'succeeded', 'scheduling', 'awaiting_action', 'waiting']) {
       expect(workflowStatusPillProps(status)).toEqual({ className: 'status status-neutral' });
       expect(formatWorkflowStatusLabel(status, 'Unknown')).toBe('Unknown');
     }
 
     expect(warn).toHaveBeenCalledWith('Unknown workflow lifecycle status: queued');
-    expect(warn).toHaveBeenCalledWith('Unknown workflow lifecycle status: no_changes');
+    expect(warn).toHaveBeenCalledWith('Unknown workflow lifecycle status: waiting');
   });
 
-  it('maps legacy no_changes only at the explicit workflow compatibility boundary', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    expect(workflowStatusPillProps('no_changes')).toEqual({ className: 'status status-neutral' });
-    expect(formatWorkflowStatusLabel('no_changes', 'Unknown')).toBe('Unknown');
-
-    expect(workflowCompatibilityStatusPillProps('no_changes')).toEqual({
+  it('canonicalizes compatibility aliases through the single status path', () => {
+    expect(workflowStatusPillProps('no_changes')).toEqual({
       className: 'status status-no-commit',
     });
-    expect(formatWorkflowCompatibilityStatusLabel('no_changes')).toBe('No commit');
+    expect(formatWorkflowStatusLabel('no_changes')).toBe('No commit');
+
+    expect(workflowStatusPillProps('running')).toMatchObject({
+      className: 'status status-running is-executing',
+      'data-state': 'executing',
+      'data-effect': 'shimmer-sweep',
+    });
+    expect(formatWorkflowStatusLabel('running')).toBe('Executing');
+  });
+
+  it('resolves the first recognized canonical display status from ordered candidates', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // A raw provider value must not mask a canonical value later in the response.
+    expect(resolveWorkflowDisplayStatus('unknown_raw_value', 'executing', 'running')).toBe('executing');
+    // Aliases canonicalize before matching.
+    expect(resolveWorkflowDisplayStatus('running', 'completed')).toBe('executing');
+    expect(resolveWorkflowDisplayStatus('no_changes')).toBe('no_commit');
+    expect(resolveWorkflowDisplayStatus(null, undefined, '', 'finalizing')).toBe('finalizing');
+    expect(resolveWorkflowDisplayStatus('bogus', null)).toBeNull();
+    expect(resolveWorkflowDisplayStatus()).toBeNull();
+
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('adds shimmer metadata only for active workflow states that own the effect', () => {

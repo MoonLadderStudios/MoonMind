@@ -2840,7 +2840,6 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toContain('--mm-executing-border-glint-outset: 1px');
     expect(dashboardCss).toContain('--mm-executing-border-glint-width: 3px');
     expect(dashboardCss).toContain('--mm-executing-border-glint-opacity: 0.95');
-    expect(dashboardCss).toContain('--mm-executing-moving-light-gradient:');
     expect(dashboardCss).toContain('--mm-status-shimmer-halo: color-mix(in srgb, currentColor 30%, transparent)');
     expect(dashboardCss).toContain('--mm-status-shimmer-core: color-mix(in srgb, currentColor 70%, white 30%)');
     expect(dashboardCss).toContain('--mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent)');
@@ -2857,6 +2856,18 @@ describe('Dashboard shared entry', () => {
     expect(shimmerBlock).toContain('overflow: hidden');
     expect(shimmerBlock).toContain('isolation: isolate');
     expect(shimmerBlock).not.toContain('animation-delay:');
+    // The moving-light gradient must be declared where its shimmer color
+    // inputs exist (the shimmer host), never on :root. A root declaration
+    // references pill-local custom properties that are undefined at :root,
+    // computes to the guaranteed-invalid value, and every consuming layer
+    // renders background-image: none while the animation keeps running.
+    expect(shimmerBlock).toContain('--mm-status-moving-light-gradient:');
+    expect(shimmerBlock).toContain('var(--mm-status-shimmer-halo) 50%');
+    expect(shimmerBlock).toContain('var(--mm-status-shimmer-core) 50%');
+    const rootBlock = cssRuleBlocks(dashboardCss, ':root').join('\n');
+    expect(rootBlock).not.toContain('moving-light-gradient');
+    expect(rootBlock).not.toContain('--mm-status-shimmer');
+    expect(dashboardCss).not.toContain('--mm-executing-moving-light-gradient');
     const runningBackgroundBlock = cssRuleBlocks(
       dashboardCss,
       '.status-running[data-effect="shimmer-sweep"], .status-running.is-executing',
@@ -2871,7 +2882,7 @@ describe('Dashboard shared entry', () => {
         rule.selector.includes('::before') &&
         rule.selector.includes('::after'),
     );
-    expect(sharedLightMaskBlock).toContain('background-image: var(--mm-executing-moving-light-gradient)');
+    expect(sharedLightMaskBlock).toContain('background-image: var(--mm-status-moving-light-gradient)');
     expect(sharedLightMaskBlock).toContain('animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite');
     expect(sharedLightMaskBlock).toContain('mix-blend-mode: plus-lighter');
     expect(sharedLightMaskBlock).toMatch(
@@ -2931,7 +2942,7 @@ describe('Dashboard shared entry', () => {
         rule.selector.includes('.status-letter-wave::after'),
     );
     expect(textMaskBlock).toContain('content: attr(data-label)');
-    expect(textMaskBlock).toContain('background-image: var(--mm-executing-moving-light-gradient)');
+    expect(textMaskBlock).toContain('background-image: var(--mm-status-moving-light-gradient)');
     expect(textMaskBlock).toContain('animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite');
     expect(textMaskBlock).toContain('background-clip: text');
     expect(textMaskBlock).toContain('-webkit-background-clip: text');

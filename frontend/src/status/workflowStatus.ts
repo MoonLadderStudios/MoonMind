@@ -48,6 +48,7 @@ const WORKFLOW_STATUS_LABELS: Record<WorkflowStatusKey, string> = {
 
 const WORKFLOW_COMPATIBILITY_ALIASES: Record<string, WorkflowStatusKey> = {
   no_changes: 'no_commit',
+  running: 'executing',
 };
 
 const WORKFLOW_STATUS_CLASSES: Record<WorkflowStatusKey, string> = {
@@ -91,8 +92,16 @@ function isWorkflowStatusKey(key: string): key is WorkflowStatusKey {
   return Object.prototype.hasOwnProperty.call(WORKFLOW_STATUS_LABELS, key);
 }
 
+function canonicalWorkflowStatusKey(status: string | null | undefined): string {
+  const key = normalizedWorkflowStatusKey(status);
+  if (Object.prototype.hasOwnProperty.call(WORKFLOW_COMPATIBILITY_ALIASES, key)) {
+    return WORKFLOW_COMPATIBILITY_ALIASES[key]!;
+  }
+  return key;
+}
+
 export function isWorkflowLifecycleStatus(status: string | null | undefined): boolean {
-  return isWorkflowStatusKey(normalizedWorkflowStatusKey(status));
+  return isWorkflowStatusKey(canonicalWorkflowStatusKey(status));
 }
 
 function warnUnknownWorkflowStatus(key: string): void {
@@ -101,19 +110,23 @@ function warnUnknownWorkflowStatus(key: string): void {
   }
 }
 
-function canonicalWorkflowCompatibilityKey(status: string | null | undefined): string {
-  const key = normalizedWorkflowStatusKey(status);
-  if (Object.prototype.hasOwnProperty.call(WORKFLOW_COMPATIBILITY_ALIASES, key)) {
-    return WORKFLOW_COMPATIBILITY_ALIASES[key]!;
+export function resolveWorkflowDisplayStatus(
+  ...candidates: Array<string | null | undefined>
+): WorkflowStatusKey | null {
+  for (const candidate of candidates) {
+    const key = canonicalWorkflowStatusKey(candidate);
+    if (isWorkflowStatusKey(key)) {
+      return key;
+    }
   }
-  return key;
+  return null;
 }
 
 export function formatWorkflowStatusLabel(
   status: string | null | undefined,
   fallback = '-',
 ): string {
-  const key = normalizedWorkflowStatusKey(status);
+  const key = canonicalWorkflowStatusKey(status);
   if (!key) return fallback;
   if (isWorkflowStatusKey(key)) {
     return WORKFLOW_STATUS_LABELS[key];
@@ -132,7 +145,7 @@ export function workflowStatusPillProps(
   status: string | null | undefined,
   options: WorkflowStatusPillOptions = {},
 ): WorkflowStatusPillProps {
-  const key = normalizedWorkflowStatusKey(status);
+  const key = canonicalWorkflowStatusKey(status);
   const className = isWorkflowStatusKey(key) ? WORKFLOW_STATUS_CLASSES[key] : 'status status-neutral';
 
   if (!isWorkflowStatusKey(key)) {
@@ -149,25 +162,4 @@ export function workflowStatusPillProps(
   }
 
   return { className };
-}
-
-export function formatWorkflowCompatibilityStatusLabel(
-  status: string | null | undefined,
-  fallback = '-',
-): string {
-  const key = canonicalWorkflowCompatibilityKey(status);
-  if (!key) return fallback;
-  if (isWorkflowStatusKey(key)) {
-    return WORKFLOW_STATUS_LABELS[key];
-  }
-  warnUnknownWorkflowStatus(key);
-  return fallback;
-}
-
-export function workflowCompatibilityStatusPillProps(
-  status: string | null | undefined,
-  options: WorkflowStatusPillOptions = {},
-): WorkflowStatusPillProps {
-  const key = canonicalWorkflowCompatibilityKey(status);
-  return workflowStatusPillProps(key, options);
 }

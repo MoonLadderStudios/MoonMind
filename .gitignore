@@ -89,3 +89,7 @@ tmp-comments*.json
 tmp-agentkit-analyze.md
 tmp_skill.md
 tmp_agentkit_clarify.md
+
+# Vitest browser-mode failure artifacts
+.vitest-attachments/
+frontend/src/browser/__screenshots__/

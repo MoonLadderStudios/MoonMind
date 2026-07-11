@@ -1261,6 +1261,59 @@ describe('Workflows Entrypoint', () => {
 
   });
 
+  it('resolves raw status aliases to the canonical executing shimmer treatment', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-running-alias',
+            source: 'temporal',
+            title: 'Running alias task',
+            status: 'running',
+            state: 'completed',
+            rawState: 'running',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-unknown-raw',
+            source: 'temporal',
+            title: 'Unknown raw task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'intervention_requested',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    // Both the desktop table cell and the mobile card render each row, so two
+    // rows produce four shimmer pills: the `running` alias canonicalizes to
+    // executing, and the unrecognized rawState must not mask the canonical
+    // `executing` state that follows it.
+    await waitFor(() => {
+      expect(
+        document.querySelectorAll(
+          '.queue-table-cell-status [data-effect="shimmer-sweep"][data-state="executing"], .queue-card-status [data-effect="shimmer-sweep"][data-state="executing"]',
+        ),
+      ).toHaveLength(4);
+    });
+
+    const pills = document.querySelectorAll<HTMLElement>(
+      '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
+    );
+    expect(pills).toHaveLength(4);
+    for (const pill of pills) {
+      expect(pill.className).toContain('status-running');
+      expect(pill.className).toContain('is-executing');
+      expect(pill.getAttribute('aria-label')).toBe('Executing');
+      expect(pill.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Executing');
+    }
+  });
+
   it('keeps started time out of the workflow list presentation', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 

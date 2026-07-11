@@ -61,7 +61,7 @@ describe('executionStatusPillProps', () => {
       className: 'status status-running',
     });
     expect(executionStatusPillProps('running', { enableMotion: false })).toEqual({
-      className: 'status status-neutral',
+      className: 'status status-running',
     });
     expect(executionStatusPillProps('initializing', { enableMotion: false })).toEqual({
       className: 'status status-initializing',
@@ -115,9 +115,9 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-canceled' });
   });
 
-  it('uses the no-commit teal pill class only for the canonical no-commit status', () => {
+  it('uses the no-commit teal pill class for the canonical status and its compatibility alias', () => {
     expect(executionStatusPillProps('no_commit')).toEqual({ className: 'status status-no-commit' });
-    expect(executionStatusPillProps('no_changes')).toEqual({ className: 'status status-neutral' });
+    expect(executionStatusPillProps('no_changes')).toEqual({ className: 'status status-no-commit' });
   });
 
   it('covers every MM-1084 canonical workflow status with a stable pill class', () => {
