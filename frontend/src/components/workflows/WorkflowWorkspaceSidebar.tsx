@@ -35,6 +35,7 @@ import {
   buildWorkflowListQueryParams,
   workflowListQueryString,
 } from '../../lib/workflowListQuery';
+import { resolveWorkflowDisplayStatus } from '../../status/workflowStatus';
 import { formatStatusLabel } from '../../utils/formatters';
 import { StatusIcon } from '../../utils/statusIcons';
 import { executionStatusPillProps } from '../../utils/executionStatusPillClasses';
@@ -152,13 +153,7 @@ function sidebarStatusLabel(status: string | null | undefined): string {
 }
 
 function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
-  let normalizedStatus = String(status || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '_');
-  if (normalizedStatus === 'running') {
-    normalizedStatus = 'executing';
-  }
+  const normalizedStatus = resolveWorkflowDisplayStatus(status) ?? '';
   if (isSidebarAnimatedWorkflowStatus(normalizedStatus)) {
     const label = sidebarStatusLabel(status);
     return (

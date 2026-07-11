@@ -747,6 +747,60 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
   });
 
+  it('renders the workflow detail header status pill with motion enabled for an executing run', async () => {
+    window.history.pushState({}, 'Header Pill Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await waitFor(() => {
+      expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
+    });
+
+    const pill = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
+    expect(pill?.dataset.state).toBe('executing');
+    expect(pill?.className).toContain('status-running');
+    expect(pill?.className).toContain('is-executing');
+    expect(pill?.getAttribute('aria-label')).toBe('Executing');
+    expect(pill?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Executing');
+    expect(pill?.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('canonicalizes a raw running header status to the executing shimmer treatment', async () => {
+    window.history.pushState({}, 'Header Alias Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+    const workspaceFetch = fetchSpy.getMockImplementation();
+    if (!workspaceFetch) {
+      throw new Error('Expected mockWorkflowWorkspaceFetches() to configure fetchSpy');
+    }
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = (await workspaceFetch(input, init)) as Response;
+      const url = String(input);
+      if (url.includes('/executions/test-123') && !url.includes('/steps')) {
+        const execution = await response.json();
+        return {
+          ok: true,
+          json: async () => ({ ...execution, rawState: 'running', state: 'completed' }),
+        } as Response;
+      }
+      return response;
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await waitFor(() => {
+      expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
+    });
+
+    const pill = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
+    expect(pill?.dataset.state).toBe('executing');
+    expect(pill?.getAttribute('aria-label')).toBe('Executing');
+  });
+
   it('MM-1133 keeps the workspace sidebar list cache isolated from the workflow table cache', async () => {
     window.history.pushState({}, 'Workspace Cache Test', '/workflows?limit=25&source=temporal');
     mockDesktopViewport(true);
@@ -3781,13 +3835,14 @@ describe('Workflow Detail Entrypoint', () => {
 
     await screen.findByText('Planning detail task');
     const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row span.status');
-    expect(toolbarStatus?.dataset.effect).toBeUndefined();
+    expect(toolbarStatus?.dataset.effect).toBe('shimmer-sweep');
+    expect(toolbarStatus?.dataset.state).toBe('planning');
     expect(toolbarStatus?.className).toContain('status-planning');
+    expect(toolbarStatus?.className).toContain('is-planning');
     expect(toolbarStatus?.className).not.toContain('status-running');
-    expect(toolbarStatus?.className).not.toContain('is-planning');
-    expect(toolbarStatus?.dataset.shimmerLabel).toBeUndefined();
-    expect(toolbarStatus?.getAttribute('aria-label')).toBeNull();
-    expect(toolbarStatus?.querySelector('.status-letter-wave')).toBeNull();
+    expect(toolbarStatus?.dataset.shimmerLabel).toBe('Planning');
+    expect(toolbarStatus?.getAttribute('aria-label')).toBe('Planning');
+    expect(toolbarStatus?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Planning');
     expect(toolbarStatus?.textContent).toBe('Planning');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');

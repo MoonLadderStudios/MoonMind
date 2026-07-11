@@ -436,6 +436,10 @@ jobs:
       run: npm ci
     - name: Run frontend CI
       run: npm run frontend:ci
+    - name: Install Playwright Chromium for browser-computed style tests
+      run: npx playwright install --with-deps chromium
+    - name: Run real-browser style regression suite
+      run: npm run ui:test:browser
     - name: Upload dashboard dist artifact
       uses: actions/upload-artifact@v7
       with:

@@ -115,7 +115,7 @@ describe('executionStatusPillProps', () => {
     expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-canceled' });
   });
 
-  it('uses the no-commit teal pill class only for the canonical no-commit status', () => {
+  it('uses the no-commit teal pill class only for the canonical status', () => {
     expect(executionStatusPillProps('no_commit')).toEqual({ className: 'status status-no-commit' });
     expect(executionStatusPillProps('no_changes')).toEqual({ className: 'status status-neutral' });
   });

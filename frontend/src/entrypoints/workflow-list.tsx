@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
+import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import {
@@ -2581,7 +2582,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
+                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2641,7 +2642,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <WorkflowLifecycleStatusPill status={row.rawState || row.state || row.status} />
+                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}

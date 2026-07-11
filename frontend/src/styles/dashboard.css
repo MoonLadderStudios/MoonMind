@@ -77,27 +77,12 @@
   --mm-executing-letter-sweep-start-ratio: 0.2;
   --mm-executing-letter-sweep-travel-ratio: 0.18;
   --mm-executing-letter-sweep-direction: 1;
-  --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
-  --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
   --workflow-list-header-row-height: 2.75rem;
   --workflow-list-body-row-height: 4rem;
   --workflow-list-compact-body-row-height: 3rem;
   --workflow-list-column-workflow-width: 20rem;
   --workflow-list-divider-width: 1px;
   --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);
-  --mm-executing-moving-light-gradient:
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 36%,
-      var(--mm-status-shimmer-halo) 50%,
-      transparent 64%
-    ),
-    linear-gradient(
-      var(--mm-executing-sweep-angle),
-      transparent 0 44%,
-      var(--mm-status-shimmer-core) 50%,
-      transparent 56%
-    );
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -3328,6 +3313,23 @@ tr[data-proposal-id].proposal-consuming td {
   --mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%);
   --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
   --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
+  /* The gradient must be declared where its shimmer color inputs are defined:
+     a custom property that references vars only defined on descendants resolves
+     to the guaranteed-invalid value at computed-value time, so consuming layers
+     end up with background-image: none while the animation keeps running. */
+  --mm-status-moving-light-gradient:
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 36%,
+      var(--mm-status-shimmer-halo) 50%,
+      transparent 64%
+    ),
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 44%,
+      var(--mm-status-shimmer-core) 50%,
+      transparent 56%
+    );
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -3346,7 +3348,7 @@ tr[data-proposal-id].proposal-consuming td {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image: var(--mm-executing-moving-light-gradient);
+  background-image: var(--mm-status-moving-light-gradient);
   background-repeat: no-repeat;
   background-size:
     calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
@@ -3430,7 +3432,7 @@ tr[data-proposal-id].proposal-consuming td {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image: var(--mm-executing-moving-light-gradient);
+  background-image: var(--mm-status-moving-light-gradient);
   background-repeat: no-repeat;
   background-size:
     calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
@@ -3518,7 +3520,7 @@ tr[data-proposal-id].proposal-consuming td {
 @media (prefers-reduced-motion: reduce) {
   .status[data-effect="shimmer-sweep"],
   .status-running.is-executing {
-    background-image: var(--mm-executing-moving-light-gradient);
+    background-image: var(--mm-status-moving-light-gradient);
     background-repeat: no-repeat;
     background-position:
       50% 50%,
