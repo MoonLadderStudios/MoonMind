@@ -37,7 +37,7 @@ This document narrows and supersedes only the list-display mode and shell/worksp
 
 Use these documents together:
 
-- `docs/UI/CollectionWorkspaceLayout.md` is canonical for the far-left application rail, shared collection-sidebar primitive, and workspace geometry.
+- `docs/UI/CollectionWorkspaceLayout.md` is canonical for the masthead navigation, shared collection-sidebar primitive, and workspace geometry.
 - `docs/UI/DashboardSPAArchitecture.md` remains canonical for the persistent SPA shell, route ownership, providers, and same-origin API model.
 - `docs/UI/DashboardDesignSystem.md` remains canonical for visual language, focus states, motion posture, glass/matte treatment, and shared tokens.
 - `docs/UI/WorkflowsListPage.md` remains canonical for table columns, filters, sorting, pagination, mobile cards, row data, and list API behavior.
@@ -174,7 +174,7 @@ Rules:
 The list display selector belongs to the current collection's shell/workspace utility region. It remains adjacent to route and collection context without becoming a centered masthead element or moving into page content, the collection sidebar, or a table toolbar.
 
 ```text
-[Application rail] [Workflow sidebar when visible] [Workflow utility + primary pane]
+[Masthead navigation] [Workflow sidebar when visible] [Workflow utility + primary pane]
 ```
 
 Control contract:
@@ -227,7 +227,7 @@ Rules:
 Rules:
 
 1. The sidebar is owned by the workspace/layout composition layer, not by the detail page body.
-2. It is the first dashboard-content column immediately right of the far-left application rail; it is never inside the detail page's centered/max-width wrapper.
+2. It is the first dashboard-content column immediately right of the masthead navigation; it is never inside the detail page's centered/max-width wrapper.
 3. Sidebar row links navigate to canonical workflow detail URLs.
 4. The active workflow row uses `aria-current="page"`.
 5. Sidebar list failures do not prevent the selected detail from rendering.
@@ -341,7 +341,7 @@ Rules:
 7. In reduced-motion mode, the mode change snaps or uses near-instant opacity changes.
 8. When the same list query and row set are used, preserve vertical scroll position where practical.
 9. If table and sidebar cannot share scroll position because of pagination or virtualization, preserve the selected row and focus target instead.
-10. The route may change, but `DashboardShell`, the application rail, and the collection utility region remain mounted.
+10. The route may change, but `DashboardShell`, the masthead, and the collection utility region remain mounted.
 
 ---
 

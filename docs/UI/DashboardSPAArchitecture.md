@@ -203,9 +203,9 @@ Rules:
 
 ---
 
-## 8. Shell, application rail, and collection workspaces
+## 8. Shell, masthead, and collection workspaces
 
-The React-owned `DashboardShell` provides global providers plus a persistent application rail.
+The React-owned `DashboardShell` provides global providers plus persistent masthead navigation.
 
 The shell owns:
 
@@ -219,15 +219,15 @@ The shell owns:
 - optional command palette provider;
 - shared workspace and collection-display state.
 
-On desktop, the application rail is the first column at the viewport's far-left edge. It contains the brand and top-level links, including Workflows, Create, Recurring, and Skills. Primary navigation is not recreated as a centered masthead pill row. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation.
+On desktop, the masthead contains the brand and top-level links, including Workflows, Create, Recurring, and Skills. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation.
 
-Immediately to the right, the dashboard content region hosts route-family workspaces. A collection workspace may render a collection sidebar as its first column and a primary pane as its second. The workspace grid is fluid and must not be nested in a centered/max-width page wrapper. Readable-width limits belong inside the primary pane.
+Below it, the dashboard content region hosts route-family workspaces. A collection workspace may render one contextual collection sidebar as its first column and a primary pane as its second. That sidebar lists Workflows, Recurring schedules, or Skills for the active route; it never contains top-level page links. The workspace must never render an application-navigation sidebar beside the collection sidebar.
 
 `docs/UI/CollectionWorkspaceLayout.md` is canonical for geometry, shared sidebar anatomy, and the common Workflow/Recurring detail frame. List-display controls for participating collections live in the shell/workspace utility area associated with that collection.
 
-Required shell primitives include `ApplicationRail`, `DashboardContent`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Workflows, Recurring, and Skills supply adapters rather than copying layout or CSS.
+Required primitives include `DashboardNavigation`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Workflows, Recurring, and Skills supply adapters rather than copying layout or CSS.
 
-Legacy server-rendered navigation partials should be removed after the SPA shell owns the application rail and global utilities. On tablet/mobile, the application rail and collection sidebar may collapse into drawers or list-to-detail flows. Non-rendered desktop controls must be absent from the accessibility tree.
+Legacy server-rendered navigation partials should be removed after the SPA shell owns masthead navigation and global utilities. On tablet/mobile, masthead navigation may use a menu and the collection sidebar may collapse into a list-to-detail flow. Non-rendered desktop controls must be absent from the accessibility tree.
 
 ---
 
@@ -400,7 +400,7 @@ Shared components should accept product-neutral inputs where practical, but shou
 MoonMind can be considered fully converted when:
 
 1. Dashboard routes are client-routed after initial shell load.
-2. The dashboard navigation is React-owned and renders as the far-left desktop application rail.
+2. The dashboard navigation is React-owned and renders in the desktop masthead.
 3. Internal dashboard route transitions do not reload the document.
 4. Direct refresh of supported dashboard deep links returns the SPA shell and renders the correct client route.
 5. FastAPI API/auth/health/static/artifact routes are never captured by SPA fallback.
@@ -422,8 +422,8 @@ Frontend tests should cover:
 
 - route rendering under the client router;
 - internal navigation without `window.location.assign`;
-- active application-rail state and shared Workflows/Recurring/Skills navigation;
-- far-left application-rail and collection-sidebar geometry;
+- active masthead state and shared Workflows/Recurring/Skills navigation;
+- masthead and single collection-sidebar geometry;
 - shared Workflow/Recurring detail-frame composition;
 - QueryClient persistence across route changes;
 - page-level error boundaries;

@@ -52,9 +52,6 @@
   --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.30);
   --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.10);
   --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.88);
-  --mm-app-rail-width: 14rem;
-  --mm-dashboard-content-padding-inline: 1rem;
-  --mm-workspace-divider: rgb(var(--mm-border) / 0.72);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
   /* MM-1048: slightly more horizontal shimmer path while preserving the shared
@@ -195,13 +192,10 @@ samp {
 .dashboard-root {
   --dashboard-pt: 0;
 
-  display: grid;
-  grid-template-columns: var(--mm-app-rail-width) minmax(0, 1fr);
-  margin: 0;
+  margin: 0 auto;
   max-width: none;
-  min-height: 100dvh;
   width: 100%;
-  padding: 0;
+  padding: var(--dashboard-pt) 1rem 2.75rem;
   box-sizing: border-box;
   container-type: inline-size;
   overflow-x: clip;
@@ -210,36 +204,32 @@ samp {
 .dashboard-content {
   min-width: 0;
   width: 100%;
-  padding: var(--dashboard-pt) var(--mm-dashboard-content-padding-inline) 2.75rem;
 }
-.application-rail {
-  position: sticky; top: 0; z-index: 50; display: flex; flex-direction: column;
-  align-items: stretch; gap: 1rem; width: var(--mm-app-rail-width); height: 100dvh;
-  padding: 0.9rem 0.7rem; border-right: 1px solid var(--mm-workspace-divider);
-  background: var(--mm-glass-fill); box-shadow: var(--mm-elevation-panel);
+
+/* Most pages read best in a centered working container; data-table routes opt into wide. */
+.dashboard-shell-constrained {
+  max-width: min(72rem, calc(100vw - 2rem));
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
-.application-rail .masthead-brand { padding: 0 0.45rem 0.65rem; border-bottom: 1px solid rgb(var(--mm-border) / 0.58); }
-.application-rail-nav { min-height: 0; overflow-y: auto; }
-.application-rail .route-nav { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0.25rem; }
-.application-rail .route-nav a {
-  position: relative; display: flex; align-items: center; gap: 0.65rem; min-height: 2.7rem;
-  padding: 0.55rem 0.7rem; border: 1px solid transparent; border-radius: 0.6rem;
+
+.dashboard-shell-constrained--data-wide {
+  max-width: min(112rem, calc(100vw - 2rem));
 }
-.application-rail .route-nav a::after { content: none; }
-.application-rail .route-nav a:hover { border-color: rgb(var(--mm-border) / 0.72); }
-.application-rail .route-nav a.active {
-  border-color: rgb(var(--mm-accent) / 0.5); background: rgb(var(--mm-accent) / 0.14);
-  box-shadow: inset 3px 0 0 rgb(var(--mm-accent)); font-weight: 650;
-}
-.application-rail-utilities {
-  display: flex; flex-direction: column; gap: 0.35rem; margin-top: auto; padding-top: 0.7rem;
-  border-top: 1px solid rgb(var(--mm-border) / 0.58);
-}
-.application-rail-utilities .version-badge { align-self: flex-start; margin: 0 0.7rem; }
-.dashboard-collection-utilities { display: flex; justify-content: flex-start; padding: 0.65rem 0; }
-.dashboard-alerts-region { min-width: 0; width: 100%; }
 
 .dashboard-shell-full {
+  width: 100%;
+}
+
+.dashboard-collection-utilities {
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.65rem 0;
+}
+
+.dashboard-alerts-region {
+  min-width: 0;
   width: 100%;
 }
 
@@ -250,7 +240,7 @@ samp {
   z-index: 50;
   isolation: isolate;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 0.7rem;
   padding: 0.65rem 1rem var(--masthead-padding-block-end);
@@ -517,18 +507,15 @@ h1 {
     grid-row: 1;
   }
 
-  .workflow-list-display-control {
+  .masthead-nav {
     grid-column: 2;
     grid-row: 1;
-  }
-
-  .masthead-nav {
-    grid-column: 1 / -1;
-    grid-row: 1;
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   .masthead-title-meta {
-    grid-column: 4;
+    grid-column: 3;
     grid-row: 1;
   }
 }
@@ -679,8 +666,7 @@ h1 {
   min-height: 0;
 }
 
-/* Workflows table and unified workspace remove the generic panel surface while
- * retaining the fluid route-root geometry. */
+/* Workflows table and unified workspace keep the fluid route-root geometry. */
 .panel.panel--data-wide:has(.workflow-list-data-slab),
 .panel.panel--data-wide:has(.workflow-workspace-shell) {
   max-width: none;
@@ -3697,17 +3683,6 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (max-width: 1180px) {
-  .dashboard-root { display: block; }
-  .dashboard-content { padding: 0 1rem 2.75rem; }
-  .application-rail {
-    position: relative; width: 100%; height: auto; padding: 0.65rem 1rem;
-    flex-direction: row; align-items: center; border-right: 0;
-    border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
-  }
-  .application-rail .masthead-brand { flex: 1 1 auto; padding: 0; border-bottom: 0; }
-  .application-rail-nav { display: contents; }
-  .application-rail-utilities { display: none; }
-
   .schedules-table-panel .data-table [data-column-key="policy"],
   .schedules-table-panel .data-table [data-column-key="updatedAt"] {
     display: none;
@@ -7563,18 +7538,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .route-nav a.active {
-    color: white;
-    background: linear-gradient(
-      90deg,
-      var(--mm-mobile-nav-active-start),
-      var(--mm-mobile-nav-active-end)
-    );
-    box-shadow:
-      inset 3px 0 0 var(--mm-mobile-nav-active-edge),
-      inset 0 1px 0 var(--mm-mobile-nav-edge);
-  }
-
-  .application-rail .route-nav a.active {
     color: white;
     background: linear-gradient(
       90deg,

@@ -3,37 +3,37 @@
 Status: **Target Architecture**
 Owners: MoonMind Engineering
 Last updated: 2026-07-10
-Canonical for: dashboard application rail placement, reusable collection sidebars, far-left workspace geometry, and the shared Workflow/Recurring entity-detail frame
+Canonical for: reusable collection sidebars, workspace geometry, and the shared Workflow/Recurring entity-detail frame
 
 **Implementation tracking:** implementation checklists belong in GitHub issues or `docs/tmp/`. This document defines durable desired state.
 
 ## 1. Purpose
 
-Define one application-wide desktop composition for MoonMind collection surfaces. Workflows, Recurring, and Skills must not invent separate left-navigation systems, and detail routes must not mount a sidebar inside a centered page wrapper.
+Define one desktop composition for MoonMind collection surfaces. Workflows, Recurring, and Skills share one contextual sidebar system; that sidebar lists entities and must never become page navigation. Detail routes must not mount a second sidebar beside it.
 
 ## 2. Non-negotiable geometry
 
-The desktop shell has three ordered regions:
+The desktop workspace has two ordered regions below the masthead:
 
 ```text
-┌──────────────────┬──────────────────────────┬───────────────────────────────────────────┐
-│ Application rail │ Collection sidebar       │ Primary page or entity-detail pane        │
-│ viewport far-left│ content-region far-left  │ fluid workspace; readable widths inside  │
-└──────────────────┴──────────────────────────┴───────────────────────────────────────────┘
+┌──────────────────────────┬───────────────────────────────────────────┐
+│ Collection sidebar       │ Primary page or entity-detail pane        │
+│ workspace left edge      │ fluid workspace; readable widths inside  │
+└──────────────────────────┴───────────────────────────────────────────┘
 ```
 
-1. The **application rail** is the first visual column at the far-left edge of the viewport. It contains the MoonMind brand and top-level destinations, including **Workflows**, **Create**, **Recurring**, and **Skills**.
-2. A **collection sidebar**, when the route owns one, is the first child of the dashboard content region immediately to the right of the application rail.
+1. Top-level destinations, including **Workflows**, **Create**, **Recurring**, and **Skills**, remain in the page masthead navigation.
+2. A **collection sidebar**, when the route owns one, is the first child of the route workspace and lists only entities from the active collection.
 3. The primary pane begins immediately after the collection sidebar and consumes the remaining width.
-4. Neither left-side region may be placed inside a centered, constrained, or `max-width` page container.
+4. The split workspace must not create a second sidebar or place the collection sidebar inside the detail frame.
 5. A detail pane may constrain prose, forms, logs, or evidence *inside itself*. Those constraints must never move the collection sidebar away from the content edge or create a large empty left margin.
-6. The application rail remains present across desktop dashboard routes. Collection sidebars are route-owned and may be absent only where the route contract explicitly calls for a full-table or focused single-pane presentation.
+6. Collection sidebars are route-owned and may be absent where the route contract calls for a full-table or focused single-pane presentation.
 
-On tablet and mobile, the shell may collapse into a drawer or list-to-detail flow. Hidden desktop rails and controls must leave the accessibility tree.
+On tablet and mobile, the collection sidebar may collapse into a drawer or list-to-detail flow. Hidden desktop controls must leave the accessibility tree.
 
-## 3. Application rail contract
+## 3. Masthead navigation contract
 
-The application rail is React-owned by `DashboardShell` and uses router-native links. Its shared anatomy is:
+The masthead is React-owned by `DashboardShell` and uses router-native links. It owns brand, top-level route navigation, responsive navigation controls, and global utilities. Collection sidebars must not contain these page links or duplicate this navigation.
 
 - brand/home control;
 - grouped top-level route links with icons and text labels;
@@ -42,7 +42,7 @@ The application rail is React-owned by `DashboardShell` and uses router-native l
 - environment, version, account, and settings utilities;
 - compact/collapsed state when supported.
 
-The rail uses the same tokens, border, focus ring, hover brightening, icon sizing, tooltip behavior, and responsive collapse behavior everywhere. Primary navigation must not be recreated as a centered pill row inside the page masthead.
+Primary navigation remains visually and structurally distinct from contextual collection lists.
 
 ## 4. Shared collection sidebar primitive
 
@@ -101,11 +101,11 @@ Shared detail elements must use the same typography, spacing, surface hierarchy,
 
 ## 6. Ownership and composition
 
-`DashboardShell` owns the application rail and global providers. A route-family workspace owns its collection sidebar and primary pane as siblings. The detail component owns only the content inside the primary pane.
+`DashboardShell` owns the masthead and global providers. A route-family workspace owns its collection sidebar and primary pane as siblings. The detail component owns only the content inside the primary pane.
 
 ```text
 DashboardShell
-├── ApplicationRail
+├── MastheadNavigation
 └── DashboardContent
     └── CollectionWorkspace
         ├── CollectionSidebar
@@ -119,7 +119,8 @@ Forbidden compositions include:
 - `EntityDetailFrame > CollectionSidebar`;
 - page-specific copies of sidebar CSS or state components;
 - a second top-level navigation system on Recurring or Skills;
-- a large decorative left gutter before either rail.
+- page-navigation links inside a collection sidebar;
+- two adjacent sidebars.
 
 ## 7. Tokens and component seams
 
@@ -135,7 +136,7 @@ Shared implementations should converge on neutral names such as:
 --mm-detail-facts-rail-width
 
 .dashboard-shell
-.application-rail
+.masthead
 .dashboard-content
 .collection-workspace
 .collection-sidebar
@@ -162,7 +163,7 @@ All rails, filters, rows, mode controls, tabs, and actions are keyboard reachabl
 
 Representative frontend tests must prove:
 
-1. the application rail is the viewport's far-left desktop column;
+1. page navigation remains in the masthead;
 2. Workflows, Recurring, and Skills links appear in the same rail with common active/focus behavior;
 3. each collection sidebar is the first content-region column and is not inside a centered/max-width wrapper;
 4. Workflow, Recurring, and Skills adapters share the same sidebar shell and state components;
