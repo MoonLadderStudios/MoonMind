@@ -109,6 +109,35 @@ def test_build_pr_resolver_start_input_preserves_prepared_agent_contract() -> No
     assert result.base_agent_request["resolvedSkillsetRef"] == "artifact://skills"
 
 
+def test_build_pr_resolver_start_input_preserves_direct_inputs_and_gate_policy() -> None:
+    request = _agent_request()
+    result = build_pr_resolver_start_input(
+        request=request,
+        node_inputs={
+            "pr": "feature/resolver",
+            "mergeMethod": "rebase",
+            "skill": {"name": "pr-resolver", "inputs": {}},
+        },
+        workflow_parameters={
+            "mergeGate": {
+                "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3150",
+                "checks": "optional",
+                "automatedReview": "disabled",
+            }
+        },
+        parent_workflow_id="parent",
+        parent_run_id="run",
+        principal="user-1",
+        step_id="resolve",
+    )
+
+    assert result.pr_number == 3150
+    assert result.merge_method == "rebase"
+    assert result.policy.checks == "optional"
+    assert result.policy.automated_review == "disabled"
+    assert result.owned_by_merge_automation_gate is True
+
+
 def _workflow_payload(**policy: Any) -> dict[str, Any]:
     return {
         "workflowType": "MoonMind.PRResolver",
@@ -172,6 +201,8 @@ async def test_workflow_verifies_already_merged_before_terminal_publication(
         "pr_resolver.write_terminal_result",
     ]
     assert result["metadata"]["mergeAutomationDisposition"] == "already_merged"
+    assert result["publishEvidence"] == "publish-ref"
+    assert result["outputRefs"]["publishEvidence"] == "publish-ref"
 
 
 @pytest.mark.asyncio
@@ -224,6 +255,7 @@ async def test_repeated_blocker_without_remote_progress_stops_bounded(
 
     assert child_calls == 1
     assert result["metadata"]["mergeAutomationDisposition"] == "manual_review"
+    assert result["failureClass"] == "execution_error"
 
 
 @pytest.mark.asyncio

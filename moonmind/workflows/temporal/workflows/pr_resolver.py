@@ -126,17 +126,36 @@ def build_pr_resolver_start_input(
         or workflow_parameters.get("repository")
         or workflow_parameters.get("repo")
     )
-    pr_value = skill_inputs.get("pr") or node_inputs.get("pr")
+    merge_gate = workflow_parameters.get("mergeGate")
+    merge_gate = merge_gate if isinstance(merge_gate, Mapping) else {}
+    pr_value = (
+        skill_inputs.get("pr")
+        or node_inputs.get("pr")
+        or skill_inputs.get("branch")
+        or node_inputs.get("branch")
+    )
     try:
         pr_number = int(str(pr_value or "").strip())
     except ValueError as exc:
-        raise ValueError("pr-resolver requires a numeric inputs.pr selector") from exc
+        pr_url_parts = _text(merge_gate.get("pullRequestUrl")).rstrip("/").split("/")
+        try:
+            pr_number = int(pr_url_parts[-1])
+        except (ValueError, IndexError) as url_exc:
+            raise ValueError(
+                "branch-style pr-resolver selectors require a resolved mergeGate.pullRequestUrl"
+            ) from url_exc
     if not repository:
         raise ValueError("pr-resolver requires inputs.repo or workspace repository")
 
-    merge_method = _text(skill_inputs.get("mergeMethod") or "squash").lower()
-    merge_gate = workflow_parameters.get("mergeGate")
-    merge_gate = merge_gate if isinstance(merge_gate, Mapping) else {}
+    legacy_args = node_inputs.get("args")
+    legacy_args = legacy_args if isinstance(legacy_args, Mapping) else {}
+    merge_method = _text(
+        node_inputs.get("mergeMethod")
+        or skill_inputs.get("mergeMethod")
+        or legacy_args.get("mergeMethod")
+        or merge_gate.get("mergeMethod")
+        or "squash"
+    ).lower()
     pr_url = _text(merge_gate.get("pullRequestUrl")) or (
         f"https://github.com/{repository}/pull/{pr_number}"
     )
@@ -148,6 +167,8 @@ def build_pr_resolver_start_input(
         "maxIdenticalBlockersWithoutProgress": skill_inputs.get(
             "maxIdenticalBlockersWithoutProgress", 2
         ),
+        "checks": merge_gate.get("checks", "required"),
+        "automatedReview": merge_gate.get("automatedReview", "required"),
     }
     return PRResolverStartInput.model_validate(
         {
@@ -165,6 +186,7 @@ def build_pr_resolver_start_input(
             "baseAgentRequest": request.model_dump(by_alias=True, mode="json"),
             "policy": policy,
             "shadowMode": bool(skill_inputs.get("shadowMode", False)),
+            "ownedByMergeAutomationGate": bool(merge_gate),
         }
     )
 
@@ -225,6 +247,10 @@ class MoonMindPRResolverWorkflow:
                 f"{workflow.info().workflow_id}:{transition}:"
                 f"{self._head_sha or 'unknown'}:{attempt}"
             ),
+            "policy": {
+                "checks": self._input.policy.checks,
+                "automatedReview": self._input.policy.automated_review,
+            },
         }
         result = await workflow.execute_activity(
             "pr_resolver.read_snapshot",
@@ -338,18 +364,19 @@ class MoonMindPRResolverWorkflow:
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
         publication = dict(publication) if isinstance(publication, Mapping) else {}
-        refs = [
-            ref
-            for ref in (
-                _text(publication.get("resultRef")),
-                _text(publication.get("publishEvidenceRef")),
-            )
-            if ref
-        ]
         result["publishEvidenceRef"] = publication.get("publishEvidenceRef")
-        failure_class = "execution_error" if status == "failed" else None
+        failure_class = None
+        if status == "failed" or (
+            status in {"manual_review", "canceled"}
+            and not self._input.owned_by_merge_automation_gate
+        ):
+            failure_class = "execution_error"
         return {
-            "outputRefs": refs,
+            "outputRefs": {
+                "prResolverResult": _text(publication.get("resultRef")),
+                "publishEvidence": _text(publication.get("publishEvidenceRef")),
+            },
+            "publishEvidence": publication.get("publishEvidenceRef"),
             "summary": reason,
             "failureClass": failure_class,
             "metadata": {
@@ -457,6 +484,10 @@ class MoonMindPRResolverWorkflow:
                             "prUrl": self._input.pr_url,
                             "headSha": self._head_sha or "",
                             "mergeMethod": self._input.merge_method,
+                            "policy": {
+                                "checks": self._input.policy.checks,
+                                "automatedReview": self._input.policy.automated_review,
+                            },
                             "attempt": self._finalize_attempts,
                             "idempotencyKey": (
                                 f"{workflow.info().workflow_id}:merge:"

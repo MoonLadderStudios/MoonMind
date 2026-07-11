@@ -1019,6 +1019,7 @@ class GitHubService:
         *,
         pr_url: str,
         merge_method: str = "merge",
+        expected_head_sha: str | None = None,
         github_token: str | None = None,
     ) -> MergePRResult:
         """Merge a GitHub pull request by URL."""
@@ -1049,6 +1050,8 @@ class GitHubService:
         )
         headers = self._github_headers(token)
         payload = {"merge_method": merge_method}
+        if expected_head_sha:
+            payload["sha"] = expected_head_sha
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:

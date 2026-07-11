@@ -1789,6 +1789,10 @@ class PRResolverPolicyModel(BaseModel):
     max_identical_blockers_without_progress: int = Field(
         2, alias="maxIdenticalBlockersWithoutProgress", ge=1, le=20
     )
+    checks: Literal["required", "optional", "disabled"] = "required"
+    automated_review: Literal["required", "optional", "disabled"] = Field(
+        "required", alias="automatedReview"
+    )
 
 
 class PRResolverStartInput(BaseModel):
@@ -1816,6 +1820,9 @@ class PRResolverStartInput(BaseModel):
         default_factory=PRResolverPolicyModel, alias="policy"
     )
     shadow_mode: bool = Field(False, alias="shadowMode")
+    owned_by_merge_automation_gate: bool = Field(
+        False, alias="ownedByMergeAutomationGate"
+    )
 
     @field_validator(
         "parent_workflow_id",

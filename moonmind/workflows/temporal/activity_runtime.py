@@ -4772,7 +4772,7 @@ class TemporalIntegrationActivities:
             repo=repository,
             pr_number=pr_number,
             head_sha=str(payload.get("headSha") or ""),
-            policy={"checks": "required", "automatedReview": "required"},
+            policy=dict(payload.get("policy") or {}),
         )
         result = readiness.model_dump(by_alias=True, mode="json")
         result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
@@ -4793,7 +4793,7 @@ class TemporalIntegrationActivities:
             repo=repository,
             pr_number=pr_number,
             head_sha=expected_head,
-            policy={"checks": "required", "automatedReview": "required"},
+            policy=dict(payload.get("policy") or {}),
         )
         if readiness.pull_request_merged is True:
             return {
@@ -4819,6 +4819,7 @@ class TemporalIntegrationActivities:
         result = await service.merge_pull_request(
             pr_url=str(payload.get("prUrl") or ""),
             merge_method=str(payload.get("mergeMethod") or "squash"),
+            expected_head_sha=expected_head or None,
         )
         output = result.model_dump(by_alias=True, mode="json")
         output["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
