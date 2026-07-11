@@ -226,12 +226,6 @@ samp {
   width: 100%;
 }
 
-.dashboard-collection-utilities {
-  display: flex;
-  justify-content: flex-start;
-  padding: 0.65rem 0;
-}
-
 .dashboard-alerts-region {
   min-width: 0;
   width: 100%;
@@ -269,6 +263,14 @@ samp {
   right: calc(50% - 50cqw - 1rem);
   bottom: 0;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+.masthead-brand-group {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 .masthead-brand {
@@ -506,7 +508,7 @@ h1 {
 }
 
 @media (min-width: 1181px) {
-  .masthead-brand {
+  .masthead-brand-group {
     grid-column: 1;
     grid-row: 1;
   }
