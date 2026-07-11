@@ -8720,7 +8720,8 @@ class TemporalAgentRuntimeActivities:
                 request=request,
                 workspace_path=workspace_path_raw,
             )
-        if payload.get("metadataOnly") or payload.get("metadata_only"):
+
+        def _prepared_request_metadata() -> dict[str, Any]:
             prepared_payload: dict[str, Any] = {
                 "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                     request.parameters
@@ -8737,6 +8738,7 @@ class TemporalAgentRuntimeActivities:
                     )
                 )
             return prepared_payload
+
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -8755,6 +8757,8 @@ class TemporalAgentRuntimeActivities:
                     workspace_path_raw
                 )
             instruction_ref = str(request.instruction_ref or "").strip()
+            if payload.get("metadataOnly") or payload.get("metadata_only"):
+                return _prepared_request_metadata()
             if instruction_ref:
                 prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
@@ -8780,6 +8784,8 @@ class TemporalAgentRuntimeActivities:
                         )
                     return prepared_payload
                 return prepared
+        if payload.get("metadataOnly") or payload.get("metadata_only"):
+            return _prepared_request_metadata()
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:

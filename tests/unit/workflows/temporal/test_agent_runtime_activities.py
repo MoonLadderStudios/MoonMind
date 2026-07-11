@@ -5360,9 +5360,11 @@ async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_only", [False, True])
 async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval_metadata_when_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    metadata_only: bool,
 ) -> None:
     async def _fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
@@ -5402,11 +5404,15 @@ async def test_agent_runtime_prepare_turn_instructions_returns_durable_retrieval
             },
             "workspacePath": str(tmp_path),
             "includePreparedRequestMetadata": True,
+            "metadataOnly": metadata_only,
         }
     )
 
     assert isinstance(result, dict)
-    assert "BEGIN_RETRIEVED_CONTEXT" in result["instructions"]
+    if metadata_only:
+        assert "instructions" not in result
+    else:
+        assert "BEGIN_RETRIEVED_CONTEXT" in result["instructions"]
     assert result["durableRetrievalMetadata"]["latestContextPackRef"].startswith(
         "artifacts/context/"
     )

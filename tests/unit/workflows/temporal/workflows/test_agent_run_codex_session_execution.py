@@ -138,6 +138,7 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     assert result.failure_class is None
     assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
     assert result.metadata["terminalContractContinuationCount"] == 1
+    assert calls[0][1]["runId"] == "wf-task-1"
     assert [name for name, _ in calls] == [
         "agent_runtime.evaluate_terminal_evidence",
         "agent_runtime.load_session_snapshot",

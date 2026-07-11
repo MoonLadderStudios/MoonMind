@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -47,6 +48,9 @@ def now_utc_iso() -> str:
 
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
+
+def current_execution_ref() -> str | None:
+    return normalize_text(os.getenv("MOONMIND_STEP_EXECUTION_ID")) or None
 
 def parse_reason(result_payload: dict[str, Any]) -> str:
     return normalize_text(

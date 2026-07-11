@@ -1936,7 +1936,11 @@ class MoonMindAgentRun:
             payload = await self._execute_routed_activity(
                 "agent_runtime.evaluate_terminal_evidence",
                 {
-                    "runId": str(self.run_id or ""),
+                    "runId": (
+                        request.managed_session.agent_run_id
+                        if request.managed_session is not None
+                        else str(self.run_id or "")
+                    ),
                     "workspacePath": workspace_path,
                     "artifactSpoolPath": (
                         os.path.join(

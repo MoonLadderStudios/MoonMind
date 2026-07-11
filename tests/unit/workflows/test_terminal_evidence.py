@@ -100,7 +100,13 @@ def test_pr_resolver_terminal_requires_result_and_publish_evidence(tmp_path: Pat
     result_path = tmp_path / "var/pr_resolver/result.json"
     result_path.parent.mkdir(parents=True)
     result_path.write_text(
-        json.dumps({"mergeAutomationDisposition": "merged"}), encoding="utf-8"
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "merged",
+                "executionRef": "step-1",
+            }
+        ),
+        encoding="utf-8",
     )
     missing_publish = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
     assert missing_publish.failure_code == "INCOMPLETE_TERMINAL_CONTRACT"
@@ -116,7 +122,12 @@ def test_pr_resolver_terminal_accepts_publish_evidence_from_spool(tmp_path: Path
     result_path = workspace / "var/pr_resolver/result.json"
     result_path.parent.mkdir(parents=True)
     result_path.write_text(
-        json.dumps({"mergeAutomationDisposition": "already_merged"}),
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "already_merged",
+                "executionRef": "step-1",
+            }
+        ),
         encoding="utf-8",
     )
     spool.mkdir()
@@ -135,3 +146,57 @@ def test_pr_resolver_terminal_accepts_publish_evidence_from_spool(tmp_path: Path
     )
 
     assert result.satisfied is True
+
+
+@pytest.mark.parametrize(
+    ("disposition", "failure_code"),
+    [
+        ("reenter_gate", "PR_RESOLVER_REENTER_GATE"),
+        ("manual_review", "PR_RESOLVER_MANUAL_REVIEW"),
+        ("failed", "PR_RESOLVER_FAILED"),
+    ],
+)
+def test_pr_resolver_terminal_rejects_unsuccessful_dispositions(
+    tmp_path: Path, disposition: str, failure_code: str
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {"mergeAutomationDisposition": disposition, "executionRef": "step-1"}
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.satisfied is False
+    assert result.failure_code == failure_code
+
+
+def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {"mergeAutomationDisposition": "merged", "executionRef": "old-step"}
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "current-step",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.satisfied is False
+    assert result.failure_code == "STALE_TERMINAL_EVIDENCE"

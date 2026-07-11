@@ -51,11 +51,19 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "MALFORMED_TERMINAL_EVIDENCE")
     if contract_id == "pr_resolver_terminal.v1":
         disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
+        expected_execution = str(
+            contract.get("executionRef") or contract.get("execution_ref") or ""
+        ).strip()
+        evidence_execution = str(payload.get("executionRef") or "").strip()
         metadata = {
             "terminalContractId": contract_id,
             "terminalContractEvidencePath": normalized_relative,
             "mergeAutomationDisposition": disposition,
         }
+        if not expected_execution or evidence_execution != expected_execution:
+            return TerminalEvidenceEvaluation(
+                False, "STALE_TERMINAL_EVIDENCE", metadata=metadata
+            )
         if disposition not in {
             "merged",
             "already_merged",
@@ -79,7 +87,15 @@ def evaluate_terminal_evidence(
                     ("artifacts/publish_result.json",),
                     metadata,
                 )
-        return TerminalEvidenceEvaluation(True, metadata=metadata)
+            return TerminalEvidenceEvaluation(True, metadata=metadata)
+        failure_codes = {
+            "reenter_gate": "PR_RESOLVER_REENTER_GATE",
+            "manual_review": "PR_RESOLVER_MANUAL_REVIEW",
+            "failed": "PR_RESOLVER_FAILED",
+        }
+        return TerminalEvidenceEvaluation(
+            False, failure_codes[disposition], metadata=metadata
+        )
     expected_schema = str(
         contract.get("expectedSchemaVersion")
         or contract.get("expected_schema_version")
