@@ -680,8 +680,18 @@ function CollectionListDisplayModeControl({
 
 function DashboardNavigation({
   uiInfo,
+  listDisplayAccessibleName,
+  listDisplayMode,
+  listDisplayTableLabel,
+  listDisplayStatus,
+  onListDisplayModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
+  listDisplayAccessibleName?: string | undefined;
+  listDisplayMode: CollectionListDisplayMode | null;
+  listDisplayTableLabel?: string | undefined;
+  listDisplayStatus?: string | null | undefined;
+  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -752,19 +762,30 @@ function DashboardNavigation({
 
   return (
     <header className="masthead">
-      <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
-        <img
-          className="masthead-logo"
-          src="/static/workflow_console/moonmindlogo.webp"
-          alt="MoonMind owl and moon logo"
-          width="256"
-          height="199"
-        />
-        <h1>
-          <span className="masthead-brand-moon">Moon</span>
-          <span className="masthead-brand-mind">Mind</span>
-        </h1>
-      </Link>
+      <div className="masthead-brand-group">
+        <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
+          <img
+            className="masthead-logo"
+            src="/static/workflow_console/moonmindlogo.webp"
+            alt="MoonMind owl and moon logo"
+            width="256"
+            height="199"
+          />
+          <h1>
+            <span className="masthead-brand-moon">Moon</span>
+            <span className="masthead-brand-mind">Mind</span>
+          </h1>
+        </Link>
+        {listDisplayMode ? (
+          <CollectionListDisplayModeControl
+            {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+            {...(listDisplayTableLabel ? { tableLabel: listDisplayTableLabel } : {})}
+            effectiveMode={listDisplayMode}
+            status={listDisplayStatus}
+            onSelect={onListDisplayModeSelect}
+          />
+        ) : null}
+      </div>
 
       <button
         ref={menuButtonRef}
@@ -921,7 +942,14 @@ function AppShell({
         </section>
 
         <div className="dashboard-shell-full">
-          <DashboardNavigation uiInfo={uiInfo} />
+          <DashboardNavigation
+            uiInfo={uiInfo}
+            listDisplayAccessibleName={listDisplayAccessibleName}
+            listDisplayMode={listDisplayMode}
+            listDisplayTableLabel={listDisplayTableLabel}
+            listDisplayStatus={listDisplayStatus}
+            onListDisplayModeSelect={onListDisplayModeSelect}
+          />
         </div>
 
         <div className="dashboard-content">
@@ -929,17 +957,6 @@ function AppShell({
             <div
               className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
             >
-              {listDisplayMode ? (
-                <div className="dashboard-collection-utilities">
-                  <CollectionListDisplayModeControl
-                    {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-                    {...(listDisplayTableLabel ? { tableLabel: listDisplayTableLabel } : {})}
-                    effectiveMode={listDisplayMode}
-                    status={listDisplayStatus}
-                    onSelect={onListDisplayModeSelect}
-                  />
-                </div>
-              ) : null}
               <div className="dashboard-alerts-region">
                 <DashboardAlerts />
               </div>

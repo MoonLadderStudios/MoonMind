@@ -3055,7 +3055,7 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('keeps collection controls outside the masthead and constrains desktop navigation', async () => {
+  it('keeps collection controls beside the brand in the masthead and constrains desktop navigation', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
@@ -3067,6 +3067,9 @@ describe('Dashboard shared entry', () => {
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /\.masthead-brand-group\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*justify-self:\s*start;/s,
     );
     expect(dashboardCss).toMatch(
       /\.workflow-list-display-control\s*\{[^}]*justify-self:\s*start;/s,
@@ -3086,7 +3089,7 @@ describe('Dashboard shared entry', () => {
           rule.parent.name === 'media' &&
           rule.parent.params.includes('min-width: 1181px'),
       );
-    expect(desktopMastheadRule('.masthead-brand')).toContain('grid-column: 1;');
+    expect(desktopMastheadRule('.masthead-brand-group')).toContain('grid-column: 1;');
     expect(desktopMastheadRule('.workflow-list-display-control')).toBe('');
     expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 2;');
     expect(desktopMastheadRule('.masthead-nav')).toContain('overflow-x: auto;');
