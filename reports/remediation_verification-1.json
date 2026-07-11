@@ -3,32 +3,18 @@
   "attempt": 1,
   "remediationAttempt": 1,
   "verifiesRemediationAttempt": 1,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_attempt-1.json",
-  "remediationAttemptArtifactStatus": "MISMATCHED_STALE_ARTIFACT",
-  "verificationTarget": "MM-1199",
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-1.json",
+  "verificationTarget": "MM-1201",
   "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
   "verdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
   "remainingWork": [
-    {
-      "requirement": "Provide a dedicated Claude-only Omnigent external host that consumes MoonMind's canonical Claude OAuth volume at /root/.claude.",
-      "gapType": "implementation",
-      "remainingWork": "Create docker-compose.claude-host.yaml with the omnigent-host-claude profile/service, HOME=/root, explicitly blank Claude and unrelated provider API credential variables, a distinct omnigent-host-claude-state volume, writable claude_auth_volume:/root/.claude, the existing workspace mounts, dependencies on omnigent and claude-auth-init, local-network membership, and restart policy from the issue brief.",
-      "suggestedEvidence": "docker-compose.claude-host.yaml; docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml --profile omnigent-host-claude config",
-      "recoverableInCurrentRuntime": true
-    },
-    {
-      "requirement": "Protect the dedicated Claude OAuth host contract with repo-local validation and operator guidance.",
-      "gapType": "verification",
-      "remainingWork": "Add hermetic Compose-structure tests covering service/profile identity, /root paths, empty competing credentials, shared named OAuth volume, dependencies, state isolation, workspace policy, and network; document startup and validation commands for operators.",
-      "suggestedEvidence": "tests/integration/temporal/test_compose_foundation.py or a focused unit Compose test; docs/Omnigent/CombinedStackValidationAndRollback.md; targeted test_unit.sh/test_integration.sh command",
-      "recoverableInCurrentRuntime": true
-    }
+    {"requirement": "Runtime-neutral capability-aware continuation", "gapType": "implementation", "remainingWork": "Move bounded continuation out of CodexSessionAdapter into replay-safe AgentRun orchestration and cover runtimes with and without same-session continuation.", "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; AgentRun workflow tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Complete helper failure matrix", "gapType": "verification", "remainingWork": "Add isolated subprocess cases for preflight/HTTP/partial/rerun/stale-artifact paths and prove created children remain preserved.", "suggestedEvidence": "tests/unit/test_batch_workflows.py", "recoverableInCurrentRuntime": true},
+    {"requirement": "Coherent parent and UI projections", "gapType": "verification", "remainingWork": "Prove finishOutcome, mm_state, closeStatus, ledger, dashboard, diagnostics, queued count, and partial child IDs agree through the parent boundary.", "suggestedEvidence": "tests/unit/workflows/temporal/workflows/test_run_integration.py; frontend dashboard tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Real reliability replay", "gapType": "verification", "remainingWork": "Drive AgentRun evaluation and parent finalization/projection rather than directly invoking the evaluator.", "suggestedEvidence": "tests/integration/reliability/test_escaped_failure_journeys.py", "recoverableInCurrentRuntime": true}
   ],
-  "environmentNotes": [
-    "MoonMind RAG recovery was NOT RUN because embedding_provider_not_configured; optional retrieval does not gate the verdict.",
-    "The focused unit wrapper could not run because pytest is not installed in this runtime; the concrete missing implementation independently determines the verdict.",
-    "reports/remediation_attempt-1.json targets MoonLadderStudios/MoonMind#3150 rather than MM-1199, so it was referenced as required but excluded as evidence."
-  ]
+  "testSummary": {"unit": "PASS (175)", "workflowBoundary": "PASS (150)", "reliability": "PASS (3)"},
+  "environmentNotes": ["The issue brief is complete; no recovery was needed.", "Unrelated MM-1199 remediation artifacts were excluded."]
 }
