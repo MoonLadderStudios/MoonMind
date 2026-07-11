@@ -55,11 +55,27 @@ def test_promote_workflow_is_manual_dispatch_only_with_typed_inputs() -> None:
     assert expected_digest["type"] == "string"
     assert expected_digest["required"] is False
 
+    codex_result_path = inputs["codex_conformance_result_path"]
+    assert codex_result_path["type"] == "string"
+    assert codex_result_path["required"] is False
+
+    codex_artifact_name = inputs["codex_conformance_artifact_name"]
+    assert codex_artifact_name["type"] == "string"
+    assert codex_artifact_name["required"] is False
+
+    codex_run_id = inputs["codex_conformance_run_id"]
+    assert codex_run_id["type"] == "string"
+    assert codex_run_id["required"] is False
+
 
 def test_promote_workflow_uses_minimal_permissions_and_serial_concurrency() -> None:
     workflow = _load_workflow()
 
-    assert workflow["permissions"] == {"contents": "read", "packages": "write"}
+    assert workflow["permissions"] == {
+        "actions": "read",
+        "contents": "read",
+        "packages": "write",
+    }
     assert workflow["concurrency"] == {
         "group": "promote-ghcr-${{ inputs.image }}-${{ inputs.channel }}",
         "cancel-in-progress": False,
@@ -100,6 +116,31 @@ def test_promote_resolves_source_digest_with_optional_guard() -> None:
     assert 'expected="${EXPECTED_DIGEST}"' in run
     assert "Digest mismatch" in run
     assert 'echo "digest=${digest}" >> "$GITHUB_OUTPUT"' in run
+
+
+def test_app_promotion_requires_codex_conformance_result_for_exact_digest() -> None:
+    install = _promote_step("Install promotion gate dependencies")
+    assert install["if"] == "inputs.image == 'app'"
+    assert "pydantic" in install["run"]
+
+    require_run_id = _promote_step("Require Codex conformance run id for artifact download")
+    assert require_run_id["if"].startswith("inputs.image == 'app'")
+    assert "codex_conformance_run_id is required" in require_run_id["run"]
+
+    download_prior = _promote_step("Download prior-run Codex conformance artifact")
+    assert download_prior["with"]["run-id"] == "${{ inputs.codex_conformance_run_id }}"
+    assert download_prior["with"]["github-token"] == "${{ secrets.GITHUB_TOKEN }}"
+
+    step = _promote_step("Validate Codex conformance result")
+    assert step["if"] == "inputs.image == 'app'"
+    assert step["env"]["RESULT_PATH"] == "${{ inputs.codex_conformance_result_path }}"
+    run = step["run"]
+    assert "find /tmp/codex-conformance -name canary-result.json" in run
+    assert "codex_conformance_result_path or codex_conformance_artifact_name" in run
+    assert "Codex conformance result not found" in run
+    assert "python -m moonmind.codex_conformance.canary check" in run
+    assert '--candidate-digest "${{ steps.source.outputs.digest }}"' in run
+    assert "--max-age-hours 72" in run
 
 
 def test_promote_retags_existing_manifest_without_rebuilding() -> None:

@@ -8,8 +8,12 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
+from moonmind.codex_conformance.canary import (
+    CANARY_SCENARIO_VERSION,
+    DEFAULT_MARKER_PATH,
+)
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
 from .log_streamer import RuntimeLogStreamer
@@ -20,6 +24,17 @@ logger = logging.getLogger(__name__)
 
 _LOG_READ_CHUNK_BYTES = 64 * 1024
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
+_CANARY_EVIDENCE_ARTIFACT_NAME = "codex_conformance_canary.evidence.json"
+_CANARY_MARKER_ARTIFACT_NAME = "codex_conformance_canary.marker.json"
+_CANARY_PROTOCOL_EVENT_KEY = "codexCanaryProtocolEvent"
+_CANARY_MUTATION_MARKERS = (
+    "github mutation",
+    "create pull request",
+    "created pull request",
+    "gh pr create",
+    "gh issue",
+    "api.github.com",
+)
 
 class ArtifactStorageWriter(Protocol):
     def write_artifact(
@@ -332,6 +347,264 @@ class ManagedSessionSupervisor:
         return ref
 
     @staticmethod
+    def _event_timestamp(event: dict[str, Any]) -> str | None:
+        timestamp = str(event.get("timestamp") or "").strip()
+        return timestamp or None
+
+    @staticmethod
+    def _event_kind(event: dict[str, Any]) -> str:
+        return str(event.get("kind") or "").strip().lower()
+
+    @staticmethod
+    def _event_text(event: dict[str, Any]) -> str:
+        return str(event.get("text") or "").strip()
+
+    @staticmethod
+    def _event_metadata(event: dict[str, Any]) -> dict[str, Any]:
+        metadata = event.get("metadata")
+        return dict(metadata) if isinstance(metadata, dict) else {}
+
+    @classmethod
+    def _event_protocol_marker(cls, event: dict[str, Any]) -> str | None:
+        metadata = cls._event_metadata(event)
+        marker = str(metadata.get(_CANARY_PROTOCOL_EVENT_KEY) or "").strip()
+        if marker in {"resumable_process_handle", "poll_after_yield"}:
+            return marker
+        return None
+
+    @classmethod
+    def _is_tool_event(cls, event: dict[str, Any]) -> bool:
+        kind = cls._event_kind(event)
+        text = cls._event_text(event).lower()
+        return kind in {
+            "tool_call",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_failed",
+            "tool_output",
+        } or text.startswith("tool call:")
+
+    @classmethod
+    def _github_mutation_count(cls, events: list[dict[str, Any]]) -> int:
+        count = 0
+        for event in events:
+            metadata = cls._event_metadata(event)
+            if metadata.get("githubMutation") is True:
+                count += 1
+                continue
+            text = " ".join(
+                (
+                    cls._event_kind(event),
+                    cls._event_text(event).lower(),
+                    json.dumps(metadata, sort_keys=True, default=str).lower(),
+                )
+            )
+            if any(marker in text for marker in _CANARY_MUTATION_MARKERS):
+                count += 1
+        return count
+
+    @classmethod
+    def _max_event_int(
+        cls,
+        events: list[dict[str, Any]],
+        key: str,
+        *,
+        default: int,
+    ) -> int:
+        values = [default]
+        for event in events:
+            value = cls._event_metadata(event).get(key)
+            if isinstance(value, bool):
+                continue
+            try:
+                values.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return max(values)
+
+    @classmethod
+    def _canary_protocol_events(
+        cls,
+        events: list[dict[str, Any]],
+    ) -> tuple[list[str], dict[str, str]]:
+        protocol_events: list[str] = []
+        timestamps: dict[str, str] = {}
+        tool_event_timestamps: list[str] = []
+        for event in events:
+            timestamp = cls._event_timestamp(event)
+            marker = cls._event_protocol_marker(event)
+            if marker is not None:
+                if marker not in protocol_events:
+                    protocol_events.append(marker)
+                    if timestamp is not None:
+                        key = (
+                            "firstToolYield"
+                            if marker == "resumable_process_handle"
+                            else "subsequentPoll"
+                        )
+                        timestamps.setdefault(key, timestamp)
+                continue
+            if cls._is_tool_event(event) and timestamp is not None:
+                tool_event_timestamps.append(timestamp)
+
+        return protocol_events, timestamps
+
+    @staticmethod
+    def _session_ids_observed(
+        record: CodexManagedSessionRecord,
+        events: list[dict[str, Any]],
+    ) -> list[str]:
+        observed: list[str] = []
+        for event in events:
+            session_id = str(event.get("sessionId") or "").strip()
+            if session_id and session_id not in observed:
+                observed.append(session_id)
+        if not observed:
+            observed.append(record.session_id)
+        return observed
+
+    @classmethod
+    def _build_codex_canary_observation(
+        cls,
+        *,
+        record: CodexManagedSessionRecord,
+        status: str,
+        marker_ref: str,
+        evidence_ref: str,
+        events: list[dict[str, Any]],
+        marker: dict[str, Any],
+        cleanup_timestamp: str,
+    ) -> dict[str, Any] | None:
+        if marker.get("scenarioVersion") != CANARY_SCENARIO_VERSION:
+            return None
+        if str(marker.get("nonce") or "").strip() == "":
+            return None
+        process_start = str(marker.get("startedAt") or "").strip()
+        process_complete = str(marker.get("completedAt") or "").strip()
+        if not process_start or not process_complete:
+            return None
+
+        protocol_events, event_timestamps = cls._canary_protocol_events(events)
+        if not {"resumable_process_handle", "poll_after_yield"}.issubset(
+            set(protocol_events)
+        ):
+            return None
+        if (
+            "firstToolYield" not in event_timestamps
+            or "subsequentPoll" not in event_timestamps
+        ):
+            return None
+
+        turn_events = [
+            event
+            for event in events
+            if cls._event_kind(event) in {"turn_completed", "turn_failed"}
+        ]
+        turn_complete = (
+            cls._event_timestamp(turn_events[-1]) if turn_events else cleanup_timestamp
+        )
+        marker_created_at = (
+            str(marker.get("createdAt") or "").strip()
+            or process_complete
+        )
+        turn_id = str(record.active_turn_id or "").strip()
+        for event in reversed(events):
+            event_turn_id = str(
+                event.get("turnId") or event.get("activeTurnId") or ""
+            ).strip()
+            if event_turn_id:
+                turn_id = event_turn_id
+                break
+        if not turn_id:
+            return None
+
+        return {
+            "schemaVersion": "v1",
+            "scenarioVersion": CANARY_SCENARIO_VERSION,
+            "testedImageDigest": str(
+                record.metadata.get("testedImageDigest")
+                or record.metadata.get("runtimeImageDigest")
+                or record.metadata.get("candidateImageDigest")
+                or ""
+            ).strip(),
+            "sessionId": record.session_id,
+            "sessionIdsObserved": cls._session_ids_observed(record, events),
+            "turnId": turn_id,
+            "markerArtifactRef": marker_ref,
+            "markerPath": DEFAULT_MARKER_PATH,
+            "timestamps": {
+                "processStart": process_start,
+                "firstToolYield": event_timestamps["firstToolYield"],
+                "subsequentPoll": event_timestamps["subsequentPoll"],
+                "processComplete": process_complete,
+                "markerCreation": marker_created_at,
+                "turnComplete": turn_complete or cleanup_timestamp,
+                "cleanup": cleanup_timestamp,
+            },
+            "protocolEvents": protocol_events,
+            "cleanupObserved": status in {"terminated", "failed", "canceled"},
+            "cleanupSessionId": record.session_id,
+            "githubMutationCount": cls._github_mutation_count(events),
+            "processInvocationCount": cls._max_event_int(
+                events,
+                "processInvocationCount",
+                default=1,
+            ),
+            "markerArtifactCreateCount": cls._max_event_int(
+                events,
+                "markerArtifactCreateCount",
+                default=1,
+            ),
+            "evidenceArtifactRef": evidence_ref,
+        }
+
+    def _publish_codex_canary_observation(
+        self,
+        *,
+        record: CodexManagedSessionRecord,
+        status: str,
+        observability_events: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        marker_path = Path(record.workspace_path) / DEFAULT_MARKER_PATH
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(marker, dict):
+            return None
+
+        marker_ref = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name=_CANARY_MARKER_ARTIFACT_NAME,
+            payload=marker,
+        )
+        cleanup_timestamp = datetime.now(tz=UTC).isoformat()
+        evidence_ref = f"{record.session_id}/{_CANARY_EVIDENCE_ARTIFACT_NAME}"
+        observation = self._build_codex_canary_observation(
+            record=record,
+            status=status,
+            marker_ref=marker_ref,
+            evidence_ref=evidence_ref,
+            events=observability_events,
+            marker=marker,
+            cleanup_timestamp=cleanup_timestamp,
+        )
+        if observation is None:
+            return None
+        observation["marker"] = marker
+        evidence_payload = {
+            "codexConformanceCanary": observation,
+            "marker": marker,
+        }
+        actual_evidence_ref = self._write_json_artifact(
+            job_id=record.session_id,
+            artifact_name=_CANARY_EVIDENCE_ARTIFACT_NAME,
+            payload=evidence_payload,
+        )
+        observation["evidenceArtifactRef"] = actual_evidence_ref
+        return observation
+
+    @staticmethod
     def _summary_payload(
         *,
         record: CodexManagedSessionRecord,
@@ -340,8 +613,10 @@ class ManagedSessionSupervisor:
         stderr_ref: str,
         diagnostics_ref: str | None,
         error_message: str | None,
+        canary_observation: dict[str, Any] | None = None,
+        marker: dict[str, Any] | None = None,
     ) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "sessionId": record.session_id,
             "sessionEpoch": record.session_epoch,
             "containerId": record.container_id,
@@ -352,6 +627,15 @@ class ManagedSessionSupervisor:
             "diagnosticsRef": diagnostics_ref,
             "errorMessage": error_message,
         }
+        if canary_observation is not None:
+            payload["metadata"] = {
+                "codexConformanceCanary": canary_observation,
+                "canaryEvidence": {
+                    "codexConformanceCanary": canary_observation,
+                    "marker": marker or {},
+                },
+            }
+        return payload
 
     @staticmethod
     def _checkpoint_payload(
@@ -361,8 +645,9 @@ class ManagedSessionSupervisor:
         stdout_ref: str,
         stderr_ref: str,
         diagnostics_ref: str | None,
+        canary_observation: dict[str, Any] | None = None,
     ) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "sessionState": record.session_state().model_dump(
                 mode="json", by_alias=True, exclude_none=True
             ),
@@ -374,6 +659,9 @@ class ManagedSessionSupervisor:
             },
             "recordUpdatedAt": datetime.now(tz=UTC).isoformat(),
         }
+        if canary_observation is not None:
+            payload["metadata"] = {"codexConformanceCanary": canary_observation}
+        return payload
 
     async def _publish_record(
         self,
@@ -432,6 +720,28 @@ class ManagedSessionSupervisor:
         observability_events.extend(
             self._log_streamer.consume_observability_events(record.agent_run_id)
         )
+        canary_observation = self._publish_codex_canary_observation(
+            record=record,
+            status=status,
+            observability_events=observability_events,
+        )
+        if canary_observation is not None:
+            observability_events.append(
+                {
+                    "stream": "session",
+                    "timestamp": datetime.now(tz=UTC).isoformat(),
+                    "text": "Codex conformance canary observation published.",
+                    "kind": "codex_conformance_canary",
+                    "sessionId": record.session_id,
+                    "sessionEpoch": record.session_epoch,
+                    "containerId": record.container_id,
+                    "threadId": record.thread_id,
+                    "turnId": canary_observation["turnId"],
+                    "metadata": {
+                        "codexConformanceCanary": canary_observation,
+                    },
+                }
+            )
         diagnostics_ref = self._log_streamer.collect_diagnostics(
             run_id=record.session_id,
             exit_code=None,
@@ -451,6 +761,12 @@ class ManagedSessionSupervisor:
                 stderr_ref=stderr_ref,
                 diagnostics_ref=diagnostics_ref,
                 error_message=error_message,
+                canary_observation=canary_observation,
+                marker=(
+                    canary_observation.get("marker")
+                    if isinstance(canary_observation, dict)
+                    else None
+                ),
             ),
         )
         checkpoint_ref = self._write_json_artifact(
@@ -462,6 +778,7 @@ class ManagedSessionSupervisor:
                 stdout_ref=stdout_ref,
                 stderr_ref=stderr_ref,
                 diagnostics_ref=diagnostics_ref,
+                canary_observation=canary_observation,
             ),
         )
         observability_events_ref = await asyncio.to_thread(
@@ -471,6 +788,10 @@ class ManagedSessionSupervisor:
             artifact_job_id=record.session_id,
         )
         now = datetime.now(tz=UTC)
+        metadata = dict(record.metadata)
+        if canary_observation is not None:
+            metadata["codexConformanceCanary"] = canary_observation
+            metadata["canaryEvidence"] = canary_observation
         return await self._store.update(
             record.session_id,
             status=status,
@@ -486,6 +807,7 @@ class ManagedSessionSupervisor:
             last_log_at=now,
             updated_at=now,
             error_message=error_message,
+            metadata=metadata,
         )
 
     async def publish_snapshot(self, session_id: str) -> CodexManagedSessionRecord:

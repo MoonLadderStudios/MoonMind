@@ -664,16 +664,8 @@ function CollectionListDisplayModeControl({
 
 function DashboardNavigation({
   uiInfo,
-  listDisplayAccessibleName,
-  listDisplayMode,
-  listDisplayStatus,
-  onListDisplayModeSelect,
 }: {
   uiInfo: DashboardUiInfo | null;
-  listDisplayAccessibleName?: string | undefined;
-  listDisplayMode: CollectionListDisplayMode | null;
-  listDisplayStatus?: string | null | undefined;
-  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -757,15 +749,6 @@ function DashboardNavigation({
           <span className="masthead-brand-mind">Mind</span>
         </h1>
       </Link>
-
-      {listDisplayMode ? (
-        <CollectionListDisplayModeControl
-          {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-          effectiveMode={listDisplayMode}
-          status={listDisplayStatus}
-          onSelect={onListDisplayModeSelect}
-        />
-      ) : null}
 
       <button
         ref={menuButtonRef}
@@ -914,23 +897,31 @@ function AppShell({
         </section>
 
         <div className="dashboard-shell-full">
-          <DashboardNavigation
-            uiInfo={uiInfo}
-            listDisplayAccessibleName={listDisplayAccessibleName}
-            listDisplayMode={listDisplayMode}
-            listDisplayStatus={listDisplayStatus}
-            onListDisplayModeSelect={onListDisplayModeSelect}
-          />
+          <DashboardNavigation uiInfo={uiInfo} />
         </div>
 
-        <div
-          className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-        >
-          <DashboardAlerts />
+        <div className="dashboard-content">
+          <div
+            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+          >
+            {listDisplayMode ? (
+              <div className="dashboard-collection-utilities">
+                <CollectionListDisplayModeControl
+                  {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                  effectiveMode={listDisplayMode}
+                  status={listDisplayStatus}
+                  onSelect={onListDisplayModeSelect}
+                />
+              </div>
+            ) : null}
+            <div className="dashboard-alerts-region">
+              <DashboardAlerts />
+            </div>
+          </div>
+          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+            {children}
+          </section>
         </div>
-        <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-          {children}
-        </section>
       </main>
     </DashboardLiveUpdateProvider>
   );

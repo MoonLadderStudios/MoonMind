@@ -417,11 +417,13 @@ The Recurring detail page is a schedule-definition control surface. It must use 
 Default desktop layout:
 
 ```text
-┌──────────────────┬──────────────────────────┬──────────────────────────────────────────┐
-│ Masthead navigation │ Recurring sidebar        │ Shared entity-detail frame               │
-│ viewport far-left│ content-region far-left  │ breadcrumb, title/state/actions          │
-│                  │                          │ summary/facts, tabs, main, optional rail │
-└──────────────────┴──────────────────────────┴──────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ Masthead navigation                                                                    │
+├──────────────────────────┬─────────────────────────────────────────────────────────────┤
+│ Recurring sidebar        │ Shared entity-detail frame                                  │
+│ content-region far-left  │ breadcrumb, title/state/actions                            │
+│                          │ summary/facts, tabs, main, optional rail                   │
+└──────────────────────────┴─────────────────────────────────────────────────────────────┘
 ```
 
 The Recurring sidebar and detail frame are workspace siblings. The full composition is fluid and must not be centered inside a narrower page container.

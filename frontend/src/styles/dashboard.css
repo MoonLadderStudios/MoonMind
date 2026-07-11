@@ -198,6 +198,12 @@ samp {
   padding: var(--dashboard-pt) 1rem 2.75rem;
   box-sizing: border-box;
   container-type: inline-size;
+  overflow-x: clip;
+}
+
+.dashboard-content {
+  min-width: 0;
+  width: 100%;
 }
 
 /* Most pages read best in a centered working container; data-table routes opt into wide. */
@@ -216,6 +222,17 @@ samp {
   width: 100%;
 }
 
+.dashboard-collection-utilities {
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.65rem 0;
+}
+
+.dashboard-alerts-region {
+  min-width: 0;
+  width: 100%;
+}
+
 .masthead {
   --masthead-padding-block-end: 0.46rem;
 
@@ -223,7 +240,7 @@ samp {
   z-index: 50;
   isolation: isolate;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 0.7rem;
   padding: 0.65rem 1rem var(--masthead-padding-block-end);
@@ -490,18 +507,15 @@ h1 {
     grid-row: 1;
   }
 
-  .workflow-list-display-control {
+  .masthead-nav {
     grid-column: 2;
     grid-row: 1;
-  }
-
-  .masthead-nav {
-    grid-column: 1 / -1;
-    grid-row: 1;
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   .masthead-title-meta {
-    grid-column: 4;
+    grid-column: 3;
     grid-row: 1;
   }
 }
@@ -618,9 +632,10 @@ h1 {
 
 .panel {
   margin-top: 0;
-  margin-left: auto;
-  margin-right: auto;
-  max-width: min(72rem, calc(100vw - 2rem));
+  margin-left: 0;
+  margin-right: 0;
+  max-width: none;
+  min-width: 0;
   width: 100%;
   border-radius: 1rem;
   background: var(--mm-glass-fill);
@@ -651,11 +666,7 @@ h1 {
   min-height: 0;
 }
 
-/* Workflows table and unified workspace run edge-to-edge, reaching up to the
- * full-width border line under the masthead instead of sitting inside a
- * narrower centered card. The `.panel` prefix raises specificity above the
- * later `.panel.panel--data-wide` 112rem cap so the edge-to-edge intent wins
- * regardless of source order. */
+/* Workflows table and unified workspace keep the fluid route-root geometry. */
 .panel.panel--data-wide:has(.workflow-list-data-slab),
 .panel.panel--data-wide:has(.workflow-workspace-shell) {
   max-width: none;
@@ -686,7 +697,7 @@ h1 {
 }
 
 .panel.panel--data-wide {
-  max-width: min(112rem, calc(100vw - 2rem));
+  max-width: none;
 }
 
 @keyframes panel-enter {
