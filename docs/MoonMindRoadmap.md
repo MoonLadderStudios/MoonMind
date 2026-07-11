@@ -61,32 +61,32 @@ These are not active roadmap milestones, but they are important assumptions for 
 - Omnigent terminal evidence can include normalized/raw stream artifacts, initial/final snapshots, capture manifests, diagnostics, changed files, workspace files, optional diffs, session files, child-session evidence, and `checkpoint.omnigent.external_state.json`.
 - The run workflow records per-step Omnigent external-agent identity and passes it into checkpoint policy resolution, so Omnigent checkpoint captures select the `external_state_ref` lane.
 - Workflow RAG already has the core ContextPack, gateway/direct transport, Qdrant, multi-collection, overlay, budgeting, and artifact/ref model used by the current managed-session path.
-- Dashboard list/detail display modes exist for Workflows and Recurring Schedules, but they are not yet a reusable application-wide pattern.
+- Dashboard list/detail display modes exist for Workflows and Recurring Schedules through the shared collection workspace and sidebar primitives.
 - The Checkpoint Branch API and persistence model already support branch create, turn launch, continue, fork, compare, promote, archive, source checkpoint identity, instruction digest, workspace policy, turn ids, git binding, and remediation-created branches; remaining work is the operator/UI/default-flow and Omnigent runtime handoff.
 - The remediation context builder writes a restricted `reports/remediation_context.json` artifact during remediation execution creation; remaining work is Omnigent-specific evidence enrichment, tools, typed actions, and UI.
 
 ---
 
-## Milestone 1 — Shared Collection Sidebars & Detail Frames 🚧
+## Milestone 1 — Dashboard Navigation, Shared Sidebars & Detail Frames ✅
 
-**Goal:** Re-purpose the Workflow sidebar as one reusable contextual collection-sidebar system for Workflows, Recurring, and Skills, and establish one shared detail-frame language for Workflow and recurring schedule detail pages.
+**Goal:** Establish one far-left application rail, one reusable collection-sidebar system for Workflows, Recurring, and Skills, and one shared detail-frame language for Workflow and recurring schedule detail pages.
 
-**Why it matters:** Operators should have one contextual entity list beside the active workspace, never a page-navigation sidebar beside a collection sidebar. Top-level navigation remains in the masthead.
+**Why it matters:** Operators should experience MoonMind as one console. Top-level navigation must stay at the viewport edge; local collection navigation must start at the content edge; and related detail pages must reuse recognizable structure instead of inheriting centered wrappers or page-specific shells.
 
-### Remaining work
+### Shipped
 
-- [ ] **1.0 Declarative design first** — make `docs/UI/CollectionWorkspaceLayout.md` canonical for shared collection sidebars and the Workflow/Recurring entity-detail frame; reconcile the related UI documents before implementation.
-- [ ] **1.1 Masthead navigation** — retain responsive top-level page navigation in the masthead; do not introduce a page-navigation sidebar.
-- [ ] **1.2 Reusable collection workspace** — implement a parent layout whose optional collection sidebar lists entities from the active collection and whose primary pane fills the remaining width; never render two adjacent sidebars.
-- [ ] **1.3 Shared sidebar component system** — provide common header, filter, row metrics, active/focus states, pinned-current row, divider, scrolling, loading/empty/error states, accessibility, and responsive behavior with entity-specific adapters.
-- [ ] **1.4 Required collection sidebars** — use the shared primitive for Workflow detail/Create, Recurring detail, and Skills preview/create; Recurring lists schedules only, Skills lists skills only, and desktop Skills keeps its sidebar present.
-- [ ] **1.5 Shared Workflow/Recurring detail frame** — reuse breadcrumb/header, status and action placement, summary/facts strip, tabs/sections, main slab, optional facts rail, and loading/error/responsive patterns while retaining entity-specific content.
-- [ ] **1.6 Reusable list display modes** — generalize Workflows/Recurring `hidden`, `sidebar`, and `table` behavior with per-collection preferences and route-owned coercion; place controls in the shell/workspace utility area rather than a centered masthead.
-- [ ] **1.7 Full-page list and route inventory** — classify each major page and harden full-page list routes for workflows, recurring schedules, skills, manifests/RAG sources, Omnigent agents/policies, remediations, and artifacts/reports.
-- [ ] **1.8 Preferences, responsiveness, and accessibility** — prevent preference cross-talk, preserve deep links and selection, provide deterministic focus, and collapse to an accessible drawer or list-to-detail flow where three columns do not fit.
-- [ ] **1.9 UI regression coverage** — test masthead navigation, single-sidebar geometry, common sidebar anatomy, required Recurring/Skills sidebars, shared detail regions, direct deep links, localized failures, and mobile accessibility.
+- [x] **1.0 Declarative design first** — `docs/UI/CollectionWorkspaceLayout.md` is canonical for far-left shell geometry, shared collection sidebars, and the Workflow/Recurring entity-detail frame, with related UI documents reconciled to that target.
+- [x] **1.1 Far-left application shell** — the responsive application rail sits at the viewport's far-left edge and owns primary navigation for Workflows, Create, Recurring, Skills, Omnigent surfaces when enabled, Remediation when enabled, Artifacts/Observability, and Settings.
+- [x] **1.2 Reusable collection workspace** — `CollectionWorkspace` places an optional collection sidebar immediately right of the application rail and keeps the primary pane fluid rather than centered in a max-width wrapper.
+- [x] **1.3 Shared sidebar component system** — `CollectionSidebar` owns common header, filter, row metrics, active/focus states, pinned-current row, divider, scrolling, loading/empty/error states, accessibility, and responsive behavior.
+- [x] **1.4 Required collection sidebars** — Workflow detail/Create, Recurring detail, and Skills preview/create use the shared sidebar primitive with entity-specific adapters.
+- [x] **1.5 Shared Workflow/Recurring detail frame** — Workflow and recurring schedule detail render through the shared `EntityDetailFrame` structure while retaining entity-specific content.
+- [x] **1.6 Reusable list display modes** — Workflows and Recurring use `hidden`, `sidebar`, and `table` display modes with per-collection preferences and route-owned coercion.
+- [x] **1.7 Full-page list and route inventory** — dashboard route families are classified between shared workspace/list surfaces and focused single-pane pages, with backend SPA exclusions for non-UI routes.
+- [x] **1.8 Preferences, responsiveness, and accessibility** — route preferences, deep links, selection, focus, mobile fallbacks, and reduced-motion behavior are covered by route/component tests.
+- [x] **1.9 UI regression coverage** — tests cover far-left geometry, common sidebar anatomy, required Recurring/Skills sidebars, shared Workflow/Recurring detail regions, direct deep links, localized failures, backend route exclusions, and mobile accessibility.
 
-**Done means:** every major area is reachable from masthead navigation; Workflow, Recurring, and Skills reuse one contextual sidebar shell without a neighboring page-nav sidebar; Workflow and recurring schedule detail pages share a recognizable detail frame; and routes, preferences, accessibility, and mobile fallbacks remain correct.
+**Done means:** every major area is reachable from one far-left application rail; Workflow, Recurring, and Skills use the same sidebar shell at the content edge; Workflow and recurring schedule detail pages share a recognizable detail frame; no split workspace is centered with a large left margin; and routes, preferences, accessibility, and mobile fallbacks remain correct.
 
 ---
 
@@ -321,7 +321,7 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 | Priority | Milestone | Status | Primary dependency |
 | --- | --- | --- | --- |
-| 🔴 P0 | 1 — Dashboard navigation, sidebars, and full-page lists | 🚧 Active | Can proceed in parallel |
+| 🔴 P0 | 1 — Dashboard navigation, sidebars, and full-page lists | ✅ Complete | Can proceed in parallel |
 | 🔴 P0 | 2 — Omnigent host auth volumes and runtime profile contract | 🚧 Active | Required for Codex/Claude host parity |
 | 🔴 P0 | 3 — MoonMind-launched Omnigent host containers | 🚧 Active | Depends on 2 for credentialed harnesses |
 | 🔴 P0 | 4 — Omnigent bridge communication and Workflow Detail chat | 🚧 Active | Required for usable operator experience |

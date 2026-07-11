@@ -52,4 +52,21 @@ describe('CollectionWorkspace', () => {
     expect(css).toMatch(/\.collection-workspace:not\(\.workflow-workspace-shell\) > \.collection-workspace__primary\s*\{[^}]*grid-column:\s*primary-start \/ primary-end/);
     expect(css).toMatch(/\.collection-workspace--single\s*\{[^}]*display:\s*block;/);
   });
+
+  it('keeps required collection adapters on the shared sidebar primitive', () => {
+    const workflowSidebar = readFileSync(
+      `${process.cwd()}/frontend/src/components/workflows/WorkflowWorkspaceSidebar.tsx`,
+      'utf8',
+    );
+    const recurringPage = readFileSync(`${process.cwd()}/frontend/src/entrypoints/schedules.tsx`, 'utf8');
+    const skillsPage = readFileSync(`${process.cwd()}/frontend/src/entrypoints/skills.tsx`, 'utf8');
+
+    for (const source of [workflowSidebar, recurringPage, skillsPage]) {
+      expect(source).toContain('CollectionSidebar');
+    }
+    expect(skillsPage).not.toContain('sidebar={<nav');
+    expect(skillsPage).toContain('landmarkLabel="Skill navigation"');
+    expect(recurringPage).toContain('landmarkLabel="Recurring schedule navigation"');
+    expect(workflowSidebar).toContain('landmarkLabel="Workflow navigation"');
+  });
 });

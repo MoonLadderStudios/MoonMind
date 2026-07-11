@@ -4,6 +4,7 @@ import { marked } from 'marked';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { CollectionSidebar, type CollectionSidebarRow } from '../components/CollectionSidebar';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
 
 interface SkillItem {
@@ -226,18 +227,25 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
 
   const skills = skillsQuery.data || [];
 
-  const filteredSkills = useMemo(() => {
-    const needle = filterText.trim().toLowerCase();
-    if (!needle) {
-      return skills;
-    }
-    return skills.filter((item) => item.id.toLowerCase().includes(needle));
-  }, [filterText, skills]);
-
-  const selectedSkillIsFilteredOut = Boolean(
-    selectedSkillId
-      && skills.some((item) => item.id === selectedSkillId)
-      && !filteredSkills.some((item) => item.id === selectedSkillId),
+  const skillRows = useMemo(
+    (): CollectionSidebarRow[] => skills.map((item) => ({
+      id: item.id,
+      href: `/skills/${encodeURIComponent(item.id)}`,
+      primaryText: item.id,
+    })),
+    [skills],
+  );
+  const pinnedSkillRow = useMemo(
+    (): CollectionSidebarRow | null => (
+      selectedSkillId && skills.some((item) => item.id === selectedSkillId)
+        ? {
+            id: selectedSkillId,
+            href: `/skills/${encodeURIComponent(selectedSkillId)}`,
+            primaryText: selectedSkillId,
+          }
+        : null
+    ),
+    [selectedSkillId, skills],
   );
 
   useEffect(() => {
@@ -409,58 +417,37 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
       className="skills-page"
       primaryAs="div"
       primaryClassName="skills-primary workflow-workspace-detail px-4 py-4 sm:px-6 sm:py-6"
-      sidebar={<nav className="workflow-workspace-sidebar collection-sidebar" aria-label="Skill navigation">
-        <div role="table" aria-label="Skill list table slice" className="workflow-workspace-sidebar-table">
-          <div role="rowgroup" className="workflow-workspace-sidebar-header">
-            <div role="row" className="workflow-workspace-sidebar-header-row">
-              <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="workflow-workspace-sidebar-header-title">Skill</span>
-                  <label className="min-w-0 text-xs font-normal">
-                    <span className="sr-only">Skill</span>
-                    <input
-                      type="search"
-                      className="w-full min-w-0"
-                      placeholder="Filter skills"
-                      value={filterText}
-                      onChange={(event) => setFilterText(event.target.value)}
-                      aria-label="Skill filter"
-                    />
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-          {selectedSkillIsFilteredOut ? (
-            <div role="rowgroup" className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label="Current skill">
-              <div role="row" className="workflow-workspace-sidebar-row-frame">
-                <div role="cell" className="workflow-workspace-sidebar-cell">
-                  <button type="button" aria-current="true" aria-label={`Current skill: ${selectedSkillId}`} className="workflow-workspace-sidebar-row workflow-workspace-sidebar-row-pinned w-full text-left" onClick={() => selectSkill(selectedSkillId)}>
-                    <span className="workflow-workspace-sidebar-row-main"><span className="workflow-workspace-sidebar-kicker">Current skill</span><span className="workflow-workspace-sidebar-title">{selectedSkillId}</span></span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-          <div role="rowgroup" className="workflow-workspace-sidebar-list" data-testid="skill-list" aria-busy={skillsQuery.isLoading}>
-            {skillsQuery.isLoading ? (
-              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state"><LoadingPlaceholder surface="skills" region="catalog" variant="catalog" density="compact" preserveContext /></div></div></div>
-            ) : skillsQuery.isError && skills.length === 0 ? (
-              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state" role="alert"><span>Failed to load skills.</span><button type="button" className="secondary" onClick={() => skillsQuery.refetch()}>Retry</button></div></div></div>
-            ) : skills.length === 0 ? (
-              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state" role="status">No skills available yet.</div></div></div>
-            ) : filteredSkills.length === 0 ? (
-              <div role="row" className="workflow-workspace-sidebar-row-frame"><div role="cell" className="workflow-workspace-sidebar-cell"><div className="workflow-workspace-sidebar-state" role="status">No skills match your filter.</div></div></div>
-            ) : filteredSkills.map((skillItem) => (
-              <div role="row" className="workflow-workspace-sidebar-row-frame" key={skillItem.id}><div role="cell" className="workflow-workspace-sidebar-cell">
-                <button type="button" aria-current={selectedSkillId === skillItem.id ? 'true' : undefined} className="workflow-workspace-sidebar-row w-full text-left" onClick={() => selectSkill(skillItem.id)}>
-                  <span className="workflow-workspace-sidebar-row-main"><span className="workflow-workspace-sidebar-title">{skillItem.id}</span></span>
-                </button>
-              </div></div>
-            ))}
-          </div>
-        </div>
-      </nav>}
+      sidebar={(
+        <CollectionSidebar
+          landmarkLabel="Skill navigation"
+          tableLabel="Skill list table slice"
+          header="Skill"
+          filterLabel="Skill filter"
+          filterPlaceholder="Filter skills"
+          rows={skillRows}
+          activeId={selectedSkillId || null}
+          pinnedRow={pinnedSkillRow}
+          isLoading={skillsQuery.isLoading}
+          error={skillsQuery.isError && skills.length === 0 ? skillsQuery.error : null}
+          onRetry={() => void skillsQuery.refetch()}
+          loadingCopy="Loading skills..."
+          emptyCopy="No skills available yet."
+          filteredEmptyCopy="No skills match your filter."
+          errorCopy="Failed to load skills."
+          currentRowCopy="Current skill"
+          filterValue={filterText}
+          onFilterChange={setFilterText}
+          className="skill-collection-sidebar"
+          renderLink={(row, props) => (
+            <button
+              type="button"
+              {...props}
+              className={`${props.className} w-full text-left`}
+              onClick={() => selectSkill(row.id)}
+            />
+          )}
+        />
+      )}
     >
         <div className="space-y-5 sm:space-y-6">
         <header className="flex items-start justify-between gap-4 px-1 sm:px-0">
