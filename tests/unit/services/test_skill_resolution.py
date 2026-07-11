@@ -15,6 +15,7 @@ from moonmind.services.skill_resolution import (
     LocalSkillLoader,
     RepoSkillLoader,
     DeploymentSkillLoader,
+    _terminal_contract_from_side_effect,
     extract_side_effect_metadata_from_skill_markdown,
 )
 
@@ -41,6 +42,17 @@ metadata:
         "owner": "agent",
         "outcomeArtifact": "artifacts/result.json",
     }
+
+
+async def test_terminal_contract_rejects_rooted_posix_path() -> None:
+    with pytest.raises(ValueError, match="outcomeArtifact is unsafe"):
+        _terminal_contract_from_side_effect(
+            {
+                "terminalContractId": "batch_workflows_fanout.v1",
+                "outcomeArtifact": "/absolute/result.json",
+            },
+            owner="batch-workflows",
+        )
 
 
 async def test_resolver_can_resolve_empty_selector():
@@ -109,6 +121,9 @@ async def test_built_in_pr_resolver_declares_portable_native_contract():
     assert entry.implementation.supported_hosts == ["cli", "temporal"]
     assert entry.implementation.native_host_eligible is True
     assert entry.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+    assert entry.terminal_contract is not None
+    assert entry.terminal_contract.contract_id == "pr_resolver_terminal.v1"
+    assert entry.terminal_contract.relative_path == "var/pr_resolver/result.json"
 
 async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
     """FR-012: batch-dependabot-resolver MUST be resolvable by name through the

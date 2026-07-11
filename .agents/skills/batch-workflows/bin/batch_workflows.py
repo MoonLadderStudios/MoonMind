@@ -741,6 +741,19 @@ def _submit_jobs_via_http(
                     ),
                 }
             )
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read(65536).decode("utf-8", errors="replace")
+                error_message = f"{exc}: {detail}"
+            except Exception:
+                error_message = str(exc)
+            errors.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "error": error_message,
+                }
+            )
         except Exception as exc:  # noqa: BLE001 - reported per target
             errors.append(
                 {

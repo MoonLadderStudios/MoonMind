@@ -106,6 +106,4 @@ async def test_batch_github_workflows_uses_repository_context(tmp_path):
     assert source["githubIssueRange"]["repository"] == (
         "MoonLadderStudios/MoonMind"
     )
-    assert expanded["steps"][0]["skill"]["id"] == (
-        "queue-moonmind-workflows"
-    )
+    assert expanded["steps"][0]["skill"]["id"] == "batch-workflows"

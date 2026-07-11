@@ -248,18 +248,25 @@ def _terminal_contract_from_side_effect(
         return None
     known = {
         "batch_workflows_fanout.v1": "moonmind.batch-workflows-result.v1",
+        "pr_resolver_terminal.v1": "moonmind.pr-resolver-result.v1",
     }
     if contract_id not in known:
         raise ValueError(
             f"skill '{owner}' selects unknown terminal contract '{contract_id}'"
         )
     relative_path = str(side_effect.get("outcomeArtifact") or "").strip()
-    path = Path(relative_path)
-    if not relative_path or path.is_absolute() or ".." in path.parts:
+    normalized_path = relative_path.replace("\\", "/")
+    path = Path(normalized_path)
+    if (
+        not relative_path
+        or normalized_path.startswith("/")
+        or path.is_absolute()
+        or ".." in path.parts
+    ):
         raise ValueError(f"skill '{owner}' terminal outcomeArtifact is unsafe")
     return SkillTerminalContract(
         contract_id=contract_id,
-        relative_path=relative_path,
+        relative_path=normalized_path,
         expected_schema_version=known[contract_id],
     )
 

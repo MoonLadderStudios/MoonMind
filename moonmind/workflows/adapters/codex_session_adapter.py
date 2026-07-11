@@ -1788,7 +1788,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         request: AgentExecutionRequest,
         workspace_path: str,
     ) -> None:
-        """Populate launch-safe durable metadata without installing skill projections."""
+        """Populate launch metadata, including the active skill projection."""
 
         if self._prepare_turn_instructions is None:
             return
@@ -1802,10 +1802,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     ),
                     "workspacePath": workspace_path,
                     "includePreparedRequestMetadata": True,
-                    "skipSkillMaterialization": True,
+                    "metadataOnly": True,
                 }
             )
         except Exception:
+            if selected_agent_skill(request.parameters):
+                raise
             logger.debug(
                 "Launch metadata preflight failed; real turn preparation will run after session launch.",
                 exc_info=True,
@@ -1816,6 +1818,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request,
                 prepared.get("durableRetrievalMetadata"),
             )
+            active_skills_dir = str(prepared.get("activeSkillsDir") or "").strip()
+            if active_skills_dir:
+                request.parameters["_moonmindActiveSkillsDir"] = active_skills_dir
+            terminal_contract = prepared.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
 
     def _managed_session_launch_environment(
         self,

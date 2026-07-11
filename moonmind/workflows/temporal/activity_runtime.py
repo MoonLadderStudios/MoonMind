@@ -7039,9 +7039,15 @@ class TemporalAgentRuntimeActivities:
             record_run_id = str(getattr(record, "run_id", "") or run_id).strip()
             await self._report_task_run_binding(workflow_id, record_run_id)
 
+        response = record.model_dump(mode="json")
+        if request.terminal_contract is not None:
+            response["terminalContract"] = request.terminal_contract.model_dump(
+                mode="json", by_alias=True
+            )
+
         if process is None:
             # Idempotent path: run is already active, skip secondary supervision
-            return record.model_dump(mode="json")
+            return response
 
         # Start background supervision — hold a strong reference so the task
         # is not garbage-collected before it completes.
@@ -7072,7 +7078,7 @@ class TemporalAgentRuntimeActivities:
         self._supervision_tasks.add(task)
         task.add_done_callback(self._supervision_tasks.discard)
 
-        return record.model_dump(mode="json")
+        return response
 
     async def workload_run(
         self,
@@ -8714,6 +8720,25 @@ class TemporalAgentRuntimeActivities:
                 request=request,
                 workspace_path=workspace_path_raw,
             )
+
+        def _prepared_request_metadata() -> dict[str, Any]:
+            prepared_payload: dict[str, Any] = {
+                "durableRetrievalMetadata": extract_durable_retrieval_metadata(
+                    request.parameters
+                )
+            }
+            if skill_materialization_metadata:
+                prepared_payload["activeSkillsDir"] = str(
+                    skill_materialization_metadata.get("visiblePath") or ""
+                )
+            if request.terminal_contract is not None:
+                prepared_payload["terminalContract"] = (
+                    request.terminal_contract.model_dump(
+                        by_alias=True, exclude_none=True
+                    )
+                )
+            return prepared_payload
+
         instruction_ref = str(request.instruction_ref or "").strip()
         if instruction_ref:
             if not workspace_path_raw:
@@ -8732,6 +8757,8 @@ class TemporalAgentRuntimeActivities:
                     workspace_path_raw
                 )
             instruction_ref = str(request.instruction_ref or "").strip()
+            if payload.get("metadataOnly") or payload.get("metadata_only"):
+                return _prepared_request_metadata()
             if instruction_ref:
                 prepared = self._prepare_managed_codex_turn_text(
                     instruction_ref,
@@ -8757,6 +8784,8 @@ class TemporalAgentRuntimeActivities:
                         )
                     return prepared_payload
                 return prepared
+        if payload.get("metadataOnly") or payload.get("metadata_only"):
+            return _prepared_request_metadata()
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
@@ -10308,7 +10337,7 @@ class TemporalAgentRuntimeActivities:
 
         result = AgentRunResult.model_validate(request.get("result") or {})
         contract = request.get("terminalContract")
-        if not isinstance(contract, Mapping) or result.failure_class is not None:
+        if not isinstance(contract, Mapping):
             return result
 
         workspace_path = str(request.get("workspacePath") or "").strip()
@@ -10320,7 +10349,9 @@ class TemporalAgentRuntimeActivities:
             workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
 
         evaluation = evaluate_terminal_evidence(
-            dict(contract), workspace_path=workspace_path
+            dict(contract),
+            workspace_path=workspace_path,
+            artifact_spool_path=str(request.get("artifactSpoolPath") or "").strip(),
         )
         metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
         metadata["terminalContractId"] = str(contract.get("contractId") or "")
@@ -10339,6 +10370,15 @@ class TemporalAgentRuntimeActivities:
             }
         )
         missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
+        if result.failure_class is not None:
+            return result.model_copy(
+                update={
+                    "provider_error_code": result.provider_error_code
+                    or evaluation.failure_code
+                    or "missing_terminal_evidence",
+                    "metadata": metadata,
+                }
+            )
         return result.model_copy(
             update={
                 "summary": f"Agent completed without required terminal evidence: {missing}",

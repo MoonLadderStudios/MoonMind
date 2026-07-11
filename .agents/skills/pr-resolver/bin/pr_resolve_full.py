@@ -24,6 +24,7 @@ from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_MERGED,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
+    current_execution_ref,
     merge_automation_disposition_for_result,
     normalize_text,
     now_utc_iso,
@@ -64,6 +65,7 @@ def _write_result(
     pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
     payload: dict[str, Any] = {
         "schema_version": RESULT_SCHEMA_VERSION,
+        "executionRef": current_execution_ref(),
         "tool": "pr_resolve_full",
         "timestamp": now_utc_iso(),
         "status": status,

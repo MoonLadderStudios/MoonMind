@@ -1936,8 +1936,21 @@ class MoonMindAgentRun:
             payload = await self._execute_routed_activity(
                 "agent_runtime.evaluate_terminal_evidence",
                 {
-                    "runId": str(self.run_id or ""),
+                    "runId": (
+                        request.managed_session.agent_run_id
+                        if request.managed_session is not None
+                        else str(self.run_id or "")
+                    ),
                     "workspacePath": workspace_path,
+                    "artifactSpoolPath": (
+                        os.path.join(
+                            _MANAGED_RUNTIME_STORE_ROOT,
+                            request.managed_session.agent_run_id,
+                            "artifacts",
+                        )
+                        if request.managed_session is not None
+                        else ""
+                    ),
                     "terminalContract": request.terminal_contract.model_dump(
                         mode="json", by_alias=True
                     ),
@@ -1956,7 +1969,7 @@ class MoonMindAgentRun:
             continuation_enabled = workflow.patched(
                 TERMINAL_CONTRACT_CONTINUATION_PATCH_ID
             )
-        except BaseException as exc:
+        except Exception as exc:
             # Direct activity-boundary tests execute this helper outside a
             # Temporal workflow event loop.
             if type(exc).__name__ != "_NotInWorkflowEventLoopError":
@@ -2014,9 +2027,14 @@ class MoonMindAgentRun:
                 snapshot_request,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
+            epoch_value = snapshot.get("sessionEpoch")
             turn_request = SendCodexManagedSessionTurnRequest(
                 sessionId=request.managed_session.session_id,
-                sessionEpoch=int(snapshot.get("sessionEpoch") or request.managed_session.session_epoch),
+                sessionEpoch=int(
+                    epoch_value
+                    if epoch_value is not None
+                    else request.managed_session.session_epoch
+                ),
                 containerId=snapshot.get("containerId"),
                 threadId=snapshot.get("threadId"),
                 instructions=_terminal_contract_continuation_instruction(missing),

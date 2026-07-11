@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,37 @@ def _load_module() -> dict[str, Any]:
             / "batch_workflows.py"
         )
     )
+
+
+def test_http_error_body_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_module()
+    read_sizes: list[int | None] = []
+
+    class BoundedHTTPError(urllib.error.HTTPError):
+        def read(self, amt: int | None = None) -> bytes:
+            read_sizes.append(amt)
+            return b"invalid response: \xff"
+
+    def raise_http_error(*_args: object, **_kwargs: object) -> None:
+        raise BoundedHTTPError(
+            "https://moonmind.invalid/api/executions", 503, "unavailable", {}, None
+        )
+
+    submit = module["_submit_jobs_via_http"]
+    monkeypatch.setattr(submit.__globals__["urllib"].request, "urlopen", raise_http_error)
+    submission = module["ChildSubmission"](
+        queue_request={"type": "run", "payload": {}},
+        provider="jira",
+        ref="MM-1",
+    )
+
+    created, errors = submit(
+        [submission], moonmind_url="https://moonmind.invalid", worker_token=None
+    )
+
+    assert created == []
+    assert read_sizes == [65536]
+    assert "invalid response" in errors[0]["error"]
 
 
 _JIRA_TARGET: dict[str, Any] = {
@@ -690,4 +722,5 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
     assert partial_evidence["created"] == 2
     assert [item["workflowId"] for item in partial_evidence["queued"]] == ["child-1", "child-2"]
     assert len(partial_evidence["errors"]) == 3
+    assert "injected partial failure" in partial_evidence["errors"][0]["error"]
     assert partial_evidence["executionRef"] == "step-matrix"
