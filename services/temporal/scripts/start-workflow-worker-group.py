@@ -76,6 +76,8 @@ class GroupHealthState:
         ]
         if len(children) != len(self.child_health_urls):
             return False
+        if not all(child.get("ready") is True for child in children):
+            return False
         fingerprints = {
             str(child.get("registryFingerprint"))
             for child in children

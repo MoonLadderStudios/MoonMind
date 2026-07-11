@@ -4727,28 +4727,29 @@ class TemporalIntegrationActivities:
         if not isinstance(readiness, Mapping):
             readiness = {}
         workflow_types = {
-            str(item) for item in readiness.get("workflowTypes", [])
+            str(item) for item in (readiness.get("workflowTypes") or [])
         }
-        task_queues = {str(item) for item in readiness.get("taskQueues", [])}
+        task_queues = {str(item) for item in (readiness.get("taskQueues") or [])}
         available = (
             readiness.get("ready") is True
             and workflow_type in workflow_types
             and task_queue in task_queues
         )
         fingerprints = [
-            str(item) for item in readiness.get("registryFingerprints", [])
+            str(item) for item in (readiness.get("registryFingerprints") or [])
         ]
         if not fingerprints and readiness.get("registryFingerprint"):
             fingerprints = [str(readiness["registryFingerprint"])]
-        build_ids = [str(item) for item in readiness.get("buildIds", [])]
+        build_ids = [str(item) for item in (readiness.get("buildIds") or [])]
         if not build_ids and readiness.get("buildId"):
             build_ids = [str(readiness["buildId"])]
         children = [
             item
-            for item in readiness.get("children", [])
+            for item in (readiness.get("children") or [])
             if isinstance(item, Mapping)
-            and workflow_type in {str(value) for value in item.get("workflowTypes", [])}
-            and task_queue in {str(value) for value in item.get("taskQueues", [])}
+            and workflow_type
+            in {str(value) for value in (item.get("workflowTypes") or [])}
+            and task_queue in {str(value) for value in (item.get("taskQueues") or [])}
         ]
         if not children and workflow_type in workflow_types and task_queue in task_queues:
             children = [readiness]

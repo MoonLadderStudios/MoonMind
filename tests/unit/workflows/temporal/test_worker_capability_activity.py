@@ -83,3 +83,32 @@ async def test_capability_preflight_fails_closed_for_registration_mismatch(
     assert result["reasonCode"] == "worker_capability_unavailable"
     assert result["observedWorkerBuilds"] == ["old-build"]
     assert result["agentExecutionLaunched"] is False
+
+
+@pytest.mark.asyncio
+async def test_capability_preflight_handles_null_readiness_collections(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        activity_runtime_module.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(
+            {
+                "ready": True,
+                "workflowTypes": None,
+                "taskQueues": None,
+                "registryFingerprints": None,
+                "buildIds": None,
+                "children": None,
+            }
+        ),
+    )
+
+    result = await TemporalIntegrationActivities().worker_verify_workflow_capability(
+        {"workflowType": "MoonMind.PRResolver", "taskQueue": "mm.workflow"}
+    )
+
+    assert result["available"] is False
+    assert result["status"] == "blocked_operator"
+    assert result["observedRegistryFingerprints"] == []
+    assert result["observedWorkerBuilds"] == []

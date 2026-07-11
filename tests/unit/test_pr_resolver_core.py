@@ -9,6 +9,8 @@ import pytest
 
 from pr_resolver_core import (
     CanonicalPullRequestSnapshot,
+    IMPLEMENTATION_CONTRACT,
+    RESOLVER_CORE_DIGEST,
     ResolverAction,
     ResolverEvent,
     ResolverPolicy,
@@ -18,7 +20,6 @@ from pr_resolver_core import (
     normalize_temporal_snapshot,
     reduce_resolver_state,
 )
-import pr_resolver_core
 
 
 @pytest.mark.parametrize(
@@ -232,12 +233,21 @@ def test_core_has_no_host_or_side_effect_imports() -> None:
 
 
 def test_core_exports_immutable_identity() -> None:
-    assert pr_resolver_core.IMPLEMENTATION_CONTRACT == "pr-resolver-core/v1"
-    core_root = Path(pr_resolver_core.__file__).parent
+    assert IMPLEMENTATION_CONTRACT == "pr-resolver-core/v1"
+    core_root = Path(inspect.getfile(classify_snapshot)).parent
     semantic_bytes = b"".join(
         (core_root / name).read_bytes()
         for name in ("models.py", "normalize.py", "classify.py", "transition.py")
     )
-    assert pr_resolver_core.RESOLVER_CORE_DIGEST == (
+    assert RESOLVER_CORE_DIGEST == (
         "sha256:" + hashlib.sha256(semantic_bytes).hexdigest()
     )
+
+
+def test_temporal_snapshot_handles_null_blockers() -> None:
+    snapshot = normalize_temporal_snapshot(
+        {"blockers": None, "checksComplete": False, "checksPassing": False}
+    )
+
+    assert snapshot.merge_conflict is False
+    assert snapshot.actionable_comments is False

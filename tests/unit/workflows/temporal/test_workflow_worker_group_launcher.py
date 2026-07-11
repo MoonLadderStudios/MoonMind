@@ -195,6 +195,20 @@ def test_group_readiness_rejects_mixed_worker_registry_identity(monkeypatch) -> 
     assert state.is_ready() is False
 
 
+def test_group_readiness_rejects_child_that_is_not_ready(monkeypatch) -> None:
+    monkeypatch.setattr(
+        launcher,
+        "_read_child_readiness",
+        lambda _url: {"ready": False, "registryFingerprint": "sha256:new"},
+    )
+    state = launcher.GroupHealthState(
+        children=[FakeProcess()],
+        child_health_urls=["http://child-one/readyz"],
+    )
+
+    assert state.is_ready() is False
+
+
 def test_supervisor_exits_nonzero_and_stops_group_when_child_exits() -> None:
     processes = {
         "normal-workflow-worker": FakeProcess(),

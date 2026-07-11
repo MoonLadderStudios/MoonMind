@@ -20,7 +20,7 @@ def normalize_temporal_snapshot(
     raw: Mapping[str, Any],
 ) -> CanonicalPullRequestSnapshot:
     blockers = tuple(
-        item for item in raw.get("blockers", ()) if isinstance(item, Mapping)
+        item for item in (raw.get("blockers") or ()) if isinstance(item, Mapping)
     )
     kinds = tuple(_text(item.get("kind")).lower() for item in blockers)
     summaries = tuple(_text(item.get("summary")) for item in blockers)
