@@ -21,6 +21,7 @@ from temporalio.exceptions import (
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunState,
@@ -88,6 +89,7 @@ from moonmind.workflow_docker_mode import (
     DEFAULT_WORKFLOW_DOCKER_MODE,
     normalize_workflow_docker_mode,
 )
+from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 
 SessionSnapshotLoader = Callable[
     [str], Awaitable[CodexManagedSessionSnapshot | Mapping[str, Any]]
@@ -225,6 +227,25 @@ def _pr_resolver_terminal_contract(
             missing.append("artifacts/publish_result.json")
     metadata = _derive_pr_resolver_metadata(workspace_path)
     return not missing, missing, metadata
+
+
+def _request_terminal_contract(
+    request: AgentExecutionRequest, workspace_path: str
+) -> tuple[bool, list[str], dict[str, Any]] | None:
+    contract = request.terminal_contract
+    if contract is None:
+        return None
+    contract_payload = contract.model_dump(by_alias=True)
+    evaluation = evaluate_terminal_evidence(
+        contract_payload, workspace_path=workspace_path
+    )
+    metadata = dict(evaluation.metadata)
+    if evaluation.failure_code:
+        metadata["failureCode"] = evaluation.failure_code
+    metadata["terminalContractId"] = str(
+        contract_payload.get("contractId") or ""
+    )
+    return evaluation.satisfied, list(evaluation.missing_evidence), metadata
 
 
 def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
@@ -690,11 +711,21 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request=request,
                 workspace_path=workspace_path,
             )
+        session_environment = dict(launch_context.delta_env_overrides)
+        active_skills_dir = str(
+            request.parameters.pop("_moonmindActiveSkillsDir", "")
+        ).strip()
+        if active_skills_dir:
+            session_environment["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir
+        if request.step_execution is not None:
+            session_environment["MOONMIND_STEP_EXECUTION_ID"] = (
+                request.step_execution.step_execution_id
+            )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
             workspace_path=workspace_path,
-            environment=launch_context.delta_env_overrides,
+            environment=session_environment,
             profile=self._profile_for_launch(
                 runtime_id=runtime_id,
                 profile=profile,
@@ -976,9 +1007,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             selected_skill = selected_agent_skill(request.parameters)
             continuation_history: list[dict[str, Any]] = []
             terminal_contract_metadata: dict[str, Any] = {}
-            if turn_response.status == "completed" and selected_skill == "pr-resolver":
+            compiled_contract = _request_terminal_contract(request, workspace_path)
+            if turn_response.status == "completed" and (
+                compiled_contract is not None or selected_skill == "pr-resolver"
+            ):
                 contract_satisfied, missing_evidence, terminal_contract_metadata = (
-                    _pr_resolver_terminal_contract(workspace_path)
+                    compiled_contract
+                    if compiled_contract is not None
+                    else _pr_resolver_terminal_contract(workspace_path)
                 )
                 for continuation_index in range(
                     1, _MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS + 1
@@ -1058,8 +1094,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     if turn_response.status != "completed":
                         continuation_history[-1]["outcome"] = turn_response.status
                         break
+                    refreshed_contract = _request_terminal_contract(request, workspace_path)
                     contract_satisfied, missing_evidence, terminal_contract_metadata = (
-                        _pr_resolver_terminal_contract(workspace_path)
+                        refreshed_contract
+                        if refreshed_contract is not None
+                        else _pr_resolver_terminal_contract(workspace_path)
                     )
                     continuation_history[-1]["outcome"] = (
                         "recovered" if contract_satisfied else "incomplete"
@@ -1684,6 +1723,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request,
                 prepared.get("durableRetrievalMetadata"),
             )
+            active_skills_dir = str(prepared.get("activeSkillsDir") or "").strip()
+            if active_skills_dir:
+                request.parameters["_moonmindActiveSkillsDir"] = active_skills_dir
+            terminal_contract = prepared.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
             prepared = prepared.get("instructions")
         instructions = str(prepared or "").strip()
         if instructions:

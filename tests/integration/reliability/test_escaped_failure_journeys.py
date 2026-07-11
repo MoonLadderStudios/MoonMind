@@ -11,6 +11,7 @@ from moonmind.workflows.adapters.codex_session_adapter import (
     _pr_resolver_terminal_contract,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
@@ -26,6 +27,20 @@ pytestmark = [
     pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
+
+
+async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
+    replay_id = "batch-workflows-missing-fanout-evidence"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    evaluation = evaluate_terminal_evidence(
+        manifest["terminalContract"], workspace_path=manifest["workspacePath"]
+    )
+    assert manifest["agentTurn"]["status"] == "completed"
+    assert manifest["postRecords"] == []
+    assert evaluation.satisfied is False
+    assert evaluation.failure_code == expected["failureCode"]
+    assert expected["parentState"] == "failed"
 
 
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:

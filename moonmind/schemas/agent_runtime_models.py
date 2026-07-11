@@ -507,6 +507,30 @@ class ProfileSelector(BaseModel):
         None, alias="runtimeMaterializationMode"
     )
 
+class AgentTerminalContract(BaseModel):
+    """Compiled, execution-bound terminal evidence handed to a runtime."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    contract_id: str = Field(..., alias="contractId", min_length=1)
+    owner: Literal["agent"] = "agent"
+    evidence_kind: Literal["workspace_json"] = Field(
+        "workspace_json", alias="evidenceKind"
+    )
+    relative_path: str = Field(..., alias="relativePath", min_length=1)
+    expected_schema_version: str = Field(
+        ..., alias="expectedSchemaVersion", min_length=1
+    )
+    execution_ref: str = Field(..., alias="executionRef", min_length=1)
+
+    @field_validator("relative_path")
+    @classmethod
+    def _confine_workspace_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized.startswith("/") or ".." in normalized.split("/"):
+            raise ValueError("terminal evidence path must be relative and traversal-free")
+        return normalized
+
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""
 
@@ -525,6 +549,9 @@ class AgentExecutionRequest(BaseModel):
         None, alias="stepExecution"
     )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    terminal_contract: AgentTerminalContract | None = Field(
+        None, alias="terminalContract"
+    )
     managed_session: CodexManagedSessionBinding | None = Field(
         None, alias="managedSession"
     )

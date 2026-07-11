@@ -8608,12 +8608,23 @@ class TemporalAgentRuntimeActivities:
                     skill_materialization_metadata=skill_materialization_metadata,
                 )
                 if payload.get("includePreparedRequestMetadata"):
-                    return {
+                    prepared_payload = {
                         "instructions": prepared,
                         "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                             request.parameters
                         ),
                     }
+                    if skill_materialization_metadata:
+                        prepared_payload["activeSkillsDir"] = str(
+                            skill_materialization_metadata.get("visiblePath") or ""
+                        )
+                    if request.terminal_contract is not None:
+                        prepared_payload["terminalContract"] = (
+                            request.terminal_contract.model_dump(
+                                by_alias=True, exclude_none=True
+                            )
+                        )
+                    return prepared_payload
                 return prepared
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
@@ -8624,12 +8635,23 @@ class TemporalAgentRuntimeActivities:
                 skill_materialization_metadata=skill_materialization_metadata,
             )
             if payload.get("includePreparedRequestMetadata"):
-                return {
+                prepared_payload = {
                     "instructions": prepared,
                     "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                         request.parameters
                     ),
                 }
+                if skill_materialization_metadata:
+                    prepared_payload["activeSkillsDir"] = str(
+                        skill_materialization_metadata.get("visiblePath") or ""
+                    )
+                if request.terminal_contract is not None:
+                    prepared_payload["terminalContract"] = (
+                        request.terminal_contract.model_dump(
+                            by_alias=True, exclude_none=True
+                        )
+                    )
+                return prepared_payload
             return prepared
         raise TemporalActivityRuntimeError(
             "request.instructionRef or request.parameters.instructions is required"
@@ -8723,6 +8745,24 @@ class TemporalAgentRuntimeActivities:
                 selected_skill=selected_skill,
                 resolved_skillset=resolved_skillset,
             )
+            selected_entry = next(
+                entry for entry in resolved_skillset.skills
+                if entry.skill_name == selected_skill
+            )
+            if selected_entry.terminal_contract is not None:
+                from moonmind.schemas.agent_runtime_models import AgentTerminalContract
+
+                execution_ref = (
+                    request.step_execution.step_execution_id
+                    if request.step_execution is not None
+                    else ""
+                )
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    {
+                        **selected_entry.terminal_contract.model_dump(),
+                        "executionRef": execution_ref,
+                    }
+                )
         except TemporalActivityRuntimeError:
             raise
         except (RuntimeError, OSError, ValueError, ValidationError) as exc:

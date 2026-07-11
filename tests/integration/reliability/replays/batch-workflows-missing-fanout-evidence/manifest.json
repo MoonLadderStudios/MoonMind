@@ -1,0 +1,14 @@
+{
+  "failureShapeId": "batch-workflows-missing-fanout-evidence",
+  "incident": "MM-1201",
+  "workspacePath": "/tmp/mm-1201-missing-workspace",
+  "agentTurn": {"status": "completed", "assistantText": "Queued all five workflows."},
+  "postRecords": [],
+  "resolvedTargets": ["THOR-705", "THOR-706", "THOR-707", "THOR-708", "THOR-709"],
+  "terminalContract": {
+    "contractId": "batch_workflows_fanout.v1",
+    "relativePath": "artifacts/batch-workflows-result.json",
+    "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+    "executionRef": "workflow:run:step:execution:1"
+  }
+}

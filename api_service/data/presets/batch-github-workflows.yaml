@@ -159,7 +159,7 @@ steps:
 
     Queue each target with "{{ inputs.run_ref }}" and publish override
     "{{ inputs.publish_mode }}" using one helper invocation:
-    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
+    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
     --targets artifacts/batch-workflows-targets.json \
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \

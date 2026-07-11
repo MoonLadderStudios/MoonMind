@@ -14230,6 +14230,7 @@ class MoonMindRunWorkflow:
                     "contentDigest",
                     "inputContractDigest",
                     "inputs",
+                    "sideEffect",
                 ):
                     if key in raw_skill_payload:
                         compact_skill_payload[key] = self._json_value(
@@ -14824,6 +14825,21 @@ class MoonMindRunWorkflow:
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
 
+        terminal_contract_payload: dict[str, Any] | None = None
+        side_effect = compact_skill_payload.get("sideEffect")
+        if isinstance(side_effect, Mapping):
+            contract_id = str(side_effect.get("terminalContractId") or "").strip()
+            outcome_artifact = str(side_effect.get("outcomeArtifact") or "").strip()
+            if contract_id == "batch_workflows_fanout.v1" and outcome_artifact:
+                terminal_contract_payload = {
+                    "contractId": contract_id,
+                    "owner": "agent",
+                    "evidenceKind": "workspace_json",
+                    "relativePath": outcome_artifact,
+                    "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                    "executionRef": step_execution_payload["stepExecutionId"],
+                }
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -14834,6 +14850,7 @@ class MoonMindRunWorkflow:
             runtime_command=runtime_command_payload,
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
+            terminal_contract=terminal_contract_payload,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
             skill=compact_skill_payload,
