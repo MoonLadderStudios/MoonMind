@@ -598,11 +598,13 @@ function DashboardLiveUpdateProvider({
 function CollectionListDisplayModeControl({
   accessibleName = 'List display',
   effectiveMode,
+  tableLabel = 'Full screen table',
   status,
   onSelect,
 }: {
   accessibleName?: string;
   effectiveMode: CollectionListDisplayMode;
+  tableLabel?: string | undefined;
   status?: string | null | undefined;
   onSelect: (mode: CollectionListDisplayMode) => void;
 }) {
@@ -648,15 +650,16 @@ function CollectionListDisplayModeControl({
       {COLLECTION_LIST_DISPLAY_MODES.map((mode, index) => {
         const Icon = iconForWorkflowListMode(mode.icon);
         const checked = effectiveMode === mode.value;
+        const label = mode.value === 'table' ? tableLabel : mode.label;
         return (
           <button
             key={mode.value}
             type="button"
             role="radio"
             aria-checked={checked}
-            aria-label={mode.label}
+            aria-label={label}
             tabIndex={checked ? 0 : -1}
-            title={mode.label}
+            title={label}
             data-list-display-mode={mode.value}
             className={`workflow-list-display-option${checked ? ' workflow-list-display-option--selected' : ''}`}
             onClick={() => onSelect(mode.value)}
@@ -888,6 +891,7 @@ function AppShell({
   uiInfo,
   listDisplayAccessibleName,
   listDisplayMode,
+  listDisplayTableLabel,
   listDisplayStatus,
   onListDisplayModeSelect,
   children,
@@ -896,6 +900,7 @@ function AppShell({
   uiInfo: DashboardUiInfo | null;
   listDisplayAccessibleName?: string | undefined;
   listDisplayMode: CollectionListDisplayMode | null;
+  listDisplayTableLabel?: string | undefined;
   listDisplayStatus?: string | null | undefined;
   onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
   children: ReactNode;
@@ -927,6 +932,7 @@ function AppShell({
               <div className="dashboard-collection-utilities">
                 <CollectionListDisplayModeControl
                   {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                  {...(listDisplayTableLabel ? { tableLabel: listDisplayTableLabel } : {})}
                   effectiveMode={listDisplayMode}
                   status={listDisplayStatus}
                   onSelect={onListDisplayModeSelect}
@@ -993,6 +999,7 @@ function RoutedDashboardPage({
     : resolvedDisplay
       ? 'Workflow list display'
       : undefined;
+  const activeListDisplayTableLabel = resolvedRecurringDisplay ? 'Full table' : 'Full screen table';
 
   useEffect(() => {
     const routeWorkflowId = decodeWorkflowIdFromPath(location.pathname);
@@ -1249,6 +1256,7 @@ function RoutedDashboardPage({
         uiInfo={uiInfo}
         listDisplayAccessibleName={activeListDisplayAccessibleName}
         listDisplayMode={activeListDisplay?.effectiveMode ?? null}
+        listDisplayTableLabel={activeListDisplayTableLabel}
         listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
         onListDisplayModeSelect={handleWorkflowListModeSelect}
       >
@@ -1287,6 +1295,7 @@ function RoutedDashboardPage({
       uiInfo={uiInfo}
       listDisplayAccessibleName={activeListDisplayAccessibleName}
       listDisplayMode={activeListDisplay?.effectiveMode ?? null}
+      listDisplayTableLabel={activeListDisplayTableLabel}
       listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
       onListDisplayModeSelect={handleWorkflowListModeSelect}
     >
