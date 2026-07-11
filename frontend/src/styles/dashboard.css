@@ -7738,7 +7738,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   max-width: 100%;
 }
 
-.workflow-workspace-shell {
+/* Shared edge-rail workspace geometry. `.collection-workspace--edge-rail` is
+ * the neutral modifier every collection workspace (Workflows, Skills, ...)
+ * opts into; `.workflow-workspace-shell` is the legacy class name kept on the
+ * workflow surfaces until they migrate to the neutral name. */
+.workflow-workspace-shell,
+.collection-workspace--edge-rail {
   /* MM-1138 Q1: the rail consumes the same edge-bleed the data slab uses to
    * cancel `.dashboard-root`'s inline padding. The token lives on the slab for
    * the list page; mirror it here so the split-view rail can reach the screen
@@ -7771,7 +7776,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   display: block;
 }
 
-.collection-workspace--with-sidebar:not(.workflow-workspace-shell) {
+.collection-workspace--with-sidebar:not(.workflow-workspace-shell):not(.collection-workspace--edge-rail) {
   display: grid;
   grid-template-columns:
     [sidebar-start] var(--mm-collection-sidebar-width)
@@ -7781,11 +7786,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   column-gap: 1.25rem;
 }
 
-.collection-workspace--with-sidebar:not(.workflow-workspace-shell) > .collection-sidebar {
+.collection-workspace--with-sidebar:not(.workflow-workspace-shell):not(.collection-workspace--edge-rail) > .collection-sidebar {
   grid-column: sidebar-start / primary-start;
 }
 
-.collection-workspace:not(.workflow-workspace-shell) > .collection-workspace__primary {
+.collection-workspace:not(.workflow-workspace-shell):not(.collection-workspace--edge-rail) > .collection-workspace__primary {
   grid-column: primary-start / primary-end;
   min-width: 0;
 }
@@ -7846,31 +7851,47 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: var(--mm-rail-width);
 }
 
-.skills-page.collection-workspace {
-  --mm-rail-width: var(--workflow-list-column-workflow-width);
-  --mm-rail-bleed: 1rem;
-
-  display: grid;
-  grid-template-columns: [rail-start] var(--mm-rail-width) [content-start] minmax(0, 1fr) [content-end];
-  width: 100%;
-  min-height: calc(100vh - var(--mm-header-height, 0px));
-}
-
-.skills-page .skills-primary {
+/* Skills catalog table surface: the full-width table page keeps the fluid
+ * route-root geometry; the first column shares the sidebar rail width token so
+ * switching display modes reads as the same list collapsing or expanding. */
+.skills-catalog-page .skills-catalog-primary {
   max-width: none;
 }
 
-@media (max-width: 1023px) {
-  .skills-page.collection-workspace {
-    display: block;
-  }
+/* Skill descriptions are long prose: let catalog cells wrap instead of
+ * inheriting the data-table nowrap default, and keep the description column
+ * from stretching the table past the viewport. */
+.skills-catalog-page .data-table {
+  white-space: normal;
+}
 
-  .skills-page .collection-sidebar {
-    position: relative;
-    width: 100%;
-    max-height: 18rem;
-    margin-left: 0;
-  }
+.skills-catalog-page .data-table td[data-column-key="description"] {
+  max-width: 44rem;
+  overflow-wrap: anywhere;
+}
+
+.skills-catalog-title-link {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: rgb(var(--mm-ink));
+  text-decoration: none;
+}
+
+.skills-catalog-title-link:hover .skills-catalog-title {
+  text-decoration: underline;
+}
+
+.skills-catalog-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.skills-catalog-id {
+  font-size: 0.78rem;
+  color: rgb(var(--mm-ink) / 0.65);
+  overflow-wrap: anywhere;
 }
 
 .workflow-start-primary,
@@ -8009,6 +8030,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: 0;
 }
 
+/* Defensive reset: sidebar rows are flat table slices. If a future
+ * implementation renders a row as a <button>, the global primary-button
+ * styling (pill radius, shadow, hover/press scale) must never leak in. */
+button.workflow-workspace-sidebar-row,
+button.workflow-workspace-sidebar-row:hover,
+button.workflow-workspace-sidebar-row:active {
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+}
+
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -8142,7 +8174,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 114rem) and (min-width: 768px) {
-  .workflow-workspace-shell {
+  .workflow-workspace-shell,
+  .collection-workspace--edge-rail {
     grid-template-columns: var(--mm-rail-width) minmax(0, 1fr);
   }
 
@@ -8156,11 +8189,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     grid-column: 2;
   }
 
-  .workflow-workspace-shell[data-sidebar-collapsed="true"] {
+  .workflow-workspace-shell[data-sidebar-collapsed="true"],
+  .collection-workspace--edge-rail[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-workspace-detail,
+  .collection-workspace--edge-rail[data-sidebar-collapsed="true"] .workflow-workspace-detail,
   .workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary {
     grid-column: 1 / -1;
   }
@@ -8192,7 +8227,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @media (max-width: 767px) {
-  .workflow-workspace-shell {
+  .workflow-workspace-shell,
+  .collection-workspace--edge-rail {
     --mm-rail-bleed: 0rem;
     --workflow-list-slab-bleed-inline: 0rem;
     display: block;

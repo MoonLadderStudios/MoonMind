@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Archive, Bot, ChevronDown, Rows3, Settings, ShieldCheck, Wrench } from 'lucide-react';
+import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 import {
@@ -14,12 +14,15 @@ const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
   archive: Archive,
   bot: Bot,
   manifest: Rows3,
+  moon: Moon,
   settings: Settings,
   'shield-check': ShieldCheck,
+  sparkles: Sparkles,
   wrench: Wrench,
 };
 
 const SECTION_LABELS: Record<string, string> = {
+  recurring: 'Workflow resources',
   manifests: 'Data & evidence',
   'omnigent-agents': 'Omnigent',
   remediation: 'Operations',

@@ -22,7 +22,7 @@ describe('dashboard route resolution', () => {
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
       Array.from(new Set(DASHBOARD_DESTINATIONS.flatMap(({ pathPatterns }) => pathPatterns))),
     );
-    expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBeUndefined();
+    expect(DASHBOARD_DESTINATIONS.find(({ key }) => key === 'skills')?.displayMode).toBe('skills-list');
   });
 
   it('derives shown, hidden, and unavailable states from capability data', () => {
@@ -37,16 +37,16 @@ describe('dashboard route resolution', () => {
     features.omnigentPolicies = false;
     const info = { features };
     expect(visiblePrimaryDestinations(info).map(({ key }) => key)).toEqual([
-      'workflows', 'create', 'recurring', 'skills',
+      'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
-      'manifests', 'omnigent-agents', 'remediation', 'artifacts', 'settings',
+      'recurring', 'skills', 'manifests', 'omnigent-agents', 'remediation', 'artifacts', 'settings',
     ]);
   });
 
   it('keeps baseline primary navigation visible while UI capabilities are unavailable', () => {
     expect(visiblePrimaryDestinations(null).map(({ key }) => key)).toEqual([
-      'workflows', 'create', 'recurring', 'skills',
+      'workflows', 'create',
     ]);
     expect(visibleSystemDestinations(null)).toEqual([]);
   });
@@ -57,8 +57,14 @@ describe('dashboard route resolution', () => {
     ['/observability/run/1', 'artifacts'],
     ['/remediations/mm:1', 'remediation'],
     ['/settings/providers', 'settings'],
+    ['/schedules', 'recurring'],
+    ['/schedules/nightly%3Abuild', 'recurring'],
+    ['/skills', 'skills'],
+    ['/skills/speckit-orchestrate', 'skills'],
   ])('resolves %s to the active System destination', (path, key) => {
-    expect(destinationForPath(path)?.key).toBe(key);
+    const destination = destinationForPath(path);
+    expect(destination?.key).toBe(key);
+    expect(destination?.navigationGroup).not.toBe('primary');
   });
 
   it('detects backend destination inventory drift', () => {
@@ -150,8 +156,16 @@ describe('dashboard route resolution', () => {
     });
   });
 
-  it.each(['/schedules', '/manifests'])('uses the fluid shell for the %s collection', (path) => {
+  it.each(['/schedules', '/manifests', '/skills'])('uses the fluid shell for the %s collection', (path) => {
     expect(resolveDashboardRoute(path)?.dataWidePanel).toBe(true);
+  });
+
+  it('resolves skill detail routes into the fluid skills page', () => {
+    expect(resolveDashboardRoute('/skills/speckit-orchestrate')).toEqual({
+      page: 'skills',
+      dataWidePanel: true,
+      currentPath: '/skills/speckit-orchestrate',
+    });
   });
 
   it('resolves the remediation collection as a data-wide route', () => {

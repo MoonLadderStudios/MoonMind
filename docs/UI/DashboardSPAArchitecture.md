@@ -219,13 +219,13 @@ The shell owns:
 - optional command palette provider;
 - shared workspace and collection-display state.
 
-On desktop, the masthead contains the brand and top-level links, including Workflows, Create, Recurring, and Skills. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation.
+On desktop, the masthead contains the brand, the primary links Workflows and Create, and the System menu trigger. Recurring and Skills are System destinations grouped under **Workflow resources**. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation; the System trigger is active on Recurring and Skills routes.
 
 Below it, the dashboard content region hosts route-family workspaces. A collection workspace may render one contextual collection sidebar as its first column and a primary pane as its second. That sidebar lists Workflows, Recurring schedules, or Skills for the active route; it never contains top-level page links. The workspace must never render an application-navigation sidebar beside the collection sidebar.
 
 `docs/UI/CollectionWorkspaceLayout.md` is canonical for geometry, shared sidebar anatomy, and the common Workflow/Recurring detail frame. List-display controls for participating collections live in the shell/workspace utility area associated with that collection.
 
-Required primitives include `DashboardNavigation`, `DashboardSystemMenu`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Primary destinations (Workflows, Create, Recurring, and Skills) render as direct masthead links. Feature-enabled operations and system destinations render under the System control: a popover on desktop and an inline section in the mobile navigation drawer. Their direct destination URLs remain canonical; System is a menu trigger, not a route or landing page.
+Required primitives include `DashboardNavigation`, `DashboardSystemMenu`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Primary destinations (Workflows and Create) render as direct masthead links. Feature-enabled workflow-resource, operations, and system destinations — including Recurring and Skills — render under the System control: a popover on desktop and an inline section in the mobile navigation drawer. Their direct destination URLs remain canonical; System is a menu trigger, not a route or landing page.
 
 Collection sidebars remain entity lists for their owning collection and never become application navigation. Grouping a destination under System does not move its content or change its route.
 
@@ -424,7 +424,7 @@ Frontend tests should cover:
 
 - route rendering under the client router;
 - internal navigation without `window.location.assign`;
-- active masthead state and shared Workflows/Recurring/Skills navigation;
+- active masthead state, including System-trigger activation on Recurring and Skills routes;
 - masthead and single collection-sidebar geometry;
 - shared Workflow/Recurring detail-frame composition;
 - QueryClient persistence across route changes;

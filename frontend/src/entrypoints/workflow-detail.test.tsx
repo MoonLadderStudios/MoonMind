@@ -1428,10 +1428,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
-      /\.workflow-workspace-shell\s*\{[^}]*grid-template-columns:\s*\[rail-start\] minmax\(0,\s*1fr\)\s*\[content-start\] min\(var\(--mm-content-max\),\s*calc\(100% - 2rem\)\)\s*\[content-end\] minmax\(0,\s*1fr\);/,
+      /\.workflow-workspace-shell,\s*\.collection-workspace--edge-rail\s*\{[^}]*grid-template-columns:\s*\[rail-start\] minmax\(0,\s*1fr\)\s*\[content-start\] min\(var\(--mm-content-max\),\s*calc\(100% - 2rem\)\)\s*\[content-end\] minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
-      /@media \(max-width:\s*114rem\) and \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+      /@media \(max-width:\s*114rem\) and \(min-width:\s*768px\)\s*\{[\s\S]*\.workflow-workspace-shell\[data-sidebar-collapsed="true"\],\s*\.collection-workspace--edge-rail\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,

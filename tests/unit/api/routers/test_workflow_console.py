@@ -343,7 +343,18 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     skills_destination = next(
         item for item in payload["destinations"] if item["key"] == "skills"
     )
-    assert "displayMode" not in skills_destination
+    assert skills_destination["navigationGroup"] == "system"
+    assert skills_destination["displayMode"] == "skills-list"
+    recurring_destination = next(
+        item for item in payload["destinations"] if item["key"] == "recurring"
+    )
+    assert recurring_destination["navigationGroup"] == "system"
+    primary_keys = [
+        item["key"]
+        for item in payload["destinations"]
+        if item["navigationGroup"] == "primary"
+    ]
+    assert primary_keys == ["workflows", "create"]
     assert payload["endpoints"]["workflows"] == "/api/executions"
     assert (
         payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"

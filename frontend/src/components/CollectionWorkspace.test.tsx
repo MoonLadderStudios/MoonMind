@@ -47,10 +47,19 @@ describe('CollectionWorkspace', () => {
     const css = readFileSync(`${process.cwd()}/frontend/src/styles/dashboard.css`, 'utf8');
 
     expect(css).toMatch(/\.collection-workspace\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;/);
-    expect(css).toMatch(/\.collection-workspace--with-sidebar:not\(\.workflow-workspace-shell\)\s*\{[^}]*grid-template-columns:[^}]*var\(--mm-collection-sidebar-width\)[^}]*minmax\(0,\s*1fr\)/);
-    expect(css).toMatch(/\.collection-workspace--with-sidebar:not\(\.workflow-workspace-shell\) > \.collection-sidebar\s*\{[^}]*grid-column:\s*sidebar-start \/ primary-start/);
-    expect(css).toMatch(/\.collection-workspace:not\(\.workflow-workspace-shell\) > \.collection-workspace__primary\s*\{[^}]*grid-column:\s*primary-start \/ primary-end/);
+    expect(css).toMatch(/\.collection-workspace--with-sidebar:not\(\.workflow-workspace-shell\):not\(\.collection-workspace--edge-rail\)\s*\{[^}]*grid-template-columns:[^}]*var\(--mm-collection-sidebar-width\)[^}]*minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/\.collection-workspace--with-sidebar:not\(\.workflow-workspace-shell\):not\(\.collection-workspace--edge-rail\) > \.collection-sidebar\s*\{[^}]*grid-column:\s*sidebar-start \/ primary-start/);
+    expect(css).toMatch(/\.collection-workspace:not\(\.workflow-workspace-shell\):not\(\.collection-workspace--edge-rail\) > \.collection-workspace__primary\s*\{[^}]*grid-column:\s*primary-start \/ primary-end/);
     expect(css).toMatch(/\.collection-workspace--single\s*\{[^}]*display:\s*block;/);
+  });
+
+  it('drives the shared edge-rail geometry through the neutral workspace modifier', () => {
+    const css = readFileSync(`${process.cwd()}/frontend/src/styles/dashboard.css`, 'utf8');
+
+    expect(css).toMatch(/\.workflow-workspace-shell,\s*\.collection-workspace--edge-rail\s*\{/);
+    // Defensive reset: any button-backed sidebar row must stay a flat table
+    // slice with no primary-button pill radius, shadow, or press scale.
+    expect(css).toMatch(/button\.workflow-workspace-sidebar-row[^{]*\{[^}]*border-radius:\s*0;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;/s);
   });
 
   it('keeps required collection adapters on the shared sidebar primitive', () => {

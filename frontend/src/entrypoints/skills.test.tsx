@@ -1,20 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { SkillsPage } from './skills';
 
-describe('Skills Entrypoint', () => {
-  const mockPayload: BootPayload = {
+type SkillsDisplayMode = 'hidden' | 'sidebar' | 'table';
+
+function skillsPayload(path: string, mode?: SkillsDisplayMode): BootPayload {
+  return {
     page: 'skills',
     apiBase: '/api',
+    initialData: {
+      ...(mode ? { skillsListDisplayMode: mode } : {}),
+      dashboardConfig: { initialPath: path },
+    },
   };
+}
 
+function renderSkills({ path = '/skills', mode }: { path?: string; mode?: SkillsDisplayMode } = {}) {
+  const payload = skillsPayload(path, mode);
+  return renderWithClient(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/skills" element={<SkillsPage payload={payload} />} />
+        <Route path="/skills/:skillId" element={<SkillsPage payload={payload} />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe('Skills Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Skills', '/skills');
+    window.localStorage.clear();
     let listCallCount = 0;
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -31,15 +52,6 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/workflows/skills') && !url.includes('includeContent=true')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: { worker: ['speckit-orchestrate', 'pr-resolver'] },
-            legacyItems: [],
-          }),
-        } as Response);
-      }
       if (url.startsWith('/api/workflows/skills?includeContent=true')) {
         listCallCount += 1;
         return Promise.resolve({
@@ -53,7 +65,14 @@ describe('Skills Entrypoint', () => {
               ],
             },
             legacyItems: [
-              { id: 'speckit-orchestrate', markdown: '# Speckit\n\nExisting **worker** skill.\n\n- Plans\n- Tests' },
+              {
+                id: 'speckit-orchestrate',
+                label: 'Speckit Orchestrate',
+                description: 'Plans and executes spec workflows.',
+                hasInputSchema: true,
+                source: { kind: 'file', path: '/skills/speckit-orchestrate/SKILL.md' },
+                markdown: '# Speckit\n\nExisting **worker** skill.\n\n- Plans\n- Tests',
+              },
               { id: 'pr-resolver', markdown: '# PR Resolver\n\nResolves pull requests.' },
               ...(listCallCount > 1
                 ? [
@@ -62,6 +81,15 @@ describe('Skills Entrypoint', () => {
                   ]
                 : []),
             ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith('/api/workflows/skills') && !url.includes('includeContent=true') && init?.method !== 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ['speckit-orchestrate', 'pr-resolver'] },
+            legacyItems: [],
           }),
         } as Response);
       }
@@ -83,6 +111,218 @@ describe('Skills Entrypoint', () => {
     fetchSpy.mockRestore();
   });
 
+  describe('route-derived selection and display modes', () => {
+    it('renders the full catalog table on /skills without a sidebar or detail pane', async () => {
+      renderSkills({ path: '/skills', mode: 'table' });
+
+      expect(await screen.findByRole('table', { name: 'Skills catalog' })).toBeTruthy();
+      expect(screen.queryByRole('complementary', { name: 'Skill navigation' })).toBeNull();
+      expect(screen.queryByText('Skill Preview')).toBeNull();
+      expect(await screen.findByRole('link', { name: /^Speckit Orchestrate/ })).toBeTruthy();
+    });
+
+    it('derives the selected skill from the detail route and mounts exactly one sidebar', async () => {
+      renderSkills({ path: '/skills/pr-resolver', mode: 'sidebar' });
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'pr-resolver' })).toBeTruthy();
+      });
+      expect(screen.getAllByRole('complementary', { name: 'Skill navigation' })).toHaveLength(1);
+      expect(screen.getByText('Resolves pull requests.')).toBeTruthy();
+    });
+
+    it('honors hidden mode on a detail route without mounting the sidebar', async () => {
+      renderSkills({ path: '/skills/pr-resolver', mode: 'hidden' });
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'pr-resolver' })).toBeTruthy();
+      });
+      expect(screen.queryByRole('complementary', { name: 'Skill navigation' })).toBeNull();
+    });
+
+    it('coerces a persisted table mode on a direct detail visit to sidebar without redirecting', async () => {
+      renderSkills({ path: '/skills/pr-resolver', mode: 'table' });
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'pr-resolver' })).toBeTruthy();
+      });
+      expect(screen.getAllByRole('complementary', { name: 'Skill navigation' })).toHaveLength(1);
+      expect(screen.queryByRole('table', { name: 'Skills catalog' })).toBeNull();
+    });
+
+    it('shows a localized not-found state for a stale skill ID while keeping the catalog sidebar usable', async () => {
+      renderSkills({ path: '/skills/ghost-skill', mode: 'sidebar' });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('skill-not-found').textContent).toContain('ghost-skill');
+      });
+      const navigation = screen.getByRole('complementary', { name: 'Skill navigation' });
+      expect(within(navigation).getByRole('link', { name: 'pr-resolver' })).toBeTruthy();
+    });
+  });
+
+  describe('catalog table', () => {
+    it('renders normalized catalog metadata columns', async () => {
+      renderSkills({ path: '/skills' });
+
+      const table = await screen.findByRole('table', { name: 'Skills catalog' });
+      const headerTexts = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
+      expect(headerTexts.join(' ')).toContain('Skill');
+      expect(headerTexts).toEqual(expect.arrayContaining([
+        'Description', 'Source', 'Inputs', 'Content', 'Action',
+      ]));
+
+      const speckitLink = await within(table).findByRole('link', { name: /^Speckit Orchestrate/ });
+      expect(speckitLink.textContent).toContain('speckit-orchestrate');
+      const speckitRow = speckitLink.closest('tr')!;
+      expect(speckitRow.textContent).toContain('Plans and executes spec workflows.');
+      expect(speckitRow.textContent).toContain('File');
+      expect(speckitRow.textContent).toContain('Structured inputs');
+      expect(speckitRow.textContent).toContain('6 lines');
+
+      const prRow = within(table).getByRole('link', { name: 'pr-resolver' }).closest('tr')!;
+      expect(prRow.textContent).toContain('—');
+    });
+
+    it('navigates to the detail route when a row is opened and records the remembered skill', async () => {
+      renderSkills({ path: '/skills' });
+
+      fireEvent.click(await screen.findByRole('link', { name: 'Open skill pr-resolver' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'pr-resolver' })).toBeTruthy();
+        expect(screen.getByText('Resolves pull requests.')).toBeTruthy();
+      });
+      const stored = JSON.parse(window.localStorage.getItem('moonmind.dashboard.preferences') ?? '{}');
+      expect(stored.preferences.lastSelectedSkillId).toBe('pr-resolver');
+    });
+
+    it('filters catalog rows through the column filter popover', async () => {
+      renderSkills({ path: '/skills' });
+
+      expect(await screen.findByRole('link', { name: /^Speckit Orchestrate/ })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+      fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'pr-' } });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('link', { name: /^Speckit Orchestrate/ })).toBeNull();
+        expect(screen.getByRole('link', { name: 'pr-resolver' })).toBeTruthy();
+      });
+
+      fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'does-not-exist' } });
+      await waitFor(() => {
+        expect(screen.getByText('No skills match your filter.')).toBeTruthy();
+      });
+    });
+  });
+
+  describe('sidebar rows and filter popover', () => {
+    it('renders sidebar rows as links with aria-current on the active route', async () => {
+      renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
+
+      const navigation = await screen.findByRole('complementary', { name: 'Skill navigation' });
+      expect(navigation.classList.contains('collection-sidebar')).toBe(true);
+      expect(within(navigation).getByRole('table', { name: 'Skill list table slice' })).toBeTruthy();
+      expect(within(navigation).queryByRole('button', { name: 'pr-resolver' })).toBeNull();
+
+      const active = await within(navigation).findByRole('link', { name: /^Speckit Orchestrate/ });
+      expect(active.getAttribute('aria-current')).toBe('page');
+      const inactive = within(navigation).getByRole('link', { name: 'pr-resolver' });
+      expect(inactive.getAttribute('aria-current')).toBeNull();
+
+      fireEvent.click(inactive);
+
+      await waitFor(() => {
+        expect(inactive.getAttribute('aria-current')).toBe('page');
+        expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'pr-resolver' }));
+      });
+    });
+
+    it('keeps the filter field hidden until the filter icon opens the popover', async () => {
+      renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
+
+      await screen.findByRole('complementary', { name: 'Skill navigation' });
+      expect(screen.queryByLabelText('Skill sidebar filter value')).toBeNull();
+
+      const trigger = screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' });
+      fireEvent.click(trigger);
+
+      const dialog = screen.getByRole('dialog', { name: 'Skill sidebar filter' });
+      expect(within(dialog).getByText('Skill filter')).toBeTruthy();
+      const input = within(dialog).getByLabelText('Skill sidebar filter value') as HTMLInputElement;
+      expect(input.placeholder).toBe('Filter skills');
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+      expect(screen.queryByRole('dialog', { name: 'Skill sidebar filter' })).toBeNull();
+    });
+
+    it('supports reset, apply, escape, and outside-click with focus restoration', async () => {
+      renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
+
+      await screen.findByRole('complementary', { name: 'Skill navigation' });
+      const trigger = screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' });
+      fireEvent.click(trigger);
+
+      const reset = screen.getByRole('button', { name: 'Reset skill sidebar filter' });
+      expect((reset as HTMLButtonElement).disabled).toBe(true);
+
+      fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'pr-' } });
+      expect((reset as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole('button', { name: 'Skill sidebar filter: pr-' })).toBeTruthy();
+
+      fireEvent.click(reset);
+      expect((screen.getByLabelText('Skill sidebar filter value') as HTMLInputElement).value).toBe('');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Apply skill sidebar filter' }));
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Skill sidebar filter' })).toBeNull();
+      });
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+      const dialog = screen.getByRole('dialog', { name: 'Skill sidebar filter' });
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Skill sidebar filter' })).toBeNull();
+      });
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+      expect(screen.getByRole('dialog', { name: 'Skill sidebar filter' })).toBeTruthy();
+      fireEvent.pointerDown(document.body);
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Skill sidebar filter' })).toBeNull();
+      });
+    });
+
+    it('filters sidebar rows and pins the current skill when it does not match', async () => {
+      renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
+
+      const navigation = await screen.findByRole('complementary', { name: 'Skill navigation' });
+      expect(await within(navigation).findByRole('link', { name: 'pr-resolver' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+      fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'pr-' } });
+
+      await waitFor(() => {
+        expect(within(navigation).getByRole('link', { name: 'pr-resolver' })).toBeTruthy();
+        expect(screen.getByRole('rowgroup', { name: 'Current skill' })).toBeTruthy();
+        expect(within(navigation).getByRole('link', { name: /Current skill.*Speckit Orchestrate/ })).toBeTruthy();
+      });
+      // Narrowing the list must not clear the selected detail.
+      expect(screen.getByRole('heading', { name: 'Speckit Orchestrate' })).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'does-not-exist' } });
+      await waitFor(() => {
+        expect(screen.getByText('No skills match your filter.')).toBeTruthy();
+        expect(within(navigation).getByRole('link', { name: /Current skill.*Speckit Orchestrate/ })).toBeTruthy();
+      });
+    });
+  });
+
   it('renders page-matched loading placeholders for skill catalog and preview regions', () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -96,41 +336,21 @@ describe('Skills Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
     expect(screen.getByRole('heading', { name: 'Skills' })).toBeTruthy();
     expect(screen.getByText('Loading skills...')).toBeTruthy();
     expect(screen.getByText('Skills preview loading placeholder').closest('[role="status"]')).toBeTruthy();
   });
 
-  it('lists skills and previews markdown for the selected item', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'speckit-orchestrate' }));
+  it('previews markdown for the route-selected skill', async () => {
+    renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
     await waitFor(() => {
       expect(screen.getByText('Speckit')).toBeTruthy();
       expect(screen.getByText('worker')).toBeTruthy();
       expect(screen.getByText('Plans')).toBeTruthy();
       expect(document.querySelector('strong')?.textContent).toBe('worker');
-    });
-  });
-
-  it('names the skill navigation, exposes selection, and focuses the selected detail', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
-
-    const navigation = await screen.findByRole('complementary', { name: 'Skill navigation' });
-    expect(navigation).toBeTruthy();
-    expect(navigation.classList.contains('collection-sidebar')).toBe(true);
-    expect(within(navigation).getByRole('table', { name: 'Skill list table slice' })).toBeTruthy();
-    const skill = await screen.findByRole('button', { name: 'pr-resolver' });
-    expect(skill.getAttribute('aria-current')).toBeNull();
-
-    fireEvent.click(skill);
-
-    await waitFor(() => {
-      expect(skill.getAttribute('aria-current')).toBe('page');
-      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'pr-resolver' }));
     });
   });
 
@@ -151,15 +371,6 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/workflows/skills')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: { worker: ['markdown-skill'] },
-            legacyItems: [],
-          }),
-        } as Response);
-      }
       return Promise.resolve({
         ok: false,
         status: 404,
@@ -167,9 +378,7 @@ describe('Skills Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<SkillsPage payload={mockPayload} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'markdown-skill' }));
+    renderSkills({ path: '/skills/markdown-skill', mode: 'sidebar' });
 
     await waitFor(() => {
       const preview = screen.getByTestId('skill-markdown-preview');
@@ -180,8 +389,8 @@ describe('Skills Entrypoint', () => {
     });
   });
 
-  it('creates a new skill, refreshes the list, and selects the created skill', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+  it('creates a new skill, refreshes the list, and navigates to the created skill', async () => {
+    renderSkills({ path: '/skills' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
     fireEvent.change(screen.getByLabelText('Skill Name'), {
@@ -212,13 +421,16 @@ describe('Skills Entrypoint', () => {
     });
 
     await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'fresh-skill' })).toBeTruthy();
       expect(screen.getByText('Fresh Skill')).toBeTruthy();
       expect(screen.getByText('Created from the UI.')).toBeTruthy();
     });
+    const stored = JSON.parse(window.localStorage.getItem('moonmind.dashboard.preferences') ?? '{}');
+    expect(stored.preferences.lastSelectedSkillId).toBe('fresh-skill');
   });
 
-  it('uploads a skill zip, refreshes the list, and selects the uploaded skill', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+  it('uploads a skill zip, refreshes the list, and navigates to the uploaded skill', async () => {
+    renderSkills({ path: '/skills' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
     const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
@@ -239,39 +451,14 @@ describe('Skills Entrypoint', () => {
     });
 
     await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'zip-skill' })).toBeTruthy();
       expect(screen.getByText('Zip Skill')).toBeTruthy();
       expect(screen.getByText('Uploaded from a zip.')).toBeTruthy();
     });
   });
 
-  it('filters available skills by ID', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
-
-    expect(await screen.findByRole('button', { name: 'speckit-orchestrate' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText('Skill filter'), {
-      target: { value: 'pr-' },
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: 'speckit-orchestrate' })).toBeNull();
-      expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
-    });
-
-    fireEvent.change(screen.getByLabelText('Skill filter'), {
-      target: { value: 'does-not-exist' },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('No skills match your filter.')).toBeTruthy();
-      expect(screen.getByRole('rowgroup', { name: 'Current skill' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: /Current skill.*speckit-orchestrate/ })).toBeTruthy();
-    });
-  });
-
   it('keeps the shared skill sidebar mounted while create and upload are open', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
 
@@ -283,24 +470,33 @@ describe('Skills Entrypoint', () => {
   });
 
   it('shows the raw markdown and metadata preview tabs', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'speckit-orchestrate' }));
+    const renderedTab = await screen.findByRole('tab', { name: 'Rendered' });
+    const rawTab = screen.getByRole('tab', { name: 'Raw Markdown' });
+    expect(renderedTab.tabIndex).toBe(0);
+    expect(rawTab.tabIndex).toBe(-1);
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Raw Markdown' }));
+    fireEvent.click(rawTab);
     await waitFor(() => {
-      expect(screen.getByTestId('skill-raw-markdown').textContent).toContain('# Speckit');
+      const rawMarkdown = screen.getByLabelText('Raw Markdown Content');
+      expect(rawMarkdown.textContent).toContain('# Speckit');
+      expect(rawMarkdown.tabIndex).toBe(0);
+      expect(rawTab.tabIndex).toBe(0);
+      expect(renderedTab.tabIndex).toBe(-1);
     });
 
     fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
     await waitFor(() => {
       const metadata = screen.getByTestId('skill-metadata');
       expect(metadata.textContent).toContain('speckit-orchestrate');
+      expect(metadata.textContent).toContain('File');
+      expect(metadata.textContent).toContain('Structured inputs');
     });
   });
 
   it('validates the skill name before submitting a create request', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
     fireEvent.change(screen.getByLabelText('Skill Markdown'), {
@@ -331,7 +527,7 @@ describe('Skills Entrypoint', () => {
   });
 
   it('shows an error when uploading a zip without choosing a file', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
     fireEvent.click(screen.getByRole('button', { name: 'Upload Zip' }));
@@ -347,7 +543,7 @@ describe('Skills Entrypoint', () => {
   });
 
   it('sends the collision policy when uploading a zip and does not expose the unsupported new-version mode', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
     const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
@@ -372,7 +568,7 @@ describe('Skills Entrypoint', () => {
   });
 
   it('closes the create drawer when cancel or escape is used', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills' });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
     expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
@@ -393,7 +589,7 @@ describe('Skills Entrypoint', () => {
   });
 
   it('traps focus in the create drawer and restores it to the trigger', async () => {
-    renderWithClient(<SkillsPage payload={mockPayload} />);
+    renderSkills({ path: '/skills' });
 
     const trigger = await screen.findByRole('button', { name: 'Create New Skill' });
     trigger.focus();
@@ -434,15 +630,6 @@ describe('Skills Entrypoint', () => {
           }),
         } as Response);
       }
-      if (url.startsWith('/api/workflows/skills')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            items: { worker: ['unsafe-skill'] },
-            legacyItems: [],
-          }),
-        } as Response);
-      }
       return Promise.resolve({
         ok: false,
         status: 404,
@@ -450,9 +637,7 @@ describe('Skills Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<SkillsPage payload={mockPayload} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'unsafe-skill' }));
+    renderSkills({ path: '/skills/unsafe-skill', mode: 'sidebar' });
 
     await waitFor(() => {
       const preview = screen.getByTestId('skill-markdown-preview');
