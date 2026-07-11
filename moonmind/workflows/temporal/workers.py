@@ -25,8 +25,8 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityBinding,
     build_activity_bindings,
 )
-from moonmind.workflows.temporal.hard_switch_cutover import (
-    registered_user_workflow_type,
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_workflow_types,
 )
 
 ALLOWED_TEMPORAL_WORKER_FLEETS = (
@@ -121,18 +121,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
         "docker_workload",
     ),
 }
-STATIC_TEMPORAL_WORKFLOW_TYPES = (
-    "MoonMind.ManifestIngest",
-    "MoonMind.ProviderProfileManager",
-    "MoonMind.AgentSession",
-    "MoonMind.ManagedSessionReconcile",
-    "MoonMind.ManagedRuntimeWorkspaceCleanup",
-    "MoonMind.AgentRun",
-    "MoonMind.OAuthSession",
-    "MoonMind.MergeAutomation",
-    "MoonMind.PRResolver",
-)
-
 class TemporalWorkerBootstrapError(ValueError):
     """Raised when the worker topology cannot be resolved safely."""
 
@@ -147,10 +135,7 @@ def list_registered_workflow_types_for_settings(
 ) -> tuple[str, ...]:
     """Return workflow registrations for the configured user-workflow contract."""
 
-    return (
-        registered_user_workflow_type(temporal_settings),
-        *STATIC_TEMPORAL_WORKFLOW_TYPES,
-    )
+    return workflow_fleet_workflow_types(temporal_settings)
 
 @dataclass(frozen=True, slots=True)
 class TemporalWorkerTopology:
