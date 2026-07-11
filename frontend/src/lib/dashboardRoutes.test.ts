@@ -4,9 +4,12 @@ import {
   DASHBOARD_DESTINATIONS,
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
+  destinationForPath,
   matchesDashboardDestinationRegistry,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  visiblePrimaryDestinations,
+  visibleSystemDestinations,
 } from './dashboardRoutes';
 
 describe('dashboard route resolution', () => {
@@ -27,6 +30,35 @@ describe('dashboard route resolution', () => {
     expect(destinationState(skills, { features: { skills: true } })).toBe('shown');
     expect(destinationState(skills, { features: {} })).toBe('hidden');
     expect(destinationState(skills, { features: { skills: false } })).toBe('unavailable');
+  });
+
+  it('preserves registry order while grouping enabled navigation destinations', () => {
+    const features = Object.fromEntries(DASHBOARD_DESTINATIONS.map(({ capabilityKey }) => [capabilityKey, true]));
+    features.omnigentPolicies = false;
+    const info = { features };
+    expect(visiblePrimaryDestinations(info).map(({ key }) => key)).toEqual([
+      'workflows', 'create', 'recurring', 'skills',
+    ]);
+    expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
+      'manifests', 'omnigent-agents', 'remediation', 'artifacts', 'settings',
+    ]);
+  });
+
+  it('keeps baseline primary navigation visible while UI capabilities are unavailable', () => {
+    expect(visiblePrimaryDestinations(null).map(({ key }) => key)).toEqual([
+      'workflows', 'create', 'recurring', 'skills',
+    ]);
+    expect(visibleSystemDestinations(null)).toEqual([]);
+  });
+
+  it.each([
+    ['/manifests/default', 'manifests'],
+    ['/artifacts/run/1', 'artifacts'],
+    ['/observability/run/1', 'artifacts'],
+    ['/remediations/mm:1', 'remediation'],
+    ['/settings/providers', 'settings'],
+  ])('resolves %s to the active System destination', (path, key) => {
+    expect(destinationForPath(path)?.key).toBe(key);
   });
 
   it('detects backend destination inventory drift', () => {

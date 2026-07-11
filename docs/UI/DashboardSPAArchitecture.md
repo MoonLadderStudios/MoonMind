@@ -225,7 +225,9 @@ Below it, the dashboard content region hosts route-family workspaces. A collecti
 
 `docs/UI/CollectionWorkspaceLayout.md` is canonical for geometry, shared sidebar anatomy, and the common Workflow/Recurring detail frame. List-display controls for participating collections live in the shell/workspace utility area associated with that collection.
 
-Required primitives include `DashboardNavigation`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Workflows, Recurring, and Skills supply adapters rather than copying layout or CSS.
+Required primitives include `DashboardNavigation`, `DashboardSystemMenu`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Primary destinations (Workflows, Create, Recurring, and Skills) render as direct masthead links. Feature-enabled operations and system destinations render under the System control: a popover on desktop and an inline section in the mobile navigation drawer. Their direct destination URLs remain canonical; System is a menu trigger, not a route or landing page.
+
+Collection sidebars remain entity lists for their owning collection and never become application navigation. Grouping a destination under System does not move its content or change its route.
 
 Legacy server-rendered navigation partials should be removed after the SPA shell owns masthead navigation and global utilities. On tablet/mobile, masthead navigation may use a menu and the collection sidebar may collapse into a list-to-detail flow. Non-rendered desktop controls must be absent from the accessibility tree.
 
