@@ -602,3 +602,92 @@ def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
     assert evidence["executionRef"] == "step-external-1"
     assert evidence["created"] == 5
     assert [item["ref"] for item in evidence["queued"]] == [f"THOR-{n}" for n in range(705, 710)]
+
+
+def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp_path):
+    """Every preflight/transport failure replaces stale evidence and retains children."""
+    repo_root = Path(__file__).resolve().parents[2]
+    snapshot = tmp_path / "skills_active"
+    shutil.copytree(repo_root / ".agents" / "skills" / "batch-workflows", snapshot / "batch-workflows")
+    shutil.copytree(repo_root / ".agents" / "skills" / "_shared", snapshot / "_shared")
+    workspace = tmp_path / "external-repo"
+    workspace.mkdir()
+    artifacts = workspace / "artifacts"
+    result_path = artifacts / "batch-workflows-result.json"
+    helper = snapshot / "batch-workflows" / "bin" / "batch_workflows.py"
+    targets = [
+        {"provider": "jira", "ref": f"THOR-{number}", "jiraIssue": {"key": f"THOR-{number}"}}
+        for number in range(705, 710)
+    ]
+    targets_path = workspace / "targets.json"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    def run(*, url: str, execution_ref: str | None = "step-matrix"):
+        env = {**os.environ, "MOONMIND_URL": url, "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot)}
+        if execution_ref is None:
+            env.pop("MOONMIND_STEP_EXECUTION_ID", None)
+        else:
+            env["MOONMIND_STEP_EXECUTION_ID"] = execution_ref
+        return subprocess.run(
+            [sys.executable, str(helper), "--targets", str(targets_path), "--run-ref", "skill:jira-verify", "--publish-mode", "none", "--artifacts-dir", str(artifacts)],
+            cwd=workspace, env=env, text=True, capture_output=True, timeout=20, check=False,
+        )
+
+    artifacts.mkdir()
+    result_path.write_text(json.dumps({"status": "queued", "executionRef": "stale"}), encoding="utf-8")
+    missing_identity = run(url="http://127.0.0.1:1", execution_ref=None)
+    assert missing_identity.returncode == 1
+    evidence = json.loads(result_path.read_text())
+    assert evidence["status"] == "failed"
+    assert evidence["executionRef"] is None
+    assert evidence["queued"] == []
+
+    targets_path.write_text("{malformed", encoding="utf-8")
+    malformed = run(url="http://127.0.0.1:1")
+    assert malformed.returncode == 1
+    assert json.loads(result_path.read_text())["status"] == "failed"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    unavailable = run(url="http://127.0.0.1:1")
+    assert unavailable.returncode == 1
+    unavailable_evidence = json.loads(result_path.read_text())
+    assert unavailable_evidence["status"] == "failed"
+    assert unavailable_evidence["created"] == 0
+    assert len(unavailable_evidence["errors"]) == 5
+
+    posts = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            nonlocal posts
+            posts += 1
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            if posts > 2:
+                self.send_error(503, "injected partial failure")
+                return
+            body = json.dumps({"workflowId": f"child-{posts}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        partial = run(url=f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert partial.returncode == 1
+    partial_evidence = json.loads(result_path.read_text())
+    assert partial_evidence["status"] == "partial_failure"
+    assert partial_evidence["created"] == 2
+    assert [item["workflowId"] for item in partial_evidence["queued"]] == ["child-1", "child-2"]
+    assert len(partial_evidence["errors"]) == 3
+    assert partial_evidence["executionRef"] == "step-matrix"
