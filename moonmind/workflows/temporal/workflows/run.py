@@ -538,6 +538,7 @@ RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
+RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
 FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
@@ -4507,6 +4508,8 @@ class MoonMindRunWorkflow:
             )
             if agent_id:
                 agent_kind = self._agent_kind_for_id(agent_id)
+        elif not agent_kind:
+            agent_kind = self._agent_kind_for_id(agent_id)
         if agent_kind == "external" and agent_id:
             self._step_external_agent_ids[logical_step_id] = agent_id.lower()
 
@@ -4615,6 +4618,9 @@ class MoonMindRunWorkflow:
             return None
 
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        managed_checkpoint_authority_enabled = workflow.patched(
+            RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH
+        )
         resolved_policy = resolve_checkpoint_policy(
             boundary=str(boundary),
             recovery_source=self._recovery_source
@@ -4624,7 +4630,8 @@ class MoonMindRunWorkflow:
             external_agent_id=self._step_external_agent_ids.get(logical_step_id),
             agent_kind=(
                 "managed"
-                if capture_input.get("captureAuthority") == "managed_runtime"
+                if managed_checkpoint_authority_enabled
+                and capture_input.get("captureAuthority") == "managed_runtime"
                 else None
             ),
         )
@@ -4643,7 +4650,7 @@ class MoonMindRunWorkflow:
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": resolved_policy.checkpoint_kind,
+            "kind": capture_input.get("kind") or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
