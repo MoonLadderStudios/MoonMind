@@ -251,6 +251,10 @@ docker compose \
 If you prefer `COMPOSE_FILE`, do not pass a colon-separated value in the
 command string on Windows. Use the OS-specific separator:
 
+`docker compose` reads `COMPOSE_FILE` from the working-directory `.env` file
+automatically, so remove or update any existing `COMPOSE_FILE` entry there before
+running these commands.
+
 ```text
 # Linux / macOS
 COMPOSE_FILE=docker-compose.yaml:docker-compose.claude-host.yaml docker compose --profile omnigent-host-claude up -d omnigent-host-claude
