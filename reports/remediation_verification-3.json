@@ -1,0 +1,44 @@
+{
+  "artifact_type": "remediation.verification",
+  "attempt": 3,
+  "remediationAttempt": 3,
+  "verifiesRemediationAttempt": 3,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-3.json",
+  "verificationReportArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/artifacts/jira-implement-verify.json",
+  "verificationTarget": "MM-1201",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
+  "recoverableInCurrentRuntime": true,
+  "remainingWork": [
+    {
+      "requirement": "Runtime-neutral capability-aware continuation",
+      "gapType": "implementation",
+      "remainingWork": "Move the continuation decision and bounded retry loop from CodexSessionAdapter to replay-safe AgentRun orchestration using immutable runtime capability data, with supported and unsupported runtime tests.",
+      "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; AgentRun workflow tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Escaped incident reliability replay",
+      "gapType": "verification",
+      "remainingWork": "Extend the integration_ci replay through parent finalization/projection after AgentRun returns the terminal-contract failure.",
+      "suggestedEvidence": "tests/integration/reliability/test_escaped_failure_journeys.py and its batch-workflows replay fixture",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "resolvedInAttempt": [
+    {
+      "requirement": "Coherent parent and UI projections",
+      "evidence": "Parent/reliability slice passed 126 tests; focused dashboard suite passed 183 tests; structured terminal evidence is retained by parent finalization tests."
+    }
+  ],
+  "testSummary": {
+    "workflowAndReliability": "PASS (126)",
+    "dashboard": "PASS (183)",
+    "diffCheck": "PASS"
+  },
+  "environmentNotes": [
+    "The issue brief is complete; no recovery was needed.",
+    "Workspace projection preflight passed."
+  ]
+}
