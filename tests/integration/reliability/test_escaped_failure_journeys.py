@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
 )
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
@@ -23,6 +25,9 @@ from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _pr_resolver_request,
     _terminal_contract_test_adapter,
     _turn_response,
+)
+from tests.unit.workflows.temporal.workflows.test_run_integration import (
+    _finalize_and_capture_summary,
 )
 
 
@@ -85,6 +90,40 @@ async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     assert result.metadata["failureCode"] == expected["failureCode"]
     assert result.metadata["terminalContractMissingEvidence"] == expected["missingEvidence"]
     assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
+
+    parent = MoonMindRunWorkflow()
+    parent._owner_type = "user"
+    parent._owner_id = "mm-1201-replay"
+    diagnostic = parent._record_result_failure_diagnostic(
+        stage="execute",
+        category=result.failure_class,
+        source="child_workflow",
+        step_id="batch-workflows",
+        step_title="batch-workflows",
+        message=result.summary,
+        child_workflow_id="agent-run-mm-1201",
+        terminal_evidence=result.metadata,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_workflow_module
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 11, tzinfo=timezone.utc),
+    )
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        parent,
+        parameters={"publishMode": "none"},
+        status="failed",
+        error=diagnostic["message"],
+    )
+
+    assert summary["finishOutcome"]["code"] == "FAILED"
+    assert summary["failure"]["failureCode"] == expected["failureCode"]
+    assert summary["failure"]["terminalContractMissingEvidence"] == expected[
+        "missingEvidence"
+    ]
 
 
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:
