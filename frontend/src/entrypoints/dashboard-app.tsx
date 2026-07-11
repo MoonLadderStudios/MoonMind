@@ -803,43 +803,45 @@ function DashboardNavigation({
           id="dashboard-nav"
           aria-label="MoonMind navigation"
         >
-          {visiblePrimaryKeys.has('workflows') ? (
-            <NavLink
-              to="/workflows"
-              end
-              className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
-            >
-              <WorkflowsNavIcon className="route-nav-icon" />
-              Workflows
-            </NavLink>
-          ) : null}
-          {visiblePrimaryKeys.has('create') ? (
-            <AnimatedRouteNavLink
-              to="/workflows/new"
-              icon={StartWorkflowNavIcon}
-              className={({ isActive }) => (isActive ? 'active' : undefined)}
-            >
-              Create
-            </AnimatedRouteNavLink>
-          ) : null}
-          {visiblePrimaryKeys.has('recurring') ? (
-            <AnimatedRouteNavLink
-              to="/schedules"
-              icon={SchedulesNavIcon}
-              className={({ isActive }) => (isActive ? 'active' : undefined)}
-            >
-              Recurring
-            </AnimatedRouteNavLink>
-          ) : null}
-          {visiblePrimaryKeys.has('skills') ? (
-            <AnimatedRouteNavLink
-              to="/skills"
-              icon={SkillsNavIcon}
-              className={({ isActive }) => (isActive ? 'active' : undefined)}
-            >
-              Skills
-            </AnimatedRouteNavLink>
-          ) : null}
+          <div className="route-nav-primary">
+            {visiblePrimaryKeys.has('workflows') ? (
+              <NavLink
+                to="/workflows"
+                end
+                className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
+              >
+                <WorkflowsNavIcon className="route-nav-icon" />
+                Workflows
+              </NavLink>
+            ) : null}
+            {visiblePrimaryKeys.has('create') ? (
+              <AnimatedRouteNavLink
+                to="/workflows/new"
+                icon={StartWorkflowNavIcon}
+                className={({ isActive }) => (isActive ? 'active' : undefined)}
+              >
+                Create
+              </AnimatedRouteNavLink>
+            ) : null}
+            {visiblePrimaryKeys.has('recurring') ? (
+              <AnimatedRouteNavLink
+                to="/schedules"
+                icon={SchedulesNavIcon}
+                className={({ isActive }) => (isActive ? 'active' : undefined)}
+              >
+                Recurring
+              </AnimatedRouteNavLink>
+            ) : null}
+            {visiblePrimaryKeys.has('skills') ? (
+              <AnimatedRouteNavLink
+                to="/skills"
+                icon={SkillsNavIcon}
+                className={({ isActive }) => (isActive ? 'active' : undefined)}
+              >
+                Skills
+              </AnimatedRouteNavLink>
+            ) : null}
+          </div>
           <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
         </nav>
       </div>

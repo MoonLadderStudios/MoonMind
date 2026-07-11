@@ -44,6 +44,13 @@ describe('dashboard route resolution', () => {
     ]);
   });
 
+  it('keeps baseline primary navigation visible while UI capabilities are unavailable', () => {
+    expect(visiblePrimaryDestinations(null).map(({ key }) => key)).toEqual([
+      'workflows', 'create', 'recurring', 'skills',
+    ]);
+    expect(visibleSystemDestinations(null)).toEqual([]);
+  });
+
   it.each([
     ['/manifests/default', 'manifests'],
     ['/artifacts/run/1', 'artifacts'],

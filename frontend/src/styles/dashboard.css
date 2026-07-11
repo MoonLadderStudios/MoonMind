@@ -507,6 +507,13 @@ h1 {
   min-width: 0;
 }
 
+.route-nav-primary {
+  display: flex;
+  align-items: stretch;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
 @media (min-width: 1181px) {
   .masthead-brand-group {
     grid-column: 1;
@@ -517,6 +524,15 @@ h1 {
     grid-column: 2;
     grid-row: 1;
     max-width: 100%;
+  }
+
+  .route-nav {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .route-nav-primary {
+    flex: 1 1 auto;
     overflow-x: auto;
   }
 
@@ -7550,6 +7566,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .masthead-nav {
+    display: contents;
+  }
+
+  .route-nav-primary {
     display: contents;
   }
 

@@ -95,6 +95,9 @@ export function visibleDashboardDestinations(
 export function visiblePrimaryDestinations(
   uiInfo: DashboardUiInfo | null | undefined,
 ): DashboardDestination[] {
+  if (!uiInfo) {
+    return DASHBOARD_DESTINATIONS.filter(({ navigationGroup }) => navigationGroup === 'primary');
+  }
   return visibleDashboardDestinations(uiInfo).filter(({ navigationGroup }) => navigationGroup === 'primary');
 }
 

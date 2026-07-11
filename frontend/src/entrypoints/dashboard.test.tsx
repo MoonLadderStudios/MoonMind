@@ -401,7 +401,7 @@ describe('Dashboard shared entry', () => {
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
     const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
-    expect(Array.from(navigation.querySelectorAll(':scope > a')).map((link) => link.textContent?.trim())).toEqual([
+    expect(Array.from(navigation.querySelectorAll('.route-nav-primary > a')).map((link) => link.textContent?.trim())).toEqual([
       'Workflows', 'Create', 'Recurring', 'Skills',
     ]);
     expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
@@ -3220,7 +3220,8 @@ describe('Dashboard shared entry', () => {
     expect(desktopMastheadRule('.masthead-brand-group')).toContain('grid-column: 1;');
     expect(desktopMastheadRule('.workflow-list-display-control')).toBe('');
     expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 2;');
-    expect(desktopMastheadRule('.masthead-nav')).toContain('overflow-x: auto;');
+    expect(desktopMastheadRule('.masthead-nav')).not.toContain('overflow');
+    expect(desktopMastheadRule('.route-nav-primary')).toContain('overflow-x: auto;');
     expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 3;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });

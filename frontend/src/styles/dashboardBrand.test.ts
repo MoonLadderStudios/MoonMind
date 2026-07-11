@@ -74,6 +74,12 @@ describe('dashboard masthead brand styles', () => {
     expect(popover).toContain('z-index: 60;');
     expect(popover).toContain('background: rgb(var(--mm-panel));');
     expect(popover).toContain('box-shadow: var(--mm-elevation-panel);');
+    expect(dashboardCss).toMatch(
+      /@media \(min-width: 1181px\)\s*\{[\s\S]*\.route-nav-primary\s*\{[^}]*overflow-x:\s*auto;/s,
+    );
+    expect(dashboardCss).not.toMatch(
+      /@media \(min-width: 1181px\)\s*\{[\s\S]*\.masthead-nav\s*\{[^}]*overflow-[xy]:\s*(?:auto|hidden|scroll);/s,
+    );
 
     expect(cssRuleBlock('.dashboard-system-trigger:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring);',
