@@ -1,19 +1,20 @@
 {
-  "artifact_type": "remediation.verification",
+  "artifactType": "remediation.verification",
   "attempt": 2,
-  "remediationAttempt": 2,
-  "verifiesRemediationAttempt": 2,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_attempt-2.json",
-  "verificationReportArtifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/var/artifacts/moonspec-verify/jira-orchestrate.json",
-  "verificationTarget": "MM-1199",
-  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "issueRef": "MM-1202",
+  "verificationTarget": "issue_brief",
+  "remediationAttemptArtifact": "reports/remediation_attempt-2.json",
+  "authoritativeVerifierArtifact": "artifacts/jira-implement-verify.json",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "summary": "Remediation attempt 2 closes both MM-1199 gaps: the dedicated Claude-only Omnigent host consumes the canonical writable OAuth volume at /root/.claude with competing credentials cleared, and the contract is protected by repo-local validation plus operator guidance. The unavailable pytest executable is a disclosed environment limitation; direct inspection, static contract assertions, and merged Compose rendering verify every repo-verifiable requirement.",
-  "environmentNotes": [
-    "Focused pytest was NOT RUN because /usr/local/bin/python has no pytest module. This is an environment-only limitation and does not gate the verdict because the test source was inspected, equivalent static YAML assertions passed, and Docker Compose rendered the merged configuration successfully.",
-    "Live Claude OAuth and Omnigent provider execution were NOT RUN because they require external credentials and services; they are advisory scope exclusions."
-  ]
+  "remainingWork": [
+    "Implement trusted resolved-skill native binding independent of publish authority.",
+    "Extract and adopt one provider-neutral resolver core with cross-host parity fixtures.",
+    "Implement immutable/versioned rollout and stale-worker exclusion.",
+    "Add operator capability-failure classification, budget protection, diagnostics, metrics, and alerts.",
+    "Add a readiness-gating parent-to-resolver canary and required Temporal/Compose/restart regression coverage.",
+    "Update the required architecture, deployment, restart, and registration-failure documentation."
+  ],
+  "summary": "Attempt 2 verifies the executable WorkerSpec activity-composition fix, but six concrete MM-1202 target-state gaps remain. The complete structured findings and mandatory next-remediation input are in artifacts/jira-implement-verify.json."
 }
