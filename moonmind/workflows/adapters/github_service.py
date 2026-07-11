@@ -62,6 +62,19 @@ class PullRequestReadinessResult(BaseModel):
     blockers: list[dict[str, Any]] = Field(default_factory=list, alias="blockers")
 
 
+class PullRequestSelectorResult(BaseModel):
+    """Canonical result of resolving one PR number, URL, or head branch."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    resolved: bool = False
+    pr_number: int | None = Field(None, alias="prNumber")
+    pr_url: str | None = Field(None, alias="prUrl")
+    selector_type: str = Field(..., alias="selectorType")
+    reason_code: str = Field(..., alias="reasonCode")
+    summary: str
+
+
 class GitHubIssueResult(BaseModel):
     """Result from GitHub issue create/update operations."""
 
@@ -1013,6 +1026,147 @@ class GitHubService:
                         f" {exc.__class__.__name__}"
                     ),
                 )
+
+    async def resolve_pull_request_selector(
+        self,
+        *,
+        repo: str,
+        selector: str,
+        github_token: str | None = None,
+    ) -> PullRequestSelectorResult:
+        """Resolve a PR number, GitHub PR URL, or exact open head branch."""
+
+        repository = str(repo or "").strip()
+        candidate = str(selector or "").strip()
+        if not repository or not candidate:
+            return PullRequestSelectorResult(
+                selectorType="invalid",
+                reasonCode="selector_invalid",
+                summary="PR resolution requires a repository and selector.",
+            )
+
+        try:
+            pr_number = int(candidate)
+        except ValueError:
+            pr_number = 0
+        if pr_number > 0:
+            return PullRequestSelectorResult(
+                resolved=True,
+                prNumber=pr_number,
+                prUrl=f"https://github.com/{repository}/pull/{pr_number}",
+                selectorType="number",
+                reasonCode="resolved",
+                summary=f"Resolved PR #{pr_number} from its numeric selector.",
+            )
+
+        parsed_url = self.parse_github_pr_url(candidate.rstrip("/"))
+        if parsed_url is not None:
+            owner, repo_name, number_text = parsed_url
+            url_repository = f"{owner}/{repo_name}"
+            if url_repository.lower() != repository.lower():
+                return PullRequestSelectorResult(
+                    selectorType="url",
+                    reasonCode="repository_mismatch",
+                    summary=(
+                        f"PR URL repository {url_repository} does not match "
+                        f"requested repository {repository}."
+                    ),
+                )
+            pr_number = int(number_text)
+            return PullRequestSelectorResult(
+                resolved=True,
+                prNumber=pr_number,
+                prUrl=f"https://github.com/{repository}/pull/{pr_number}",
+                selectorType="url",
+                reasonCode="resolved",
+                summary=f"Resolved PR #{pr_number} from its GitHub URL.",
+            )
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repository,
+        )
+        if not token:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="auth_unavailable",
+                summary=resolution_error or self._missing_auth_summary("resolve a PR branch"),
+            )
+
+        headers = self._github_headers(token)
+        owner = repository.split("/", 1)[0]
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.get(
+                    f"https://api.github.com/repos/{repository}/pulls",
+                    headers=headers,
+                    params={
+                        "state": "open",
+                        "head": f"{owner}:{candidate}",
+                        "per_page": 20,
+                    },
+                )
+                response.raise_for_status()
+            except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as exc:
+                return PullRequestSelectorResult(
+                    selectorType="branch",
+                    reasonCode="github_lookup_failed",
+                    summary=(
+                        f"GitHub PR lookup failed for branch {candidate}: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                )
+
+        data = response.json()
+        matches = []
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, Mapping):
+                    continue
+                head = item.get("head")
+                head = head if isinstance(head, Mapping) else {}
+                head_repo = head.get("repo")
+                head_repo = head_repo if isinstance(head_repo, Mapping) else {}
+                if (
+                    str(head.get("ref") or "") == candidate
+                    and str(head_repo.get("full_name") or "").lower()
+                    == repository.lower()
+                ):
+                    matches.append(item)
+
+        if not matches:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="pull_request_not_found",
+                summary=f"No open pull request found for branch {candidate} in {repository}.",
+            )
+        if len(matches) > 1:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="pull_request_ambiguous",
+                summary=(
+                    f"Multiple open pull requests found for branch {candidate} in "
+                    f"{repository}; submit a PR number or URL."
+                ),
+            )
+
+        match = matches[0]
+        pr_number = int(match.get("number") or 0)
+        pr_url = str(match.get("html_url") or "").strip()
+        if pr_number <= 0 or not pr_url:
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="github_response_invalid",
+                summary="GitHub returned incomplete pull-request identity metadata.",
+            )
+        return PullRequestSelectorResult(
+            resolved=True,
+            prNumber=pr_number,
+            prUrl=pr_url,
+            selectorType="branch",
+            reasonCode="resolved",
+            summary=f"Resolved branch {candidate} to PR #{pr_number}.",
+        )
 
     async def merge_pull_request(
         self,

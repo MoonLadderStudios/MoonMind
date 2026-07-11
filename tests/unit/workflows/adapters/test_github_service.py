@@ -281,6 +281,45 @@ async def test_create_pr_missing_token(monkeypatch):
     assert result.created is False
     assert "GitHub auth is not configured" in result.summary
 
+
+@pytest.mark.asyncio
+async def test_resolve_pull_request_selector_resolves_exact_open_branch(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    pull_request = {
+        "number": 3192,
+        "html_url": "https://github.com/o/r/pull/3192",
+        "head": {"ref": "feature/mm-1200", "repo": {"full_name": "o/r"}},
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, [pull_request]))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().resolve_pull_request_selector(
+            repo="o/r",
+            selector="feature/mm-1200",
+        )
+
+    assert result.resolved is True
+    assert result.pr_number == 3192
+    assert result.pr_url == "https://github.com/o/r/pull/3192"
+    assert mock_client.get.await_args.kwargs["params"]["head"] == "o:feature/mm-1200"
+
+
+@pytest.mark.asyncio
+async def test_resolve_pull_request_selector_rejects_cross_repo_url() -> None:
+    result = await GitHubService().resolve_pull_request_selector(
+        repo="o/r",
+        selector="https://github.com/other/repo/pull/42",
+    )
+
+    assert result.resolved is False
+    assert result.reason_code == "repository_mismatch"
+
 @pytest.mark.asyncio
 async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
     """Secret-ref fallback should be used when raw env token is absent."""

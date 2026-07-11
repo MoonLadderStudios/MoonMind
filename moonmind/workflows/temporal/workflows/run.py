@@ -84,6 +84,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.workflows.pr_resolver import (
         build_pr_resolver_start_input,
+        pr_resolver_identity_selector,
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
@@ -605,6 +606,9 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
+RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
+    "run-pr-resolver-selector-resolution-v1"
+)
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
 _MANAGED_AGENT_IDS = frozenset(
@@ -8368,6 +8372,57 @@ class MoonMindRunWorkflow:
                             )
                             try:
                                 if temporal_pr_resolver:
+                                    resolved_pull_request = None
+                                    merge_gate = parameters.get("mergeGate")
+                                    merge_gate = (
+                                        merge_gate
+                                        if isinstance(merge_gate, Mapping)
+                                        else {}
+                                    )
+                                    repository, selector = (
+                                        pr_resolver_identity_selector(
+                                            request=request,
+                                            node_inputs=node_inputs,
+                                            workflow_parameters=parameters,
+                                        )
+                                    )
+                                    try:
+                                        numeric_selector = int(selector)
+                                    except (TypeError, ValueError):
+                                        numeric_selector = 0
+                                    if (
+                                        workflow.patched(
+                                            RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH
+                                        )
+                                        and numeric_selector <= 0
+                                        and not str(
+                                            merge_gate.get("pullRequestUrl") or ""
+                                        ).strip()
+                                    ):
+                                        selector_result = await workflow.execute_activity(
+                                            "pr_resolver.resolve_selector",
+                                            {
+                                                "repository": repository,
+                                                "selector": selector,
+                                            },
+                                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                                            start_to_close_timeout=timedelta(minutes=2),
+                                            retry_policy=RetryPolicy(
+                                                maximum_attempts=3
+                                            ),
+                                        )
+                                        resolved_pull_request = (
+                                            dict(selector_result)
+                                            if isinstance(selector_result, Mapping)
+                                            else {}
+                                        )
+                                        if not resolved_pull_request.get("resolved"):
+                                            raise ValueError(
+                                                str(
+                                                    resolved_pull_request.get("summary")
+                                                    or "PR selector could not be resolved."
+                                                )
+                                            )
                                     resolver_input = build_pr_resolver_start_input(
                                         request=request,
                                         node_inputs=node_inputs,
@@ -8376,6 +8431,7 @@ class MoonMindRunWorkflow:
                                         parent_run_id=workflow.info().run_id,
                                         principal=self._principal(),
                                         step_id=node_id,
+                                        resolved_pull_request=resolved_pull_request,
                                     )
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.PRResolver",
