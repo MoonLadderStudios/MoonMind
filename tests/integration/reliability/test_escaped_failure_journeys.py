@@ -82,30 +82,14 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
 
 
-async def test_managed_workspace_uses_checkpoint_resolver_and_fault_is_retryable(
+async def test_checkpoint_finalization_fault_is_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replay_id = "managed-workspace-checkpoint-routing"
-    expected = load_replay(replay_id, "expected-outcome.json")
-    managed_root = tmp_path / "agent_jobs"
-    repo = managed_root / "run-3145" / "repo"
+    workspace_root = tmp_path / "workspaces"
+    repo = workspace_root / "temporal_sandbox" / "run-3145" / "repo"
     repo.mkdir(parents=True)
-    activities = TemporalSandboxActivities(
-        workspace_root=tmp_path / "sandbox-root",
-        managed_workspace_root=managed_root,
-    )
-
-    sandbox_calls = 0
-
-    def forbidden_sandbox_resolver(*_args: object, **_kwargs: object) -> Path:
-        nonlocal sandbox_calls
-        sandbox_calls += 1
-        raise AssertionError("managed workspace reached sandbox resolver")
-
-    monkeypatch.setattr(activities, "_resolve_workspace", forbidden_sandbox_resolver)
-    assert activities._resolve_checkpoint_workspace(repo, must_exist=True) == repo
-    assert sandbox_calls == 0
-    assert expected["sandboxResolverCalls"] == 0
+    activities = TemporalSandboxActivities(workspace_root=workspace_root)
 
     durable_execution_result = load_replay(replay_id, "execution-result.json")
     original_capture = activities._capture_workspace_evidence
