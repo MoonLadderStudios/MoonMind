@@ -1770,15 +1770,21 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1181 keeps route roots fluid and edge-anchored', async () => {
     const contentRule = cssRuleBlock(dashboardCss, '.dashboard-content');
+    const stateStripRule = cssRuleBlock(dashboardCss, '.dashboard-state-strip');
+    const stateStripInnerRule = cssRuleBlock(dashboardCss, '.dashboard-state-strip__inner');
     const panelRule = cssRuleBlock(dashboardCss, '.panel');
     expect(contentRule).toContain('min-width: 0;');
     expect(contentRule).toContain('width: 100%;');
+    expect(stateStripRule).toContain('min-width: 0;');
+    expect(stateStripRule).toContain('width: 100%;');
+    expect(stateStripInnerRule).toContain('max-width: min(72rem, calc(100vw - 2rem));');
     expect(panelRule).toContain('margin-left: 0;');
     expect(panelRule).toContain('margin-right: 0;');
     expect(panelRule).toContain('max-width: none;');
     expect(panelRule).toContain('min-width: 0;');
     expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain('max-width: none;');
     expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
+    expect(dashboardCss).not.toContain('dashboard-shell-constrained');
   });
 
   it('keeps workflow collection workspaces fluid', async () => {
