@@ -122,6 +122,10 @@ def test_advertised_workflow_types_match_production_worker_classes():
     assert registered_class_names == list_registered_workflow_types()
 
 
+def test_production_worker_classes_are_cached():
+    assert workflow_fleet_workflow_classes() is workflow_fleet_workflow_classes()
+
+
 def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
     async def _run() -> None:
         service, session, engine = await _artifact_service(tmp_path)

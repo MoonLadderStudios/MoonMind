@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from importlib import import_module
 from typing import Any
 
@@ -82,6 +83,7 @@ STATIC_WORKFLOW_REGISTRATIONS = (
 )
 
 
+@cache
 def workflow_fleet_workflow_classes() -> tuple[type[Any], ...]:
     """Return the exact workflow classes registered by production workers."""
 
