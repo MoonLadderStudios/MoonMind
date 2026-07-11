@@ -12,6 +12,8 @@ from moonmind.workflows.temporal.worker_healthcheck import (
     _build_response_body,
     _is_enabled,
     _port,
+    mark_worker_not_ready,
+    mark_worker_ready,
     start_healthcheck_server,
 )
 
@@ -23,6 +25,22 @@ def test_build_response_body_returns_valid_json(monkeypatch):
     assert body["fleet"] == "sandbox"
     assert "uptime_seconds" in body
     assert isinstance(body["uptime_seconds"], int)
+
+
+def test_readiness_exposes_bounded_worker_identity():
+    mark_worker_ready(
+        task_queues=("workflow",),
+        workflow_types=("MoonMind.PRResolver",),
+        registry_fingerprint="a" * 64,
+    )
+    try:
+        body = json.loads(_build_response_body(readiness=True))
+        assert body["status"] == "ready"
+        assert body["task_queues"] == ["workflow"]
+        assert body["workflow_types"] == ["MoonMind.PRResolver"]
+        assert body["registry_fingerprint"] == "a" * 64
+    finally:
+        mark_worker_not_ready()
 
 def test_build_response_body_defaults_fleet(monkeypatch):
     """Fleet should default to 'unknown' when env var is missing."""

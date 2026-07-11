@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cache
+import hashlib
 from importlib import import_module
 from typing import Any
 
@@ -25,6 +26,20 @@ class WorkflowRegistration:
         """Import the workflow class without making topology imports cyclic."""
 
         return getattr(import_module(self.module), self.class_name)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowWorkerSpec:
+    """Immutable executable identity for a workflow-fleet deployment."""
+
+    workflow_types: tuple[str, ...]
+    workflow_classes: tuple[type[Any], ...]
+    fingerprint: str
+
+
+def _registry_fingerprint(workflow_types: tuple[str, ...]) -> str:
+    payload = "\n".join(workflow_types).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 USER_WORKFLOW_REGISTRATION = WorkflowRegistration(
@@ -101,4 +116,20 @@ def workflow_fleet_workflow_types(
     return (
         registered_user_workflow_type(temporal_settings),
         *(registration.workflow_type for registration in STATIC_WORKFLOW_REGISTRATIONS),
+    )
+
+
+def workflow_fleet_worker_spec(
+    temporal_settings: TemporalSettings,
+) -> WorkflowWorkerSpec:
+    """Return the single immutable specification for construction and diagnostics."""
+
+    workflow_types = workflow_fleet_workflow_types(temporal_settings)
+    workflow_classes = workflow_fleet_workflow_classes()
+    if len(workflow_types) != len(workflow_classes):
+        raise RuntimeError("workflow registry type/class count mismatch")
+    return WorkflowWorkerSpec(
+        workflow_types=workflow_types,
+        workflow_classes=workflow_classes,
+        fingerprint=_registry_fingerprint(workflow_types),
     )

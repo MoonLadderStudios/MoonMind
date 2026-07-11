@@ -97,7 +97,11 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
 )
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
+from moonmind.workflows.temporal.worker_healthcheck import (
+    mark_worker_not_ready,
+    mark_worker_ready,
+    start_healthcheck_server,
+)
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     resolve_adapter_metadata,
@@ -106,7 +110,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workflow_registry import (
-    workflow_fleet_workflow_classes,
+    workflow_fleet_worker_spec,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
@@ -2640,6 +2644,7 @@ async def main_async() -> None:
 
     # Start healthcheck server before connecting to Temporal so probes
     # can confirm the process is alive even during initial connection.
+    mark_worker_not_ready()
     healthcheck_server = await start_healthcheck_server()
 
     import os
@@ -2693,7 +2698,8 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        workflows = workflow_fleet_workflow_classes()
+        worker_spec = workflow_fleet_worker_spec(settings.temporal)
+        workflows = worker_spec.workflow_classes
         activities = [
             resolve_adapter_metadata,
             get_activity_route,
@@ -2702,7 +2708,7 @@ async def main_async() -> None:
         ]
         logger.info(
             "Temporal workflow fleet registrations: %s",
-            ", ".join(list_registered_workflow_types()),
+            ", ".join(worker_spec.workflow_types),
         )
     else:
         runtime_resources, activities = await _build_runtime_activities(topology)
@@ -2723,6 +2729,12 @@ async def main_async() -> None:
             for task_queue in topology.task_queues
         ]
 
+        mark_worker_ready(
+            task_queues=topology.task_queues,
+            workflow_types=(worker_spec.workflow_types if topology.fleet == WORKFLOW_FLEET else ()),
+            registry_fingerprint=(worker_spec.fingerprint if topology.fleet == WORKFLOW_FLEET else None),
+        )
+
         logger.info(
             "Worker started, polling task queues: %s",
             ", ".join(topology.task_queues),
@@ -2731,6 +2743,7 @@ async def main_async() -> None:
             for worker in workers:
                 tg.create_task(worker.run())
     finally:
+        mark_worker_not_ready()
         if runtime_resources is not None:
             await runtime_resources.aclose()
         if healthcheck_server is not None:

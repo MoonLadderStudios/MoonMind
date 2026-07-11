@@ -12,7 +12,7 @@ from moonmind.workflows.temporal.workers import (
     describe_configured_worker,
 )
 from moonmind.workflows.temporal.workflow_registry import (
-    workflow_fleet_workflow_classes,
+    workflow_fleet_worker_spec,
 )
 
 async def main():
@@ -28,7 +28,7 @@ async def main():
 
     workflows = []
     if topology.fleet == WORKFLOW_FLEET:
-        workflows.extend(workflow_fleet_workflow_classes())
+        workflows.extend(workflow_fleet_worker_spec(settings.temporal).workflow_classes)
 
     bindings = build_worker_activity_bindings(fleet=topology.fleet)
     activities = [b.handler for b in bindings]

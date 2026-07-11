@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.workers import (
 )
 from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_workflow_classes,
+    workflow_fleet_worker_spec,
 )
 
 async def _artifact_service(
@@ -124,6 +125,14 @@ def test_advertised_workflow_types_match_production_worker_classes():
 
 def test_production_worker_classes_are_cached():
     assert workflow_fleet_workflow_classes() is workflow_fleet_workflow_classes()
+
+
+def test_worker_spec_has_stable_executable_registry_fingerprint():
+    spec = workflow_fleet_worker_spec(settings.temporal)
+    assert spec.workflow_classes == workflow_fleet_workflow_classes()
+    assert spec.workflow_types == list_registered_workflow_types()
+    assert len(spec.fingerprint) == 64
+    assert spec.fingerprint == workflow_fleet_worker_spec(settings.temporal).fingerprint
 
 
 def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
