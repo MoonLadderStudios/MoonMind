@@ -986,6 +986,7 @@ class MoonMindRunWorkflow:
         message: str,
         child_workflow_id: str | None = None,
         diagnostics_ref: str | None = None,
+        terminal_evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Capture a failure diagnostic from a completed-but-failed step result."""
 
@@ -1013,6 +1014,17 @@ class MoonMindRunWorkflow:
             "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
         }
         compact = {key: value for key, value in diagnostic.items() if value is not None}
+        if isinstance(terminal_evidence, Mapping):
+            for key in (
+                "failureCode",
+                "terminalContractId",
+                "terminalContractMissingEvidence",
+                "queuedChildCount",
+                "queuedChildren",
+            ):
+                value = terminal_evidence.get(key)
+                if value is not None:
+                    compact[key] = value
         if self._failure_diagnostic is None:
             self._failure_diagnostic = compact
         return compact
@@ -8826,6 +8838,7 @@ class MoonMindRunWorkflow:
                                 message=step_failure_summary,
                                 child_workflow_id=child_workflow_id,
                                 diagnostics_ref=diagnostics_ref,
+                                terminal_evidence=outputs,
                             )
                             # MM-884: capture the sanitized provider failure
                             # envelope and observed cost (first failure wins) so
@@ -14360,6 +14373,7 @@ class MoonMindRunWorkflow:
                     "contentDigest",
                     "inputContractDigest",
                     "inputs",
+                    "sideEffect",
                 ):
                     if key in raw_skill_payload:
                         compact_skill_payload[key] = self._json_value(
@@ -14954,6 +14968,24 @@ class MoonMindRunWorkflow:
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
 
+        terminal_contract_payload: dict[str, Any] | None = None
+        side_effect = compact_skill_payload.get("sideEffect")
+        if isinstance(side_effect, Mapping):
+            contract_id = str(side_effect.get("terminalContractId") or "").strip()
+            outcome_artifact = str(side_effect.get("outcomeArtifact") or "").strip()
+            expected_schema_version = str(
+                side_effect.get("terminalSchemaVersion") or ""
+            ).strip()
+            if contract_id and outcome_artifact and expected_schema_version:
+                terminal_contract_payload = {
+                    "contractId": contract_id,
+                    "owner": "agent",
+                    "evidenceKind": "workspace_json",
+                    "relativePath": outcome_artifact,
+                    "expectedSchemaVersion": expected_schema_version,
+                    "executionRef": step_execution_payload["stepExecutionId"],
+                }
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -14964,6 +14996,7 @@ class MoonMindRunWorkflow:
             runtime_command=runtime_command_payload,
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
+            terminal_contract=terminal_contract_payload,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
             skill=compact_skill_payload,

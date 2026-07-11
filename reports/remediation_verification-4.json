@@ -1,0 +1,37 @@
+{
+  "artifact_type": "remediation.verification",
+  "attempt": 4,
+  "remediationAttempt": 4,
+  "verifiesRemediationAttempt": 4,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-4.json",
+  "verificationReportArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/artifacts/jira-implement-verify.json",
+  "verificationTarget": "MM-1201",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
+  "recoverableInCurrentRuntime": true,
+  "remainingWork": [
+    {
+      "requirement": "Runtime-neutral capability-aware bounded continuation",
+      "gapType": "implementation",
+      "remainingWork": "Move continuation ownership and its bounded retry loop from CodexSessionAdapter to replay-safe AgentRun orchestration using the immutable runtime capability snapshot, with supported- and unsupported-runtime workflow-boundary tests.",
+      "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; moonmind/workflows/executions/runtime_capabilities.py; AgentRun workflow tests",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "resolvedInAttempt": [
+    {
+      "requirement": "Escaped incident reliability replay",
+      "evidence": "tests/integration/reliability/test_escaped_failure_journeys.py now crosses AgentRun terminal-evidence evaluation into parent failure diagnostic and finalization; targeted workflow/reliability suite passed 126 tests."
+    }
+  ],
+  "testSummary": {
+    "workflowAndReliability": "PASS (126 tests in 3.81s)",
+    "workspaceProjectionPreflight": "PASS"
+  },
+  "environmentNotes": [
+    "The issue brief is complete; no recovery was needed.",
+    "Workspace projection preflight passed.",
+    "Optional RAG enrichment was NOT RUN and does not gate the verdict."
+  ]
+}

@@ -17,6 +17,7 @@ from typing import Any
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentTerminalContract,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
@@ -1242,6 +1243,23 @@ class ManagedRuntimeLauncher:
         from moonmind.workflows.agent_skills.selection import selected_agent_skill
 
         selected_skill_name = selected_agent_skill(params) or None
+        selected_entry = next(
+            (
+                entry for entry in resolved_skillset.skills
+                if entry.skill_name == selected_skill_name
+            ),
+            None,
+        )
+        if selected_entry is not None and selected_entry.terminal_contract is not None:
+            execution_ref = (
+                request.step_execution.step_execution_id
+                if request.step_execution is not None
+                else ""
+            )
+            request.terminal_contract = AgentTerminalContract.model_validate({
+                **selected_entry.terminal_contract.model_dump(by_alias=True),
+                "executionRef": execution_ref,
+            })
         materialization_metadata = await materialize_run_skill_snapshot(
             workspace_path=resolved_workspace_path,
             run_root=str(run_root),
@@ -1429,6 +1447,18 @@ class ManagedRuntimeLauncher:
             resolved_workspace_path=resolved_workspace_path,
         )
         if skill_materialization_metadata is not None:
+            active_skills_dir = str(
+                skill_materialization_metadata.get("visiblePath") or ""
+            ).strip()
+            if not active_skills_dir:
+                raise SkillProjectionError(
+                    "active skills visiblePath metadata is missing at launch"
+                )
+            env_overrides["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir
+            if request.step_execution is not None:
+                env_overrides["MOONMIND_STEP_EXECUTION_ID"] = (
+                    request.step_execution.step_execution_id
+                )
             self._emit_system_annotation(
                 run_id=run_id,
                 workspace_path=resolved_workspace_path,

@@ -21,6 +21,7 @@ from temporalio.exceptions import (
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunState,
@@ -193,7 +194,6 @@ _SESSION_INTERVENTION_FIELDS = (
 )
 _EMPTY_ASSISTANT_MAX_CLEAR_SESSION_ATTEMPTS = 2
 _MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS = 2
-_INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE = "INCOMPLETE_TERMINAL_CONTRACT"
 _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     r"\b(?:created\s+(?:jira\s+)?(?:issues?|stories?|tickets?)|"
     r"created\s+(?:issue\s+)?keys?|issue\s+keys?\s+created)\b"
@@ -226,15 +226,6 @@ def _pr_resolver_terminal_contract(
     metadata = _derive_pr_resolver_metadata(workspace_path)
     return not missing, missing, metadata
 
-
-def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
-    evidence = ", ".join(f"`{path}`" for path in missing)
-    return (
-        "The selected skill has not satisfied its terminal contract. "
-        f"Missing required evidence: {evidence}. Resume the still-running "
-        "resolver if possible; otherwise rerun it from durable attempt state. "
-        "Do not declare completion until the terminal result contract is satisfied."
-    )
 
 def _result_ref_metadata(
     *,
@@ -690,11 +681,21 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request=request,
                 workspace_path=workspace_path,
             )
+        session_environment = dict(launch_context.delta_env_overrides)
+        active_skills_dir = str(
+            request.parameters.pop("_moonmindActiveSkillsDir", "")
+        ).strip()
+        if active_skills_dir:
+            session_environment["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir
+        if request.step_execution is not None:
+            session_environment["MOONMIND_STEP_EXECUTION_ID"] = (
+                request.step_execution.step_execution_id
+            )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
             workspace_path=workspace_path,
-            environment=launch_context.delta_env_overrides,
+            environment=session_environment,
             profile=self._profile_for_launch(
                 runtime_id=runtime_id,
                 profile=profile,
@@ -973,120 +974,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 runtime_epoch=turn_response.session_state.session_epoch,
             )
             current_active_turn_id = turn_response.session_state.active_turn_id
-            selected_skill = selected_agent_skill(request.parameters)
-            continuation_history: list[dict[str, Any]] = []
-            terminal_contract_metadata: dict[str, Any] = {}
-            if turn_response.status == "completed" and selected_skill == "pr-resolver":
-                contract_satisfied, missing_evidence, terminal_contract_metadata = (
-                    _pr_resolver_terminal_contract(workspace_path)
-                )
-                for continuation_index in range(
-                    1, _MAX_INCOMPLETE_TERMINAL_CONTRACT_CONTINUATIONS + 1
-                ):
-                    if contract_satisfied:
-                        break
-                    continuation_reason = "missing_terminal_evidence"
-                    continuation_history.append(
-                        {
-                            "continuation": continuation_index,
-                            "reason": continuation_reason,
-                            "missingEvidence": list(missing_evidence),
-                            "outcome": "requested",
-                        }
-                    )
-                    if execution_deadline is not None:
-                        remaining_seconds = execution_deadline - time.monotonic()
-                        if remaining_seconds <= 0:
-                            continuation_history[-1]["outcome"] = "deadline_exhausted"
-                            break
-                    continuation_call = self._coerce_turn_response(
-                        self._send_turn(
-                            SendCodexManagedSessionTurnRequest(
-                                sessionId=current_locator.session_id,
-                                sessionEpoch=current_locator.session_epoch,
-                                containerId=current_locator.container_id,
-                                threadId=current_locator.thread_id,
-                                instructions=_terminal_contract_continuation_instruction(
-                                    missing_evidence
-                                ),
-                                reason="incomplete_terminal_contract",
-                                requestId=(
-                                    f"{request.idempotency_key}:terminal-contract:"
-                                    f"{continuation_index}"
-                                ),
-                            )
-                        )
-                    )
-                    try:
-                        if execution_deadline is None:
-                            turn_response = await continuation_call
-                        else:
-                            try:
-                                turn_response = await asyncio.wait_for(
-                                    continuation_call, timeout=remaining_seconds
-                                )
-                            except TimeoutError:
-                                continuation_history[-1]["outcome"] = "deadline_exhausted"
-                                break
-                    except Exception as exc:
-                        # Cancellation derives from BaseException and intentionally
-                        # bypasses this recovery path. Provider/activity failures,
-                        # however, must retain the contract context that caused the
-                        # continuation while preserving their underlying details.
-                        continuation_history[-1]["outcome"] = "provider_failure"
-                        failure_details: dict[str, Any] = {
-                            "reason": str(exc).strip()
-                            or "Managed-session continuation failed",
-                            "continuationFailureType": type(exc).__name__,
-                        }
-                        if isinstance(exc, ActivityError) and isinstance(
-                            exc.cause, ApplicationError
-                        ):
-                            failure_details.update(
-                                _turn_failure_metadata_from_activity_error(exc.cause)
-                            )
-                        turn_response = turn_response.model_copy(
-                            update={"status": "failed", "metadata": failure_details}
-                        )
-                        break
-                    turn_id = turn_response.turn_id
-                    current_locator = self._locator_from_state(
-                        session_state=turn_response.session_state,
-                        runtime_epoch=turn_response.session_state.session_epoch,
-                    )
-                    current_active_turn_id = turn_response.session_state.active_turn_id
-                    if turn_response.status != "completed":
-                        continuation_history[-1]["outcome"] = turn_response.status
-                        break
-                    contract_satisfied, missing_evidence, terminal_contract_metadata = (
-                        _pr_resolver_terminal_contract(workspace_path)
-                    )
-                    continuation_history[-1]["outcome"] = (
-                        "recovered" if contract_satisfied else "incomplete"
-                    )
-                if not contract_satisfied:
-                    incomplete_metadata = {
-                        **dict(turn_response.metadata or {}),
-                        **terminal_contract_metadata,
-                        "failureCode": (
-                            dict(turn_response.metadata or {}).get("failureCode")
-                            or _INCOMPLETE_TERMINAL_CONTRACT_FAILURE_CODE
-                        ),
-                        "terminalContractContinuationCount": len(continuation_history),
-                        "terminalContractReason": "missing_terminal_evidence",
-                        "terminalContractMissingEvidence": list(missing_evidence),
-                        "terminalContractContinuationHistory": continuation_history,
-                        "terminalContractRecoveryOutcome": (
-                            continuation_history[-1]["outcome"]
-                            if continuation_history
-                            and continuation_history[-1]["outcome"]
-                            in {"provider_failure", "deadline_exhausted"}
-                            else "exhausted"
-                        ),
-                    }
-                    turn_response = turn_response.model_copy(
-                        update={"status": "failed", "metadata": incomplete_metadata}
-                    )
             if turn_response.status != "completed":
                 raw_reason = turn_response.metadata.get("reason")
                 reason = _clamp_agent_run_result_summary(
@@ -1208,17 +1095,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     ),
                     "turnId": turn_id,
                 }
-                if continuation_history:
-                    result_metadata.update(terminal_contract_metadata)
-                    result_metadata.update(
-                        {
-                            "terminalContractContinuationCount": len(continuation_history),
-                            "terminalContractReason": "missing_terminal_evidence",
-                            "terminalContractMissingEvidence": [],
-                            "terminalContractContinuationHistory": continuation_history,
-                            "terminalContractRecoveryOutcome": "recovered",
-                        }
-                    )
                 if disposition:
                     result_metadata["outcomeDisposition"] = disposition
                     if disposition_reason:
@@ -1684,6 +1560,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 request,
                 prepared.get("durableRetrievalMetadata"),
             )
+            active_skills_dir = str(prepared.get("activeSkillsDir") or "").strip()
+            if active_skills_dir:
+                request.parameters["_moonmindActiveSkillsDir"] = active_skills_dir
+            terminal_contract = prepared.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
             prepared = prepared.get("instructions")
         instructions = str(prepared or "").strip()
         if instructions:

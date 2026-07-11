@@ -1,23 +1,31 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
-from moonmind.workflows.adapters.codex_session_adapter import (
-    CodexSessionRunFailedError,
-    _pr_resolver_terminal_contract,
+from moonmind.workflows.adapters.codex_session_adapter import _pr_resolver_terminal_contract
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
+    TemporalSandboxActivities,
 )
-from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
     _pr_resolver_request,
     _terminal_contract_test_adapter,
     _turn_response,
+)
+from tests.unit.workflows.temporal.workflows.test_run_integration import (
+    _finalize_and_capture_summary,
 )
 
 
@@ -27,6 +35,93 @@ pytestmark = [
     pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
+
+
+async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
+    replay_id = "batch-workflows-missing-fanout-evidence"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    evaluation = evaluate_terminal_evidence(
+        manifest["terminalContract"], workspace_path=manifest["workspacePath"]
+    )
+    assert manifest["agentTurn"]["status"] == "completed"
+    assert manifest["postRecords"] == []
+    assert evaluation.satisfied is False
+    assert evaluation.failure_code == expected["failureCode"]
+    assert expected["parentState"] == "failed"
+
+
+async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the escaped MM-1201 journey through AgentRun's authority handoff."""
+    replay_id = "batch-workflows-missing-fanout-evidence"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    agent_run = MoonMindAgentRun()
+
+    async def execute_activity(name: str, payload: dict, **_kwargs: object) -> dict:
+        assert name == "agent_runtime.evaluate_terminal_evidence"
+        activities = TemporalAgentRuntimeActivities(client_adapter=object())
+        evaluated = await activities.agent_runtime_evaluate_terminal_evidence(payload)
+        return evaluated.model_dump(mode="json", by_alias=True)
+
+    monkeypatch.setattr(agent_run, "_execute_routed_activity", execute_activity)
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="mm-1201",
+        idempotencyKey="mm-1201:replay",
+        workspaceSpec={"workspacePath": manifest["workspacePath"]},
+        terminalContract=manifest["terminalContract"],
+    )
+    provider_result = AgentRunResult(
+        summary=manifest["agentTurn"]["assistantText"],
+        metadata={"workspacePath": manifest["workspacePath"]},
+    )
+
+    result = await agent_run._evaluate_terminal_contract(
+        request=request, result=provider_result
+    )
+
+    assert result.failure_class == expected["failureClass"]
+    assert result.metadata["failureCode"] == expected["failureCode"]
+    assert result.metadata["terminalContractMissingEvidence"] == expected["missingEvidence"]
+    assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
+
+    parent = MoonMindRunWorkflow()
+    parent._owner_type = "user"
+    parent._owner_id = "mm-1201-replay"
+    diagnostic = parent._record_result_failure_diagnostic(
+        stage="execute",
+        category=result.failure_class,
+        source="child_workflow",
+        step_id="batch-workflows",
+        step_title="batch-workflows",
+        message=result.summary,
+        child_workflow_id="agent-run-mm-1201",
+        terminal_evidence=result.metadata,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_workflow_module
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 11, tzinfo=timezone.utc),
+    )
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        parent,
+        parameters={"publishMode": "none"},
+        status="failed",
+        error=diagnostic["message"],
+    )
+
+    assert summary["finishOutcome"]["code"] == "FAILED"
+    assert summary["failure"]["failureCode"] == expected["failureCode"]
+    assert summary["failure"]["terminalContractMissingEvidence"] == expected[
+        "missingEvidence"
+    ]
 
 
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:
@@ -70,14 +165,12 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
 
     binding = _binding()
     adapter = _terminal_contract_test_adapter(tmp_path, send_turn=send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as exc_info:
-        await adapter.start(_pr_resolver_request(binding, workspace))
+    handle = await adapter.start(_pr_resolver_request(binding, workspace))
 
-    result = exc_info.value.agent_run_result
-    assert result.failure_class == "execution_error"
-    assert result.metadata["failureCode"] == expected["failureCode"]
-    assert result.metadata["terminalContractContinuationCount"] == 2
-    assert len(requests) == 3
+    # Provider adapters translate one runtime turn. AgentRun owns terminal
+    # evidence evaluation and any capability-aware bounded continuation.
+    assert handle.status == "completed"
+    assert len(requests) == 1
     assert {
         (item.session_id, item.session_epoch, item.thread_id) for item in requests
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}

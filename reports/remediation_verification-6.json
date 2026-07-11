@@ -1,0 +1,23 @@
+{
+  "artifact_type": "remediation.verification",
+  "attempt": 6,
+  "remediationAttempt": 6,
+  "verifiesRemediationAttempt": 6,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-6.json",
+  "verificationReportArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/artifacts/jira-implement-verify.json",
+  "verificationTarget": "MM-1201",
+  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
+  "verdict": "FULLY_IMPLEMENTED",
+  "recommendedNextAction": "advance",
+  "recoverableInCurrentRuntime": true,
+  "remainingWork": [],
+  "testSummary": {
+    "targetedUnitAndReliability": "PASS (394 tests)",
+    "workspaceProjectionPreflight": "PASS",
+    "diffHygiene": "PASS"
+  },
+  "environmentNotes": [
+    "The authoritative issue brief artifact is complete; no recovery was needed.",
+    "Optional RAG enrichment was NOT RUN and does not gate the verdict."
+  ]
+}

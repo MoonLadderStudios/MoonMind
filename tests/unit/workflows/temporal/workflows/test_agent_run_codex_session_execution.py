@@ -9,6 +9,7 @@ from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
@@ -81,6 +82,206 @@ async def test_managed_session_request_preserves_explicit_empty_inputs() -> None
 
     assert request.parameters == {}
     assert request.workspace_spec == {}
+
+
+def _request_with_terminal_contract() -> AgentExecutionRequest:
+    return _managed_session_request().model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                contractId="batch-fanout-v1",
+                relativePath="reports/result.json",
+                expectedSchemaVersion="1",
+                executionRef="exec-1",
+            )
+        }
+    )
+
+
+async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        _request_with_terminal_contract().model_dump(by_alias=True)
+    )
+    calls: list[tuple[str, Any]] = []
+    evaluations = 0
+
+    async def fake_activity(name: str, payload: Any, **_kwargs: Any) -> Any:
+        nonlocal evaluations
+        calls.append((name, payload))
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            evaluations += 1
+            if evaluations == 1:
+                return {
+                    "summary": "missing",
+                    "failureClass": "execution_error",
+                    "metadata": {
+                        "terminalContractMissingEvidence": ["reports/result.json"]
+                    },
+                }
+            return {"summary": "recovered", "metadata": {}}
+        if name == "agent_runtime.load_session_snapshot":
+            return {"sessionEpoch": 1, "containerId": "ctr-1", "threadId": "thr-1"}
+        if name == "agent_runtime.send_turn":
+            return {"status": "completed"}
+        if name == "agent_runtime.fetch_result":
+            return {"summary": "continued", "metadata": {}}
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    assert result.metadata["terminalContractContinuationCount"] == 1
+    assert [name for name, _ in calls] == [
+        "agent_runtime.evaluate_terminal_evidence",
+        "agent_runtime.load_session_snapshot",
+        "agent_runtime.send_turn",
+        "agent_runtime.fetch_result",
+        "agent_runtime.evaluate_terminal_evidence",
+    ]
+    turn = calls[2][1]
+    assert turn.request_id == "idem-managed-1:terminal-contract:1"
+
+
+async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+        }
+    )
+    calls: list[str] = []
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        calls.append(name)
+        return {
+            "summary": "missing",
+            "failureClass": "execution_error",
+            "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractRecoveryOutcome"] == "continuation_unsupported"
+    assert result.metadata["terminalContractContinuationCount"] == 0
+    assert calls == ["agent_runtime.evaluate_terminal_evidence"]
+
+
+async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_activity(name: str, payload: Any, **_kwargs: Any) -> Any:
+        calls.append((name, payload))
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            return {
+                "summary": "missing",
+                "failureClass": "execution_error",
+                "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            }
+        if name == "agent_runtime.load_session_snapshot":
+            return {"sessionEpoch": 1, "containerId": "ctr-1", "threadId": "thr-1"}
+        if name == "agent_runtime.send_turn":
+            return {"status": "completed"}
+        if name == "agent_runtime.fetch_result":
+            return {"summary": "still missing", "metadata": {}}
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=AgentRunResult(summary="initial"),
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractContinuationCount"] == 2
+    assert result.metadata["terminalContractRecoveryOutcome"] == "incomplete"
+    turns = [payload for name, payload in calls if name == "agent_runtime.send_turn"]
+    assert [turn.request_id for turn in turns] == [
+        "idem-managed-1:terminal-contract:1",
+        "idem-managed-1:terminal-contract:2",
+    ]
+    assert {(turn.session_id, turn.thread_id) for turn in turns} == {
+        ("sess:wf-task-1:codex_cli", "thr-1")
+    }
+
+
+async def test_terminal_contract_provider_failure_retains_contract_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            return {
+                "summary": "missing",
+                "failureClass": "execution_error",
+                "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            }
+        if name == "agent_runtime.load_session_snapshot":
+            return {"sessionEpoch": 1, "containerId": "ctr-1", "threadId": "thr-1"}
+        if name == "agent_runtime.send_turn":
+            raise RuntimeError("provider transport unavailable")
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=_request_with_terminal_contract(),
+        result=AgentRunResult(summary="initial"),
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractRecoveryOutcome"] == "provider_failure"
+    assert result.metadata["terminalContractContinuationCount"] == 1
+    assert result.metadata["terminalContractContinuationHistory"] == [
+        {"continuation": 1, "reason": "missing_terminal_evidence", "outcome": "provider_failure"}
+    ]
+
+
+async def test_terminal_contract_continuation_propagates_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+
+    async def fake_activity(name: str, _payload: Any, **_kwargs: Any) -> Any:
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            return {
+                "summary": "missing",
+                "failureClass": "execution_error",
+                "metadata": {"terminalContractMissingEvidence": ["reports/result.json"]},
+            }
+        if name == "agent_runtime.load_session_snapshot":
+            return {"sessionEpoch": 1, "containerId": "ctr-1", "threadId": "thr-1"}
+        if name == "agent_runtime.send_turn":
+            raise asyncio.CancelledError
+        raise AssertionError(name)
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await run._evaluate_terminal_contract(
+            request=_request_with_terminal_contract(),
+            result=AgentRunResult(summary="initial"),
+        )
 
 
 async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadata(

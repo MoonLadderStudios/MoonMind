@@ -13,33 +13,39 @@ publish policy. A summary artifact links every queued child workflow.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hashlib
+import importlib.util
 import json
 import logging
 import os
-import re
 import sys
 import traceback
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-import httpx
-from moonmind.workflows.executions.execution_contract import SUPPORTED_PUBLISH_MODES
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+SHARED_ROOT = Path(__file__).resolve().parents[2] / "_shared"
+_CLIENT_PATH = SHARED_ROOT / "workflow_execution_client.py"
+_CLIENT_SPEC = importlib.util.spec_from_file_location(
+    "batch_workflows_execution_client", _CLIENT_PATH
+)
+if _CLIENT_SPEC is None or _CLIENT_SPEC.loader is None:
+    raise RuntimeError(f"resolved skill snapshot is missing portable client: {_CLIENT_PATH}")
+_CLIENT = importlib.util.module_from_spec(_CLIENT_SPEC)
+_CLIENT_SPEC.loader.exec_module(_CLIENT)
+child_idempotency_key = _CLIENT.child_idempotency_key
+normalize_publish_mode = _CLIENT.normalize_publish_mode
+normalize_runtime_id = _CLIENT.normalize_runtime_id
+validate_execution_envelope = _CLIENT.validate_execution_envelope
 
 logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
-IDEMPOTENCY_KEY_MAX_LENGTH = 128
+IDEMPOTENCY_KEY_MAX_LENGTH = _CLIENT.IDEMPOTENCY_KEY_MAX_LENGTH
 PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation"
-BATCH_PUBLISH_MODES = SUPPORTED_PUBLISH_MODES | {PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
 
 
 @dataclass
@@ -82,10 +88,7 @@ def _text(value: Any) -> str | None:
 
 
 def _normalize_publish_mode(value: str | None) -> str:
-    candidate = str(value or "").strip().lower()
-    if candidate not in BATCH_PUBLISH_MODES:
-        return "pr"
-    return candidate
+    return normalize_publish_mode(value)
 
 
 def _publish_payload_for_mode(publish_mode: str) -> dict[str, Any]:
@@ -305,22 +308,13 @@ def _child_idempotency_key(
     scope = _text(batch_scope)
     if not scope:
         return None
-    components = {
-        "scope": scope,
-        "provider": provider,
-        "ref": ref,
-        "targetKind": target_kind,
-        "targetSlug": target_slug,
-    }
-    canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    safe_ref = re.sub(r"[^A-Za-z0-9_.#/-]+", "_", ref)[:32]
-    key = f"batch-workflows:{provider}:{safe_ref}:sha256:{digest}"
-    if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
-        key = f"batch-workflows:sha256:{digest}"
-    if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
-        raise RuntimeError("generated child idempotency key exceeds storage limit")
-    return key
+    return child_idempotency_key(
+        batch_scope=scope,
+        provider=provider,
+        ref=ref,
+        target_kind=target_kind,
+        target_slug=target_slug,
+    )
 
 
 def build_child_request(
@@ -427,12 +421,14 @@ def build_child_request(
     if idempotency_key:
         payload_dict["idempotencyKey"] = idempotency_key
 
-    return {
-        "type": "task",
-        "priority": 0,
-        "maxAttempts": 3,
-        "payload": payload_dict,
-    }
+    return validate_execution_envelope(
+        {
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": payload_dict,
+        }
+    )
 
 
 def build_child_requests(
@@ -693,7 +689,7 @@ def _read_worker_token() -> str | None:
     return None
 
 
-async def _submit_jobs_via_http(
+def _submit_jobs_via_http(
     submissions: list[ChildSubmission],
     *,
     moonmind_url: str,
@@ -710,55 +706,58 @@ async def _submit_jobs_via_http(
     agent_run_id = _agent_run_id_from_env()
     if agent_run_id:
         headers["X-MoonMind-Agent-Run-Identifier"] = agent_run_id
-    base = moonmind_url.rstrip("/")
-    async with httpx.AsyncClient(
-        base_url=base, timeout=30.0, headers=headers
-    ) as client:
-        for submission in submissions:
-            request = submission.queue_request
-            body = {
-                "type": str(request["type"]),
-                "payload": request["payload"],
-                "priority": int(request.get("priority", 0)),
-                "maxAttempts": int(request.get("maxAttempts", 3)),
-            }
-            try:
-                response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
-                response.raise_for_status()
-                data = response.json()
-                job_id = (
-                    str(
-                        data.get("workflowId")
-                        or data.get("taskId")
-                        or data.get("id")
-                        or ""
-                    )
-                    or "(unknown)"
-                )
-                created.append(
-                    {
-                        "provider": submission.provider,
-                        "ref": submission.ref,
-                        "workflowId": job_id,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 - reported per target
-                errors.append(
-                    {
-                        "provider": submission.provider,
-                        "ref": submission.ref,
-                        "error": str(exc),
-                    }
-                )
+    endpoint = moonmind_url.rstrip("/") + API_EXECUTIONS_ENDPOINT
+    for submission in submissions:
+        envelope = submission.queue_request
+        body = {
+            "type": str(envelope["type"]),
+            "payload": envelope["payload"],
+            "priority": int(envelope.get("priority", 0)),
+            "maxAttempts": int(envelope.get("maxAttempts", 3)),
+        }
+        try:
+            encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+            http_request = urllib.request.Request(
+                endpoint, data=encoded, headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(http_request, timeout=30.0) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            if not isinstance(data, dict):
+                raise RuntimeError("execution API response must be a JSON object")
+            job_id = str(
+                data.get("workflowId") or data.get("taskId") or data.get("id") or ""
+            ).strip()
+            if not job_id:
+                raise RuntimeError("execution API response is missing workflowId")
+            created.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "workflowId": job_id,
+                    "executionId": job_id,
+                    "targetRef": submission.ref,
+                    "idempotencyKey": str(
+                        envelope.get("payload", {}).get("idempotencyKey") or ""
+                    ),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - reported per target
+            errors.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "error": str(exc),
+                }
+            )
     return created, errors
 
 
-async def _submit_jobs(
+def _submit_jobs(
     submissions: list[ChildSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     moonmind_url = _text(os.getenv("MOONMIND_URL"))
     if moonmind_url:
-        return await _submit_jobs_via_http(
+        return _submit_jobs_via_http(
             submissions,
             moonmind_url=moonmind_url,
             worker_token=_read_worker_token(),
@@ -775,7 +774,9 @@ async def _submit_jobs(
 
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2))
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -808,20 +809,50 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     targets_path = Path(args.targets)
-    if not targets_path.exists():
-        raise RuntimeError(f"targets file not found: {targets_path}")
-    targets = _read_targets(targets_path)
-    constraints = _read_constraints(args)
-    runtime = _resolve_runtime_selection(args.task_context_path)
-    batch_repository = _load_parent_repository(args.task_context_path)
-    batch_scope = _parent_run_scope(args.task_context_path)
-    inherit_from_caller = _task_workflow_id_from_env() is not None
-    target_kind, target_slug = parse_run_ref(args.run_ref)
+    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir)
+    result_path = artifacts_dir / "batch-workflows-result.json"
+    try:
+        result_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"cannot remove stale result artifact: {exc}") from exc
+    execution_ref = _text(os.getenv("MOONMIND_STEP_EXECUTION_ID"))
+    targets_digest = (
+        hashlib.sha256(targets_path.read_bytes()).hexdigest()
+        if targets_path.exists() and targets_path.is_file()
+        else None
+    )
+    base_result: dict[str, Any] = {
+        "schemaVersion": "moonmind.batch-workflows-result.v1",
+        "contractId": "batch_workflows_fanout.v1",
+        "executionRef": execution_ref,
+        "targetsSha256": targets_digest,
+        "status": "running",
+        "runRef": args.run_ref,
+        "requested": 0,
+        "created": 0,
+        "queued": [],
+        "skipped": [],
+        "errors": [],
+        "failure": None,
+    }
+    _write_artifacts(result_path, base_result)
+    try:
+        if not execution_ref:
+            raise RuntimeError("MOONMIND_STEP_EXECUTION_ID is required")
+        if not targets_path.exists():
+            raise RuntimeError(f"targets file not found: {targets_path}")
+        targets = _read_targets(targets_path)
+        constraints = _read_constraints(args)
+        runtime = _resolve_runtime_selection(args.task_context_path)
+        batch_repository = _load_parent_repository(args.task_context_path)
+        batch_scope = _parent_run_scope(args.task_context_path) or execution_ref
+        inherit_from_caller = _task_workflow_id_from_env() is not None
+        target_kind, target_slug = parse_run_ref(args.run_ref)
 
-    config = TargetConfig(
+        config = TargetConfig(
         target_kind=target_kind,
         target_slug=target_slug,
         publish_mode=_normalize_publish_mode(args.publish_mode),
@@ -830,7 +861,7 @@ async def main(argv: list[str] | None = None) -> int:
         update_status=bool(args.update_status),
     )
 
-    submissions, skipped = build_child_requests(
+        submissions, skipped = build_child_requests(
         targets,
         config=config,
         runtime=runtime,
@@ -839,9 +870,20 @@ async def main(argv: list[str] | None = None) -> int:
         inherit_runtime_from_caller=inherit_from_caller,
         default_repository=batch_repository,
     )
-    created, errors = await _submit_jobs(submissions)
+        created, errors = _submit_jobs(submissions)
+    except Exception as exc:  # evidence must survive every reachable preflight failure
+        failed = {
+            **base_result,
+            "status": "failed",
+            "failure": {"code": "BATCH_FANOUT_FAILED", "message": str(exc)[:1024]},
+            "errors": [{"error": str(exc)[:1024]}],
+        }
+        _write_artifacts(result_path, failed)
+        print(json.dumps(failed, indent=2))
+        return 1
 
     payload = {
+        **base_result,
         "timestamp": datetime.now(UTC).isoformat(),
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "target": {
@@ -856,18 +898,26 @@ async def main(argv: list[str] | None = None) -> int:
             "effort": runtime.effort,
             "executionProfileRef": runtime.provider_profile,
         },
+        "status": (
+            "no_op" if not targets else
+            "queued" if len(created) == len(targets) and not errors and not skipped else
+            "partial_failure" if created else "failed"
+        ),
         "requested": len(targets),
         "created": len(created),
         "queued": created,
         "skipped": [{"ref": item.ref, "reason": item.reason} for item in skipped],
         "errors": errors,
+        "failure": (
+            {"code": "BATCH_FANOUT_PARTIAL_FAILURE" if created else "BATCH_FANOUT_FAILED"}
+            if errors or skipped else None
+        ),
     }
     if payload["created"] == 0:
         payload["message"] = "No child workflows were queued."
 
-    artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir)
-    _write_artifacts(artifacts_dir / "batch-workflows-result.json", payload)
-    if payload["created"] == 0 and not errors:
+    _write_artifacts(result_path, payload)
+    if payload["status"] == "no_op":
         _write_artifacts(
             artifacts_dir / "skill_outcome.json",
             {
@@ -886,12 +936,12 @@ async def main(argv: list[str] | None = None) -> int:
         f"queued={payload['created']} skipped={len(skipped)} errors={len(errors)} "
         f"target={run_ref_for_config(config)}"
     )
-    return 1 if errors else 0
+    return 0 if payload["status"] in {"queued", "no_op"} else 1
 
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(asyncio.run(main()))
+        raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001 - surface root cause before exiting
         # Print the exception message and full traceback to stderr so runtime
         # failures (missing files, JSON decode errors, HTTP errors) are

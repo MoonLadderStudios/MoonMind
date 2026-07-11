@@ -1,0 +1,39 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 4,
+  "issueRef": "MM-1201",
+  "sourceVerificationArtifact": "reports/remediation_verification-3.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "status": "partial",
+  "summary": "Extended the escaped MM-1201 reliability replay through AgentRun terminal-evidence enforcement and parent finalization/projection in one integration journey. Runtime-neutral capability-aware continuation remains open.",
+  "changedFiles": [
+    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "reports/remediation_attempt-4.json"
+  ],
+  "gapStatuses": [
+    {
+      "requirement": "Runtime-neutral capability-aware continuation",
+      "status": "open",
+      "evidence": "The bounded continuation loop remains in CodexSessionAdapter. Attempt 4 did not introduce a duplicate or partially migrated side-effect path without a replay-safe workflow/activity contract.",
+      "remaining": "Move the continuation decision and bounded retry loop from CodexSessionAdapter to AgentRun using the immutable RuntimeExecutionCapabilities snapshot, with supported- and unsupported-runtime workflow tests."
+    },
+    {
+      "requirement": "Escaped incident reliability replay",
+      "status": "resolved",
+      "evidence": "The batch-workflows replay now evaluates missing evidence through TemporalAgentRuntimeActivities and MoonMindAgentRun, records the resulting structured child failure in MoonMindRunWorkflow, runs parent finalization, and asserts FAILED finish outcome plus the same failure code and missing-evidence path.",
+      "remaining": null
+    }
+  ],
+  "targetedLocalChecks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability/test_escaped_failure_journeys.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short",
+      "result": "PASS",
+      "details": "126 passed in 3.92s."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "details": "No whitespace errors."
+    }
+  ]
+}

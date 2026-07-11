@@ -210,7 +210,7 @@ steps:
     capability's issue input and copy the shared constraints into every child.
     Apply publish override "{{ inputs.publish_mode }}" once to every child. Run the
     helper as a single command:
-    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
+    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
     --targets artifacts/batch-workflows-targets.json \
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \

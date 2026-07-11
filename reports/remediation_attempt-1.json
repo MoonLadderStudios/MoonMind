@@ -1,65 +1,77 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueProvider": "jira",
-  "issueRef": "MM-1200",
+  "issueRef": "MM-1201",
   "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "completed",
-  "summary": "Added only the focused frontend regression coverage requested by the latest MM-1200 verification report. No production code or route behavior changed.",
+  "status": "partial",
+  "summary": "Moved terminal evidence enforcement to the runtime-neutral AgentRun activity boundary, made terminal-contract compilation metadata-driven, added an isolated five-target external-workspace subprocess journey, and repaired the required reliability file. Provider-adapter-local bounded continuation and full UI/projection coherence coverage remain open.",
   "changedFiles": [
-    "frontend/src/entrypoints/dashboard.test.tsx",
-    "frontend/src/styles/dashboardBrand.test.ts",
-    "reports/remediation_attempt-1.json"
+    ".agents/skills/batch-workflows/SKILL.md",
+    "moonmind/workflows/temporal/activity_runtime.py",
+    "moonmind/workflows/temporal/workflows/agent_run.py",
+    "moonmind/workflows/temporal/workflows/run.py",
+    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "tests/unit/test_batch_workflows.py",
+    "tests/unit/workflows/temporal/test_agent_runtime_activities.py"
   ],
   "gapStatuses": [
     {
-      "requirement": "System trigger active state on every child route",
-      "gapType": "verification",
-      "status": "remediated",
-      "evidence": "Rendered component coverage asserts System active and the primary Workflows link inactive for /manifests, /artifacts/*, /observability/*, /remediations/*, and /settings/*."
+      "requirement": "Runtime-neutral terminal evidence authority",
+      "status": "partial",
+      "evidence": "AgentRun now invokes agent_runtime.evaluate_terminal_evidence for every typed terminal contract; contract compilation no longer checks the batch contract ID.",
+      "remaining": "Bounded same-session continuation is still performed inside CodexSessionAdapter and must move above provider adapters with replay-safe workflow versioning."
     },
     {
-      "requirement": "Accessible System interaction contract and mobile inline navigation",
-      "gapType": "verification",
-      "status": "remediated",
-      "evidence": "Focused tests cover Enter, Space, ArrowDown, ArrowUp, Home, End, Escape focus restoration, client-side selection and closure, outside click, focus departure, disabled destinations, and mobile inline children without a nested menu."
+      "requirement": "External repository isolation and five-target fan-out",
+      "status": "resolved",
+      "evidence": "A subprocess test runs the materialized snapshot from an external repository with a conflicting repo-owned helper and moonmind/api_service import traps; THOR-705 through THOR-709 produce five POSTs, five unique idempotency keys, and identity-bound evidence."
     },
     {
-      "requirement": "System-specific desktop, mobile, focus, dark-mode, and reduced-motion styling coverage",
-      "gapType": "verification",
-      "status": "remediated",
-      "evidence": "CSS regression assertions cover the end-aligned stacked desktop popover, theme-token panel/active/focus styling (including tokens overridden by the dark theme), mobile flattening, and reduced-motion suppression."
+      "requirement": "Helper failure and outcome matrix",
+      "status": "partial",
+      "evidence": "Existing helper/evaluator tests cover stale, malformed, missing, partial, failed, zero-target, runtime normalization, idempotency construction, and publish-mode behavior; the new subprocess journey covers successful HTTP fan-out.",
+      "remaining": "Dedicated subprocess cases for endpoint unavailable, failure after two POSTs, missing runtime identity, and rerun artifact replacement remain to be consolidated into one outcome-matrix test."
+    },
+    {
+      "requirement": "Parent failure and coherent projections",
+      "status": "partial",
+      "evidence": "AgentRun converts completed prose without terminal evidence into AgentRunResult failureClass=execution_error before returning to the root workflow; existing root workflow integration tests covering structured result failure pass.",
+      "remaining": "No new end-to-end assertion jointly proves finishOutcome, mm_state, closeStatus, step ledger, dashboard projection, diagnostics, queued-child count, and partial child IDs."
+    },
+    {
+      "requirement": "Runtime orchestration coverage",
+      "status": "partial",
+      "evidence": "Runtime-neutral activity coverage proves completed prose cannot satisfy a contract, and existing Codex adapter tests cover bounded recovery/exhaustion.",
+      "remaining": "Successful recovery, exhaustion, and a runtime without continuation support are not yet tested through the same runtime-neutral AgentRun orchestration boundary."
+    },
+    {
+      "requirement": "Required reliability replay passes and exercises the real journey",
+      "status": "partial",
+      "evidence": "The required reliability_journey file now passes 3/3 and its stale workspace fixture uses the current sandbox authority contract.",
+      "remaining": "The MM-1201 replay still directly evaluates the fixture rather than executing root finalization and persisted projection."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "npm run ui:test -- frontend/src/entrypoints/dashboard.test.tsx frontend/src/styles/dashboardBrand.test.ts",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/test_batch_workflows.py tests/unit/workflows/test_terminal_evidence.py tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/api/test_batch_workflows_preset.py",
+      "result": "PYTHON_PASS_WRAPPER_UI_FAIL",
+      "details": "242 Python tests passed. The automatically appended full UI suite had 1000 passed, 238 skipped, and 2 unrelated failures in dashboard schedule routing and workflow-list focus timeout; this reproduces verifier-recorded wrapper noise and does not touch MM-1201 files."
+    },
+    {
+      "command": "pytest tests/integration/reliability/test_escaped_failure_journeys.py -q --tb=short",
       "result": "PASS",
-      "details": "2 files passed; 120 tests passed."
+      "details": "3 passed."
     },
     {
-      "command": "npm run ui:test -- frontend/src/entrypoints/dashboard.test.tsx frontend/src/lib/dashboardRoutes.test.ts frontend/src/styles/dashboardBrand.test.ts",
+      "command": "pytest tests/unit/workflows/temporal/workflows/test_run_integration.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py -q --tb=short",
       "result": "PASS",
-      "details": "3 files passed; 155 tests passed."
+      "details": "150 passed."
     },
     {
-      "command": "./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
-      "result": "PASS"
-    },
-    {
-      "command": "./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src",
-      "result": "PASS"
-    },
-    {
-      "command": "npm run ui:clean-dist && ./node_modules/.bin/vite build --config frontend/vite.config.ts && npm run ui:verify-manifest",
+      "command": "python -m py_compile moonmind/workflows/temporal/workflows/agent_run.py moonmind/workflows/temporal/activity_runtime.py && git diff --check",
       "result": "PASS",
-      "details": "Production build and manifest verification passed; the existing non-fatal chunk-size warning remained."
+      "details": "Compilation and whitespace validation passed."
     }
-  ],
-  "knownRemainingGaps": [],
-  "scopeNotes": [
-    "No production implementation changes were necessary because the verifier marked implementationStatus VERIFIED for the partially verified requirements.",
-    "No integration_ci run was required for this frontend-only verification remediation."
   ]
 }
