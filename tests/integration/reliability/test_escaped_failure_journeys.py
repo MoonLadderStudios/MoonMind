@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
+from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionRunFailedError,
     _pr_resolver_terminal_contract,
@@ -82,18 +83,12 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
 
 
-async def test_managed_workspace_uses_checkpoint_resolver_and_fault_is_retryable(
+async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replay_id = "managed-workspace-checkpoint-routing"
     expected = load_replay(replay_id, "expected-outcome.json")
-    managed_root = tmp_path / "agent_jobs"
-    repo = managed_root / "run-3145" / "repo"
-    repo.mkdir(parents=True)
-    activities = TemporalSandboxActivities(
-        workspace_root=tmp_path / "sandbox-root",
-        managed_workspace_root=managed_root,
-    )
+    activities = TemporalSandboxActivities(workspace_root=tmp_path / "sandbox-root")
 
     sandbox_calls = 0
 
@@ -103,22 +98,6 @@ async def test_managed_workspace_uses_checkpoint_resolver_and_fault_is_retryable
         raise AssertionError("managed workspace reached sandbox resolver")
 
     monkeypatch.setattr(activities, "_resolve_workspace", forbidden_sandbox_resolver)
-    assert activities._resolve_checkpoint_workspace(repo, must_exist=True) == repo
-    assert sandbox_calls == 0
-    assert expected["sandboxResolverCalls"] == 0
-
-    durable_execution_result = load_replay(replay_id, "execution-result.json")
-    original_capture = activities._capture_workspace_evidence
-    calls = 0
-
-    async def fail_once(model: object, workspace: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("injected finalization failure")
-        return await original_capture(model, workspace)
-
-    monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
     payload = {
         "identity": {
             "workflowId": "wf-reliability-3145",
@@ -128,14 +107,16 @@ async def test_managed_workspace_uses_checkpoint_resolver_and_fault_is_retryable
         },
         "boundary": "after_execution",
         "kind": "worktree_archive",
-        "workspacePath": str(repo),
+        "workspaceLocator": {
+            "kind": "managed_runtime",
+            "runtimeId": "codex",
+            "agentRunId": "run-3145",
+        },
         "artifactNamespace": "checkpoint",
         "idempotencyKey": "reliability-3145-after-execution",
     }
-    first = await activities.workspace_capture_checkpoint(payload)
-    assert first["status"] == "invalid"
-    assert durable_execution_result["status"] == "completed"
-    second = await activities.workspace_capture_checkpoint(payload)
-    assert second["status"] == "captured"
-    assert durable_execution_result["status"] == "completed"
-    assert calls == 2
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc_info:
+        await activities.workspace_capture_checkpoint(payload)
+
+    assert exc_info.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+    assert sandbox_calls == expected["sandboxResolverCalls"] == 0
