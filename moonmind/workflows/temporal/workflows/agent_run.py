@@ -1901,6 +1901,38 @@ class MoonMindAgentRun:
             pr_resolver_merge_gate_owned=pr_resolver_merge_gate_owned,
         )
 
+    async def _evaluate_terminal_contract(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        """Enforce terminal evidence at the runtime-neutral AgentRun boundary."""
+        if request.terminal_contract is None:
+            return result
+        workspace_path = str(
+            (result.metadata or {}).get("workspacePath")
+            or (request.workspace_spec or {}).get("workspacePath")
+            or ""
+        ).strip()
+        payload = await self._execute_routed_activity(
+            "agent_runtime.evaluate_terminal_evidence",
+            {
+                "runId": str(self.run_id or ""),
+                "workspacePath": workspace_path,
+                "terminalContract": request.terminal_contract.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "result": result.model_dump(mode="json", by_alias=True),
+            },
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        return (
+            AgentRunResult.model_validate(payload)
+            if isinstance(payload, Mapping)
+            else payload
+        )
+
     async def _poll_managed_status(
         self,
         *,
@@ -4157,6 +4189,12 @@ class MoonMindAgentRun:
                                         },
                                     }
                                 )
+
+                if self.final_result is not None:
+                    self.final_result = await self._evaluate_terminal_contract(
+                        request=request,
+                        result=self.final_result,
+                    )
 
                 # Prefer the canonical structured provider failure event for the
                 # cooldown decision when present; fall back to text-marker codes.

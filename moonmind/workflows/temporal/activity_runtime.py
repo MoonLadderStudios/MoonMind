@@ -1341,6 +1341,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
+    "agent_runtime.evaluate_terminal_evidence": (
+        "agent_runtime",
+        "agent_runtime_evaluate_terminal_evidence",
+    ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
     "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
@@ -10167,6 +10171,56 @@ class TemporalAgentRuntimeActivities:
         finally:
             await self._cleanup_managed_run_publish_support_best_effort(run_id)
 
+    async def agent_runtime_evaluate_terminal_evidence(
+        self,
+        request: Mapping[str, Any],
+        /,
+    ) -> AgentRunResult:
+        """Apply an execution-bound terminal contract above provider adapters."""
+        from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+        result = AgentRunResult.model_validate(request.get("result") or {})
+        contract = request.get("terminalContract")
+        if not isinstance(contract, Mapping) or result.failure_class is not None:
+            return result
+
+        workspace_path = str(request.get("workspacePath") or "").strip()
+        if not workspace_path:
+            workspace_path = str((result.metadata or {}).get("workspacePath") or "").strip()
+        run_id = str(request.get("runId") or "").strip()
+        if not workspace_path and run_id and self._run_store is not None:
+            record = self._run_store.load(run_id)
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+
+        evaluation = evaluate_terminal_evidence(
+            dict(contract), workspace_path=workspace_path
+        )
+        metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
+        metadata["terminalContractId"] = str(contract.get("contractId") or "")
+        metadata["terminalContractAuthority"] = "MoonMind.AgentRun"
+        if evaluation.failure_code:
+            metadata["failureCode"] = evaluation.failure_code
+        if evaluation.satisfied:
+            metadata["terminalContractSatisfied"] = True
+            return result.model_copy(update={"metadata": metadata})
+
+        metadata.update(
+            {
+                "terminalContractSatisfied": False,
+                "terminalContractMissingEvidence": list(evaluation.missing_evidence),
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+            }
+        )
+        missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
+        return result.model_copy(
+            update={
+                "summary": f"Agent completed without required terminal evidence: {missing}",
+                "failure_class": "execution_error",
+                "provider_error_code": evaluation.failure_code
+                or "missing_terminal_evidence",
+                "metadata": metadata,
+            }
+        )
     async def _managed_session_summary_metadata(
         self,
         record: ManagedRunRecord,

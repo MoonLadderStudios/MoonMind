@@ -7,6 +7,7 @@ metadata:
     owner: agent
     outcomeArtifact: artifacts/batch-workflows-result.json
     terminalContractId: batch_workflows_fanout.v1
+    terminalSchemaVersion: moonmind.batch-workflows-result.v1
   required-capabilities:
     - git
     - jira

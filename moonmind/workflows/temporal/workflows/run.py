@@ -14830,13 +14830,16 @@ class MoonMindRunWorkflow:
         if isinstance(side_effect, Mapping):
             contract_id = str(side_effect.get("terminalContractId") or "").strip()
             outcome_artifact = str(side_effect.get("outcomeArtifact") or "").strip()
-            if contract_id == "batch_workflows_fanout.v1" and outcome_artifact:
+            expected_schema_version = str(
+                side_effect.get("terminalSchemaVersion") or ""
+            ).strip()
+            if contract_id and outcome_artifact and expected_schema_version:
                 terminal_contract_payload = {
                     "contractId": contract_id,
                     "owner": "agent",
                     "evidenceKind": "workspace_json",
                     "relativePath": outcome_artifact,
-                    "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                    "expectedSchemaVersion": expected_schema_version,
                     "executionRef": step_execution_payload["stepExecutionId"],
                 }
 

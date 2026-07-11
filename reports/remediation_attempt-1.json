@@ -1,55 +1,77 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issue_ref": "MoonLadderStudios/MoonMind#3150",
-  "source_verdict_artifact": "artifacts/github-issue-implement-verify.json",
-  "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Replaced hardcoded Codex canary runner evidence with fail-closed assembly from observed execution context and a fetched marker artifact. Added hermetic runner tests for marker retrieval, authoritative observation requirements, duplicate execution counts, missing protocol evidence, and nonce validation.",
-  "changed_files": [
-    "tools/run_codex_conformance_canary.py",
-    "tests/unit/codex_conformance/test_runner.py"
+  "issueRef": "MM-1201",
+  "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "status": "partial",
+  "summary": "Moved terminal evidence enforcement to the runtime-neutral AgentRun activity boundary, made terminal-contract compilation metadata-driven, added an isolated five-target external-workspace subprocess journey, and repaired the required reliability file. Provider-adapter-local bounded continuation and full UI/projection coherence coverage remain open.",
+  "changedFiles": [
+    ".agents/skills/batch-workflows/SKILL.md",
+    "moonmind/workflows/temporal/activity_runtime.py",
+    "moonmind/workflows/temporal/workflows/agent_run.py",
+    "moonmind/workflows/temporal/workflows/run.py",
+    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "tests/unit/test_batch_workflows.py",
+    "tests/unit/workflows/temporal/test_agent_runtime_activities.py"
   ],
-  "gap_status": [
+  "gapStatuses": [
     {
-      "requirement": "Live canary evidence must prove the long-running command, resumable handle, poll, marker creation, turn completion, and cleanup order from real managed-session evidence.",
-      "status": "addressed",
-      "notes": "The runner no longer fabricates duration, protocol events, process counts, marker counts, session ids, or cleanup state from terminal status. It now collects a codexConformanceCanary/canaryEvidence observation from execution detail, step ledger, linked artifacts, or agent-run observability and fails closed when that authoritative observation is absent."
+      "requirement": "Runtime-neutral terminal evidence authority",
+      "status": "partial",
+      "evidence": "AgentRun now invokes agent_runtime.evaluate_terminal_evidence for every typed terminal contract; contract compilation no longer checks the batch contract ID.",
+      "remaining": "Bounded same-session continuation is still performed inside CodexSessionAdapter and must move above provider adapters with replay-safe workflow versioning."
     },
     {
-      "requirement": "The canary requires a validated terminal marker artifact before success.",
-      "status": "addressed",
-      "notes": "The runner now downloads the marker artifact through /api/artifacts/{artifact_id}/download, parses the actual JSON content, validates nonce and scenario version before evidence assembly, and emits CANARY_TERMINAL_MARKER_MISSING when marker evidence cannot be read or matched."
+      "requirement": "External repository isolation and five-target fan-out",
+      "status": "resolved",
+      "evidence": "A subprocess test runs the materialized snapshot from an external repository with a conflicting repo-owned helper and moonmind/api_service import traps; THOR-705 through THOR-709 produce five POSTs, five unique idempotency keys, and identity-bound evidence."
     },
     {
-      "requirement": "The canary verifies no GitHub mutation, duplicate process, duplicate artifact, and no premature cleanup.",
-      "status": "addressed",
-      "notes": "githubMutationCount, processInvocationCount, markerArtifactCreateCount, sessionIdsObserved, cleanupObserved, and cleanupSessionId now come from the canary observation payload and are validated by the existing canary validator instead of constants/defaults."
+      "requirement": "Helper failure and outcome matrix",
+      "status": "partial",
+      "evidence": "Existing helper/evaluator tests cover stale, malformed, missing, partial, failed, zero-target, runtime normalization, idempotency construction, and publish-mode behavior; the new subprocess journey covers successful HTTP fan-out.",
+      "remaining": "Dedicated subprocess cases for endpoint unavailable, failure after two POSTs, missing runtime identity, and rerun artifact replacement remain to be consolidated into one outcome-matrix test."
     },
     {
-      "requirement": "Hermetic tests for the canary harness failure modes.",
-      "status": "addressed",
-      "notes": "Added tests/unit/codex_conformance/test_runner.py with fake execution API and artifact responses covering success, missing authoritative observation, missing marker artifact, marker nonce mismatch, duplicate process count, and missing resumable-handle protocol evidence."
+      "requirement": "Parent failure and coherent projections",
+      "status": "partial",
+      "evidence": "AgentRun converts completed prose without terminal evidence into AgentRunResult failureClass=execution_error before returning to the root workflow; existing root workflow integration tests covering structured result failure pass.",
+      "remaining": "No new end-to-end assertion jointly proves finishOutcome, mm_state, closeStatus, step ledger, dashboard projection, diagnostics, queued-child count, and partial child IDs."
     },
     {
-      "requirement": "Credentialed provider canary execution.",
-      "status": "not_run_advisory",
-      "notes": "The verifier marked provider execution advisory in this runtime because MOONMIND_CODEX_CANARY_RESULT_PATH/credentials are unavailable. No provider-side command was run during remediation."
+      "requirement": "Runtime orchestration coverage",
+      "status": "partial",
+      "evidence": "Runtime-neutral activity coverage proves completed prose cannot satisfy a contract, and existing Codex adapter tests cover bounded recovery/exhaustion.",
+      "remaining": "Successful recovery, exhaustion, and a runtime without continuation support are not yet tested through the same runtime-neutral AgentRun orchestration boundary."
+    },
+    {
+      "requirement": "Required reliability replay passes and exercises the real journey",
+      "status": "partial",
+      "evidence": "The required reliability_journey file now passes 3/3 and its stale workspace fixture uses the current sandbox authority contract.",
+      "remaining": "The MM-1201 replay still directly evaluates the fixture rather than executing root finalization and persisted projection."
     }
   ],
-  "targeted_checks": [
+  "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/codex_conformance/test_canary.py tests/unit/codex_conformance/test_runner.py tests/unit/test_codex_conformance_workflow.py tests/unit/test_promote_ghcr_stable_workflow.py",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/test_batch_workflows.py tests/unit/workflows/test_terminal_evidence.py tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/api/test_batch_workflows_preset.py",
+      "result": "PYTHON_PASS_WRAPPER_UI_FAIL",
+      "details": "242 Python tests passed. The automatically appended full UI suite had 1000 passed, 238 skipped, and 2 unrelated failures in dashboard schedule routing and workflow-list focus timeout; this reproduces verifier-recorded wrapper noise and does not touch MM-1201 files."
+    },
+    {
+      "command": "pytest tests/integration/reliability/test_escaped_failure_journeys.py -q --tb=short",
       "result": "PASS",
-      "notes": "26 focused Python tests passed; wrapper frontend phase also passed 64 files / 983 passed / 238 skipped."
+      "details": "3 passed."
     },
     {
-      "command": "git diff --check",
-      "result": "PASS"
+      "command": "pytest tests/unit/workflows/temporal/workflows/test_run_integration.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py -q --tb=short",
+      "result": "PASS",
+      "details": "150 passed."
     },
     {
-      "command": "python -m py_compile tools/run_codex_conformance_canary.py tests/unit/codex_conformance/test_runner.py",
-      "result": "PASS"
+      "command": "python -m py_compile moonmind/workflows/temporal/workflows/agent_run.py moonmind/workflows/temporal/activity_runtime.py && git diff --check",
+      "result": "PASS",
+      "details": "Compilation and whitespace validation passed."
     }
-  ],
-  "remaining_known_gaps": []
+  ]
 }
