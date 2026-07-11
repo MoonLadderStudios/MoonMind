@@ -4630,8 +4630,22 @@ class MoonMindRunWorkflow:
             recovery_source=self._recovery_source
             if isinstance(self._recovery_source, Mapping)
             else None,
-            runtime_kind=self._target_runtime,
+            runtime_kind=(
+                self._target_runtime if managed_checkpoint_authority_enabled else None
+            ),
             external_agent_id=self._step_external_agent_ids.get(logical_step_id),
+            workspace_authority=(
+                capture_input.get("captureAuthority")
+                if managed_checkpoint_authority_enabled
+                and capture_input.get("captureAuthority")
+                in {
+                    "moonmind_sandbox",
+                    "managed_runtime",
+                    "external_provider",
+                    "none",
+                }
+                else None
+            ),
             agent_kind=(
                 "managed"
                 if managed_checkpoint_authority_enabled
@@ -4639,12 +4653,29 @@ class MoonMindRunWorkflow:
                 else None
             ),
         )
-        if resolved_policy.capture_authority == "managed_runtime":
+        if resolved_policy.capture_activity != "workspace.capture_checkpoint":
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "unsupported",
                 "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
                 "boundary": str(boundary),
-                "captureAuthority": "managed_runtime",
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        claimed_kind = str(capture_input.get("kind") or "").strip() or None
+        if (
+            claimed_kind
+            and claimed_kind not in resolved_policy.supported_checkpoint_kinds
+        ):
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "failed",
+                "failureCode": "CHECKPOINT_CAPABILITY_MISMATCH",
+                "boundary": str(boundary),
+                "claimedCheckpointKind": claimed_kind,
+                "supportedCheckpointKind": resolved_policy.checkpoint_kind,
+                "captureAuthority": resolved_policy.capture_authority,
             }
             return None
 
@@ -4654,7 +4685,7 @@ class MoonMindRunWorkflow:
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": capture_input.get("kind") or resolved_policy.checkpoint_kind,
+            "kind": claimed_kind or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }

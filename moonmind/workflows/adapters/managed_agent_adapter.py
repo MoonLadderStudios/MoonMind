@@ -46,8 +46,11 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
     build_docker_sidecar_launch_plan,
 )
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready_from_payload,
 )
@@ -113,7 +116,12 @@ _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
 def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
     """Return compact status metadata that is safe for workflow history."""
 
-    metadata: dict[str, Any] = {"runtimeId": record.runtime_id}
+    capabilities = resolve_runtime_execution_capabilities(record.runtime_id)
+    metadata: dict[str, Any] = {
+        "runtimeId": capabilities.runtime_id,
+        "capabilitySetVersion": capabilities.capability_set_version,
+        "capabilityDigest": capabilities.capability_digest,
+    }
     timestamp_fields = {
         "startedAt": record.started_at,
         "finishedAt": record.finished_at,
@@ -825,6 +833,7 @@ def _derive_pr_resolver_metadata(
     workspace_path: str | None,
     *,
     merge_gate_owned: bool = False,
+    supports_same_session_continuation: bool = False,
     run_id: str | None = None,
     workflow_id: str | None = None,
     not_before: datetime | None = None,
@@ -864,7 +873,9 @@ def _derive_pr_resolver_metadata(
                 "terminalResultPresent": False,
                 "missingEvidence": [_PR_RESOLVER_RESULT_PATHS[0].as_posix()],
                 "retryRecommendation": (
-                    "continue_same_session" if merge_gate_owned else "retry_new_session"
+                    "continue_same_session"
+                    if merge_gate_owned and supports_same_session_continuation
+                    else "retry_new_session"
                 ),
             }
         )
@@ -1186,6 +1197,10 @@ class ManagedAgentAdapter:
                 metadata = _derive_pr_resolver_metadata(
                     record.workspace_path,
                     merge_gate_owned=pr_resolver_merge_gate_owned,
+                    supports_same_session_continuation=(
+                        resolve_runtime_execution_capabilities(record.runtime_id)
+                        .supports_same_session_continuation
+                    ),
                     run_id=record.run_id,
                     workflow_id=record.workflow_id,
                     not_before=record.started_at,

@@ -40,6 +40,10 @@ from moonmind.schemas.managed_session_models import (
     ManagedSessionControlAction,
     canonical_managed_session_runtime_id,
 )
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeExecutionCapabilities,
+    resolve_runtime_execution_capabilities,
+)
 
 MANAGED_SESSION_CONFORMANCE_SUITE_ID = "managed-session-conformance"
 MANAGED_SESSION_CONFORMANCE_REPORT_VERSION = 2
@@ -247,78 +251,6 @@ class ManagedSessionRuntimeCapabilities(BaseModel):
             if support.behavior == behavior:
                 return support
         return None
-
-
-class RuntimeExecutionCapabilities(BaseModel):
-    """Compact execution-policy projection of managed-session conformance.
-
-    This is the checkpoint-focused integration boundary for the general runtime
-    descriptor tracked by #3148. It intentionally exposes separate session state,
-    workspace capture, and workspace restore decisions and has no generic
-    ``checkpointSupported`` field.
-    """
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
-
-    capability_set_version: Literal["managed-session-checkpoints-v2"] = Field(
-        "managed-session-checkpoints-v2", alias="capabilitySetVersion"
-    )
-    runtime_id: NonBlankStr = Field(..., alias="runtimeId")
-    runtime_family: str | None = Field(None, alias="runtimeFamily")
-    workspace_authority: WorkspaceAuthority = Field(..., alias="workspaceAuthority")
-    session_state_checkpoint: ManagedSessionBehaviorDecision = Field(
-        ..., alias="sessionStateCheckpoint"
-    )
-    step_workspace_checkpoint_capture: ManagedSessionBehaviorDecision = Field(
-        ..., alias="stepWorkspaceCheckpointCapture"
-    )
-    step_workspace_checkpoint_restore: ManagedSessionBehaviorDecision = Field(
-        ..., alias="stepWorkspaceCheckpointRestore"
-    )
-    checkpoint_capture_kinds: tuple[str, ...] = Field(
-        default=(), alias="checkpointCaptureKinds"
-    )
-    checkpoint_restore_kinds: tuple[str, ...] = Field(
-        default=(), alias="checkpointRestoreKinds"
-    )
-    checkpoint_capture_activity: str | None = Field(
-        None, alias="checkpointCaptureActivity"
-    )
-    checkpoint_restore_activity: str | None = Field(
-        None, alias="checkpointRestoreActivity"
-    )
-    supports_same_session_continuation: bool = Field(
-        ..., alias="supportsSameSessionContinuation"
-    )
-    supports_active_command_introspection: bool = Field(
-        False, alias="supportsActiveCommandIntrospection"
-    )
-    terminal_contract_ids: tuple[str, ...] = Field(
-        default=(), alias="terminalContractIds"
-    )
-    post_execution_checkpoint_criticality: Literal[
-        "required", "recoverability_only", "unsupported"
-    ] = Field(..., alias="postExecutionCheckpointCriticality")
-
-    @model_validator(mode="after")
-    def _validate_checkpoint_claims(self) -> "RuntimeExecutionCapabilities":
-        capture_conforms = self.step_workspace_checkpoint_capture == "conforms"
-        restore_conforms = self.step_workspace_checkpoint_restore == "conforms"
-        if capture_conforms != bool(
-            self.checkpoint_capture_kinds and self.checkpoint_capture_activity
-        ):
-            raise ValueError(
-                "workspace capture conformance must match declared capture kinds "
-                "and activity owner"
-            )
-        if restore_conforms != bool(
-            self.checkpoint_restore_kinds and self.checkpoint_restore_activity
-        ):
-            raise ValueError(
-                "workspace restore conformance must match declared restore kinds "
-                "and activity owner"
-            )
-        return self
 
 
 def _gap(behavior: str, reason: str) -> dict[str, Any]:
@@ -764,40 +696,9 @@ def managed_session_capabilities_for_runtime(
 def runtime_execution_capabilities_for_runtime(
     runtime_id: str,
 ) -> RuntimeExecutionCapabilities:
-    """Project precise conformance decisions into execution checkpoint policy."""
+    """Return the canonical execution descriptor used by workflow policy."""
 
-    managed = managed_session_capabilities_for_runtime(runtime_id)
-    report = evaluate_managed_session_conformance(managed)
-    decisions = {
-        decision["behavior"]: decision for decision in report["behaviorDecisions"]
-    }
-    capture = decisions["step_workspace_checkpoint_capture"]
-    restore = decisions["step_workspace_checkpoint_restore"]
-    session_state = decisions["session_state_checkpoint"]
-    resume = decisions["resume"]
-    canonical_id = report["canonicalRuntimeId"]
-
-    return RuntimeExecutionCapabilities(
-        runtimeId=managed.runtime_id,
-        runtimeFamily=managed.runtime_family,
-        workspaceAuthority="managed_runtime" if canonical_id else "none",
-        sessionStateCheckpoint=session_state["decision"],
-        stepWorkspaceCheckpointCapture=capture["decision"],
-        stepWorkspaceCheckpointRestore=restore["decision"],
-        checkpointCaptureKinds=tuple(capture["checkpointKinds"]),
-        checkpointRestoreKinds=tuple(restore["checkpointKinds"]),
-        checkpointCaptureActivity=capture["owner"],
-        checkpointRestoreActivity=restore["owner"],
-        supportsSameSessionContinuation=(
-            session_state["decision"] == "conforms" and resume["decision"] == "conforms"
-        ),
-        terminalContractIds=(
-            ("codex_managed_session_summary_v1",) if canonical_id else ()
-        ),
-        postExecutionCheckpointCriticality=(
-            "recoverability_only" if canonical_id else "unsupported"
-        ),
-    )
+    return resolve_runtime_execution_capabilities(runtime_id)
 
 
 def build_managed_session_conformance_summary(

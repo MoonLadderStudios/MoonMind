@@ -162,7 +162,11 @@ def test_pr_resolver_metadata_distinguishes_invalid_stale_and_missing(
     assert stale["failureCode"] == "TERMINAL_ARTIFACT_STALE"
 
     result_path.unlink()
-    missing = _derive_pr_resolver_metadata(str(tmp_path), merge_gate_owned=True)
+    missing = _derive_pr_resolver_metadata(
+        str(tmp_path),
+        merge_gate_owned=True,
+        supports_same_session_continuation=True,
+    )
     assert missing["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
     assert missing["retryRecommendation"] == "continue_same_session"
 
