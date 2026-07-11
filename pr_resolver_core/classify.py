@@ -71,6 +71,10 @@ def classify_snapshot(snapshot: CanonicalPullRequestSnapshot) -> ResolverDecisio
         return _decision(
             "manual_review", "unknown_blocker", ResolverAction.STOP_MANUAL_REVIEW
         )
+    if snapshot.malformed:
+        return _decision(
+            "manual_review", "snapshot_malformed", ResolverAction.STOP_MANUAL_REVIEW
+        )
     if snapshot.actionable_comments:
         return _decision(
             "actionable_comments", "actionable_comments", ResolverAction.RUN_REMEDIATION
@@ -87,10 +91,6 @@ def classify_snapshot(snapshot: CanonicalPullRequestSnapshot) -> ResolverDecisio
         )
     if not snapshot.checks_complete:
         return _decision("ci_running", "ci_running", ResolverAction.WAIT)
-    if snapshot.malformed:
-        return _decision(
-            "manual_review", "snapshot_malformed", ResolverAction.STOP_MANUAL_REVIEW
-        )
     if snapshot.checks_passing:
         return _decision(
             "ready_to_merge", "ready_to_merge", ResolverAction.ATTEMPT_MERGE

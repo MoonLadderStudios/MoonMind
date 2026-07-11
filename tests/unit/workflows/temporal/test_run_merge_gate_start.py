@@ -1,6 +1,22 @@
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    _worker_capability_unavailable_error,
+)
+
+
+def test_worker_capability_error_preserves_structured_details() -> None:
+    capability = {
+        "available": False,
+        "reasonCode": "worker_capability_unavailable",
+    }
+
+    error = _worker_capability_unavailable_error(capability)
+
+    assert error.type == "WORKER_CAPABILITY_UNAVAILABLE"
+    assert error.non_retryable is True
+    assert error.details == (capability,)
 
 def test_merge_automation_disabled_by_default() -> None:
     workflow = MoonMindRunWorkflow()

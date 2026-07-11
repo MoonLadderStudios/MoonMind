@@ -623,6 +623,20 @@ RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH = (
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
     "run-pr-resolver-selector-resolution-v1"
 )
+
+
+def _worker_capability_unavailable_error(
+    worker_capability: Mapping[str, Any],
+) -> exceptions.ApplicationError:
+    return exceptions.ApplicationError(
+        "MoonMind.PRResolver worker capability is unavailable; "
+        "no resolver or remediation agent was launched.",
+        dict(worker_capability),
+        type="WORKER_CAPABILITY_UNAVAILABLE",
+        non_retryable=True,
+    )
+
+
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
 _MANAGED_AGENT_IDS = frozenset(
@@ -8558,12 +8572,8 @@ class MoonMindRunWorkflow:
                                             else {}
                                         )
                                         if not worker_capability.get("available"):
-                                            raise exceptions.ApplicationError(
-                                                "MoonMind.PRResolver worker capability is unavailable; "
-                                                "no resolver or remediation agent was launched.",
-                                                type="WORKER_CAPABILITY_UNAVAILABLE",
-                                                non_retryable=True,
-                                                details=[worker_capability],
+                                            raise _worker_capability_unavailable_error(
+                                                worker_capability
                                             )
                                     resolved_pull_request = None
                                     merge_gate = parameters.get("mergeGate")

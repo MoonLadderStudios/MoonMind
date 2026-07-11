@@ -251,3 +251,29 @@ def test_temporal_snapshot_handles_null_blockers() -> None:
 
     assert snapshot.merge_conflict is False
     assert snapshot.actionable_comments is False
+
+
+def test_malformed_snapshot_stops_instead_of_waiting_for_ci() -> None:
+    decision = classify_snapshot(normalize_temporal_snapshot({}))
+
+    assert decision.classification == "manual_review"
+    assert decision.reason_code == "snapshot_malformed"
+    assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+
+
+@pytest.mark.parametrize("retryable", [False, None])
+def test_external_state_unavailable_honors_retryability(retryable) -> None:
+    blocker = {"kind": "external_state_unavailable"}
+    if retryable is not None:
+        blocker["retryable"] = retryable
+
+    decision = classify_snapshot(
+        normalize_temporal_snapshot({"blockers": [blocker]})
+    )
+
+    if retryable is False:
+        assert decision.classification == "manual_review"
+        assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+    else:
+        assert decision.classification == "mergeability_transient"
+        assert decision.action is ResolverAction.WAIT

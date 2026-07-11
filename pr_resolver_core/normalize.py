@@ -24,6 +24,11 @@ def normalize_temporal_snapshot(
     )
     kinds = tuple(_text(item.get("kind")).lower() for item in blockers)
     summaries = tuple(_text(item.get("summary")) for item in blockers)
+    non_retryable_external_state = any(
+        _text(item.get("kind")).lower() == "external_state_unavailable"
+        and item.get("retryable") is False
+        for item in blockers
+    )
     checks_complete = raw.get("checksComplete")
     checks_passing = raw.get("checksPassing")
     recognized_blocker = bool(kinds)
@@ -56,9 +61,12 @@ def normalize_temporal_snapshot(
             {
                 "mergeability_unknown",
                 "mergeability_transient",
-                "external_state_unavailable",
             }
             & set(kinds)
+        )
+        or (
+            "external_state_unavailable" in kinds
+            and not non_retryable_external_state
         ),
         checks_complete=(ready or "checks_failed" in kinds or _bool(checks_complete)),
         checks_passing=(
@@ -99,7 +107,8 @@ def normalize_temporal_snapshot(
                 "publish_unavailable",
                 "draft",
             }
-        ),
+        )
+        or non_retryable_external_state,
         blocker_kinds=kinds,
         blocker_summaries=summaries,
     )

@@ -1,6 +1,9 @@
 from datetime import UTC, datetime
 import io
 import os
+from pathlib import Path
+import subprocess
+import sys
 import tarfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -194,6 +197,47 @@ async def test_build_skill_bundle_payload_rejects_dangling_symlink(tmp_path):
 
     with pytest.raises(OSError, match="symlink target is missing"):
         AgentSkillsActivities._build_skill_bundle_payload(skill_dir)
+
+
+async def test_pr_resolver_bundle_includes_portable_core_and_runs_help(tmp_path):
+    repo = tmp_path / "repo"
+    skill_dir = repo / ".agents" / "skills" / "pr-resolver"
+    (skill_dir / "bin").mkdir(parents=True)
+    source_root = Path(__file__).resolve().parents[4]
+    for relative_path in (
+        "SKILL.md",
+        "bin/pr_resolve_contract.py",
+        "bin/pr_resolve_finalize.py",
+    ):
+        source = source_root / ".agents" / "skills" / "pr-resolver" / relative_path
+        destination = skill_dir / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    core_root = repo / "pr_resolver_core"
+    core_root.mkdir()
+    for source in (source_root / "pr_resolver_core").glob("*.py"):
+        (core_root / source.name).write_bytes(source.read_bytes())
+    (repo / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+
+    payload = AgentSkillsActivities._build_skill_bundle_payload(
+        skill_dir,
+        include_pr_resolver_core=True,
+    )
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+        archive.extractall(extracted, filter="data")
+
+    result = subprocess.run(
+        [sys.executable, str(extracted / "bin" / "pr_resolve_finalize.py"), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (extracted / "lib" / "pr_resolver_core" / "__init__.py").is_file()
 
 
 async def test_build_prompt_index_activity_returns_bundle():
