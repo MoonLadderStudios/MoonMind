@@ -18,10 +18,6 @@ import {
 } from 'lucide-animated';
 import { z } from 'zod';
 import type { BootPayload } from '../../boot/parseBootPayload';
-import {
-  WorkflowColumnFilterButton,
-  WorkflowColumnHeader,
-} from '../WorkflowColumnHeader';
 import { workflowDetailHref } from '../../lib/workflowListContext';
 import { requestWorkflowStartRouteChange } from '../../lib/workflowStartRouteGuard';
 import { updateDashboardPreferences } from '../../utils/dashboardPreferences';
@@ -39,7 +35,12 @@ import { resolveWorkflowDisplayStatus } from '../../status/workflowStatus';
 import { formatStatusLabel } from '../../utils/formatters';
 import { StatusIcon } from '../../utils/statusIcons';
 import { executionStatusPillProps } from '../../utils/executionStatusPillClasses';
-import { CollectionSidebar, type CollectionSidebarRow } from '../CollectionSidebar';
+import {
+  CollectionSidebar,
+  CollectionSidebarFilterHeader,
+  type CollectionSidebarFilterCopy,
+  type CollectionSidebarRow,
+} from '../CollectionSidebar';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number };
@@ -175,98 +176,18 @@ function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefin
   );
 }
 
-function WorkflowSidebarHeader({
-  filterText,
-  setFilterText,
-}: {
-  filterText: string;
-  setFilterText: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const filterRef = useRef<HTMLDivElement | null>(null);
-  const active = filterText.trim().length > 0;
-
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && filterRef.current?.contains(target)) {
-        return;
-      }
-      setOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
-
-  return (
-    <div role="rowgroup" className="workflow-workspace-sidebar-header">
-      <div role="row" className="workflow-workspace-sidebar-header-row">
-        <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
-          <WorkflowColumnHeader
-            label={<span className="workflow-workspace-sidebar-header-title workflow-list-column-header-label">Workflow</span>}
-            filterButton={
-              <WorkflowColumnFilterButton
-                active={active}
-                expanded={open}
-                ariaLabel={active ? `Workflow sidebar filter: ${filterText}` : 'Workflow sidebar filter. No filter applied.'}
-                onClick={() => setOpen((value) => !value)}
-              />
-            }
-            filterRef={filterRef}
-          >
-            {open ? (
-              <div
-                className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"
-                role="dialog"
-                aria-label="Workflow sidebar filter"
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.stopPropagation();
-                    setOpen(false);
-                  }
-                }}
-              >
-                <div className="workflow-list-column-filter-title">Workflow filter</div>
-                <label className="workflow-list-filter-control">
-                  <span>Workflow</span>
-                  <input
-                    type="search"
-                    value={filterText}
-                    onChange={(event) => setFilterText(event.target.value)}
-                    placeholder="Filter workflows"
-                    aria-label="Workflow sidebar filter value"
-                    autoFocus
-                  />
-                </label>
-                <div className="workflow-list-filter-actions">
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => setFilterText('')}
-                    disabled={!active}
-                    aria-label="Reset workflow sidebar filter"
-                  >
-                    Reset
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOpen(false)}
-                    aria-label="Apply workflow sidebar filter"
-                  >
-                    Apply
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </WorkflowColumnHeader>
-        </div>
-      </div>
-    </div>
-  );
-}
+const WORKFLOW_SIDEBAR_FILTER_COPY: CollectionSidebarFilterCopy = {
+  columnHeader: 'Workflow',
+  dialogLabel: 'Workflow sidebar filter',
+  dialogTitle: 'Workflow filter',
+  fieldLabel: 'Workflow',
+  placeholder: 'Filter workflows',
+  inputLabel: 'Workflow sidebar filter value',
+  triggerIdleLabel: 'Workflow sidebar filter. No filter applied.',
+  triggerActiveLabel: (value) => `Workflow sidebar filter: ${value}`,
+  resetLabel: 'Reset workflow sidebar filter',
+  applyLabel: 'Apply workflow sidebar filter',
+};
 
 function WorkflowSidebar({
   workflowId,
@@ -319,7 +240,13 @@ function WorkflowSidebar({
       onFilterChange={setFilterText}
       externalFiltering
       className="workflow-collection-sidebar"
-      headerContent={<WorkflowSidebarHeader filterText={filterText} setFilterText={setFilterText} />}
+      headerContent={(
+        <CollectionSidebarFilterHeader
+          copy={WORKFLOW_SIDEBAR_FILTER_COPY}
+          filterText={filterText}
+          setFilterText={setFilterText}
+        />
+      )}
       renderLink={(row, props) => {
         const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
           if (

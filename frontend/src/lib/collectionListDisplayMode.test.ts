@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COLLECTION_LIST_DISPLAY_MODES,
+  decodeSkillDetail,
+  encodeSkillDetailPath,
   resolveRecurringListDisplay,
+  resolveSkillListDisplay,
   resolveWorkflowListDisplay,
   collectionListDisplayModeByValue,
   type CollectionListDisplayMode,
@@ -313,5 +316,163 @@ describe('resolveRecurringListDisplay', () => {
       listSurface: 'table',
       targetPath: '/schedules',
     });
+  });
+});
+
+describe('decodeSkillDetail', () => {
+  it('decodes safe percent-encoded skill IDs', () => {
+    expect(decodeSkillDetail('/skills/speckit-orchestrate')).toEqual({ skillId: 'speckit-orchestrate' });
+    expect(decodeSkillDetail('/skills/my%20skill')).toEqual({ skillId: 'my skill' });
+    expect(decodeSkillDetail('/skills/skill.v2/')).toEqual({ skillId: 'skill.v2' });
+  });
+
+  it('rejects malformed percent encoding', () => {
+    expect(decodeSkillDetail('/skills/%zz')).toBeNull();
+    expect(decodeSkillDetail('/skills/%')).toBeNull();
+  });
+
+  it('rejects encoded slashes and empty IDs', () => {
+    expect(decodeSkillDetail('/skills/foo%2Fbar')).toBeNull();
+    expect(decodeSkillDetail('/skills/%2F')).toBeNull();
+    expect(decodeSkillDetail('/skills/')).toBeNull();
+  });
+
+  it('rejects unsupported extra path segments and non-skills routes', () => {
+    expect(decodeSkillDetail('/skills/foo/bar')).toBeNull();
+    expect(decodeSkillDetail('/skills')).toBeNull();
+    expect(decodeSkillDetail('/workflows/foo')).toBeNull();
+  });
+});
+
+describe('encodeSkillDetailPath', () => {
+  it('percent-encodes the skill ID and preserves the search context', () => {
+    expect(encodeSkillDetailPath('my skill')).toBe('/skills/my%20skill');
+    expect(encodeSkillDetailPath('speckit', '?q=spec')).toBe('/skills/speckit?q=spec');
+  });
+});
+
+describe('resolveSkillListDisplay', () => {
+  it('keeps /skills as the skills table surface in table mode', () => {
+    expect(resolveSkillListDisplay({
+      pathname: '/skills',
+      requestedMode: 'table',
+      search: '?q=spec',
+    })).toEqual({
+      requestedMode: 'table',
+      effectiveMode: 'table',
+      surface: 'skills-table',
+      routeAction: 'none',
+      primarySurface: 'skill-table',
+      listSurface: 'table',
+      selection: { skillId: null, source: 'none' },
+      targetPath: '/skills?q=spec',
+      status: null,
+    });
+  });
+
+  it('opens the remembered skill from /skills for sidebar mode', () => {
+    expect(resolveSkillListDisplay({
+      pathname: '/skills',
+      requestedMode: 'sidebar',
+      selectedSkillId: 'pr-resolver',
+    })).toMatchObject({
+      requestedMode: 'sidebar',
+      effectiveMode: 'sidebar',
+      surface: 'skills-table',
+      routeAction: 'navigate-selected-detail',
+      primarySurface: 'skill-detail',
+      listSurface: 'sidebar',
+      selection: { skillId: 'pr-resolver', source: 'last-selected' },
+      targetPath: '/skills/pr-resolver',
+    });
+  });
+
+  it('resolves the first visible skill from /skills for hidden mode', () => {
+    expect(resolveSkillListDisplay({
+      pathname: '/skills',
+      requestedMode: 'hidden',
+      firstVisibleSkillId: 'speckit-orchestrate',
+    })).toMatchObject({
+      effectiveMode: 'hidden',
+      routeAction: 'resolve-first-row',
+      primarySurface: 'skill-detail',
+      listSurface: 'none',
+      selection: { skillId: 'speckit-orchestrate', source: 'first-visible-row' },
+      targetPath: '/skills/speckit-orchestrate',
+    });
+  });
+
+  it('keeps an empty /skills route in table mode when no skill can be opened', () => {
+    expect(resolveSkillListDisplay({ pathname: '/skills', requestedMode: 'sidebar' })).toEqual({
+      requestedMode: 'sidebar',
+      effectiveMode: 'table',
+      surface: 'skills-table',
+      routeAction: 'none',
+      primarySurface: 'empty-skills',
+      listSurface: 'table',
+      selection: { skillId: null, source: 'none' },
+      targetPath: '/skills',
+      status: 'No skill can be opened from the current list.',
+    });
+  });
+
+  it('switches detail routes between hidden and sidebar without changing the route', () => {
+    expect(resolveSkillListDisplay({
+      pathname: '/skills/pr-resolver',
+      search: '?q=pr',
+      requestedMode: 'hidden',
+    })).toMatchObject({
+      effectiveMode: 'hidden',
+      surface: 'skill-detail',
+      routeAction: 'none',
+      primarySurface: 'skill-detail',
+      listSurface: 'none',
+      selection: { skillId: 'pr-resolver', source: 'route' },
+      targetPath: '/skills/pr-resolver?q=pr',
+    });
+
+    expect(resolveSkillListDisplay({
+      pathname: '/skills/pr-resolver',
+      requestedMode: 'sidebar',
+    })).toMatchObject({
+      effectiveMode: 'sidebar',
+      routeAction: 'none',
+      listSurface: 'sidebar',
+      targetPath: '/skills/pr-resolver',
+    });
+  });
+
+  it('navigates a detail route to /skills for table mode and preserves the filter context', () => {
+    expect(resolveSkillListDisplay({
+      pathname: '/skills/pr-resolver',
+      search: '?q=pr',
+      requestedMode: 'table',
+    })).toMatchObject({
+      effectiveMode: 'table',
+      surface: 'skill-detail',
+      routeAction: 'navigate-skills',
+      primarySurface: 'skill-table',
+      listSurface: 'table',
+      selection: { skillId: 'pr-resolver', source: 'route' },
+      targetPath: '/skills?q=pr',
+    });
+  });
+
+  it('accepts safe percent-encoded IDs and rejects malformed detail routes', () => {
+    expect(resolveSkillListDisplay({
+      pathname: '/skills/my%20skill',
+      requestedMode: 'sidebar',
+    })).toMatchObject({
+      selection: { skillId: 'my skill', source: 'route' },
+    });
+
+    expect(resolveSkillListDisplay({ pathname: '/skills/%zz', requestedMode: 'sidebar' })).toBeNull();
+    expect(resolveSkillListDisplay({ pathname: '/skills/foo%2Fbar', requestedMode: 'sidebar' })).toBeNull();
+    expect(resolveSkillListDisplay({ pathname: '/skills/foo/bar', requestedMode: 'sidebar' })).toBeNull();
+  });
+
+  it('returns null for unsupported non-Skills routes', () => {
+    expect(resolveSkillListDisplay({ pathname: '/workflows', requestedMode: 'table' })).toBeNull();
+    expect(resolveSkillListDisplay({ pathname: '/settings', requestedMode: 'sidebar' })).toBeNull();
   });
 });

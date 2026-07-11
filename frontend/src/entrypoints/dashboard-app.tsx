@@ -23,12 +23,8 @@ import {
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
-  MoonIcon,
-  type MoonIconHandle,
   RocketIcon,
   type RocketIconHandle,
-  SparklesIcon,
-  type SparklesIconHandle,
 } from 'lucide-animated';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -49,7 +45,9 @@ import {
 } from '../lib/dashboardRoutes';
 import {
   COLLECTION_LIST_DISPLAY_MODES,
+  encodeSkillDetailPath,
   resolveRecurringListDisplay,
+  resolveSkillListDisplay,
   resolveWorkflowListDisplay,
   type CollectionListDisplayMode,
 } from '../lib/collectionListDisplayMode';
@@ -127,10 +125,7 @@ function requestRecurringFocusForMode(
   );
 }
 
-type AnimatedNavIconHandle =
-  | MoonIconHandle
-  | RocketIconHandle
-  | SparklesIconHandle;
+type AnimatedNavIconHandle = RocketIconHandle;
 
 type AnimatedNavIconProps = NavIconProps & {
   iconRef?: Ref<AnimatedNavIconHandle> | undefined;
@@ -144,30 +139,6 @@ function StartWorkflowNavIcon({ className, iconRef }: AnimatedNavIconProps) {
   return (
     <RocketIcon
       ref={iconRef as Ref<RocketIconHandle>}
-      size={NAV_ICON_SIZE}
-      className={className}
-      animateOnHover={false}
-      aria-hidden="true"
-    />
-  );
-}
-
-function SchedulesNavIcon({ className, iconRef }: AnimatedNavIconProps) {
-  return (
-    <MoonIcon
-      ref={iconRef as Ref<MoonIconHandle>}
-      size={NAV_ICON_SIZE}
-      className={className}
-      animateOnHover={false}
-      aria-hidden="true"
-    />
-  );
-}
-
-function SkillsNavIcon({ className, iconRef }: AnimatedNavIconProps) {
-  return (
-    <SparklesIcon
-      ref={iconRef as Ref<SparklesIconHandle>}
       size={NAV_ICON_SIZE}
       className={className}
       animateOnHover={false}
@@ -295,6 +266,19 @@ async function authorizedRecurringDefinitionId(apiBase: string, definitionId: st
     return null;
   }
   return definitionId;
+}
+
+async function visibleSkillIds(apiBase: string): Promise<string[]> {
+  const response = await fetch(`${apiBase}/workflows/skills`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Skill catalog request failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as { legacyItems?: Array<{ id?: unknown }> } | null;
+  return (payload?.legacyItems ?? [])
+    .map((item) => (typeof item?.id === 'string' ? item.id.trim() : ''))
+    .filter(Boolean);
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -823,24 +807,6 @@ function DashboardNavigation({
                 Create
               </AnimatedRouteNavLink>
             ) : null}
-            {visiblePrimaryKeys.has('recurring') ? (
-              <AnimatedRouteNavLink
-                to="/schedules"
-                icon={SchedulesNavIcon}
-                className={({ isActive }) => (isActive ? 'active' : undefined)}
-              >
-                Recurring
-              </AnimatedRouteNavLink>
-            ) : null}
-            {visiblePrimaryKeys.has('skills') ? (
-              <AnimatedRouteNavLink
-                to="/skills"
-                icon={SkillsNavIcon}
-                className={({ isActive }) => (isActive ? 'active' : undefined)}
-              >
-                Skills
-              </AnimatedRouteNavLink>
-            ) : null}
           </div>
           <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
         </nav>
@@ -945,6 +911,12 @@ function RoutedDashboardPage({
   const [lastSelectedDefinitionId, setLastSelectedDefinitionId] = useState<string | null>(
     () => readDashboardPreferences().lastSelectedDefinitionId.trim() || null,
   );
+  const [requestedSkillsMode, setRequestedSkillsMode] = useState<CollectionListDisplayMode>(
+    () => readDashboardPreferences().skillsListDisplayMode,
+  );
+  const [lastSelectedSkillId, setLastSelectedSkillId] = useState<string | null>(
+    () => readDashboardPreferences().lastSelectedSkillId.trim() || null,
+  );
   const [resolutionStatus, setResolutionStatus] = useState<string | null>(null);
   const route = resolveDashboardRoute(location.pathname);
   const apiBase = typeof uiInfo?.apiBase === 'string' ? uiInfo.apiBase : '/api';
@@ -962,13 +934,22 @@ function RoutedDashboardPage({
     selectedDefinitionId: lastSelectedDefinitionId,
     firstVisibleDefinitionId: null,
   });
-  const activeListDisplay = resolvedDisplay ?? resolvedRecurringDisplay;
-  const activeListDisplayAccessibleName = resolvedRecurringDisplay
-    ? 'Recurring list display'
-    : resolvedDisplay
-      ? 'Workflow list display'
-      : undefined;
-  const activeListDisplayTableLabel = resolvedRecurringDisplay ? 'Full table' : 'Full screen table';
+  const resolvedSkillsDisplay = resolveSkillListDisplay({
+    pathname: location.pathname,
+    search: location.search,
+    requestedMode: requestedSkillsMode,
+    selectedSkillId: lastSelectedSkillId,
+    firstVisibleSkillId: null,
+  });
+  const activeListDisplay = resolvedDisplay ?? resolvedRecurringDisplay ?? resolvedSkillsDisplay;
+  const activeListDisplayAccessibleName = resolvedDisplay
+    ? 'Workflow list display'
+    : resolvedRecurringDisplay
+      ? 'Recurring list display'
+      : resolvedSkillsDisplay
+        ? 'Skills list display'
+        : undefined;
+  const activeListDisplayTableLabel = resolvedDisplay ? 'Full screen table' : 'Full table';
 
   useEffect(() => {
     const routeWorkflowId = decodeWorkflowIdFromPath(location.pathname);
@@ -986,6 +967,20 @@ function RoutedDashboardPage({
           // localStorage write, JSON round-trip, and change-event dispatch.
           if (readDashboardPreferences().lastSelectedDefinitionId !== definitionId) {
             updateDashboardPreferences({ lastSelectedDefinitionId: definitionId });
+          }
+        }
+      } catch {
+        // Ignore malformed paths; route validation handles unsupported pages.
+      }
+    }
+    const skillMatch = location.pathname.match(/^\/skills\/([^/]+)$/);
+    if (skillMatch) {
+      try {
+        const skillId = decodeURIComponent(skillMatch[1] || '').trim();
+        if (skillId && !skillId.includes('/')) {
+          setLastSelectedSkillId(skillId);
+          if (readDashboardPreferences().lastSelectedSkillId !== skillId) {
+            updateDashboardPreferences({ lastSelectedSkillId: skillId });
           }
         }
       } catch {
@@ -1026,6 +1021,19 @@ function RoutedDashboardPage({
         setRequestedRecurringMode(prefs.recurringListDisplayMode);
       }
       setLastSelectedDefinitionId(prefs.lastSelectedDefinitionId.trim() || null);
+      // Skills mirrors Recurring: `/skills` is route-owned `table`, and a
+      // direct detail visit coerces a persisted `table` to `sidebar` so the
+      // requested skill stays open.
+      if (normalizedPath === '/skills') {
+        setRequestedSkillsMode('table');
+      } else if (normalizedPath.startsWith('/skills/')) {
+        setRequestedSkillsMode(
+          prefs.skillsListDisplayMode === 'table' ? 'sidebar' : prefs.skillsListDisplayMode,
+        );
+      } else {
+        setRequestedSkillsMode(prefs.skillsListDisplayMode);
+      }
+      setLastSelectedSkillId(prefs.lastSelectedSkillId.trim() || null);
     };
     window.addEventListener(DASHBOARD_PREFERENCES_CHANGED_EVENT, syncPreferences);
     window.addEventListener('storage', syncPreferences);
@@ -1053,12 +1061,21 @@ function RoutedDashboardPage({
       setRequestedRecurringMode('table');
     } else if (normalizedPath.startsWith('/schedules/')) {
       setRequestedRecurringMode((mode) => (mode === 'table' ? 'sidebar' : mode));
+    } else if (normalizedPath === '/skills') {
+      setRequestedSkillsMode('table');
+    } else if (normalizedPath.startsWith('/skills/')) {
+      // Re-derive from the persisted preference: while the table route is
+      // active the requested mode is route-owned `table`, so arriving on a
+      // detail route must restore the operator's persisted `hidden`/`sidebar`
+      // choice (and coerce a persisted `table` to `sidebar`).
+      const persistedSkillsMode = readDashboardPreferences().skillsListDisplayMode;
+      setRequestedSkillsMode(persistedSkillsMode === 'table' ? 'sidebar' : persistedSkillsMode);
     }
     pendingRequestRef.current = null;
     setResolutionStatus(null);
   }, [location.pathname]);
 
-  const handleWorkflowListModeSelect = async (mode: CollectionListDisplayMode) => {
+  const handleCollectionListModeSelect = async (mode: CollectionListDisplayMode) => {
     const selectedMode = mode;
     const search = new URLSearchParams(location.search);
     pendingRequestRef.current = null;
@@ -1126,6 +1143,69 @@ function RoutedDashboardPage({
       }
       updateDashboardPreferences(patch);
       requestRecurringFocusForMode(selectedMode, resolved.selection.definitionId);
+      const current = `${location.pathname}${location.search}`;
+      if (resolved.targetPath !== current) {
+        navigate(resolved.targetPath);
+      }
+      return;
+    }
+
+    if (resolvedSkillsDisplay) {
+      if (location.pathname.replace(/\/$/, '') === '/skills' && selectedMode !== 'table') {
+        const requestId = Symbol();
+        pendingRequestRef.current = requestId;
+        setRequestedSkillsMode(selectedMode);
+        updateDashboardPreferences({ skillsListDisplayMode: selectedMode });
+        setResolutionStatus('Opening first skill...');
+        try {
+          const catalogSkillIds = await visibleSkillIds(apiBase);
+          if (pendingRequestRef.current !== requestId) {
+            return;
+          }
+          const rememberedId = lastSelectedSkillId?.trim() || '';
+          const rememberedIsVisible = Boolean(rememberedId) && catalogSkillIds.includes(rememberedId);
+          if (rememberedId && !rememberedIsVisible) {
+            // Clear a stale remembered skill before falling back so it is never
+            // used to navigate to a missing detail route.
+            setLastSelectedSkillId(null);
+            updateDashboardPreferences({ lastSelectedSkillId: '' });
+          }
+          const targetSkillId = rememberedIsVisible ? rememberedId : catalogSkillIds[0] ?? null;
+          if (!targetSkillId) {
+            setResolutionStatus('No skill to open.');
+            return;
+          }
+          setLastSelectedSkillId(targetSkillId);
+          updateDashboardPreferences({ lastSelectedSkillId: targetSkillId });
+          setResolutionStatus(null);
+          navigate(encodeSkillDetailPath(targetSkillId, location.search));
+        } catch {
+          if (pendingRequestRef.current === requestId) {
+            setResolutionStatus('Skill list is unavailable.');
+          }
+        }
+        return;
+      }
+
+      const resolved = resolveSkillListDisplay({
+        pathname: location.pathname,
+        search: location.search,
+        requestedMode: selectedMode,
+        selectedSkillId: lastSelectedSkillId,
+        firstVisibleSkillId: null,
+      });
+      if (!resolved) {
+        return;
+      }
+      setRequestedSkillsMode(selectedMode);
+      const patch: Parameters<typeof updateDashboardPreferences>[0] = {
+        skillsListDisplayMode: selectedMode,
+      };
+      if (resolved.selection.skillId) {
+        setLastSelectedSkillId(resolved.selection.skillId);
+        patch.lastSelectedSkillId = resolved.selection.skillId;
+      }
+      updateDashboardPreferences(patch);
       const current = `${location.pathname}${location.search}`;
       if (resolved.targetPath !== current) {
         navigate(resolved.targetPath);
@@ -1208,7 +1288,7 @@ function RoutedDashboardPage({
         listDisplayAccessibleName={activeListDisplayAccessibleName}
         listDisplayMode={null}
         listDisplayStatus={resolutionStatus}
-        onListDisplayModeSelect={handleWorkflowListModeSelect}
+        onListDisplayModeSelect={handleCollectionListModeSelect}
       >
         <UnknownPage page={location.pathname} />
       </AppShell>
@@ -1227,7 +1307,7 @@ function RoutedDashboardPage({
         listDisplayMode={activeListDisplay?.effectiveMode ?? null}
         listDisplayTableLabel={activeListDisplayTableLabel}
         listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
-        onListDisplayModeSelect={handleWorkflowListModeSelect}
+        onListDisplayModeSelect={handleCollectionListModeSelect}
       >
         <LoadingPage />
       </AppShell>
@@ -1253,10 +1333,24 @@ function RoutedDashboardPage({
       recurringListDisplayStatus: resolutionStatus ?? resolvedRecurringDisplay.status,
     };
   }
+  if (resolvedSkillsDisplay) {
+    routedPayload.initialData = {
+      ...(routedPayload.initialData && typeof routedPayload.initialData === 'object'
+        ? routedPayload.initialData
+        : {}),
+      skillsListDisplayMode: resolvedSkillsDisplay.effectiveMode,
+      skillsListDisplayStatus: resolutionStatus ?? resolvedSkillsDisplay.status,
+    };
+  }
   const layout = readSharedLayout(routedPayload);
+  // Workflows and Skills keep a stable key so their workspaces stay mounted
+  // across table/detail navigation (preserving sidebar filter state); other
+  // pages remount per path.
   const routeKey = route.page === 'workflows-workspace'
     ? 'workflows-workspace'
-    : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
+    : route.page === 'skills'
+      ? 'skills'
+      : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 
   return (
     <AppShell
@@ -1266,7 +1360,7 @@ function RoutedDashboardPage({
       listDisplayMode={activeListDisplay?.effectiveMode ?? null}
       listDisplayTableLabel={activeListDisplayTableLabel}
       listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
-      onListDisplayModeSelect={handleWorkflowListModeSelect}
+      onListDisplayModeSelect={handleCollectionListModeSelect}
     >
       <PageContent
         key={routeKey}

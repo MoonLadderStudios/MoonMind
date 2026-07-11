@@ -1,4 +1,161 @@
-import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+
+import { WorkflowColumnFilterButton, WorkflowColumnHeader } from './WorkflowColumnHeader';
+
+/**
+ * Entity-specific copy consumed by the shared sidebar filter header. Every
+ * collection sidebar (Workflows, Skills, ...) provides its own nouns while the
+ * open/close, focus, reset, and apply behavior stays shared so it cannot drift.
+ */
+export type CollectionSidebarFilterCopy = {
+  /** Column header text, e.g. "Workflow". */
+  columnHeader: string;
+  /** Popover dialog accessible name, e.g. "Workflow sidebar filter". */
+  dialogLabel: string;
+  /** Popover title text, e.g. "Workflow filter". */
+  dialogTitle: string;
+  /** Search field label, e.g. "Workflow". */
+  fieldLabel: string;
+  /** Search field placeholder, e.g. "Filter workflows". */
+  placeholder: string;
+  /** Search input accessible name, e.g. "Workflow sidebar filter value". */
+  inputLabel: string;
+  /** Trigger accessible name with no filter applied. */
+  triggerIdleLabel: string;
+  /** Trigger accessible name announcing the current filter value. */
+  triggerActiveLabel: (value: string) => string;
+  /** Reset action accessible name, e.g. "Reset workflow sidebar filter". */
+  resetLabel: string;
+  /** Apply action accessible name, e.g. "Apply workflow sidebar filter". */
+  applyLabel: string;
+};
+
+export function CollectionColumnFilter({
+  copy,
+  filterText,
+  setFilterText,
+  labelClassName,
+}: {
+  copy: CollectionSidebarFilterCopy;
+  filterText: string;
+  setFilterText: (value: string) => void;
+  labelClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const filterRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const active = filterText.trim().length > 0;
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && filterRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  return (
+    <WorkflowColumnHeader
+      label={(
+        <span className={labelClassName ?? 'workflow-list-column-header-label'}>
+          {copy.columnHeader}
+        </span>
+      )}
+      filterButton={(
+        <WorkflowColumnFilterButton
+          active={active}
+          expanded={open}
+          ariaLabel={active ? copy.triggerActiveLabel(filterText) : copy.triggerIdleLabel}
+          onClick={() => setOpen((value) => !value)}
+          buttonRef={triggerRef}
+        />
+      )}
+      filterRef={filterRef}
+    >
+      {open ? (
+        <div
+          className="workflow-workspace-sidebar-filter-popover workflow-list-column-filter-popover"
+          role="dialog"
+          aria-label={copy.dialogLabel}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              closeAndRestoreFocus();
+            }
+          }}
+        >
+          <div className="workflow-list-column-filter-title">{copy.dialogTitle}</div>
+          <label className="workflow-list-filter-control">
+            <span>{copy.fieldLabel}</span>
+            <input
+              type="search"
+              value={filterText}
+              onChange={(event) => setFilterText(event.target.value)}
+              placeholder={copy.placeholder}
+              aria-label={copy.inputLabel}
+              autoFocus
+            />
+          </label>
+          <div className="workflow-list-filter-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setFilterText('')}
+              disabled={!active}
+              aria-label={copy.resetLabel}
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={closeAndRestoreFocus}
+              aria-label={copy.applyLabel}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </WorkflowColumnHeader>
+  );
+}
+
+export function CollectionSidebarFilterHeader({
+  copy,
+  filterText,
+  setFilterText,
+}: {
+  copy: CollectionSidebarFilterCopy;
+  filterText: string;
+  setFilterText: (value: string) => void;
+}) {
+  return (
+    <div role="rowgroup" className="workflow-workspace-sidebar-header">
+      <div role="row" className="workflow-workspace-sidebar-header-row">
+        <div role="columnheader" className="workflow-workspace-sidebar-header-cell">
+          <CollectionColumnFilter
+            copy={copy}
+            filterText={filterText}
+            setFilterText={setFilterText}
+            labelClassName="workflow-workspace-sidebar-header-title workflow-list-column-header-label"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export type CollectionSidebarRow = {
   id: string;

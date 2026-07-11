@@ -13,7 +13,7 @@ import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
-import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -179,15 +179,33 @@ vi.mock('lucide-animated', async () => {
 // MM-960: simulate a transient dynamic-import (chunk-load) failure for one page
 // so we can assert the route boundary's Retry recreates the lazy import instead
 // of replaying React.lazy's cached rejection. The factory rejects the first time
-// it is evaluated and resolves to a real component afterward.
-const skillsImport = vi.hoisted(() => ({ attempts: 0 }));
-vi.mock('./skills', () => {
-  skillsImport.attempts += 1;
-  if (skillsImport.attempts === 1) {
-    throw new Error('Failed to fetch dynamically imported module: skills');
+// it is evaluated and resolves to a real component afterward. The index-health
+// page carries the failure because no other test imports it first.
+const indexHealthImport = vi.hoisted(() => ({ attempts: 0 }));
+vi.mock('./index-health', () => {
+  indexHealthImport.attempts += 1;
+  if (indexHealthImport.attempts === 1) {
+    throw new Error('Failed to fetch dynamically imported module: index-health');
   }
-  return { default: () => <div>Skills page recovered</div> };
+  return { default: () => <div>Index health page recovered</div> };
 });
+
+vi.mock('./skills', () => ({
+  default: ({ payload }: { payload: BootPayload }) => {
+    const initialData = payload.initialData as {
+      dashboardConfig?: { initialPath?: string };
+      skillsListDisplayMode?: unknown;
+      skillsListDisplayStatus?: unknown;
+    } | undefined;
+    return (
+      <div>
+        <div>Skills page loaded</div>
+        <div>Skills route path: {initialData?.dashboardConfig?.initialPath ?? 'unknown'}</div>
+        <div>Skills list display: {String(initialData?.skillsListDisplayMode ?? 'unset')}</div>
+      </div>
+    );
+  },
+}));
 
 vi.mock('./workflow-list', () => ({
   default: () => <div>Workflow list route loaded</div>,
@@ -381,18 +399,9 @@ describe('Dashboard shared entry', () => {
     fireEvent.mouseLeave(createLink);
     expect(animatedNavIconMocks.rocketStop).toHaveBeenCalledTimes(1);
 
-    const schedulesLink = screen.getByRole('link', { name: 'Recurring' });
-    fireEvent.mouseEnter(schedulesLink);
-    expect(animatedNavIconMocks.moonStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(schedulesLink);
-    expect(animatedNavIconMocks.moonStop).toHaveBeenCalledTimes(1);
-
-    const skillsLink = screen.getByRole('link', { name: 'Skills' });
-    fireEvent.mouseEnter(skillsLink);
-    expect(animatedNavIconMocks.sparklesStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(skillsLink);
-    expect(animatedNavIconMocks.sparklesStop).toHaveBeenCalledTimes(1);
-
+    // Recurring and Skills live in the System menu, not the permanent masthead.
+    expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
   });
 
   it('MM-1200 groups enabled non-primary destinations under the System menu', async () => {
@@ -402,20 +411,25 @@ describe('Dashboard shared entry', () => {
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
     const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
     expect(Array.from(navigation.querySelectorAll('.route-nav-primary > a')).map((link) => link.textContent?.trim())).toEqual([
-      'Workflows', 'Create', 'Recurring', 'Skills',
+      'Workflows', 'Create',
     ]);
+    expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
 
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: 'Recurring' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
+    expect(screen.getByText('Workflow resources')).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'RAG / Manifests' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Artifacts / Observability' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
 
-    const first = screen.getByRole('menuitem', { name: 'RAG / Manifests' });
+    const first = screen.getByRole('menuitem', { name: 'Recurring' });
     first.focus();
     fireEvent.keyDown(first, { key: 'End' });
     expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Settings' }));
@@ -430,6 +444,10 @@ describe('Dashboard shared entry', () => {
     '/observability/example',
     '/remediations/example',
     '/settings/providers',
+    '/schedules',
+    '/schedules/nightly-build',
+    '/skills',
+    '/skills/speckit-orchestrate',
   ])('MM-1200 marks System active for the child route %s', (path) => {
     renderWithClient(
       <MemoryRouter initialEntries={[path]}>
@@ -448,9 +466,9 @@ describe('Dashboard shared entry', () => {
   });
 
   it.each([
-    ['Enter', 'RAG / Manifests'],
-    [' ', 'RAG / Manifests'],
-    ['ArrowDown', 'RAG / Manifests'],
+    ['Enter', 'Recurring'],
+    [' ', 'Recurring'],
+    ['ArrowDown', 'Recurring'],
     ['ArrowUp', 'Settings'],
   ])('MM-1200 opens System with %s and focuses %s', async (key, expectedItem) => {
     renderWithClient(
@@ -472,11 +490,11 @@ describe('Dashboard shared entry', () => {
     );
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
-    const first = screen.getByRole('menuitem', { name: 'RAG / Manifests' });
+    const first = screen.getByRole('menuitem', { name: 'Recurring' });
     const last = screen.getByRole('menuitem', { name: 'Settings' });
     first.focus();
     fireEvent.keyDown(first, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Artifacts / Observability' }));
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Skills' }));
     fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' });
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: 'End' });
@@ -520,6 +538,9 @@ describe('Dashboard shared entry', () => {
     const inline = screen.getByLabelText('System destinations');
     expect(inline.querySelector('[role="menu"]')).toBeNull();
     expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
+    // Recurring and Skills render as normal inline links, not a nested popover.
+    expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
+    expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
   });
@@ -625,7 +646,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(5);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(3);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -882,6 +903,140 @@ describe('Dashboard shared entry', () => {
     });
     expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
+  });
+
+  function mockSkillsCatalogFetch(skillIds: string[]) {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/workflows/skills') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: skillIds },
+            legacyItems: skillIds.map((id) => ({ id })),
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+  }
+
+  function storedDashboardPreferences(): Record<string, unknown> {
+    const raw = window.localStorage.getItem('moonmind.dashboard.preferences');
+    const parsed = raw ? JSON.parse(raw) : {};
+    return (parsed.preferences ?? {}) as Record<string, unknown>;
+  }
+
+  it('renders one Skills list display radio group on skill routes and opens the first skill in sidebar mode', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    const group = screen.getByRole('radiogroup', { name: 'Skills list display' });
+    expect(screen.getAllByRole('radiogroup')).toHaveLength(1);
+    expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Recurring list display' })).toBeNull();
+    expect(within(group).getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(within(group).getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/speckit-orchestrate');
+    });
+    expect(await screen.findByText('Skills list display: sidebar')).toBeTruthy();
+
+    const prefs = storedDashboardPreferences();
+    expect(prefs.skillsListDisplayMode).toBe('sidebar');
+    expect(prefs.lastSelectedSkillId).toBe('speckit-orchestrate');
+    // Skills mode changes never touch the Workflow or Recurring preferences.
+    expect(prefs.workflowListDisplayMode).toBe('sidebar');
+    expect(prefs.recurringListDisplayMode).toBe('table');
+  });
+
+  it('opens a remembered skill from /skills and clears a stale remembered skill before fallback', async () => {
+    window.localStorage.setItem('moonmind.dashboard.preferences', JSON.stringify({
+      version: 3,
+      preferences: { skillsListDisplayMode: 'table', lastSelectedSkillId: 'ghost-skill' },
+    }));
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/speckit-orchestrate');
+    });
+    expect(await screen.findByText('Skills list display: hidden')).toBeTruthy();
+    const prefs = storedDashboardPreferences();
+    expect(prefs.lastSelectedSkillId).toBe('speckit-orchestrate');
+    expect(prefs.skillsListDisplayMode).toBe('hidden');
+  });
+
+  it('opens a still-valid remembered skill instead of the first visible row', async () => {
+    window.localStorage.setItem('moonmind.dashboard.preferences', JSON.stringify({
+      version: 3,
+      preferences: { skillsListDisplayMode: 'table', lastSelectedSkillId: 'pr-resolver' },
+    }));
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/pr-resolver');
+    });
+  });
+
+  it('keeps an empty skills catalog on the table with an accessible status message', async () => {
+    mockSkillsCatalogFetch([]);
+    
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    const group = screen.getByRole('radiogroup', { name: 'Skills list display' });
+    fireEvent.click(within(group).getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(within(group).getByRole('status').textContent).toBe('No skill to open.');
+    });
+    expect(window.location.pathname).toBe('/skills');
+    expect(within(group).getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('switches Skills detail between hidden and full-table modes without guessing routes', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+    
+    window.history.replaceState({}, '', '/skills/pr-resolver');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    // A direct detail visit coerces the persisted table default to sidebar
+    // instead of redirecting away from the requested skill.
+    expect(await screen.findByText('Skills list display: sidebar')).toBeTruthy();
+    expect(window.location.pathname).toBe('/skills/pr-resolver');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
+    expect(await screen.findByText('Skills list display: hidden')).toBeTruthy();
+    expect(window.location.pathname).toBe('/skills/pr-resolver');
+    expect(storedDashboardPreferences().skillsListDisplayMode).toBe('hidden');
+    expect(storedDashboardPreferences().lastSelectedSkillId).toBe('pr-resolver');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Full table' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills');
+    });
+    expect(await screen.findByText('Skills list display: table')).toBeTruthy();
   });
 
   it('switches Recurring detail between full table and hidden-list modes', async () => {
@@ -1343,19 +1498,19 @@ describe('Dashboard shared entry', () => {
   it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      window.history.replaceState({}, '', '/skills');
+      window.history.replaceState({}, '', '/index-health');
       renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
       // First dynamic import rejects -> styled route error with a Retry action.
       expect(await screen.findByText('This page failed to load')).toBeTruthy();
-      expect(screen.queryByText('Skills page recovered')).toBeNull();
+      expect(screen.queryByText('Index health page recovered')).toBeNull();
 
       // Retry must recreate the lazy import (a cached rejection would re-throw).
       fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
-      expect(await screen.findByText('Skills page recovered')).toBeTruthy();
+      expect(await screen.findByText('Index health page recovered')).toBeTruthy();
       expect(screen.queryByText('This page failed to load')).toBeNull();
-      expect(skillsImport.attempts).toBeGreaterThanOrEqual(2);
+      expect(indexHealthImport.attempts).toBeGreaterThanOrEqual(2);
     } finally {
       consoleErrorSpy.mockRestore();
     }
@@ -1886,13 +2041,13 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
   });
 
-  it('uses the constrained shell by default for non-table pages', async () => {
+  it('uses the fluid data-wide shell for the skills workspace', async () => {
     window.history.replaceState({}, '', '/skills');
-    skillsImport.attempts = 1;
+    
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Skills page recovered')).toBeTruthy();
-    expect(document.querySelector('.panel--data-wide')).toBeNull();
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    expect(document.querySelector('.panel--data-wide')).toBeTruthy();
     expect(document.querySelector('.dashboard-alerts-region')).toBeTruthy();
   });
 
@@ -1951,9 +2106,12 @@ describe('Dashboard shared entry', () => {
     expect(shellBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
     expect(shellBlock).toContain('[content-start] min(var(--mm-content-max), calc(100% - 2rem))');
 
-    const skillsWorkspaceBlock = cssRuleBlock(dashboardCss, '.skills-page.collection-workspace');
-    expect(skillsWorkspaceBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
-    expect(skillsWorkspaceBlock).toContain('--mm-rail-bleed: 1rem');
+    // Skills opts into the same edge-rail geometry through the neutral
+    // collection-workspace modifier rather than a forked page-specific grid.
+    const edgeRailBlock = cssRuleBlock(dashboardCss, '.collection-workspace--edge-rail');
+    expect(edgeRailBlock).toContain('--mm-rail-width: var(--workflow-list-column-workflow-width)');
+    expect(edgeRailBlock).toContain('--mm-rail-bleed: var(--workflow-list-slab-bleed-inline)');
+    expect(cssRuleBlocks(dashboardCss, '.skills-page.collection-workspace')).toEqual([]);
 
     // The rail stays fixed to the shared workflow-column width and bleeds left
     // by the same amount as the data slab, so its painted edge reaches x:0.
@@ -2011,7 +2169,7 @@ describe('Dashboard shared entry', () => {
     // in-flow behavior: collapsed create content spans the single available
     // column and the floating bar resets to the viewport-centered offset.
     const midShellBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
-      normalizeCssSelector(rule.selector) === '.workflow-workspace-shell' &&
+      rule.selector.split(',').map(normalizeCssSelector).includes('.workflow-workspace-shell') &&
       rule.parent?.type === 'atrule' &&
       rule.parent.name === 'media' &&
       rule.parent.params.includes('max-width: 114rem') &&

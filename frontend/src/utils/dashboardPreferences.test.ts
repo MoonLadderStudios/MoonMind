@@ -275,6 +275,75 @@ describe('dashboardPreferences', () => {
       expect(reloaded.recurringListDisplayMode).toBe('hidden');
       expect(reloaded.lastSelectedDefinitionId).toBe('schedule-two');
     });
+
+    it('defaults the skills list display mode to table and the remembered skill to empty', () => {
+      expect(DEFAULT_DASHBOARD_PREFERENCES.skillsListDisplayMode).toBe('table');
+      expect(DEFAULT_DASHBOARD_PREFERENCES.lastSelectedSkillId).toBe('');
+    });
+
+    it('keeps a valid persisted skills list display mode', () => {
+      for (const mode of ['hidden', 'sidebar', 'table'] as const) {
+        expect(
+          sanitizeDashboardPreferences({ skillsListDisplayMode: mode }).skillsListDisplayMode,
+        ).toBe(mode);
+      }
+    });
+
+    it('sanitizes an invalid skills list display mode back to table', () => {
+      for (const candidate of ['collapsed', '', 42, null, undefined, {}, []]) {
+        expect(
+          sanitizeDashboardPreferences({ skillsListDisplayMode: candidate }).skillsListDisplayMode,
+        ).toBe('table');
+      }
+    });
+
+    it('trims the remembered skill and rejects non-string values', () => {
+      expect(
+        sanitizeDashboardPreferences({ lastSelectedSkillId: '  pr-resolver  ' }).lastSelectedSkillId,
+      ).toBe('pr-resolver');
+      for (const candidate of [null, undefined, 42, false, {}, []]) {
+        expect(
+          sanitizeDashboardPreferences({ lastSelectedSkillId: candidate }).lastSelectedSkillId,
+        ).toBe('');
+      }
+    });
+
+    it('round-trips the skills mode and remembered skill across a reload', () => {
+      writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        skillsListDisplayMode: 'hidden',
+        lastSelectedSkillId: 'speckit-orchestrate',
+      });
+
+      const reloaded = readDashboardPreferences();
+      expect(reloaded.skillsListDisplayMode).toBe('hidden');
+      expect(reloaded.lastSelectedSkillId).toBe('speckit-orchestrate');
+    });
+
+    it('migrates version 2 preferences by seeding the skills defaults without losing stored fields', () => {
+      window.localStorage.setItem(
+        DASHBOARD_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({
+          version: 2,
+          preferences: {
+            workflowListDensity: 'compact',
+            workflowListDisplayMode: 'hidden',
+            recurringListDisplayMode: 'sidebar',
+            lastSelectedWorkflowId: 'workflow-one',
+            lastSelectedDefinitionId: 'schedule-one',
+          },
+        }),
+      );
+
+      const migrated = readDashboardPreferences();
+      expect(migrated.workflowListDensity).toBe('compact');
+      expect(migrated.workflowListDisplayMode).toBe('hidden');
+      expect(migrated.recurringListDisplayMode).toBe('sidebar');
+      expect(migrated.lastSelectedWorkflowId).toBe('workflow-one');
+      expect(migrated.lastSelectedDefinitionId).toBe('schedule-one');
+      expect(migrated.skillsListDisplayMode).toBe('table');
+      expect(migrated.lastSelectedSkillId).toBe('');
+    });
   });
 
   describe('reset behavior (MM-964 reset behavior)', () => {
