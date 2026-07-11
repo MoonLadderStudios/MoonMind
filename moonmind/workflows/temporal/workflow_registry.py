@@ -35,6 +35,7 @@ class WorkflowWorkerSpec:
     workflow_types: tuple[str, ...]
     workflow_classes: tuple[type[Any], ...]
     task_queues: tuple[str, ...]
+    activity_handlers: tuple[Any, ...]
     activity_types: tuple[str, ...]
     fingerprint: str
 
@@ -125,7 +126,7 @@ def workflow_fleet_worker_spec(
     temporal_settings: TemporalSettings,
     *,
     task_queues: tuple[str, ...] | None = None,
-    activity_types: tuple[str, ...] = (),
+    activity_handlers: tuple[Any, ...] = (),
 ) -> WorkflowWorkerSpec:
     """Return the single immutable specification for construction and diagnostics."""
 
@@ -147,6 +148,11 @@ def workflow_fleet_worker_spec(
     resolved_task_queues = task_queues or (
         temporal_settings.workflow_task_queue,
     )
+    activity_types = tuple(
+        str(getattr(getattr(handler, "__temporal_activity_definition", None), "name", None)
+            or getattr(handler, "__name__", type(handler).__name__))
+        for handler in activity_handlers
+    )
     fingerprint_parts = (
         "fleet=workflow",
         *(f"queue={value}" for value in resolved_task_queues),
@@ -157,6 +163,7 @@ def workflow_fleet_worker_spec(
         workflow_types=workflow_types,
         workflow_classes=workflow_classes,
         task_queues=resolved_task_queues,
+        activity_handlers=activity_handlers,
         activity_types=activity_types,
         fingerprint=_registry_fingerprint(fingerprint_parts),
     )

@@ -2698,23 +2698,19 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        worker_spec = workflow_fleet_worker_spec(
-            settings.temporal,
-            task_queues=topology.task_queues,
-            activity_types=(
-                "resolve_adapter_metadata",
-                "get_activity_route",
-                "resolve_external_adapter",
-                "external_adapter_execution_style",
-            ),
-        )
-        workflows = worker_spec.workflow_classes
-        activities = [
+        workflow_activity_handlers = (
             resolve_adapter_metadata,
             get_activity_route,
             resolve_external_adapter,
             external_adapter_execution_style,
-        ]
+        )
+        worker_spec = workflow_fleet_worker_spec(
+            settings.temporal,
+            task_queues=topology.task_queues,
+            activity_handlers=workflow_activity_handlers,
+        )
+        workflows = worker_spec.workflow_classes
+        activities = worker_spec.activity_handlers
         logger.info(
             "Temporal workflow fleet registrations: %s",
             ", ".join(worker_spec.workflow_types),

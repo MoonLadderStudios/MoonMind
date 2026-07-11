@@ -1,59 +1,82 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 2,
-  "issue_ref": "MM-1199",
-  "source_verification_artifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_verification-1.json",
+  "issue_ref": "MM-1202",
+  "source_verification_artifact": "reports/remediation_verification-1.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Added the dedicated Claude-only Omnigent host overlay, hermetic Compose contract coverage, and operator startup and validation guidance requested by the MM-1199 verifier.",
+  "summary": "Completed the executable WorkerSpec composition gap by making the specification own the concrete workflow-fleet activity handlers and deriving SDK inputs, advertised activity identities, and the registry fingerprint from that tuple. The other six verifier backlog entries remain open and were not represented as completed.",
   "changed_files": [
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/docker-compose.claude-host.yaml",
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/tests/integration/temporal/test_compose_foundation.py",
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/docs/Omnigent/CombinedStackValidationAndRollback.md",
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_attempt-2.json"
+    "moonmind/workflows/temporal/workflow_registry.py",
+    "moonmind/workflows/temporal/worker_runtime.py",
+    "tests/unit/workflows/temporal/test_temporal_workers.py",
+    "reports/remediation_attempt-2.json"
   ],
-  "tasks_file": {
-    "status": "not_present",
-    "notes": "The prerequisite script could not resolve a MoonSpec feature packet on this Jira branch. No tasks.md was changed; the verifier remainingWork list was used as the authoritative bounded backlog."
-  },
   "gap_statuses": [
     {
-      "requirement": "Provide a dedicated Claude-only Omnigent external host that consumes MoonMind's canonical Claude OAuth volume at /root/.claude.",
+      "requirement": "Complete the executable immutable worker specification",
       "gap_type": "implementation",
       "status": "fixed",
-      "evidence": "docker-compose.claude-host.yaml defines the omnigent-host-claude profile and hostname, HOME=/root, empty competing credential variables, writable claude_auth_volume:/root/.claude, isolated state, sanitized workspace mounts, required dependencies, local-network membership, and restart policy."
+      "evidence": "WorkflowWorkerSpec now owns activity_handlers, derives activity_types and the fingerprint from them, and worker_runtime passes the same spec-owned handlers to Temporal Worker construction. Unit coverage asserts handler and derived-identity composition."
     },
     {
-      "requirement": "Protect the dedicated Claude OAuth host contract with repo-local validation and operator guidance.",
+      "requirement": "Trusted native resolver binding",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "No change in this attempt; provenance, digest, policy permission, core compatibility, and publish-authority separation remain required."
+    },
+    {
+      "requirement": "Shared portable resolver semantics",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "No change in this attempt; a pure shared resolver core and cross-host parity fixtures remain required."
+    },
+    {
+      "requirement": "Immutable deployment identity and rollout safety",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "No change in this attempt; versioned deployment and stale-worker drain/exclusion controls remain required."
+    },
+    {
+      "requirement": "Capability failure handling and observability",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "No change in this attempt; operator-level capability classification, budget protection, bounded diagnostics, metrics, and alerts remain required."
+    },
+    {
+      "requirement": "Real deployment canary and comprehensive regression evidence",
       "gap_type": "verification",
-      "status": "fixed_with_test_execution_environment_limitation",
-      "evidence": "tests/integration/temporal/test_compose_foundation.py covers the overlay contract and docs/Omnigent/CombinedStackValidationAndRollback.md documents startup and validation. Docker Compose rendering and a static Python contract check passed; pytest execution is unavailable because this runtime has no pytest module."
+      "status": "remaining",
+      "evidence": "No change in this attempt; parent-to-resolver Temporal and deployed-entrypoint coverage remains required."
+    },
+    {
+      "requirement": "Architecture and operator documentation",
+      "gap_type": "documentation",
+      "status": "remaining",
+      "evidence": "No documentation was changed in this attempt; the named architecture, deployment, restart, and registration-failure documents remain required."
     }
   ],
   "targeted_checks": [
     {
-      "command": "python -m pytest tests/integration/temporal/test_compose_foundation.py -k omnigent_claude_host_profile -q --tb=short",
+      "command": "python -m py_compile moonmind/workflows/temporal/workflow_registry.py moonmind/workflows/temporal/worker_runtime.py",
+      "result": "PASS",
+      "notes": "Changed production modules compile."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_worker_healthcheck.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py",
       "result": "BLOCKED",
-      "notes": "/usr/local/bin/python: No module named pytest. This matches the source verifier's environment note."
-    },
-    {
-      "command": "docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml --profile omnigent-host-claude config --quiet",
-      "result": "PASS",
-      "notes": "The merged base and Claude-host overlay configuration rendered successfully."
-    },
-    {
-      "command": "python - <focused YAML contract assertions>",
-      "result": "PASS",
-      "notes": "PyYAML loaded the overlay and verified HOME, all empty competing credentials, the canonical OAuth mount, and the claude-auth-init dependency."
-    },
-    {
-      "command": "git diff --check",
-      "result": "PASS",
-      "notes": "No whitespace errors."
+      "notes": "The repository audits passed, then /usr/local/bin/python reported: No module named pytest."
     }
   ],
-  "remaining_work": [],
+  "remaining_work": [
+    "Implement trusted resolved-skill native binding independent of publish authority.",
+    "Extract and adopt one provider-neutral resolver core with cross-host parity fixtures.",
+    "Implement immutable/versioned rollout and stale-worker exclusion.",
+    "Add operator capability-failure classification, budget protection, diagnostics, metrics, and alerts.",
+    "Add the readiness-gating parent-to-resolver canary and required Temporal/Compose/replay/restart regression coverage.",
+    "Update the required architecture, deployment, restart, and registration-failure documentation."
+  ],
   "environment_limitations": [
-    "The focused pytest integration test could not execute because pytest is not installed in the managed runtime."
+    "Focused pytest execution is unavailable because pytest is not installed in the managed runtime."
   ],
   "scope_controls": {
     "pull_request_created": false,

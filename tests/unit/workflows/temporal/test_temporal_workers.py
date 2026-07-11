@@ -132,6 +132,7 @@ def test_worker_spec_has_stable_executable_registry_fingerprint():
     assert spec.workflow_classes == workflow_fleet_workflow_classes()
     assert spec.workflow_types == list_registered_workflow_types()
     assert spec.task_queues == (settings.temporal.workflow_task_queue,)
+    assert spec.activity_handlers == ()
     assert spec.activity_types == ()
     assert len(spec.fingerprint) == 64
     assert spec.fingerprint == workflow_fleet_worker_spec(settings.temporal).fingerprint
@@ -142,12 +143,17 @@ def test_worker_spec_fingerprint_covers_queue_and_activity_composition():
     changed_queue = workflow_fleet_worker_spec(
         settings.temporal, task_queues=("other-queue",)
     )
+    def activity_one():
+        pass
+
     changed_activities = workflow_fleet_worker_spec(
-        settings.temporal, activity_types=("activity.one",)
+        settings.temporal, activity_handlers=(activity_one,)
     )
 
     assert baseline.fingerprint != changed_queue.fingerprint
     assert baseline.fingerprint != changed_activities.fingerprint
+    assert changed_activities.activity_handlers == (activity_one,)
+    assert changed_activities.activity_types == ("activity_one",)
 
 
 def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
