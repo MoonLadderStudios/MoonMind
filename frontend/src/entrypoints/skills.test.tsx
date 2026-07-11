@@ -253,6 +253,10 @@ describe('Skills Entrypoint', () => {
       const input = within(dialog).getByLabelText('Skill sidebar filter value') as HTMLInputElement;
       expect(input.placeholder).toBe('Filter skills');
       expect(document.activeElement).toBe(input);
+
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+      expect(screen.queryByRole('dialog', { name: 'Skill sidebar filter' })).toBeNull();
     });
 
     it('supports reset, apply, escape, and outside-click with focus restoration', async () => {
@@ -468,9 +472,18 @@ describe('Skills Entrypoint', () => {
   it('shows the raw markdown and metadata preview tabs', async () => {
     renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Raw Markdown' }));
+    const renderedTab = await screen.findByRole('tab', { name: 'Rendered' });
+    const rawTab = screen.getByRole('tab', { name: 'Raw Markdown' });
+    expect(renderedTab.tabIndex).toBe(0);
+    expect(rawTab.tabIndex).toBe(-1);
+
+    fireEvent.click(rawTab);
     await waitFor(() => {
-      expect(screen.getByTestId('skill-raw-markdown').textContent).toContain('# Speckit');
+      const rawMarkdown = screen.getByLabelText('Raw Markdown Content');
+      expect(rawMarkdown.textContent).toContain('# Speckit');
+      expect(rawMarkdown.tabIndex).toBe(0);
+      expect(rawTab.tabIndex).toBe(0);
+      expect(renderedTab.tabIndex).toBe(-1);
     });
 
     fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));

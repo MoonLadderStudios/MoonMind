@@ -518,6 +518,7 @@ function SkillDetail({
                 type="button"
                 role="tab"
                 aria-selected={previewTab === tab}
+                tabIndex={previewTab === tab ? 0 : -1}
                 className={previewTab === tab ? 'queue-submit-primary' : 'secondary'}
                 onClick={() => setPreviewTab(tab)}
               >
@@ -537,6 +538,8 @@ function SkillDetail({
             <pre
               className="min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100"
               data-testid="skill-raw-markdown"
+              tabIndex={0}
+              aria-label="Raw Markdown Content"
             >
               {selectedSkill.markdown || ''}
             </pre>
@@ -882,11 +885,19 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         >
           <label>
             Skill Name
-            <input value={name} onChange={(event) => setName(event.target.value)} />
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={createMutation.isPending}
+            />
           </label>
           <label>
             Skill Markdown
-            <textarea value={markdown} onChange={(event) => setMarkdown(event.target.value)} />
+            <textarea
+              value={markdown}
+              onChange={(event) => setMarkdown(event.target.value)}
+              disabled={createMutation.isPending}
+            />
           </label>
           <div className="actions">
             <button type="submit" className="queue-submit-primary" disabled={createMutation.isPending}>
@@ -925,6 +936,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
             <input
               type="file"
               accept=".zip,application/zip"
+              disabled={uploadMutation.isPending}
               onChange={(event) => {
                 setZipFile(event.target.files?.[0] || null);
                 setMessage(null);
@@ -935,6 +947,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
             Collision Policy
             <select
               value={collisionPolicy}
+              disabled={uploadMutation.isPending}
               onChange={(event) => setCollisionPolicy(event.target.value as CollisionPolicy)}
             >
               {COLLISION_POLICIES.map((policy) => (

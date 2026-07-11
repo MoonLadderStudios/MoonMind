@@ -57,7 +57,10 @@ export function CollectionColumnFilter({
     }
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Node && filterRef.current?.contains(target)) {
+      if (
+        target instanceof Node &&
+        (filterRef.current?.contains(target) || triggerRef.current?.contains(target))
+      ) {
         return;
       }
       setOpen(false);
