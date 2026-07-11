@@ -1,0 +1,38 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 6,
+  "jiraIssueKey": "MM-1201",
+  "sourceVerificationReport": "reports/remediation_verification-5.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Migrated stale adapter-owned terminal-contract continuation assertions to the AgentRun workflow boundary and completed the verifier-requested targeted suite.",
+  "changedFiles": [
+    "tests/unit/workflows/adapters/test_codex_session_adapter.py",
+    "tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py"
+  ],
+  "gapStatuses": [
+    {
+      "requirement": "Runtime-neutral capability-aware bounded continuation with required unit-test coverage",
+      "gapType": "verification",
+      "status": "resolved",
+      "evidence": "Removed six superseded adapter-owned continuation tests; retained portable helper-contract coverage; added AgentRun-boundary assertions for bounded recovery, same-session identity, exhaustion, provider failure, and cancellation propagation."
+    }
+  ],
+  "targetedLocalChecks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py -q --tb=short",
+      "status": "passed",
+      "result": "96 passed, 2 warnings"
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/unit/test_batch_workflows.py tests/unit/workflows/test_terminal_evidence.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py tests/unit/workflows/temporal/workflows/test_run_integration.py tests/integration/reliability/test_escaped_failure_journeys.py -q --tb=short",
+      "status": "passed",
+      "result": "394 passed, 18 warnings"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed",
+      "result": "No whitespace errors"
+    }
+  ],
+  "knownRemainingGaps": []
+}

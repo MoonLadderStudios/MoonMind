@@ -1,0 +1,22 @@
+{
+  "artifact_type": "remediation.verification",
+  "attempt": 5,
+  "remediationAttempt": 5,
+  "verifiesRemediationAttempt": 5,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-5.json",
+  "verificationReportArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/artifacts/jira-implement-verify.json",
+  "verificationTarget": "MM-1201",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
+  "recoverableInCurrentRuntime": true,
+  "remainingWork": [{
+    "requirement": "Runtime-neutral capability-aware bounded continuation with required unit-test coverage",
+    "gapType": "verification",
+    "remainingWork": "Migrate the six stale CodexSessionAdapter continuation tests to the AgentRun workflow boundary and rerun the complete targeted suite.",
+    "suggestedEvidence": "tests/unit/workflows/adapters/test_codex_session_adapter.py; tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py; artifacts/jira-implement-verify.json",
+    "recoverableInCurrentRuntime": true
+  }],
+  "testSummary": {"workflowAndReliability": "PASS (157 tests)", "helperEvaluatorActivityAdapter": "FAIL (233 passed, 6 failed)", "workspaceProjectionPreflight": "PASS"},
+  "environmentNotes": ["The issue brief is complete; no recovery was needed.", "Optional RAG enrichment was NOT RUN and does not gate the verdict."]
+}

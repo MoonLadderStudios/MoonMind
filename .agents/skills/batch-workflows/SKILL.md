@@ -6,6 +6,8 @@ metadata:
     kind: enqueue_children
     owner: agent
     outcomeArtifact: artifacts/batch-workflows-result.json
+    terminalContractId: batch_workflows_fanout.v1
+    terminalSchemaVersion: moonmind.batch-workflows-result.v1
   required-capabilities:
     - git
     - jira
@@ -76,7 +78,7 @@ Progress" with a single batch run.
 2. **Queue child workflows** by running the helper:
 
    ```bash
-   python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
+   python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
      --targets artifacts/batch-workflows-targets.json \
      --run-ref <skill:jira-verify|preset:jira-implement> \
      --publish-mode <none|branch|pr|pr_with_merge_automation> \

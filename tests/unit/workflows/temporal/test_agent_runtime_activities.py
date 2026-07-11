@@ -6139,3 +6139,25 @@ async def test_agent_runtime_prepare_turn_instructions_reports_disabled_retrieva
     assert "MoonMind retrieval capability:" in result
     assert "currently unavailable" in result
     assert "rag_disabled" in result
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_fails_completed_prose_without_artifact(
+    tmp_path: Path,
+) -> None:
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(tmp_path),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+            "result": {"summary": "Everything completed successfully."},
+        }
+    )
+    assert result.failure_class == "execution_error"
+    assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
+    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"

@@ -1,63 +1,46 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 2,
-  "issue_ref": "MM-1199",
-  "source_verification_artifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_verification-1.json",
-  "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Added the dedicated Claude-only Omnigent host overlay, hermetic Compose contract coverage, and operator startup and validation guidance requested by the MM-1199 verifier.",
-  "changed_files": [
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/docker-compose.claude-host.yaml",
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/tests/integration/temporal/test_compose_foundation.py",
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/docs/Omnigent/CombinedStackValidationAndRollback.md",
-    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_attempt-2.json"
+  "issueRef": "MM-1201",
+  "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "status": "partial",
+  "summary": "Closed the verifier's isolated helper failure-matrix gap. Missing runtime identity, malformed targets, endpoint unavailability, stale-result replacement, partial HTTP failure after two successful submissions, and preservation of created child IDs are now exercised through the materialized portable helper. Runtime-neutral continuation, full parent/UI projection coherence, and a real AgentRun-to-parent reliability replay remain open.",
+  "changedFiles": [
+    "tests/unit/test_batch_workflows.py",
+    "reports/remediation_attempt-2.json"
   ],
-  "tasks_file": {
-    "status": "not_present",
-    "notes": "The prerequisite script could not resolve a MoonSpec feature packet on this Jira branch. No tasks.md was changed; the verifier remainingWork list was used as the authoritative bounded backlog."
-  },
-  "gap_statuses": [
+  "gapStatuses": [
     {
-      "requirement": "Provide a dedicated Claude-only Omnigent external host that consumes MoonMind's canonical Claude OAuth volume at /root/.claude.",
-      "gap_type": "implementation",
-      "status": "fixed",
-      "evidence": "docker-compose.claude-host.yaml defines the omnigent-host-claude profile and hostname, HOME=/root, empty competing credential variables, writable claude_auth_volume:/root/.claude, isolated state, sanitized workspace mounts, required dependencies, local-network membership, and restart policy."
+      "requirement": "Runtime-neutral capability-aware continuation",
+      "status": "open",
+      "evidence": "CodexSessionAdapter still owns the bounded terminal-contract continuation loop.",
+      "remaining": "Move continuation into replay-safe AgentRun orchestration, branch on the immutable runtime capability snapshot, and cover supported and unsupported runtimes."
     },
     {
-      "requirement": "Protect the dedicated Claude OAuth host contract with repo-local validation and operator guidance.",
-      "gap_type": "verification",
-      "status": "fixed_with_test_execution_environment_limitation",
-      "evidence": "tests/integration/temporal/test_compose_foundation.py covers the overlay contract and docs/Omnigent/CombinedStackValidationAndRollback.md documents startup and validation. Docker Compose rendering and a static Python contract check passed; pytest execution is unavailable because this runtime has no pytest module."
+      "requirement": "Complete helper failure matrix",
+      "status": "resolved",
+      "evidence": "tests/unit/test_batch_workflows.py::test_materialized_helper_failure_matrix_preserves_authoritative_evidence runs the materialized helper as an isolated subprocess and covers missing identity, malformed targets, unavailable HTTP, failure after two successful POSTs, stale artifact replacement, and retained partial child IDs.",
+      "remaining": null
+    },
+    {
+      "requirement": "Coherent parent and UI projections",
+      "status": "open",
+      "evidence": "Existing tests cover individual result and dashboard paths but do not jointly assert finishOutcome, mm_state, closeStatus, ledger, diagnostics, queued count, and partial child IDs.",
+      "remaining": "Add the verifier-requested parent-boundary and dashboard contract coverage."
+    },
+    {
+      "requirement": "Real reliability replay",
+      "status": "open",
+      "evidence": "The MM-1201 reliability fixture still calls evaluate_terminal_evidence directly.",
+      "remaining": "Drive AgentRun terminal evaluation and root finalization/projection from the minimized replay fixture."
     }
   ],
-  "targeted_checks": [
+  "targetedLocalChecks": [
     {
-      "command": "python -m pytest tests/integration/temporal/test_compose_foundation.py -k omnigent_claude_host_profile -q --tb=short",
-      "result": "BLOCKED",
-      "notes": "/usr/local/bin/python: No module named pytest. This matches the source verifier's environment note."
-    },
-    {
-      "command": "docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml --profile omnigent-host-claude config --quiet",
+      "command": "python -m pytest tests/unit/test_batch_workflows.py -q --tb=short",
       "result": "PASS",
-      "notes": "The merged base and Claude-host overlay configuration rendered successfully."
-    },
-    {
-      "command": "python - <focused YAML contract assertions>",
-      "result": "PASS",
-      "notes": "PyYAML loaded the overlay and verified HOME, all empty competing credentials, the canonical OAuth mount, and the claude-auth-init dependency."
-    },
-    {
-      "command": "git diff --check",
-      "result": "PASS",
-      "notes": "No whitespace errors."
+      "details": "26 passed in 6.13s."
     }
-  ],
-  "remaining_work": [],
-  "environment_limitations": [
-    "The focused pytest integration test could not execute because pytest is not installed in the managed runtime."
-  ],
-  "scope_controls": {
-    "pull_request_created": false,
-    "jira_status_changed": false,
-    "scope_broadened": false
-  }
+  ]
 }

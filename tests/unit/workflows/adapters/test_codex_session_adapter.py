@@ -40,6 +40,8 @@ from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionRunFailedError,
     _jira_skill_blocker_summary,
     _pr_resolver_terminal_contract,
+)
+from moonmind.workflows.temporal.workflows.agent_run import (
     _terminal_contract_continuation_instruction,
 )
 from moonmind.workflows.temporal.managed_session_errors import (
@@ -47,9 +49,6 @@ from moonmind.workflows.temporal.managed_session_errors import (
 )
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
-)
-from moonmind.workflows.temporal.runtime.managed_session_controller import (
-    DockerCodexManagedSessionController,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -81,7 +80,7 @@ def test_pr_resolver_terminal_contract_requires_publish_evidence_for_merge(
     assert missing == ["artifacts/publish_result.json"]
     instruction = _terminal_contract_continuation_instruction(missing)
     assert "artifacts/publish_result.json" in instruction
-    assert "Do not declare completion" in instruction
+    assert "do not declare completion" in instruction
 
 
 def _terminal_contract_test_adapter(
@@ -164,234 +163,6 @@ def _pr_resolver_request(
     return request.model_copy(
         update={"parameters": {"publishMode": "none", "selectedSkill": "pr-resolver"}}
     )
-
-
-async def test_pr_resolver_continuation_recovers_on_same_session(tmp_path: Path) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    requests: list[SendCodexManagedSessionTurnRequest] = []
-    termination_calls: list[Any] = []
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        requests.append(request)
-        if len(requests) == 2:
-            result = workspace / "var" / "pr_resolver" / "result.json"
-            result.parent.mkdir(parents=True)
-            result.write_text('{"status":"blocked"}', encoding="utf-8")
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-            turn_id=f"turn-{len(requests)}",
-        )
-
-    async def _terminate(request: Any) -> None:
-        termination_calls.append(request)
-
-    adapter = _terminal_contract_test_adapter(
-        tmp_path, send_turn=_send_turn, terminate_remote_session=_terminate
-    )
-    handle = await adapter.start(_pr_resolver_request(binding, workspace))
-    result = await adapter.fetch_result(handle.run_id)
-
-    assert handle.status == "completed"
-    assert len(requests) == 2
-    assert {(r.session_id, r.session_epoch, r.thread_id) for r in requests} == {
-        (binding.session_id, binding.session_epoch, "thread-terminal-contract")
-    }
-    assert requests[1].request_id == "idem-1:terminal-contract:1"
-    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
-    assert result.metadata["terminalContractContinuationCount"] == 1
-    assert termination_calls == []
-
-
-async def test_pr_resolver_scripted_app_server_journey_resumes_active_shell(
-    tmp_path: Path,
-) -> None:
-    """Exercise recovery through the real controller/app-server command boundary."""
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    invoked: list[dict[str, Any]] = []
-    active_shell_id = "shell-session-3142"
-
-    async def _fake_app_server(
-        command: tuple[str, ...],
-        *,
-        input_text: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> tuple[int, str, str]:
-        del env
-        assert command[:3] == ("docker", "exec", "-i")
-        assert command[-2:] == ("invoke", "send_turn")
-        payload = json.loads(input_text or "{}")
-        invoked.append(payload)
-        if len(invoked) == 1:
-            metadata = {
-                "assistantText": "Outer wait completed.",
-                "toolResult": {
-                    "status": "completed",
-                    "payload": {"session_id": active_shell_id, "status": "running"},
-                },
-            }
-        else:
-            result = workspace / "var" / "pr_resolver" / "result.json"
-            result.parent.mkdir(parents=True)
-            result.write_text('{"status":"blocked"}', encoding="utf-8")
-            metadata = {"assistantText": "Resumed the shell and wrote evidence."}
-        response = {
-            "sessionState": {
-                "sessionId": payload["sessionId"],
-                "sessionEpoch": payload["sessionEpoch"],
-                "containerId": payload["containerId"],
-                "threadId": payload["threadId"],
-                "activeTurnId": None,
-            },
-            "turnId": f"vendor-turn-{len(invoked)}",
-            "status": "completed",
-            "metadata": metadata,
-        }
-        return 0, json.dumps(response), ""
-
-    controller = DockerCodexManagedSessionController(
-        workspace_volume_name="agent_workspaces",
-        codex_volume_name="codex_auth_volume",
-        workspace_root=str(tmp_path / "agent_jobs"),
-        command_runner=_fake_app_server,
-    )
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=controller.send_turn)
-
-    handle = await adapter.start(_pr_resolver_request(binding, workspace))
-    result = await adapter.fetch_result(handle.run_id)
-
-    assert handle.status == "completed"
-    assert [item["requestId"] for item in invoked] == [
-        "idem-1:initial",
-        "idem-1:terminal-contract:1",
-    ]
-    assert {item["sessionId"] for item in invoked} == {binding.session_id}
-    assert {item["sessionEpoch"] for item in invoked} == {binding.session_epoch}
-    assert {item["threadId"] for item in invoked} == {"thread-terminal-contract"}
-    assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
-    assert result.metadata["terminalContractContinuationCount"] == 1
-
-
-async def test_pr_resolver_continuation_exhaustion_is_compact_execution_error(
-    tmp_path: Path,
-) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    requests: list[SendCodexManagedSessionTurnRequest] = []
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        requests.append(request)
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-            turn_id=f"turn-{len(requests)}",
-        )
-
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as exc_info:
-        await adapter.start(_pr_resolver_request(binding, workspace))
-
-    result = exc_info.value.agent_run_result
-    assert result.failure_class == "execution_error"
-    assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
-    assert result.metadata["terminalContractContinuationCount"] == 2
-    assert result.metadata["terminalContractMissingEvidence"] == [
-        "var/pr_resolver/result.json"
-    ]
-    assert [request.request_id for request in requests] == [
-        "idem-1:initial",
-        "idem-1:terminal-contract:1",
-        "idem-1:terminal-contract:2",
-    ]
-
-
-async def test_pr_resolver_continuation_provider_failure_retains_contract_context(
-    tmp_path: Path,
-) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    calls = 0
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("provider transport unavailable")
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-        )
-
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as exc_info:
-        await adapter.start(_pr_resolver_request(binding, workspace))
-
-    metadata = exc_info.value.agent_run_result.metadata
-    assert metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
-    assert metadata["terminalContractRecoveryOutcome"] == "provider_failure"
-    assert metadata["terminalContractContinuationHistory"][0]["outcome"] == (
-        "provider_failure"
-    )
-    assert metadata["turnMetadata"]["continuationFailureType"] == "RuntimeError"
-    assert "provider transport unavailable" in exc_info.value.agent_run_result.summary
-
-
-async def test_pr_resolver_continuation_obeys_deadline_and_cancellation(
-    tmp_path: Path,
-) -> None:
-    binding = _binding()
-    workspace = tmp_path / "workspace"
-    continuation_started = asyncio.Event()
-    release = asyncio.Event()
-    calls = 0
-
-    async def _send_turn(
-        request: SendCodexManagedSessionTurnRequest,
-    ) -> CodexManagedSessionTurnResponse:
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            continuation_started.set()
-            await release.wait()
-        return _turn_response(
-            session_id=request.session_id,
-            session_epoch=request.session_epoch,
-            container_id=request.container_id,
-            thread_id=request.thread_id,
-        )
-
-    adapter = _terminal_contract_test_adapter(tmp_path, send_turn=_send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as deadline_exc:
-        await adapter.start(
-            _pr_resolver_request(binding, workspace, timeout_seconds=0.01)
-        )
-    assert deadline_exc.value.agent_run_result.metadata[
-        "terminalContractRecoveryOutcome"
-    ] == (
-        "deadline_exhausted"
-    )
-
-    calls = 0
-    continuation_started.clear()
-    task = asyncio.create_task(adapter.start(_pr_resolver_request(binding, workspace)))
-    await continuation_started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        _ = await task
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):

@@ -8,6 +8,13 @@ and unsupported-target skips.
 from __future__ import annotations
 
 import runpy
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -520,3 +527,167 @@ def test_batch_workflows_parent_is_side_effect_only_publish():
         resolve_publish_mode_for_skill("batch-workflows", "auto")
     with pytest.raises(WorkflowContractError):
         resolve_publish_mode_for_skill("batch-workflows", "pr")
+
+
+def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
+    """The active snapshot wins even when the target repo owns conflicting skills."""
+    repo_root = Path(__file__).resolve().parents[2]
+    snapshot = tmp_path / "skills_active"
+    shutil.copytree(repo_root / ".agents" / "skills" / "batch-workflows", snapshot / "batch-workflows")
+    shutil.copytree(repo_root / ".agents" / "skills" / "_shared", snapshot / "_shared")
+    external_repo = tmp_path / "external-repo"
+    (external_repo / ".agents" / "skills" / "batch-workflows" / "bin").mkdir(parents=True)
+    (external_repo / ".agents" / "skills" / "batch-workflows" / "bin" / "batch_workflows.py").write_text(
+        "raise SystemExit('repository-owned helper executed')\n", encoding="utf-8"
+    )
+    trap = tmp_path / "import-trap"
+    trap.mkdir()
+    for name in ("moonmind.py", "api_service.py"):
+        (trap / name).write_text("raise AssertionError('service graph imported')\n", encoding="utf-8")
+    targets = [
+        {"provider": "jira", "ref": f"THOR-{number}", "jiraIssue": {"key": f"THOR-{number}"}, "repository": "acme/widgets"}
+        for number in range(705, 710)
+    ]
+    (external_repo / "targets.json").write_text(json.dumps(targets), encoding="utf-8")
+
+    posts: list[dict[str, Any]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            posts.append(json.loads(self.rfile.read(length)))
+            body = json.dumps({"workflowId": f"child-{len(posts)}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(trap),
+        "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
+        "MOONMIND_STEP_EXECUTION_ID": "step-external-1",
+        "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot),
+    }
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(snapshot / "batch-workflows" / "bin" / "batch_workflows.py"),
+                "--targets", "targets.json", "--run-ref", "skill:jira-verify",
+                "--publish-mode", "none", "--artifacts-dir", str(external_repo / "artifacts"),
+            ],
+            cwd=external_repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert completed.returncode == 0, completed.stderr
+    assert len(posts) == 5
+    keys = [post["payload"]["idempotencyKey"] for post in posts]
+    assert len(set(keys)) == 5
+    evidence = json.loads((external_repo / "artifacts" / "batch-workflows-result.json").read_text())
+    assert evidence["executionRef"] == "step-external-1"
+    assert evidence["created"] == 5
+    assert [item["ref"] for item in evidence["queued"]] == [f"THOR-{n}" for n in range(705, 710)]
+
+
+def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp_path):
+    """Every preflight/transport failure replaces stale evidence and retains children."""
+    repo_root = Path(__file__).resolve().parents[2]
+    snapshot = tmp_path / "skills_active"
+    shutil.copytree(repo_root / ".agents" / "skills" / "batch-workflows", snapshot / "batch-workflows")
+    shutil.copytree(repo_root / ".agents" / "skills" / "_shared", snapshot / "_shared")
+    workspace = tmp_path / "external-repo"
+    workspace.mkdir()
+    artifacts = workspace / "artifacts"
+    result_path = artifacts / "batch-workflows-result.json"
+    helper = snapshot / "batch-workflows" / "bin" / "batch_workflows.py"
+    targets = [
+        {"provider": "jira", "ref": f"THOR-{number}", "jiraIssue": {"key": f"THOR-{number}"}}
+        for number in range(705, 710)
+    ]
+    targets_path = workspace / "targets.json"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    def run(*, url: str, execution_ref: str | None = "step-matrix"):
+        env = {**os.environ, "MOONMIND_URL": url, "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot)}
+        if execution_ref is None:
+            env.pop("MOONMIND_STEP_EXECUTION_ID", None)
+        else:
+            env["MOONMIND_STEP_EXECUTION_ID"] = execution_ref
+        return subprocess.run(
+            [sys.executable, str(helper), "--targets", str(targets_path), "--run-ref", "skill:jira-verify", "--publish-mode", "none", "--artifacts-dir", str(artifacts)],
+            cwd=workspace, env=env, text=True, capture_output=True, timeout=20, check=False,
+        )
+
+    artifacts.mkdir()
+    result_path.write_text(json.dumps({"status": "queued", "executionRef": "stale"}), encoding="utf-8")
+    missing_identity = run(url="http://127.0.0.1:1", execution_ref=None)
+    assert missing_identity.returncode == 1
+    evidence = json.loads(result_path.read_text())
+    assert evidence["status"] == "failed"
+    assert evidence["executionRef"] is None
+    assert evidence["queued"] == []
+
+    targets_path.write_text("{malformed", encoding="utf-8")
+    malformed = run(url="http://127.0.0.1:1")
+    assert malformed.returncode == 1
+    assert json.loads(result_path.read_text())["status"] == "failed"
+    targets_path.write_text(json.dumps(targets), encoding="utf-8")
+
+    unavailable = run(url="http://127.0.0.1:1")
+    assert unavailable.returncode == 1
+    unavailable_evidence = json.loads(result_path.read_text())
+    assert unavailable_evidence["status"] == "failed"
+    assert unavailable_evidence["created"] == 0
+    assert len(unavailable_evidence["errors"]) == 5
+
+    posts = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            nonlocal posts
+            posts += 1
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            if posts > 2:
+                self.send_error(503, "injected partial failure")
+                return
+            body = json.dumps({"workflowId": f"child-{posts}"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        partial = run(url=f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert partial.returncode == 1
+    partial_evidence = json.loads(result_path.read_text())
+    assert partial_evidence["status"] == "partial_failure"
+    assert partial_evidence["created"] == 2
+    assert [item["workflowId"] for item in partial_evidence["queued"]] == ["child-1", "child-2"]
+    assert len(partial_evidence["errors"]) == 3
+    assert partial_evidence["executionRef"] == "step-matrix"

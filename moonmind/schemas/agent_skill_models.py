@@ -60,7 +60,6 @@ class AgentSkillProvenance(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
-
 class SkillImplementationContract(BaseModel):
     """Portable semantics and native-host eligibility declared by a Skill."""
 
@@ -73,6 +72,18 @@ class SkillImplementationContract(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+
+class SkillTerminalContract(BaseModel):
+    """Immutable terminal evidence selected by trusted skill metadata."""
+
+    contract_id: str
+    owner: Literal["agent"] = "agent"
+    evidence_kind: Literal["workspace_json"] = "workspace_json"
+    relative_path: str
+    expected_schema_version: str
+
+    model_config = ConfigDict(extra="forbid")
+
 class ResolvedSkillEntry(BaseModel):
     """An individual agent skill selected for a run."""
 
@@ -83,6 +94,7 @@ class ResolvedSkillEntry(BaseModel):
     provenance: AgentSkillProvenance
     required_skills: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
+    terminal_contract: SkillTerminalContract | None = None
     selection_reason: str | None = None
     required_by: list[str] = Field(default_factory=list)
     implementation: SkillImplementationContract | None = None

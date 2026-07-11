@@ -3,17 +3,48 @@
   "attempt": 2,
   "remediationAttempt": 2,
   "verifiesRemediationAttempt": 2,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_attempt-2.json",
-  "verificationReportArtifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/var/artifacts/moonspec-verify/jira-orchestrate.json",
-  "verificationTarget": "MM-1199",
-  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-2.json",
+  "verificationTarget": "MM-1201",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "summary": "Remediation attempt 2 closes both MM-1199 gaps: the dedicated Claude-only Omnigent host consumes the canonical writable OAuth volume at /root/.claude with competing credentials cleared, and the contract is protected by repo-local validation plus operator guidance. The unavailable pytest executable is a disclosed environment limitation; direct inspection, static contract assertions, and merged Compose rendering verify every repo-verifiable requirement.",
+  "remainingWork": [
+    {
+      "requirement": "Runtime-neutral capability-aware continuation",
+      "gapType": "implementation",
+      "remainingWork": "Move bounded terminal-contract continuation out of CodexSessionAdapter into replay-safe, capability-aware AgentRun orchestration and cover supported and unsupported runtimes.",
+      "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; AgentRun workflow tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Coherent parent and UI projections",
+      "gapType": "verification",
+      "remainingWork": "Prove finishOutcome, mm_state, closeStatus, ledger, dashboard, diagnostics, queued count, and partial child IDs agree through the parent boundary.",
+      "suggestedEvidence": "tests/unit/workflows/temporal/workflows/test_run_integration.py; frontend dashboard tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Real reliability replay",
+      "gapType": "verification",
+      "remainingWork": "Drive AgentRun terminal evaluation and parent finalization/projection rather than directly invoking the evaluator.",
+      "suggestedEvidence": "tests/integration/reliability/test_escaped_failure_journeys.py",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "resolvedInAttempt": [
+    {
+      "requirement": "Complete helper failure matrix",
+      "evidence": "tests/unit/test_batch_workflows.py:607-693; targeted unit suite passed 176 tests."
+    }
+  ],
+  "testSummary": {
+    "unit": "PASS (176)",
+    "workflowBoundary": "PASS (150)",
+    "reliability": "PASS (3)"
+  },
   "environmentNotes": [
-    "Focused pytest was NOT RUN because /usr/local/bin/python has no pytest module. This is an environment-only limitation and does not gate the verdict because the test source was inspected, equivalent static YAML assertions passed, and Docker Compose rendered the merged configuration successfully.",
-    "Live Claude OAuth and Omnigent provider execution were NOT RUN because they require external credentials and services; they are advisory scope exclusions."
+    "The issue brief is complete; no recovery was needed.",
+    "Workspace projection preflight passed."
   ]
 }

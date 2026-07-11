@@ -18,6 +18,7 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillEntry,
     ResolvedSkillSet,
     SkillImplementationContract,
+    SkillTerminalContract,
     SkillSelector,
 )
 
@@ -216,6 +217,12 @@ def _scan_for_skills(
             continue
         if item.is_dir() and (item / "SKILL.md").exists():
             frontmatter = _load_skill_frontmatter(item)
+            side_effect = _side_effect_metadata_from_frontmatter(
+                frontmatter, owner=item.name
+            )
+            terminal_contract = _terminal_contract_from_side_effect(
+                side_effect, owner=item.name
+            )
             results.append(
                 ResolvedSkillEntry(
                     skill_name=item.name,
@@ -227,9 +234,34 @@ def _scan_for_skills(
                         source_kind=source_kind,
                         source_path=str(item),
                     ),
+                    terminal_contract=terminal_contract,
                 )
             )
     return results
+
+
+def _terminal_contract_from_side_effect(
+    side_effect: dict[str, typing.Any], *, owner: str
+) -> SkillTerminalContract | None:
+    contract_id = str(side_effect.get("terminalContractId") or "").strip()
+    if not contract_id:
+        return None
+    known = {
+        "batch_workflows_fanout.v1": "moonmind.batch-workflows-result.v1",
+    }
+    if contract_id not in known:
+        raise ValueError(
+            f"skill '{owner}' selects unknown terminal contract '{contract_id}'"
+        )
+    relative_path = str(side_effect.get("outcomeArtifact") or "").strip()
+    path = Path(relative_path)
+    if not relative_path or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"skill '{owner}' terminal outcomeArtifact is unsafe")
+    return SkillTerminalContract(
+        contract_id=contract_id,
+        relative_path=relative_path,
+        expected_schema_version=known[contract_id],
+    )
 
 
 def _is_moonmind_active_projection(skills_dir: Path) -> bool:

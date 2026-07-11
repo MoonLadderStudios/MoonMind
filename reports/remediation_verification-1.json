@@ -2,27 +2,19 @@
   "artifact_type": "remediation.verification",
   "attempt": 1,
   "remediationAttempt": 1,
-  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "authoritativeVerificationArtifact": "artifacts/jira-implement-verify.json",
-  "issueProvider": "jira",
-  "issueRef": "MM-1200",
-  "verificationTarget": "issue_brief",
-  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "verifiesRemediationAttempt": 1,
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-1.json",
+  "verificationTarget": "MM-1201",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "summary": "Remediation attempt 1 closes all verification gaps from the prior MM-1200 verdict. The whole target state is fully implemented and all controlling frontend checks pass.",
-  "testResults": [
-    {"command": "npm run ui:test -- frontend/src/entrypoints/dashboard.test.tsx frontend/src/lib/dashboardRoutes.test.ts frontend/src/styles/dashboardBrand.test.ts", "result": "PASS", "details": "3 files and 155 tests passed."},
-    {"command": "./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json", "result": "PASS"},
-    {"command": "./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src", "result": "PASS"},
-    {"command": "npm run ui:clean-dist && ./node_modules/.bin/vite build --config frontend/vite.config.ts && npm run ui:verify-manifest", "result": "PASS", "details": "Production build and manifest verification passed with an existing non-fatal chunk-size warning."}
+  "remainingWork": [
+    {"requirement": "Runtime-neutral capability-aware continuation", "gapType": "implementation", "remainingWork": "Move bounded continuation out of CodexSessionAdapter into replay-safe AgentRun orchestration and cover runtimes with and without same-session continuation.", "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; AgentRun workflow tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Complete helper failure matrix", "gapType": "verification", "remainingWork": "Add isolated subprocess cases for preflight/HTTP/partial/rerun/stale-artifact paths and prove created children remain preserved.", "suggestedEvidence": "tests/unit/test_batch_workflows.py", "recoverableInCurrentRuntime": true},
+    {"requirement": "Coherent parent and UI projections", "gapType": "verification", "remainingWork": "Prove finishOutcome, mm_state, closeStatus, ledger, dashboard, diagnostics, queued count, and partial child IDs agree through the parent boundary.", "suggestedEvidence": "tests/unit/workflows/temporal/workflows/test_run_integration.py; frontend dashboard tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Real reliability replay", "gapType": "verification", "remainingWork": "Drive AgentRun evaluation and parent finalization/projection rather than directly invoking the evaluator.", "suggestedEvidence": "tests/integration/reliability/test_escaped_failure_journeys.py", "recoverableInCurrentRuntime": true}
   ],
-  "verifiedRemediationGaps": [
-    {"requirement": "System trigger active state on every child route", "status": "VERIFIED", "evidence": "frontend/src/entrypoints/dashboard.test.tsx:427"},
-    {"requirement": "Accessible System interaction contract and mobile inline navigation", "status": "VERIFIED", "evidence": "frontend/src/entrypoints/dashboard.test.tsx:450-525"},
-    {"requirement": "System-specific desktop, mobile, focus, dark-mode, and reduced-motion styling coverage", "status": "VERIFIED", "evidence": "frontend/src/styles/dashboardBrand.test.ts:70"}
-  ],
-  "scopeLimitations": []
+  "testSummary": {"unit": "PASS (175)", "workflowBoundary": "PASS (150)", "reliability": "PASS (3)"},
+  "environmentNotes": ["The issue brief is complete; no recovery was needed.", "Unrelated MM-1199 remediation artifacts were excluded."]
 }

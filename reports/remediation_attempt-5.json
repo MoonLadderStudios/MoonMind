@@ -1,0 +1,47 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 5,
+  "issueRef": "MM-1201",
+  "sourceVerificationArtifact": "reports/remediation_verification-4.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "status": "completed",
+  "changedFiles": [
+    "moonmind/workflows/adapters/codex_session_adapter.py",
+    "moonmind/workflows/temporal/workflows/agent_run.py",
+    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "tests/unit/workflows/adapters/test_codex_session_adapter.py",
+    "tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py",
+    "reports/remediation_attempt-5.json"
+  ],
+  "gapStatus": [
+    {
+      "requirement": "Runtime-neutral capability-aware bounded continuation",
+      "priorStatus": "PARTIAL",
+      "status": "addressed",
+      "evidence": "MoonMindAgentRun now resolves the immutable RuntimeExecutionCapabilities snapshot, rejects continuation immediately when supports_same_session_continuation is false, and owns the deterministic two-attempt continuation loop and history. CodexSessionAdapter no longer evaluates terminal contracts or retries incomplete terminal evidence."
+    }
+  ],
+  "targetedLocalChecks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability/test_escaped_failure_journeys.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short",
+      "result": "PASS",
+      "details": "126 passed in 4.41s"
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py -q --tb=short",
+      "result": "PASS",
+      "details": "31 passed in 3.80s; includes continuation-capable and continuation-incapable workflow-boundary cases"
+    },
+    {
+      "command": "test ! -L .agents/skills; test ! -L .gemini/skills; test ! -e skills_active || test -L skills_active; git status --porcelain -- .agents/skills .gemini/skills skills_active",
+      "result": "PASS",
+      "details": "No active skill projection contaminated the repository view."
+    },
+    {
+      "command": "python -m py_compile moonmind/workflows/temporal/workflows/agent_run.py moonmind/workflows/adapters/codex_session_adapter.py && git diff --check",
+      "result": "PASS",
+      "details": "Changed Python modules compile and the diff has no whitespace errors."
+    }
+  ],
+  "knownGaps": []
+}

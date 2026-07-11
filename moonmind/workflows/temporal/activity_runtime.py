@@ -1349,6 +1349,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
+    "agent_runtime.evaluate_terminal_evidence": (
+        "agent_runtime",
+        "agent_runtime_evaluate_terminal_evidence",
+    ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
     "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
@@ -8735,12 +8739,23 @@ class TemporalAgentRuntimeActivities:
                     skill_materialization_metadata=skill_materialization_metadata,
                 )
                 if payload.get("includePreparedRequestMetadata"):
-                    return {
+                    prepared_payload = {
                         "instructions": prepared,
                         "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                             request.parameters
                         ),
                     }
+                    if skill_materialization_metadata:
+                        prepared_payload["activeSkillsDir"] = str(
+                            skill_materialization_metadata.get("visiblePath") or ""
+                        )
+                    if request.terminal_contract is not None:
+                        prepared_payload["terminalContract"] = (
+                            request.terminal_contract.model_dump(
+                                by_alias=True, exclude_none=True
+                            )
+                        )
+                    return prepared_payload
                 return prepared
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
@@ -8751,12 +8766,23 @@ class TemporalAgentRuntimeActivities:
                 skill_materialization_metadata=skill_materialization_metadata,
             )
             if payload.get("includePreparedRequestMetadata"):
-                return {
+                prepared_payload = {
                     "instructions": prepared,
                     "durableRetrievalMetadata": extract_durable_retrieval_metadata(
                         request.parameters
                     ),
                 }
+                if skill_materialization_metadata:
+                    prepared_payload["activeSkillsDir"] = str(
+                        skill_materialization_metadata.get("visiblePath") or ""
+                    )
+                if request.terminal_contract is not None:
+                    prepared_payload["terminalContract"] = (
+                        request.terminal_contract.model_dump(
+                            by_alias=True, exclude_none=True
+                        )
+                    )
+                return prepared_payload
             return prepared
         raise TemporalActivityRuntimeError(
             "request.instructionRef or request.parameters.instructions is required"
@@ -8850,6 +8876,24 @@ class TemporalAgentRuntimeActivities:
                 selected_skill=selected_skill,
                 resolved_skillset=resolved_skillset,
             )
+            selected_entry = next(
+                entry for entry in resolved_skillset.skills
+                if entry.skill_name == selected_skill
+            )
+            if selected_entry.terminal_contract is not None:
+                from moonmind.schemas.agent_runtime_models import AgentTerminalContract
+
+                execution_ref = (
+                    request.step_execution.step_execution_id
+                    if request.step_execution is not None
+                    else ""
+                )
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    {
+                        **selected_entry.terminal_contract.model_dump(),
+                        "executionRef": execution_ref,
+                    }
+                )
         except TemporalActivityRuntimeError:
             raise
         except (RuntimeError, OSError, ValueError, ValidationError) as exc:
@@ -10254,6 +10298,56 @@ class TemporalAgentRuntimeActivities:
         finally:
             await self._cleanup_managed_run_publish_support_best_effort(run_id)
 
+    async def agent_runtime_evaluate_terminal_evidence(
+        self,
+        request: Mapping[str, Any],
+        /,
+    ) -> AgentRunResult:
+        """Apply an execution-bound terminal contract above provider adapters."""
+        from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+        result = AgentRunResult.model_validate(request.get("result") or {})
+        contract = request.get("terminalContract")
+        if not isinstance(contract, Mapping) or result.failure_class is not None:
+            return result
+
+        workspace_path = str(request.get("workspacePath") or "").strip()
+        if not workspace_path:
+            workspace_path = str((result.metadata or {}).get("workspacePath") or "").strip()
+        run_id = str(request.get("runId") or "").strip()
+        if not workspace_path and run_id and self._run_store is not None:
+            record = self._run_store.load(run_id)
+            workspace_path = str(getattr(record, "workspace_path", "") or "").strip()
+
+        evaluation = evaluate_terminal_evidence(
+            dict(contract), workspace_path=workspace_path
+        )
+        metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
+        metadata["terminalContractId"] = str(contract.get("contractId") or "")
+        metadata["terminalContractAuthority"] = "MoonMind.AgentRun"
+        if evaluation.failure_code:
+            metadata["failureCode"] = evaluation.failure_code
+        if evaluation.satisfied:
+            metadata["terminalContractSatisfied"] = True
+            return result.model_copy(update={"metadata": metadata})
+
+        metadata.update(
+            {
+                "terminalContractSatisfied": False,
+                "terminalContractMissingEvidence": list(evaluation.missing_evidence),
+                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+            }
+        )
+        missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
+        return result.model_copy(
+            update={
+                "summary": f"Agent completed without required terminal evidence: {missing}",
+                "failure_class": "execution_error",
+                "provider_error_code": evaluation.failure_code
+                or "missing_terminal_evidence",
+                "metadata": metadata,
+            }
+        )
     async def _managed_session_summary_metadata(
         self,
         record: ManagedRunRecord,

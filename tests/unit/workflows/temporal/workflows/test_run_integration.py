@@ -4409,3 +4409,45 @@ def test_humanize_step_failure_summary_handles_all_category_tokens() -> None:
         )
         assert summary not in MoonMindRunWorkflow._ERROR_CATEGORY_TOKENS
         assert f"({token})" in summary
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_failure_projects_partial_fanout_consistently(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queued = [
+        {"ref": "THOR-705", "workflowId": "child-1"},
+        {"ref": "THOR-706", "workflowId": "child-2"},
+    ]
+    diagnostic = mock_run_workflow._record_result_failure_diagnostic(
+        stage="execute",
+        category="execution_error",
+        source="child_workflow",
+        step_id="batch-workflows",
+        step_title="batch-workflows",
+        message="Agent completed without required terminal evidence",
+        child_workflow_id="agent-run-mm-1201",
+        diagnostics_ref="artifact://mm-1201-diagnostics",
+        terminal_evidence={
+            "failureCode": "BATCH_FANOUT_PARTIAL_FAILURE",
+            "terminalContractId": "batch_workflows_fanout.v1",
+            "terminalContractMissingEvidence": [],
+            "queuedChildCount": 2,
+            "queuedChildren": queued,
+        },
+    )
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters={"publishMode": "none"},
+        status="failed",
+        error=diagnostic["message"],
+    )
+
+    assert summary["finishOutcome"]["code"] == "FAILED"
+    assert summary["failure"]["failureCode"] == "BATCH_FANOUT_PARTIAL_FAILURE"
+    assert summary["failure"]["queuedChildCount"] == len(queued)
+    assert summary["failure"]["queuedChildren"] == queued
+    assert summary["lastStep"]["diagnosticsRef"] == "artifact://mm-1201-diagnostics"

@@ -1586,6 +1586,22 @@ const RunSummaryArtifactSchema = z
       })
       .passthrough()
       .optional(),
+    failure: z
+      .object({
+        failureCode: z.string().nullable().optional(),
+        queuedChildCount: z.number().int().nonnegative().optional(),
+        queuedChildren: z
+          .array(
+            z.object({
+              workflowId: z.string().nullable().optional(),
+              executionId: z.string().nullable().optional(),
+              ref: z.string().nullable().optional(),
+            }).passthrough(),
+          )
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
     publishContext: z
       .object({
         branch: z.string().nullable().optional(),
@@ -8522,6 +8538,23 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               </FlatFactGrid>
               {runSummary.publish?.reason ? (
                 <p className="whitespace-pre-wrap">{runSummary.publish.reason}</p>
+              ) : null}
+              {runSummary.failure?.failureCode ? (
+                <FlatFactGrid>
+                  <Fact label="Failure Code">{runSummary.failure.failureCode}</Fact>
+                  <Fact label="Queued Children">
+                    {runSummary.failure.queuedChildCount ?? runSummary.failure.queuedChildren?.length ?? 0}
+                  </Fact>
+                </FlatFactGrid>
+              ) : null}
+              {runSummary.failure?.queuedChildren?.length ? (
+                <FactGroup title="Queued Child Workflows">
+                  {runSummary.failure.queuedChildren.map((child, index) => (
+                    <Fact key={child.workflowId || child.executionId || `${child.ref || 'child'}-${index}`} label={child.ref || `Child ${index + 1}`}>
+                      <code className="text-xs break-all">{child.workflowId || child.executionId || '—'}</code>
+                    </Fact>
+                  ))}
+                </FactGroup>
               ) : null}
               {runSummary.publishContext ? (
                 <FlatFactGrid>

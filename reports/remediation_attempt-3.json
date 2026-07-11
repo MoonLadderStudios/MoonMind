@@ -1,0 +1,58 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 3,
+  "issueRef": "MM-1201",
+  "sourceVerificationArtifact": "reports/remediation_verification-2.json",
+  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
+  "status": "partial",
+  "summary": "Preserved authoritative terminal-evidence details through the parent failure projection and dashboard, and upgraded the escaped-failure replay to cross the AgentRun terminal-evaluation activity boundary. Runtime-neutral capability-aware continuation remains open.",
+  "changedFiles": [
+    "moonmind/workflows/temporal/workflows/run.py",
+    "frontend/src/entrypoints/workflow-detail.tsx",
+    "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "reports/remediation_attempt-3.json"
+  ],
+  "gapStatuses": [
+    {
+      "requirement": "Runtime-neutral capability-aware continuation",
+      "status": "open",
+      "evidence": "Bounded continuation remains implemented inside CodexSessionAdapter; attempt 3 did not safely complete the workflow-owned capability-aware refactor.",
+      "remaining": "Move the continuation decision and retry bound into replay-safe AgentRun orchestration using an immutable runtime capability snapshot, with supported and unsupported runtime tests."
+    },
+    {
+      "requirement": "Coherent parent and UI projections",
+      "status": "resolved",
+      "evidence": "Parent failure diagnostics now retain failureCode, terminalContractId, terminalContractMissingEvidence, queuedChildCount, and queuedChildren. The final summary and dashboard render the same failure code, queued count, diagnostics reference, and partial child workflow IDs; targeted parent and frontend suites pass.",
+      "remaining": null
+    },
+    {
+      "requirement": "Real reliability replay",
+      "status": "partial",
+      "evidence": "The MM-1201 replay now drives MoonMindAgentRun._evaluate_terminal_contract through TemporalAgentRuntimeActivities.agent_runtime_evaluate_terminal_evidence and proves the AgentRun authority metadata and execution_error result. Parent finalization/projection is covered by the focused parent workflow test, but not yet in the same integration replay.",
+      "remaining": "Extend the minimized integration replay through parent finalization/projection after the AgentRun failure result."
+    }
+  ],
+  "targetedLocalChecks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability/test_escaped_failure_journeys.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short",
+      "result": "PASS",
+      "details": "126 passed in 4.21s."
+    },
+    {
+      "command": "npm run ui:test -- frontend/src/entrypoints/workflow-detail.test.tsx",
+      "result": "PASS",
+      "details": "183 passed in 25.40s."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/workflow-detail.test.tsx",
+      "result": "FAIL",
+      "details": "The command unexpectedly selected the broad Python unit suite before the UI target and exposed two unrelated pre-existing missing moonspec/bundle fixture files; it was stopped after recording the failures. The documented direct focused frontend command then passed."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "details": "No whitespace errors."
+    }
+  ]
+}
