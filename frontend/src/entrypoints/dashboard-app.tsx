@@ -21,14 +21,12 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Bot, PanelLeft, Rows3, ScrollText, ShieldCheck, Square, Wrench } from 'lucide-react';
+import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   MoonIcon,
   type MoonIconHandle,
   RocketIcon,
   type RocketIconHandle,
-  SettingsIcon,
-  type SettingsIconHandle,
   SparklesIcon,
   type SparklesIconHandle,
 } from 'lucide-animated';
@@ -37,6 +35,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { validatePageBoot } from '../boot/pageBootSchemas';
 import { DashboardErrorState } from '../components/DashboardErrorState';
 import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBoundary';
+import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
@@ -44,6 +43,7 @@ import {
   DASHBOARD_REACT_ROUTE_PATHS,
   DASHBOARD_DESTINATIONS,
   matchesDashboardDestinationRegistry,
+  visiblePrimaryDestinations,
   type DashboardPage,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
@@ -130,7 +130,6 @@ function requestRecurringFocusForMode(
 type AnimatedNavIconHandle =
   | MoonIconHandle
   | RocketIconHandle
-  | SettingsIconHandle
   | SparklesIconHandle;
 
 type AnimatedNavIconProps = NavIconProps & {
@@ -139,10 +138,6 @@ type AnimatedNavIconProps = NavIconProps & {
 
 function WorkflowsNavIcon({ className }: NavIconProps) {
   return <ScrollText size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
-}
-
-function RemediationsNavIcon({ className }: NavIconProps) {
-  return <Wrench size={NAV_ICON_SIZE} className={className} aria-hidden="true" />;
 }
 
 function StartWorkflowNavIcon({ className, iconRef }: AnimatedNavIconProps) {
@@ -173,18 +168,6 @@ function SkillsNavIcon({ className, iconRef }: AnimatedNavIconProps) {
   return (
     <SparklesIcon
       ref={iconRef as Ref<SparklesIconHandle>}
-      size={NAV_ICON_SIZE}
-      className={className}
-      animateOnHover={false}
-      aria-hidden="true"
-    />
-  );
-}
-
-function SettingsNavIcon({ className, iconRef }: AnimatedNavIconProps) {
-  return (
-    <SettingsIcon
-      ref={iconRef as Ref<SettingsIconHandle>}
       size={NAV_ICON_SIZE}
       className={className}
       animateOnHover={false}
@@ -699,6 +682,7 @@ function DashboardNavigation({
   const location = useLocation();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
   const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
+  const visiblePrimaryKeys = new Set(visiblePrimaryDestinations(uiInfo).map(({ key }) => key));
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
@@ -819,80 +803,44 @@ function DashboardNavigation({
           id="dashboard-nav"
           aria-label="MoonMind navigation"
         >
-          <NavLink
-            to="/workflows"
-            end
-            className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
-          >
-            <WorkflowsNavIcon className="route-nav-icon" />
-            Workflows
-          </NavLink>
-          <AnimatedRouteNavLink
-            to="/workflows/new"
-            icon={StartWorkflowNavIcon}
-            className={({ isActive }) => (isActive ? 'active' : undefined)}
-          >
-            Create
-          </AnimatedRouteNavLink>
-          {uiInfo?.features?.omnigentAgents === true ? (
-            <NavLink to="/omnigent/agents" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-              <Bot size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
-              Omnigent Agents
-            </NavLink>
-          ) : null}
-          {uiInfo?.features?.omnigentPolicies === true ? (
-            <NavLink to="/omnigent/policies" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-              <ShieldCheck size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
-              Omnigent Policies
-            </NavLink>
-          ) : null}
-          <AnimatedRouteNavLink
-            to="/schedules"
-            icon={SchedulesNavIcon}
-            className={({ isActive }) => (isActive ? 'active' : undefined)}
-          >
-            Recurring
-          </AnimatedRouteNavLink>
-          <AnimatedRouteNavLink
-            to="/skills"
-            icon={SkillsNavIcon}
-            className={({ isActive }) => (isActive ? 'active' : undefined)}
-          >
-            Skills
-          </AnimatedRouteNavLink>
-          {uiInfo?.features?.manifests === true ? (
-            <NavLink to="/manifests" className={({ isActive }) => (isActive ? 'active' : undefined)}>
-              <Rows3 size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
-              RAG / Manifests
-            </NavLink>
-          ) : null}
-          {uiInfo?.features?.artifacts === true ? (
+          {visiblePrimaryKeys.has('workflows') ? (
             <NavLink
-              to="/artifacts"
-              className={({ isActive }) => (
-                isActive || location.pathname === '/observability' ? 'active' : undefined
-              )}
+              to="/workflows"
+              end
+              className={({ isActive }) => (isActive || isWorkflowDetail ? 'active' : undefined)}
             >
-              <Archive size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
-              Artifacts
+              <WorkflowsNavIcon className="route-nav-icon" />
+              Workflows
             </NavLink>
           ) : null}
-          <AnimatedRouteNavLink
-            to="/settings"
-            icon={SettingsNavIcon}
-            className={({ isActive }) => (isActive ? 'active' : undefined)}
-          >
-            Settings
-          </AnimatedRouteNavLink>
-          {uiInfo?.features?.remediationCollection === true ? (
-            <NavLink
-              to="/remediations"
+          {visiblePrimaryKeys.has('create') ? (
+            <AnimatedRouteNavLink
+              to="/workflows/new"
+              icon={StartWorkflowNavIcon}
               className={({ isActive }) => (isActive ? 'active' : undefined)}
             >
-              <RemediationsNavIcon className="route-nav-icon" />
-              Remediation
-            </NavLink>
+              Create
+            </AnimatedRouteNavLink>
           ) : null}
+          {visiblePrimaryKeys.has('recurring') ? (
+            <AnimatedRouteNavLink
+              to="/schedules"
+              icon={SchedulesNavIcon}
+              className={({ isActive }) => (isActive ? 'active' : undefined)}
+            >
+              Recurring
+            </AnimatedRouteNavLink>
+          ) : null}
+          {visiblePrimaryKeys.has('skills') ? (
+            <AnimatedRouteNavLink
+              to="/skills"
+              icon={SkillsNavIcon}
+              className={({ isActive }) => (isActive ? 'active' : undefined)}
+            >
+              Skills
+            </AnimatedRouteNavLink>
+          ) : null}
+          <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
         </nav>
       </div>
 

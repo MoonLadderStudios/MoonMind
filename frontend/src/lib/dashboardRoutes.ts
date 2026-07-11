@@ -86,6 +86,24 @@ export function destinationState(
   return 'hidden';
 }
 
+export function visibleDashboardDestinations(
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestination[] {
+  return DASHBOARD_DESTINATIONS.filter((destination) => destinationState(destination, uiInfo) === 'shown');
+}
+
+export function visiblePrimaryDestinations(
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestination[] {
+  return visibleDashboardDestinations(uiInfo).filter(({ navigationGroup }) => navigationGroup === 'primary');
+}
+
+export function visibleSystemDestinations(
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestination[] {
+  return visibleDashboardDestinations(uiInfo).filter(({ navigationGroup }) => navigationGroup !== 'primary');
+}
+
 export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
   new Set(DASHBOARD_DESTINATIONS.flatMap((destination) => destination.pathPatterns)),
 );

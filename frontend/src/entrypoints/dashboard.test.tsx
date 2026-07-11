@@ -391,11 +391,35 @@ describe('Dashboard shared entry', () => {
     fireEvent.mouseLeave(skillsLink);
     expect(animatedNavIconMocks.sparklesStop).toHaveBeenCalledTimes(1);
 
-    const settingsLink = screen.getByRole('link', { name: 'Settings' });
-    fireEvent.mouseEnter(settingsLink);
-    expect(animatedNavIconMocks.settingsStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(settingsLink);
-    expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('MM-1200 groups enabled non-primary destinations under the System menu', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
+    expect(Array.from(navigation.querySelectorAll(':scope > a')).map((link) => link.textContent?.trim())).toEqual([
+      'Workflows', 'Create', 'Recurring', 'Skills',
+    ]);
+    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: 'RAG / Manifests' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Artifacts / Observability' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
+
+    const first = screen.getByRole('menuitem', { name: 'RAG / Manifests' });
+    first.focus();
+    fireEvent.keyDown(first, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Settings' }));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -499,7 +523,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(7);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(5);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -1395,7 +1419,8 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
 
     expect(
       await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
@@ -1728,7 +1753,8 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
-    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
 
     const completeList = resolveList;
