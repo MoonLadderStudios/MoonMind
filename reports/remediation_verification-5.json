@@ -1,0 +1,64 @@
+{
+  "artifactType": "remediation.verification",
+  "verificationTarget": "issue_brief",
+  "issueRef": "MM-1202",
+  "remediationAttempt": 5,
+  "remediationAttemptArtifact": "reports/remediation_attempt-5.json",
+  "authoritativeVerifierResult": "artifacts/jira-implement-verify.json",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
+  "recoverableInCurrentRuntime": true,
+  "summary": "Attempt 5 passes its focused checks and fixes Temporal core adoption plus versioned worker deployment identity, but the whole MM-1202 target remains incomplete: standalone/core parity, full parity/replay fixtures, capability alerts, canary-gated readiness, and production rollout boundary tests are still missing.",
+  "remainingWork": [
+    {
+      "requirement": "Shared portable resolver semantics",
+      "gapType": "implementation",
+      "remainingWork": "Adopt one portable core in both hosts and normalize shared snapshot and terminal schemas.",
+      "suggestedEvidence": "Standalone scripts, moonmind/pr_resolver_core, and both host adapters",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Shared parity and replay fixtures",
+      "gapType": "verification",
+      "remainingWork": "Run the complete shared corpus through core, standalone, Temporal, and replay paths.",
+      "suggestedEvidence": "Core, standalone tool, Temporal boundary, and replay tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Capability observability and alerts",
+      "gapType": "implementation",
+      "remainingWork": "Add fleet build/fingerprint and repeated registration/child-start failure signals and alerts.",
+      "suggestedEvidence": "Metrics/alerts configuration and focused tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Readiness canary and deployment boundary coverage",
+      "gapType": "implementation",
+      "remainingWork": "Gate resolver readiness on a harmless real parent-child canary tied to queue, build, and registry identity.",
+      "suggestedEvidence": "Canary implementation, health readiness, and parent-child boundary tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Production rollout regression coverage",
+      "gapType": "verification",
+      "remainingWork": "Add deployed-entrypoint, restart/replay, failure-budget, fingerprint stability, and stale-worker exclusion integration coverage.",
+      "suggestedEvidence": "Temporal and Compose integration tests",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "testResults": [
+    {
+      "result": "PASS",
+      "notes": "Focused suite: 330 passed and 2 subtests passed in 10.30 seconds."
+    },
+    {
+      "result": "PASS",
+      "notes": "git diff --check."
+    },
+    {
+      "result": "NOT RUN",
+      "notes": "Broad Compose integration cannot supply the missing canary and rollout fixtures."
+    }
+  ],
+  "scopeLimitations": []
+}
