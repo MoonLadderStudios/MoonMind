@@ -2869,6 +2869,112 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("criticality", "expected_status", "attention_required"),
+    [
+        ("required", "failed", True),
+        ("recoverability_only", "degraded", False),
+    ],
+)
+async def test_after_execution_finalization_failure_preserves_primary_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    criticality: str,
+    expected_status: str,
+    attention_required: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "criticality": criticality,
+    }
+    row = workflow._step_ledger_row_for("implement")
+    assert row is not None
+    row["artifacts"] = {
+        "outputPrimary": "artifact://result",
+        "runtimeMergedLogs": "artifact://logs",
+        "runtimeDiagnostics": "artifact://diagnostics",
+    }
+    workflow._record_primary_execution_outcome(
+        "implement",
+        execution_result={"status": "COMPLETED"},
+        result_status="COMPLETED",
+        recorded_at=now,
+    )
+
+    async def fail_checkpoint(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("checkpoint service unavailable")
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", fail_checkpoint)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["executionOutcome"] == {
+        "status": "succeeded",
+        "resultRef": "artifact://result",
+        "outputRefs": [
+            "artifact://result",
+            "artifact://logs",
+            "artifact://diagnostics",
+        ],
+        "diagnosticsRef": "artifact://diagnostics",
+        "workspaceLocator": "/work/agent_jobs/run-1/repo",
+        "recordedAt": now.isoformat(),
+    }
+    assert step["finalizationOutcome"]["status"] == expected_status
+    assert step["finalizationOutcome"]["failureCode"] == (
+        "FINALIZATION_CHECKPOINT_FAILED"
+    )
+    assert step["finalizationOutcome"]["phase"] == "after_execution_checkpoint"
+    assert workflow._attention_required is attention_required
+    assert workflow._summary.startswith("Execution succeeded; finalization failed")
+
+
+@pytest.mark.asyncio
+async def test_after_execution_finalization_is_idempotent_and_does_not_execute_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "criticality": "required",
+    }
+    checkpoint_calls = 0
+
+    async def checkpoint(*args: Any, **kwargs: Any) -> str:
+        nonlocal checkpoint_calls
+        checkpoint_calls += 1
+        return "artifact://checkpoint/after_execution"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert checkpoint_calls == 2
+    assert step["executionOrdinal"] == 1
+    assert step["finalizationOutcome"]["status"] == "succeeded"
+    assert step["finalizationOutcome"]["checkpointRef"] == (
+        "artifact://checkpoint/after_execution"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
