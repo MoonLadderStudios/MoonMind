@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import workflow
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -42,6 +43,9 @@ from moonmind.workflows.temporal.workers import (
     build_worker_activity_bindings,
     describe_configured_worker,
     list_registered_workflow_types,
+)
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_workflow_classes,
 )
 
 async def _artifact_service(
@@ -107,6 +111,15 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",
     )
+
+
+def test_advertised_workflow_types_match_production_worker_classes():
+    registered_class_names = tuple(
+        workflow._Definition.must_from_class(workflow_class).name
+        for workflow_class in workflow_fleet_workflow_classes()
+    )
+
+    assert registered_class_names == list_registered_workflow_types()
 
 
 def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
