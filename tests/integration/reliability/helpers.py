@@ -35,16 +35,3 @@ class NestedYieldProcess:
 
     def finish_inner(self) -> None:
         self.inner_active = False
-
-
-class FinalizationFault:
-    """Reusable one-shot checkpoint/publication fault injection."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def fail_once(self, _payload: dict[str, Any]) -> dict[str, Any]:
-        self.calls += 1
-        if self.calls == 1:
-            raise RuntimeError("injected finalization failure")
-        return {"status": "captured", "diagnosticRefs": []}

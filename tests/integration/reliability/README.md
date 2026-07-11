@@ -1,7 +1,7 @@
 # Escaped-failure reliability journeys
 
 Every escaped production reliability incident must add or minimize a fixture
-under `tests/reliability/replays/<failure-shape-id>/` before closure. A replay
+under `tests/integration/reliability/replays/<failure-shape-id>/` before closure. A replay
 contains a manifest with the incident reference, runtime/protocol metadata,
 deterministic event script, workspace artifact manifest, redacted transcript
 when relevant, and expected invariant/classification. Fixtures must require no
@@ -11,7 +11,7 @@ logs.
 Run the corpus with:
 
 ```bash
-pytest tests/reliability -m reliability_journey -q
+pytest tests/integration/reliability -m reliability_journey -q
 ```
 
 The suite complements focused tests. Replays should cross the production
