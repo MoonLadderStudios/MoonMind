@@ -29,6 +29,35 @@ UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://gith
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
+### Recovering from `postgres` unhealthy (no space left on device)
+
+If `postgres` reports:
+
+`FATAL: could not write lock file "postmaster.pid": No space left on device`
+
+that is a disk-capacity failure on the PostgreSQL data volume, not a Compose or janitor bug.
+
+1. Run a safe cleanup pass:
+
+```bash
+./tools/cleanup-docker-space.sh --dry-run
+./tools/cleanup-docker-space.sh --aggressive
+```
+
+2. Restart postgres:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml up -d postgres
+```
+
+3. Verify recovery:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml ps --format table postgres
+```
+
+The managed-runtime janitor is a separate retention cleanup path for workspace/artifact state; it is not the same as Docker disk cleanup for PostgreSQL data.
+
 ### OAuth Workflow
 If you already have a subscription with a model provider:
 
