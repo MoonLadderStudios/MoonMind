@@ -86,3 +86,17 @@ def test_checkpoint_matrix_never_defaults_external_runtime_to_local_capture() ->
                 assert policy.capture_activity != "workspace.capture_checkpoint"
             if policy.checkpoint_kind is not None:
                 assert policy.checkpoint_kind in capabilities.checkpoint_capture_kinds
+
+
+def test_recorded_capability_snapshot_is_independent_of_registry_changes() -> None:
+    snapshot = resolve_runtime_execution_capabilities("omnigent").model_dump(
+        by_alias=True, mode="json"
+    )
+    replacement = RuntimeExecutionCapabilities.model_validate(
+        {**snapshot, "checkpointCaptureKinds": ["future_kind"]}
+    )
+
+    recorded = RuntimeExecutionCapabilities.model_validate(snapshot)
+
+    assert recorded.checkpoint_capture_kinds == ("external_state_ref",)
+    assert replacement.checkpoint_capture_kinds == ("future_kind",)

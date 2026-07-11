@@ -2998,6 +2998,35 @@ def test_run_derives_managed_authority_from_agent_id() -> None:
     ] == "managed_runtime"
 
 
+def test_run_records_capability_snapshot_without_identity_checkpoint_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "external",
+            "agentId": "jules",
+            "workspaceRoot": "/provider/workspace",
+            "baseCommit": "abc123",
+            "checkpointKind": "git_patch",
+            "checkpointCriticality": "required",
+        },
+    )
+
+    capture = workflow._step_workspace_capture_inputs["implement"]
+    assert capture["captureAuthority"] == "external_provider"
+    assert capture["criticality"] == "unsupported"
+    assert capture["runtimeCapabilities"]["runtimeId"] == "jules"
+    assert capture["kind"] == "git_patch"
+
+
 @pytest.mark.asyncio
 async def test_managed_checkpoint_replay_preserves_pre_authority_activity(
     monkeypatch: pytest.MonkeyPatch,
@@ -3263,10 +3292,12 @@ def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None
     )
 
     assert workflow._step_external_agent_ids["implement"] == "omnigent"
-    assert workflow._step_workspace_capture_inputs["implement"] == {
-        "workspacePath": "/work/agent_jobs/run-1/repo",
-        "baseCommit": "abc123",
-    }
+    capture = workflow._step_workspace_capture_inputs["implement"]
+    assert capture["workspacePath"] == "/work/agent_jobs/run-1/repo"
+    assert capture["baseCommit"] == "abc123"
+    assert capture["captureAuthority"] == "external_provider"
+    assert capture["runtimeCapabilities"]["runtimeId"] == "omnigent"
+    assert "kind" not in capture
 
 
 @pytest.mark.asyncio
