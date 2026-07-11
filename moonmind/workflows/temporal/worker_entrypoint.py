@@ -11,31 +11,8 @@ from moonmind.workflows.temporal.workers import (
     build_worker_activity_bindings,
     describe_configured_worker,
 )
-from moonmind.workflows.temporal.hard_switch_cutover import registered_user_workflow_type
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
-from moonmind.workflows.temporal.workflows.agent_session import (
-    MoonMindAgentSessionWorkflow,
-)
-from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
-    MoonMindManagedSessionReconcileWorkflow,
-)
-from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup import (
-    MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
-)
-from moonmind.workflows.temporal.workflows.oauth_session import (
-    MoonMindOAuthSessionWorkflow,
-)
-from moonmind.workflows.temporal.workflows.provider_profile_manager import (
-    MoonMindProviderProfileManagerWorkflow,
-)
-from moonmind.workflows.temporal.workflows.run import (
-    MoonMindUserWorkflow,
-)
-from moonmind.workflows.temporal.workflows.merge_automation import (
-    MoonMindMergeAutomationWorkflow,
-)
-from moonmind.workflows.temporal.workflows.pr_resolver import (
-    MoonMindPRResolverWorkflow,
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_workflow_classes,
 )
 
 async def main():
@@ -51,31 +28,7 @@ async def main():
 
     workflows = []
     if topology.fleet == WORKFLOW_FLEET:
-        registered_user_workflow_type(settings.temporal)
-        workflows.extend(
-            [
-                MoonMindUserWorkflow,
-                MoonMindProviderProfileManagerWorkflow,
-                MoonMindAgentSessionWorkflow,
-                MoonMindManagedSessionReconcileWorkflow,
-                MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
-                MoonMindAgentRun,
-                MoonMindOAuthSessionWorkflow,
-                MoonMindMergeAutomationWorkflow,
-                MoonMindPRResolverWorkflow,
-            ]
-        )
-        # Import ManifestIngest workflow if it exists
-        try:
-            from moonmind.workflows.temporal.workflows.manifest_ingest import (
-                MoonMindManifestIngestWorkflow,
-            )
-
-            workflows.append(MoonMindManifestIngestWorkflow)
-        except ImportError:
-            logger.info(
-                "Optional MoonMindManifestIngestWorkflow not available; skipping registration"
-            )
+        workflows.extend(workflow_fleet_workflow_classes())
 
     bindings = build_worker_activity_bindings(fleet=topology.fleet)
     activities = [b.handler for b in bindings]

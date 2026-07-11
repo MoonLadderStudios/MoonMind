@@ -24,7 +24,6 @@ from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
-    MoonMindUserWorkflow,
     OpenTelemetryLoggingFilter,
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
@@ -43,6 +42,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     resolve_external_adapter,
     external_adapter_execution_style,
 )
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
     DEPLOYMENT_FLEET,
@@ -3866,13 +3866,16 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.merge_automation import (
         MoonMindMergeAutomationWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.pr_resolver import (
+        MoonMindPRResolverWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
         MoonMindManagedSessionReconcileWorkflow,
     )
     from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup import (
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
     )
-    assert kwargs["workflows"] == [
+    assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
@@ -3882,7 +3885,8 @@ async def test_main_async_workflow_fleet(
         MoonMindAgentRun,
         MoonMindOAuthSession,
         MoonMindMergeAutomationWorkflow,
-    ]
+        MoonMindPRResolverWorkflow,
+    )
     assert kwargs["activities"] == [
         resolve_adapter_metadata,
         get_activity_route,
