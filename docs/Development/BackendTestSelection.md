@@ -89,7 +89,7 @@ Changes under `moonmind/workflows/adapters/` select both Temporal boundary and r
 The selector enables `reliability_journey=true` for changes to:
 
 - `moonmind/workflows/adapters/` and `moonmind/workflows/temporal/`, including checkpoint policy, activity catalog, and worker routing
-- `moonmind/schemas/agent_runtime_models.py`, `moonmind/schemas/managed_session_models.py`, and checkpoint schemas
+- `moonmind/schemas/agent_runtime_models.py`, `moonmind/schemas/managed_session_models.py`, `moonmind/schemas/temporal_models.py`, and checkpoint schemas
 - `.agents/skills/` and their orchestration tools
 - `tests/reliability/` replay fixtures and `tests/helpers/codex_session_runtime.py`
 - managed-agent runtime Dockerfiles, image build/install files under `api_service/docker/`, and runtime images under `docker/`

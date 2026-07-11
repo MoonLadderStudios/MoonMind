@@ -100,6 +100,7 @@ RELIABILITY_JOURNEY_EXACT = {
     "docker-compose.test.yaml",
     "moonmind/schemas/agent_runtime_models.py",
     "moonmind/schemas/managed_session_models.py",
+    "moonmind/schemas/temporal_models.py",
     "tests/helpers/codex_session_runtime.py",
 }
 

@@ -316,6 +316,10 @@ jobs:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
         run: |
           set -euo pipefail
+          if [[ ! -d tests/reliability ]]; then
+            echo "Reliability journey suite is not present yet; skipping until #3145 lands."
+            exit 0
+          fi
           python -m pytest tests/reliability \
             -m reliability_journey \
             -q --durations=25 \

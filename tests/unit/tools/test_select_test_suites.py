@@ -74,6 +74,7 @@ def test_reliability_journey_production_seams_are_selected() -> None:
         "moonmind/workflows/temporal/checkpoint_policy.py",
         "moonmind/schemas/agent_runtime_models.py",
         "moonmind/schemas/execution_checkpoint_models.py",
+        "moonmind/schemas/temporal_models.py",
         ".agents/skills/pr-resolver/SKILL.md",
         ".agents/skills/pr-resolver/tools/orchestrate.py",
         "api_service/Dockerfile",
