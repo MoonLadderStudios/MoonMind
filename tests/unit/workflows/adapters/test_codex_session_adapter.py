@@ -40,6 +40,8 @@ from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionRunFailedError,
     _jira_skill_blocker_summary,
     _pr_resolver_terminal_contract,
+)
+from moonmind.workflows.temporal.workflows.agent_run import (
     _terminal_contract_continuation_instruction,
 )
 from moonmind.workflows.temporal.managed_session_errors import (

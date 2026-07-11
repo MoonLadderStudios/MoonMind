@@ -22,6 +22,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionWorkflowInput,
+        SendCodexManagedSessionTurnRequest,
         canonical_managed_session_runtime_id,
     )
     from moonmind.schemas.temporal_activity_models import (
@@ -64,6 +65,22 @@ with workflow.unsafe.imports_passed_through():
         provider_failure_event_from_metadata,
         provider_failure_event_requires_cooldown,
         resolve_provider_cooldown_seconds,
+    )
+    from moonmind.workflows.executions.runtime_capabilities import (
+        resolve_runtime_execution_capabilities,
+    )
+
+TERMINAL_CONTRACT_CONTINUATION_PATCH_ID = "agent-run-terminal-contract-continuation-v1"
+_MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
+
+
+def _terminal_contract_continuation_instruction(missing: list[str]) -> str:
+    evidence = ", ".join(f"`{path}`" for path in missing)
+    return (
+        "The selected skill has not satisfied its terminal contract. "
+        f"Missing required evidence: {evidence or 'valid terminal evidence'}. "
+        "Resume the still-running work from durable state and do not declare "
+        "completion until the terminal result contract is satisfied."
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -1915,23 +1932,138 @@ class MoonMindAgentRun:
             or (request.workspace_spec or {}).get("workspacePath")
             or ""
         ).strip()
-        payload = await self._execute_routed_activity(
-            "agent_runtime.evaluate_terminal_evidence",
-            {
-                "runId": str(self.run_id or ""),
-                "workspacePath": workspace_path,
-                "terminalContract": request.terminal_contract.model_dump(
-                    mode="json", by_alias=True
+        async def _evaluate(candidate: AgentRunResult) -> AgentRunResult:
+            payload = await self._execute_routed_activity(
+                "agent_runtime.evaluate_terminal_evidence",
+                {
+                    "runId": str(self.run_id or ""),
+                    "workspacePath": workspace_path,
+                    "terminalContract": request.terminal_contract.model_dump(
+                        mode="json", by_alias=True
+                    ),
+                    "result": candidate.model_dump(mode="json", by_alias=True),
+                },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            return (
+                AgentRunResult.model_validate(payload)
+                if isinstance(payload, Mapping)
+                else payload
+            )
+
+        evaluated = await _evaluate(result)
+        try:
+            continuation_enabled = workflow.patched(
+                TERMINAL_CONTRACT_CONTINUATION_PATCH_ID
+            )
+        except BaseException as exc:
+            # Direct activity-boundary tests execute this helper outside a
+            # Temporal workflow event loop.
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            continuation_enabled = True
+        if not continuation_enabled:
+            return evaluated
+        if evaluated.failure_class is None:
+            return evaluated
+
+        runtime_id = (
+            request.managed_session.runtime_id
+            if request.managed_session is not None
+            else self._managed_runtime_id(request.agent_id)
+        )
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        history: list[dict[str, Any]] = []
+        if not capabilities.supports_same_session_continuation:
+            metadata = dict(evaluated.metadata or {})
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": "continuation_unsupported",
+                    "terminalContractContinuationCount": 0,
+                    "runtimeCapabilityDigest": capabilities.capability_digest,
+                }
+            )
+            return evaluated.model_copy(update={"metadata": metadata})
+
+        # Same-session continuation is currently exposed by the managed-session
+        # activity boundary. Capability policy and retry ownership remain here in
+        # AgentRun; adapters only translate an individual runtime turn.
+        if request.managed_session is None:
+            metadata = dict(evaluated.metadata or {})
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": "continuation_boundary_unavailable",
+                    "terminalContractContinuationCount": 0,
+                    "runtimeCapabilityDigest": capabilities.capability_digest,
+                }
+            )
+            return evaluated.model_copy(update={"metadata": metadata})
+
+        for continuation in range(1, _MAX_TERMINAL_CONTRACT_CONTINUATIONS + 1):
+            missing = [
+                str(item)
+                for item in (evaluated.metadata or {}).get(
+                    "terminalContractMissingEvidence", []
+                )
+            ]
+            snapshot_request = request.managed_session.model_dump(
+                mode="json", by_alias=True
+            )
+            snapshot = await self._execute_routed_activity(
+                "agent_runtime.load_session_snapshot",
+                snapshot_request,
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            turn_request = SendCodexManagedSessionTurnRequest(
+                sessionId=request.managed_session.session_id,
+                sessionEpoch=int(snapshot.get("sessionEpoch") or request.managed_session.session_epoch),
+                containerId=snapshot.get("containerId"),
+                threadId=snapshot.get("threadId"),
+                instructions=_terminal_contract_continuation_instruction(missing),
+                reason="incomplete_terminal_contract",
+                requestId=(
+                    f"{request.idempotency_key}:terminal-contract:{continuation}"
                 ),
-                "result": result.model_dump(mode="json", by_alias=True),
-            },
-            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            history.append(
+                {"continuation": continuation, "reason": "missing_terminal_evidence", "outcome": "requested"}
+            )
+            try:
+                await self._execute_routed_activity(
+                    "agent_runtime.send_turn",
+                    turn_request,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                )
+            except Exception:
+                history[-1]["outcome"] = "provider_failure"
+                break
+            refreshed = await self._fetch_managed_result(
+                request=request,
+                adapter=None,  # activity-backed managed-session fetch ignores the adapter
+                uses_codex_session_adapter=True,
+                use_managed_status_activity=True,
+            )
+            evaluated = await _evaluate(refreshed)
+            history[-1]["outcome"] = (
+                "recovered" if evaluated.failure_class is None else "incomplete"
+            )
+            if evaluated.failure_class is None:
+                break
+
+        metadata = dict(evaluated.metadata or {})
+        metadata.update(
+            {
+                "terminalContractContinuationCount": len(history),
+                "terminalContractContinuationHistory": history,
+                "terminalContractRecoveryOutcome": (
+                    "recovered"
+                    if evaluated.failure_class is None
+                    else history[-1]["outcome"] if history else "exhausted"
+                ),
+                "runtimeCapabilityDigest": capabilities.capability_digest,
+            }
         )
-        return (
-            AgentRunResult.model_validate(payload)
-            if isinstance(payload, Mapping)
-            else payload
-        )
+        return evaluated.model_copy(update={"metadata": metadata})
 
     async def _poll_managed_status(
         self,

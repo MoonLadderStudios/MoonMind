@@ -8,10 +8,7 @@ import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.adapters.codex_session_adapter import (
-    CodexSessionRunFailedError,
-    _pr_resolver_terminal_contract,
-)
+from moonmind.workflows.adapters.codex_session_adapter import _pr_resolver_terminal_contract
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
@@ -167,14 +164,12 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
 
     binding = _binding()
     adapter = _terminal_contract_test_adapter(tmp_path, send_turn=send_turn)
-    with pytest.raises(CodexSessionRunFailedError) as exc_info:
-        await adapter.start(_pr_resolver_request(binding, workspace))
+    handle = await adapter.start(_pr_resolver_request(binding, workspace))
 
-    result = exc_info.value.agent_run_result
-    assert result.failure_class == "execution_error"
-    assert result.metadata["failureCode"] == expected["failureCode"]
-    assert result.metadata["terminalContractContinuationCount"] == 2
-    assert len(requests) == 3
+    # Provider adapters translate one runtime turn. AgentRun owns terminal
+    # evidence evaluation and any capability-aware bounded continuation.
+    assert handle.status == "completed"
+    assert len(requests) == 1
     assert {
         (item.session_id, item.session_epoch, item.thread_id) for item in requests
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
