@@ -456,10 +456,15 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "http://omnigent:8000",
         "--non-interactive",
     ]
+    assert host_service["user"] == "1000:1000"
+    assert "env_file" not in host_service
 
     host_env = _env_map(host_service["environment"])
     assert host_env == {
-        "HOME": "/root",
+        "HOME": "/home/app",
+        "CLAUDE_HOME": "/home/app/.claude",
+        "CLAUDE_VOLUME_PATH": "/home/app/.claude",
+        "CLAUDE_CONFIG_DIR": "/home/app/.claude",
         "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_AUTH_TOKEN": "",
         "CLAUDE_API_KEY": "",
@@ -470,8 +475,8 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     }
 
     host_volumes = set(host_service["volumes"])
-    assert "omnigent-host-claude-state:/root/.omnigent" in host_volumes
-    assert "claude_auth_volume:/root/.claude" in host_volumes
+    assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
+    assert "claude_auth_volume:/home/app/.claude" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert (
         "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"

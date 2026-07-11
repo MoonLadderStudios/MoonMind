@@ -3,9 +3,13 @@ services:
     profiles: ["omnigent-host-claude"]
     image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
     hostname: omnigent-host-claude
+    user: "1000:1000"
     command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
     environment:
-      HOME: /root
+      HOME: /home/app
+      CLAUDE_HOME: /home/app/.claude
+      CLAUDE_VOLUME_PATH: /home/app/.claude
+      CLAUDE_CONFIG_DIR: /home/app/.claude
       ANTHROPIC_API_KEY: ""
       ANTHROPIC_AUTH_TOKEN: ""
       CLAUDE_API_KEY: ""
@@ -13,12 +17,9 @@ services:
       OPENAI_API_KEY: ""
       GEMINI_API_KEY: ""
       GOOGLE_API_KEY: ""
-    env_file:
-      - path: .env
-        required: false
     volumes:
-      - omnigent-host-claude-state:/root/.omnigent
-      - claude_auth_volume:/root/.claude
+      - omnigent-host-claude-state:/home/app/.omnigent
+      - claude_auth_volume:/home/app/.claude
       - ./omnigent_workspaces:/workspaces
       # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
       - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
