@@ -94,6 +94,7 @@ markers = [
     "unit_fast: cheap unit tests with no external process, network, docker, or Temporal server",
     "component: in-process app/router/service tests using TestClient or dependency overrides",
     "temporal_boundary: tests that start Temporal WorkflowEnvironment, Worker, or Replayer",
+    "reliability_journey: hermetic production journeys across Temporal, managed runtimes, adapters, terminal evidence, and finalization",
     "slow: valid tests that are too expensive for the default PR fast path",
     "moonspec: MoonSpec workflow tests.",
     "asyncio: marks tests that require an asyncio event loop.",

@@ -20,6 +20,7 @@ OUTPUT_KEYS = (
     "api_component",
     "temporal_boundary",
     "integration_ci",
+    "reliability_journey",
     "full_backend",
 )
 
@@ -64,7 +65,9 @@ TEMPORAL_BOUNDARY_EXACT = {
 }
 
 TEMPORAL_BOUNDARY_PREFIXES = (
+    "moonmind/workflows/adapters/",
     "moonmind/workflows/temporal/",
+    "tests/unit/workflows/adapters/",
     "tests/unit/workflows/temporal/",
     "tests/integration/workflows/temporal/",
 )
@@ -92,11 +95,36 @@ INTEGRATION_CI_PREFIXES = (
     "alembic/",
 )
 
+RELIABILITY_JOURNEY_EXACT = {
+    "api_service/Dockerfile",
+    "docker-compose.test.yaml",
+    "moonmind/schemas/agent_runtime_models.py",
+    "moonmind/schemas/managed_session_models.py",
+    "moonmind/schemas/temporal_models.py",
+    "tests/helpers/codex_session_runtime.py",
+}
+
+RELIABILITY_JOURNEY_PREFIXES = (
+    ".agents/skills/",
+    "api_service/docker/",
+    "docker/",
+    "moonmind/workflows/adapters/",
+    "moonmind/workflows/temporal/",
+    "tests/reliability/",
+)
+
+RELIABILITY_JOURNEY_GLOBS = (
+    "moonmind/schemas/*checkpoint*",
+)
+
 BACKEND_PREFIXES = (
+    ".agents/skills/",
     "api_service/",
+    "docker/",
     "moonmind/",
     "tests/unit/",
     "tests/integration/",
+    "tests/reliability/",
     "tests/contract/",
     "tests/api_service/",
     "tests/component/",
@@ -125,6 +153,7 @@ class SuiteSelection:
     api_component: bool = False
     temporal_boundary: bool = False
     integration_ci: bool = False
+    reliability_journey: bool = False
     full_backend: bool = False
 
     def as_outputs(self) -> dict[str, str]:
@@ -173,8 +202,16 @@ def _is_backend_path(path: str) -> bool:
         or path in API_COMPONENT_EXACT
         or path in TEMPORAL_BOUNDARY_EXACT
         or path in INTEGRATION_CI_EXACT
+        or path in RELIABILITY_JOURNEY_EXACT
         or any(path.startswith(prefix) for prefix in BACKEND_PREFIXES)
-        or _matches(path, globs=API_COMPONENT_GLOBS + TEMPORAL_BOUNDARY_GLOBS)
+        or _matches(
+            path,
+            globs=(
+                API_COMPONENT_GLOBS
+                + TEMPORAL_BOUNDARY_GLOBS
+                + RELIABILITY_JOURNEY_GLOBS
+            ),
+        )
     )
 
 
@@ -184,6 +221,7 @@ def _full_backend_selection() -> SuiteSelection:
         api_component=True,
         temporal_boundary=True,
         integration_ci=True,
+        reliability_journey=True,
         full_backend=True,
     )
 
@@ -247,6 +285,15 @@ def select_suites(
                 path,
                 exact=INTEGRATION_CI_EXACT,
                 prefixes=INTEGRATION_CI_PREFIXES,
+            )
+            for path in backend_paths
+        ),
+        reliability_journey=any(
+            _matches(
+                path,
+                exact=RELIABILITY_JOURNEY_EXACT,
+                prefixes=RELIABILITY_JOURNEY_PREFIXES,
+                globs=RELIABILITY_JOURNEY_GLOBS,
             )
             for path in backend_paths
         ),

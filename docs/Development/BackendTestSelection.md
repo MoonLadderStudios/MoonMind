@@ -22,6 +22,7 @@ Backend tests are classified by the runtime resources they start, not by the imp
 | Fast unit | `unit_fast` | Pure Python logic, schemas, validation, and services with mocks. No Docker, network, external process, or Temporal test server. | Required for backend-impacting pull requests. |
 | Component | `component` | FastAPI `TestClient`, dependency overrides, and in-process router/service wiring. | Required for API, auth, database, service, and generated OpenAPI type changes. |
 | Temporal boundary | `temporal_boundary` | Temporal `WorkflowEnvironment`, `Worker`, `Replayer`, workflow signal/update/query/replay, activity-boundary, and serialized payload behavior. | Required for Temporal workflow, runtime, worker, or Temporal schema-sensitive changes. |
+| Reliability journey | `reliability_journey` | Hermetic production composition across the Temporal test server, real workflows, managed-session/runtime adapters, scripted provider or subprocess behavior, terminal artifacts, and checkpoint/finalization routing. No external network or credentials. | Required for orchestration seams, managed runtime packaging, skill contracts, checkpoints, and replay fixtures. |
 | Slow | `slow` | Valuable tests that are too expensive or too environment-sensitive for the default PR fast path. | Excluded from the default PR fast path; run manually, nightly, or by explicit target. |
 | Hermetic integration CI | `integration` plus `integration_ci` | Docker Compose-backed tests using local dependencies only. No external credentials. | Required for Docker, compose, database, migration, integration-test, and runtime infrastructure changes. |
 | Provider verification | `provider_verification` plus provider-specific markers | Live external-provider tests requiring real credentials. | Outside required PR CI; run manually or in credentialed scheduled environments. |
@@ -37,6 +38,7 @@ unit_fast=true|false
 api_component=true|false
 temporal_boundary=true|false
 integration_ci=true|false
+reliability_journey=true|false
 full_backend=true|false
 ```
 
@@ -79,6 +81,21 @@ The selector enables `temporal_boundary=true` for changes under or matching:
 - `tests/integration/workflows/temporal/`
 
 Temporal boundary tests are mandatory for changes to workflow code, activity invocation shapes, signal/update/query names, replay-visible behavior, status normalization, serialized payloads, managed-session schemas, or adapter-to-workflow contracts.
+
+Changes under `moonmind/workflows/adapters/` select both Temporal boundary and reliability journey coverage because adapter results and metadata are workflow-visible contracts.
+
+### Reliability Journey Selection
+
+The selector enables `reliability_journey=true` for changes to:
+
+- `moonmind/workflows/adapters/` and `moonmind/workflows/temporal/`, including checkpoint policy, activity catalog, and worker routing
+- `moonmind/schemas/agent_runtime_models.py`, `moonmind/schemas/managed_session_models.py`, `moonmind/schemas/temporal_models.py`, and checkpoint schemas
+- `.agents/skills/` and their orchestration tools
+- `tests/reliability/` replay fixtures and `tests/helpers/codex_session_runtime.py`
+- managed-agent runtime Dockerfiles, image build/install files under `api_service/docker/`, and runtime images under `docker/`
+- CI workflows, selector/test runners, dependency locks, and global pytest configuration through the full-backend fail-open path
+
+This is a separate resource boundary from ordinary unit and Compose integration coverage. It runs a small deterministic journey corpus through real production orchestration layers while replacing external providers and networks with scripted local counterparts.
 
 ### Hermetic Integration CI Selection
 
@@ -126,7 +143,7 @@ The full backend path uses the canonical unit runner:
 Conditional GitHub Actions jobs are not suitable as individual branch-protection requirements because skipped jobs can leave required checks unresolved. MoonMind uses one always-running required summary job instead:
 
 - `select-test-suites` computes backend suite outputs.
-- `unit-fast`, `api-component`, `temporal-boundary`, and `integration-ci` run only when selected.
+- `unit-fast`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey` run only when selected.
 - `ci-required` always runs and fails if any selected backend suite did not complete successfully.
 
 Branch protection should require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks.
@@ -177,6 +194,13 @@ Run hermetic integration CI:
 
 ```bash
 ./tools/test_integration.sh
+```
+
+Run the hermetic reliability journeys:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/reliability \
+  -m reliability_journey -q --durations=25
 ```
 
 Run full backend unit verification:

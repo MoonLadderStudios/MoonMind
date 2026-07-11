@@ -27,6 +27,7 @@ jobs:
       api_component: ${{ steps.select.outputs.api_component }}
       temporal_boundary: ${{ steps.select.outputs.temporal_boundary }}
       integration_ci: ${{ steps.select.outputs.integration_ci }}
+      reliability_journey: ${{ steps.select.outputs.reliability_journey }}
       full_backend: ${{ steps.select.outputs.full_backend }}
     steps:
       - name: Check out code
@@ -284,6 +285,67 @@ jobs:
           path: /tmp/pytest-integration-ci
           if-no-files-found: error
 
+  reliability-journey:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.reliability_journey == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Run hermetic reliability journeys
+        env:
+          MOONMIND_FORCE_LOCAL_TESTS: "1"
+        run: |
+          set -euo pipefail
+          if [[ ! -d tests/reliability ]]; then
+            echo "Reliability journey suite is not present yet; skipping until #3145 lands."
+            exit 0
+          fi
+          python -m pytest tests/reliability \
+            -m reliability_journey \
+            -q --durations=25 \
+            --junitxml=artifacts/pytest-reliability-journey.xml
+      - name: Collect reliability journey diagnostics
+        if: failure()
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/pytest-reliability-journey
+          for path in artifacts tests/reliability/replays var/artifacts var/pr_resolver; do
+            if [[ -e "$path" ]]; then
+              cp -R --parents "$path" /tmp/pytest-reliability-journey/
+            fi
+          done
+          find . -type f \
+            \( -name 'workspace-manifest*.json' -o -name 'provider-transcript*.jsonl' \
+               -o -name 'temporal-diagnostics*.json' -o -name 'replay-manifest*.json' \) \
+            -exec cp --parents '{}' /tmp/pytest-reliability-journey/ \; 2>/dev/null || true
+      - name: Upload reliability journey diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-reliability-journey-diagnostics
+          path: /tmp/pytest-reliability-journey
+          if-no-files-found: error
+
   ci-required:
     needs:
       - select-test-suites
@@ -292,6 +354,7 @@ jobs:
       - api-component
       - temporal-boundary
       - integration-ci
+      - reliability-journey
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -351,6 +414,10 @@ jobs:
           check_result "${{ needs.select-test-suites.outputs.integration_ci }}" \
                        "${{ needs.integration-ci.result }}" \
                        "integration-ci"
+
+          check_result "${{ needs.select-test-suites.outputs.reliability_journey }}" \
+                       "${{ needs.reliability-journey.result }}" \
+                       "reliability-journey"
 
           echo "All selected backend suites passed."
 
