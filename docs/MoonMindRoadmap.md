@@ -6,7 +6,7 @@
 >
 > **Document class:** this roadmap is an *imperative execution tracker* (milestones, tasks, status). Per `docs/Workflows/MoonSpecDocumentModel.md`, durable desired state lives in the canonical declarative `docs/` files each milestone names in its `X.0` task — not here. When the two disagree, the declarative docs win.
 >
-> Last updated: 2026-07-10
+> Last updated: 2026-07-11
 
 ---
 
@@ -20,6 +20,13 @@ The target split is:
 - **Omnigent host owns** live harness execution, Codex/Claude process lifecycle inside the host environment, host-side workspace resources, live session events, and harness-specific launch details.
 - **The MoonMind Omnigent bridge owns** the compatibility boundary between those systems: session creation/attachment, event streaming, Workflow Detail chat projection, resource harvesting, artifact publication, and retry-safe external-state evidence.
 - **Direct Codex/Claude managed-session code remains compatibility substrate** until the bridge and host path can fully replace it. New roadmap work should land through the Omnigent host/bridge path or produce evidence compatible with that path.
+
+The critical path is intentionally ordered:
+
+1. reuse the Claude and Codex OAuth profiles created in Settings in one profile-bound Omnigent host at a time;
+2. stabilize the Omnigent bridge and Workflow Detail communication model against that credentialed host;
+3. let workflows request retry-safe, on-demand Omnigent host containers through the same profile and bridge contracts; and
+4. checkpoint Omnigent sessions from bridge/artifact evidence so recovery does not depend on one container remaining alive.
 
 Completed historical milestones have been removed from the active roadmap. The sections below track only remaining work that materially advances the Omnigent-host direction.
 
@@ -60,6 +67,9 @@ These are not active roadmap milestones, but they are important assumptions for 
 - `omnigent_bridge_sessions` is the canonical durable store for Omnigent bridge/session state, first-message idempotency, terminal refs, and normalized event indexing.
 - Omnigent terminal evidence can include normalized/raw stream artifacts, initial/final snapshots, capture manifests, diagnostics, changed files, workspace files, optional diffs, session files, child-session evidence, and `checkpoint.omnigent.external_state.json`.
 - The run workflow records per-step Omnigent external-agent identity and passes it into checkpoint policy resolution, so Omnigent checkpoint captures select the `external_state_ref` lane.
+- The Settings/OAuth Session path already creates or reuses named Claude and Codex auth volumes, verifies CLI credential state, and registers connected Provider Profiles; Omnigent host reuse and hard OAuth concurrency enforcement remain unfinished.
+- `ProviderProfileManager` already owns durable per-runtime profile leases, cooldowns, stale-lease recovery, and `max_parallel_runs`; the Omnigent path must use that same capacity ledger rather than creating a parallel host-only counter.
+- A dedicated local Claude Omnigent host Compose overlay proves the basic volume/home-path wiring, but supported profile routing, lifecycle ownership, Codex parity, and zero-manual-step startup remain incomplete.
 - Workflow RAG already has the core ContextPack, gateway/direct transport, Qdrant, multi-collection, overlay, budgeting, and artifact/ref model used by the current managed-session path.
 - Dashboard list/detail display modes exist for Workflows and Recurring Schedules through the shared collection workspace and sidebar primitives.
 - The Checkpoint Branch API and persistence model already support branch create, turn launch, continue, fork, compare, promote, archive, source checkpoint identity, instruction digest, workspace policy, turn ids, git binding, and remediation-created branches; remaining work is the operator/UI/default-flow and Omnigent runtime handoff.
@@ -90,92 +100,98 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 ---
 
-## Milestone 2 — Omnigent Host Auth Volumes & Runtime Profile Contract 🚧
+## Milestone 2 — Omnigent Host OAuth from MoonMind Settings 🚧
 
-**Goal:** Codex and Claude Code auth volumes can be used safely and predictably with Omnigent hosts.
+**Goal:** Claude Code / Anthropic and Codex CLI / OpenAI OAuth configured through MoonMind Settings can be used by profile-bound Omnigent hosts with one global concurrent consumer per OAuth profile.
 
-**Why it matters:** Omnigent host becomes the unified runtime only if it can consume the same operator-authenticated Codex and Claude credentials that MoonMind currently manages, without leaking raw secrets into workflow payloads or making auth state ambient across runtimes.
+**Why it matters:** OAuth-backed CLI homes contain mutable access, refresh, and account state. Omnigent host can become the unified runtime only if it consumes the same verified Provider Profiles and volumes as direct MoonMind execution while preventing concurrent refresh writers, second login ceremonies, ambient credentials, and manual host selection.
 
 ### Remaining work
 
-- [ ] **2.0 Declarative design first** — define the runtime-neutral `AuthVolumeRef`/`CredentialMountRef` contract and the provider-profile→host-volume mapping as target state in `docs/Security/ProviderProfiles.md` and `docs/Security/SecretsSystem.md`, cross-linked from `docs/Omnigent/OmnigentAdapter.md`, before materialization code.
-- [ ] **2.1 Auth materialization inventory** — document how Codex and Claude OAuth/API-key auth state is currently created, stored, refreshed, redacted, and mounted by direct MoonMind managed sessions.
-- [ ] **2.2 Host auth volume contract** — define a runtime-neutral `AuthVolumeRef`/`CredentialMountRef` contract that maps MoonMind provider profiles to Omnigent host-visible credential volumes.
-- [ ] **2.3 Codex host volume support** — make Codex auth volumes available to Omnigent hosts with correct mount paths, ownership, permissions, refresh boundaries, and redaction metadata.
-- [ ] **2.4 Claude Code host volume support** — make Claude Code auth volumes available to Omnigent hosts with equivalent lifecycle, isolation, and validation guarantees.
-- [ ] **2.5 SecretRef-only durable state** — ensure workflow, checkpoint, bridge, and remediation payloads carry only profile refs, endpoint refs, and auth-volume refs; raw tokens and generated credential bodies must remain launch-boundary only.
-- [ ] **2.6 Local compose/dev profile** — add local Docker Compose and documented development configuration that can run MoonMind + Omnigent host with Codex/Claude auth volumes mounted through the supported contract.
-- [ ] **2.7 Host auth diagnostics** — expose actionable diagnostics when auth volume creation, mounting, refresh, or runtime detection fails.
-- [ ] **2.8 Boundary tests** — cover credential non-leakage, wrong-runtime isolation, revoked/missing auth, volume cleanup, and retry-safe remount behavior.
+- [x] **2.0 Declarative design first** — `docs/Omnigent/OmnigentHostOAuth.md` defines the Settings-to-Provider-Profile-to-host desired state, the global concurrency-one invariant, profile-bound host model, bridge/checkpoint handoff, and acceptance criteria.
+- [ ] **2.1 OAuth concurrency invariant** — enforce `max_parallel_runs = 1` for supported Claude/Codex `oauth_volume` profiles in OAuth finalization, Provider Profile create/update APIs, Settings UI, migrations/readiness, and the Provider Profile Manager; do not allow workflow-level overrides.
+- [ ] **2.2 Shared credential-capacity lane** — make direct managed execution, Omnigent execution, and reconnect/disconnect maintenance acquire the same backing Provider Profile lease so only one active consumer can read/refresh/write the OAuth identity.
+- [ ] **2.3 Runtime-neutral host credential binding** — implement safe `AuthVolumeRef`, `CredentialMountRef`, profile-to-host binding, credential-generation, and host-lease references without putting credential bodies into Temporal, bridge, checkpoint, or artifact payloads.
+- [ ] **2.4 Claude Code host OAuth** — bind the selected Claude OAuth volume to one dedicated host at the correct home path, clear competing credentials, manage `.claude.json` separately, run `claude auth status` in the exact host environment, and allow at most one active runner.
+- [ ] **2.5 Codex CLI host OAuth** — provide equivalent Codex volume/home/config shaping and login-status verification, with no ambient API-key/custom-provider override and at most one active runner.
+- [ ] **2.6 Profile-aware host routing** — let Omnigent requests select `executionProfileRef`; resolve the compatible harness and exact host binding automatically, and remove manual `hostId` extraction or workflow JSON editing from the operator path.
+- [ ] **2.7 Supported local Compose path** — make init, UID/GID repair, state-volume setup, OAuth readiness wait, stable host identity, registration, restart behavior, Claude/Codex service activation, and diagnostics part of Compose/init scripts rather than manual runbook steps.
+- [ ] **2.8 Reconnect, disconnect, and generation drain** — block or explicitly terminate active consumers before credential mutation, increment credential generation after successful reconnect, drain stale hosts, and fail closed rather than silently falling back to API-key auth.
+- [ ] **2.9 Boundary and end-to-end tests** — cover one direct-versus-Omnigent lease, second-host rejection/queueing, wrong-runtime volume isolation, refresh-state persistence, reconnect drain, missing/revoked auth, host restart, retry-safe reuse, and credential non-leakage.
 
-**Done means:** a user who has authenticated Codex or Claude Code through MoonMind can run the corresponding harness inside an Omnigent host, and MoonMind can prove which profile/ref was used without exposing credential values.
+**Done means:** a user who completes Claude or Codex OAuth in Settings can select that Provider Profile for an Omnigent-backed workflow without logging in again; MoonMind automatically binds one compatible host, allows only one active consumer/host/session for the OAuth identity, persists authorized refresh-state writes, and proves the profile/lease/host/session refs without exposing credential values.
 
 ---
 
-## Milestone 3 — MoonMind-Launched Omnigent Host Containers 🚧
+## Milestone 3 — Omnigent Bridge Communication & Workflow Detail Chat 🚧
 
-**Goal:** MoonMind can launch Omnigent host agent containers as needed.
+**Goal:** Credentialed Omnigent hosts and MoonMind communicate through the Omnigent bridge, and Workflow Detail chat with Omnigent hosts works similarly to other cloud agents.
 
-**Why it matters:** Treating Omnigent only as an already-running external server is not enough for a managed runtime product. MoonMind needs to provision, supervise, and clean up host containers while preserving the boundary that Omnigent owns live harness execution.
+**Why it matters:** The bridge should be stabilized against a known profile-bound host before MoonMind automates host provisioning. Operators should not care whether a run is backed by a direct managed process, a cloud agent, or an Omnigent host; Workflow Detail should show the conversation, events, approvals, resources, diagnostics, and artifacts through one familiar model.
 
 ### Remaining work
 
-- [ ] **3.0 Declarative design first** — document the supported host-launch model, capacity/lease semantics, and mount/network policy in `docs/Omnigent/OmnigentAdapter.md` and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` before adding launch code.
-- [ ] **3.1 Host launch model** — define the supported host types MoonMind can launch first: local Docker host container, compose-managed host, and any explicitly supported remote/managed host profile.
-- [ ] **3.2 Launch activity/service** — add a MoonMind-owned launch path that creates an Omnigent host container with endpoint refs, auth-volume refs, workspace policy, network policy, labels, and idempotency keys.
-- [ ] **3.3 Host registration and readiness** — wait for host registration/heartbeat with the Omnigent server or bridge before session creation, and surface readiness diagnostics in the dashboard.
-- [ ] **3.4 Capacity and lease model** — model host slots, active sessions, cooldowns, stale leases, and cleanup so repeated workflows do not orphan host containers or overrun local resources.
-- [ ] **3.5 Workspace and artifact mounts** — standardize what is mounted into a host: repository workspace, temporary work area, auth volumes, tool/cache volumes, and artifact handoff paths.
-- [ ] **3.6 Lifecycle operations** — support stop, interrupt, terminate, cleanup, and log/diagnostic harvest through typed MoonMind actions.
-- [ ] **3.7 Cutover compatibility** — keep direct Codex/Claude managed-session execution available behind feature gates until Omnigent host launch is reliable for those harnesses.
-- [ ] **3.8 End-to-end launch tests** — cover launch, registration, session start, cancellation, terminal harvest, cleanup, and retry after MoonMind worker restart.
+- [ ] **3.0 Declarative design reconciliation** — reconcile `docs/Omnigent/OmnigentBridge.md`, `docs/Omnigent/OmnigentHostOAuth.md`, `docs/Security/SettingsSystem.md`, `docs/UI/WorkflowChatPanel.md`, and `docs/UI/WorkflowDetailsPage.md` around profile-aware host routing, bridge ownership, failed-start evidence, and the unchanged-host proxy-first topology.
+- [ ] **3.1 Proxy-mode bridge routes** — implement or complete the MoonMind bridge facade for Omnigent-shaped session, event, stream, agent, host, and resource routes while proxying to a stock Omnigent server/host.
+- [ ] **3.2 Profile/lease-aware session creation** — require the selected Provider Profile and active lease when targeting an OAuth-bound host; persist profile, binding, host lease, host, session, endpoint, and idempotency refs before posting the first message.
+- [ ] **3.3 Bridge event normalizer** — normalize host/session events into durable MoonMind event records while preserving raw event journals as artifacts.
+- [ ] **3.4 Bridge session projection API** — expose `GET /api/omnigent/bridge-sessions/{bridge_session_id}/events` and `/stream` as the canonical Workflow Chat/read-model surface.
+- [ ] **3.5 Workflow Detail chat projection** — render Omnigent sent messages, assistant deltas, tool/session events, elicitations, approvals, interrupts, stop events, resource notices, terminal outcomes, diagnostics, and artifact links before falling back to legacy logs.
+- [ ] **3.6 Artifact/resource harvesting in chat** — link changed files, diffs, workspace files, session files, snapshots, and capture manifests directly from chat and step detail.
+- [ ] **3.7 Failed-launch visibility** — create visible bridge diagnostics and a Chat timeline when profile resolution, lease acquisition, OAuth preflight, host registration, or session creation fails before a normal terminal stream exists.
+- [ ] **3.8 Direct Codex compatibility producer** — during migration, have direct Codex managed sessions emit bridge-compatible events so Workflow Detail no longer depends on runtime-specific observability records.
+- [ ] **3.9 Conformance and smoke tests** — add fake Omnigent server tests, proxy-mode route tests, profile/lease authorization tests, event-normalization tests, chat projection tests, and live combined-stack smoke coverage.
+- [ ] **3.10 Omnigent-compatible MoonMind server auth shim** 🔒 — for embedded compatibility mode, reuse the existing upstream Omnigent server/host auth verifier as a narrow library dependency or vendored module with a MoonMind adapter layer. Map verified Omnigent host/API principals to MoonMind service principals and bridge-session ownership; keep Omnigent token parsing, signature/JWKS validation, host-runner credential semantics, and conformance fixtures unchanged where possible. Add only config/SecretRef resolution, audit redaction, and FastAPI dependency glue in MoonMind. Do not reimplement the auth protocol, fork the host, or forward MoonMind user JWT/cookie headers as Omnigent credentials.
+- [ ] **3.11 Embedded compatibility mode** 🔒 — implement MoonMind-as-Omnigent-compatible host/server surface only after proxy mode has conformance and live smoke evidence.
 
-**Done means:** a workflow can request an Omnigent-backed Codex or Claude run without a manually pre-provisioned host, and MoonMind can launch the host, bind credentials/workspace/policy, observe it, and clean it up.
+**Done means:** an OAuth-backed workflow can be created against a profile-bound stock Omnigent host through MoonMind-owned routing; Workflow Detail provides durable conversation replay, failure visibility, and artifact links even after the host is gone; and embedded mode, when enabled later, remains Omnigent-compatible rather than a MoonMind-specific host fork.
 
 ---
 
-## Milestone 4 — Omnigent Bridge Communication & Workflow Detail Chat 🚧
+## Milestone 4 — Workflow-Requested Omnigent Host Containers 🚧
 
-**Goal:** Omnigent hosts and MoonMind communicate through the Omnigent bridge, and Workflow Detail chat with Omnigent hosts works similarly to other cloud agents.
+**Goal:** MoonMind can launch, supervise, assign, and clean up an Omnigent host container on demand when a workflow requests an Omnigent-backed run.
 
-**Why it matters:** Operators should not care whether a run is backed by a direct managed process, a cloud agent, or an Omnigent host. Workflow Detail should show the conversation, events, approvals, resources, diagnostics, and artifacts through one familiar model.
+**Why it matters:** Static Compose hosts are useful for proving OAuth and bridge contracts, but they are not the managed-runtime product. Once credential binding and bridge semantics are stable, MoonMind should provision exactly the host capacity a workflow/profile lease requires without orphaning containers or bypassing policy.
 
 ### Remaining work
 
-- [ ] **4.0 Declarative design first** — capture the bridge proxy routes, embedded host-facing auth topology, event-normalization contract, and Workflow Detail chat projection as target state in `docs/Omnigent/OmnigentBridge.md`, `docs/Security/SettingsSystem.md`, `docs/UI/WorkflowChatPanel.md`, and `docs/UI/WorkflowDetailsPage.md` before implementation.
-- [ ] **4.1 Proxy-mode bridge routes** — implement or complete the MoonMind bridge facade for Omnigent-shaped session, event, stream, agent, and resource routes while proxying to a stock Omnigent server/host.
-- [ ] **4.2 Bridge event normalizer** — normalize host/session events into durable MoonMind event records while preserving raw event journals as artifacts.
-- [ ] **4.3 Bridge session projection API** — expose `GET /api/omnigent/bridge-sessions/{bridge_session_id}/events` and `/stream` as the canonical Workflow Chat/read-model surface.
-- [ ] **4.4 Workflow Detail chat projection** — render Omnigent sent messages, assistant deltas, tool/session events, elicitations, approvals, interrupts, stop events, resource notices, terminal outcomes, diagnostics, and artifact links before falling back to legacy logs.
-- [ ] **4.5 Artifact/resource harvesting in chat** — link changed files, diffs, workspace files, session files, snapshots, and capture manifests directly from chat and step detail.
-- [ ] **4.6 Failed-launch visibility** — create visible bridge diagnostics and a Chat timeline even when host launch or session creation fails before a normal terminal stream exists.
-- [ ] **4.7 Direct Codex compatibility producer** — during migration, have direct Codex managed sessions emit bridge-compatible events so Workflow Detail no longer depends on runtime-specific observability records.
-- [ ] **4.8 Conformance and smoke tests** — add fake Omnigent server tests, proxy-mode route tests, event-normalization tests, chat projection tests, and live combined-stack smoke coverage.
-- [ ] **4.9 Omnigent-compatible MoonMind server auth shim** 🔒 — for embedded compatibility mode, reuse the existing upstream Omnigent server/host auth verifier as a narrow library dependency or vendored module with a MoonMind adapter layer. Map verified Omnigent host/API principals to MoonMind service principals and bridge-session ownership; keep Omnigent token parsing, signature/JWKS validation, host-runner credential semantics, and conformance fixtures unchanged where possible. Add only config/SecretRef resolution, audit redaction, and FastAPI dependency glue in MoonMind. Do not reimplement the auth protocol, fork the host, or forward MoonMind user JWT/cookie headers as Omnigent credentials.
-- [ ] **4.10 Embedded compatibility mode** 🔒 — implement MoonMind-as-Omnigent-compatible host/server surface only after proxy mode has conformance and live smoke evidence.
+- [ ] **4.0 Declarative design first** — update `docs/Omnigent/OmnigentAdapter.md`, `docs/Omnigent/OmnigentHostOAuth.md`, and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` with the supported host-launch model, durable host lease, registration/readiness contract, capacity layers, mount/network policy, and cleanup semantics before launch code.
+- [ ] **4.1 First launch model** — support one local Docker `omnigent-host` container per active Provider Profile lease and Omnigent session; preserve `maxHosts = 1` and `maxSessionsPerHost = 1` for OAuth profiles.
+- [ ] **4.2 Launch activity/service** — add a MoonMind-owned launch path that creates an unchanged Omnigent host with endpoint refs, profile/binding refs, credential mounts, workspace policy, network policy, resource limits, labels, deterministic identity, and idempotency keys.
+- [ ] **4.3 Durable host lease and retry reconciliation** — persist container/host/session ownership, credential generation, state transitions, heartbeat timestamps, and expiry so Temporal retries reattach or replace safely rather than launch duplicates.
+- [ ] **4.4 Host registration and bridge readiness** — wait for exact host registration/heartbeat, ownership, configured harness, OAuth preflight, and bridge reachability before session creation, and surface each readiness stage in Workflow Detail.
+- [ ] **4.5 Capacity hierarchy** — combine Provider Profile capacity, host-pool/session capacity, and machine/Docker capacity without creating conflicting counters; provider-account capacity remains authoritative in `ProviderProfileManager`.
+- [ ] **4.6 Workspace, artifact, auth, and cache mounts** — standardize workflow-scoped repositories, temporary work areas, profile-bound OAuth volumes, artifact handoff paths, optional caches, UID/GID, and safe mount targets.
+- [ ] **4.7 Lifecycle operations and janitor** — support interrupt, stop, terminate, log/resource harvest, host removal, stale-lease reconciliation, credential-generation drain, and orphan cleanup through typed MoonMind actions.
+- [ ] **4.8 Static-to-managed compatibility** — retain the supported static Compose host as a local/bootstrap mode while routing both static and on-demand hosts through the same binding, bridge, diagnostics, and artifact contracts.
+- [ ] **4.9 Cutover compatibility** — keep direct Codex/Claude managed-session execution behind feature gates until on-demand Omnigent launch is reliable for those harnesses.
+- [ ] **4.10 End-to-end launch tests** — cover launch, registration, session start, worker restart, duplicate prevention, cancellation, terminal harvest, host cleanup, OAuth reconnect drain, profile cooldown, and retry after partial failure.
 
-**Done means:** an Omnigent-backed workflow produces a Workflow Detail chat experience equivalent to existing cloud-agent conversations, with durable replay and artifact links even after the host container is gone; when embedded mode is enabled, its host-facing auth path remains Omnigent-compatible rather than a MoonMind-specific fork.
+**Done means:** a workflow can request an Omnigent-backed Claude or Codex run without a pre-provisioned host; MoonMind acquires the selected profile, launches exactly one policy-bound host, observes it through the bridge, runs and harvests one session, cleans the host up, and releases all leases idempotently.
 
 ---
 
-## Milestone 5 — Checkpoints, Resume & Branching 🚧
+## Milestone 5 — Omnigent Host Session Checkpoints, Resume & Branching 🚧
 
-**Goal:** The checkpoint system is fully implemented with resume and branching for Omnigent-backed executions and existing local execution paths.
+**Goal:** Omnigent-backed sessions can be checkpointed, resumed, retried, and branched from MoonMind evidence whether the original host container is still alive or has been replaced.
 
-**Why it matters:** Omnigent v1 owns live session execution, but MoonMind still owns durable recovery semantics. Resume and branching must work from MoonMind evidence, not from raw host internals.
+**Why it matters:** Omnigent owns live session execution, while MoonMind owns durable recovery semantics. Checkpoints must be built from bridge/session/artifact evidence and selected Provider Profile identity, not from an assumption that one host container or mutable OAuth home snapshot remains available forever.
 
 ### Remaining work
 
-- [ ] **5.0 Declarative design first** — update `docs/Workflows/CheckpointBranchSystem.md` and `docs/Steps/StepExecutionsAndCheckpointing.md` to define Omnigent external-state checkpoint completeness, resume-default semantics, and local-vs-external restore rules before code.
-- [ ] **5.1 External-state checkpoint completeness** — ensure every relevant Omnigent boundary captures `externalStateRef`, `idempotencyKey`, `omnigentSessionId`, diagnostics refs, terminal refs, and patch/diff availability metadata.
-- [ ] **5.2 Resume-from-checkpoint default flow** — make failed-run recovery default to evidence-gated resume when checkpoint evidence is valid, with clear reasons when resume is unavailable.
-- [ ] **5.3 Checkpoint Branch UI and runtime-profile gaps** — connect the existing Checkpoint Branch API to Workflow Detail actions, runtime/profile selection, publish-mode selection, and Omnigent-compatible launch evidence without duplicating branch endpoints.
-- [ ] **5.4 Omnigent branch execution** — start a fresh Omnigent session for a branch turn, carrying corrected instructions and validated external-state evidence without mutating the original workflow input.
-- [ ] **5.5 Local vs external restore semantics** — split or normalize ambiguous workspace refs so local sandbox paths and provider-owned external-state artifact refs cannot be confused.
-- [ ] **5.6 UI flows** — add Workflow Detail actions for resume, retry, branch, compare branch, and inspect checkpoint evidence.
-- [ ] **5.7 Replay and idempotency tests** — cover worker restart, Temporal retry, duplicate first-message prevention, checkpoint validation failures, branch duplicate prevention, and unsupported restore attempts.
+- [ ] **5.0 Declarative design first** — update `docs/Workflows/CheckpointBranchSystem.md` and `docs/Steps/StepExecutionsAndCheckpointing.md` to define Omnigent bridge external-state completeness, profile/host/session refs, live-reattach versus cold-restore semantics, branch isolation, and local-vs-external restore rules before code.
+- [ ] **5.1 Checkpoint boundary and completeness** — capture checkpoints at defined bridge/session boundaries with `externalStateRef`, `idempotencyKey`, `bridgeSessionId`, `omnigentSessionId`, endpoint/profile/binding/host-lease refs, credential generation, diagnostics/terminal refs, workspace or diff refs, and patch availability metadata.
+- [ ] **5.2 Host-independent restore contract** — treat the host container as replaceable execution infrastructure; define what must be artifact-backed so a checkpoint can restore onto a newly launched profile-bound host without copying OAuth credential bodies into the checkpoint.
+- [ ] **5.3 Live reattach versus cold resume** — reattach only when the original session, host, bridge binding, profile lease, and idempotency evidence remain valid; otherwise acquire the same profile again and start a fresh session from validated checkpoint evidence.
+- [ ] **5.4 Resume-from-checkpoint default flow** — make failed-run recovery default to evidence-gated resume when checkpoint evidence is valid, with clear reasons when live reattach, cold restore, or any resume is unavailable.
+- [ ] **5.5 Checkpoint Branch UI and runtime-profile gaps** — connect the existing Checkpoint Branch API to Workflow Detail actions, Provider Profile selection, Omnigent agent/harness selection, publish-mode selection, and host-launch evidence without duplicating branch endpoints.
+- [ ] **5.6 Omnigent branch execution** — acquire a new profile/host lease and start a fresh Omnigent session for a branch turn, carrying corrected instructions and validated external-state evidence without mutating the original workflow input or concurrently reusing its OAuth lease.
+- [ ] **5.7 Local versus external restore semantics** — split or normalize ambiguous workspace refs so local sandbox paths, host-local paths, and provider-owned external-state artifact refs cannot be confused.
+- [ ] **5.8 UI flows** — add Workflow Detail actions for resume, retry, branch, compare branch, inspect checkpoint evidence, and understand why the original or replacement host was selected.
+- [ ] **5.9 Replay and idempotency tests** — cover worker restart, Temporal retry, live session reattach, cold host recreation, duplicate first-message prevention, stale credential generations, checkpoint validation failures, branch duplicate prevention, lease cleanup, and unsupported restore attempts.
 
-**Done means:** failed workflows can resume from validated checkpoints by default, operators can intentionally branch with new instructions or runtime/profile settings, and Omnigent external state is handled as MoonMind artifact evidence rather than host-local mutable state.
+**Done means:** failed Omnigent workflows can resume from validated checkpoints by default; a live session can be reattached when safe, a removed host can be recreated for cold restore, operators can intentionally branch with new instructions or runtime/profile settings, and all recovery evidence remains MoonMind-owned artifact/ref state rather than host-local mutable state.
 
 ---
 
@@ -289,7 +305,7 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 **Why the change:** Pentest was intended as a minor capability, but the dedicated runner image plus MoonMind-specific scope-governance, provider-lease, heartbeat, settings, and scope-authoring UI machinery grew into a large maintenance surface (~12–13k lines) disproportionate to its value. Under **Orchestrate, don't recreate agents** and **Portable capabilities over MoonMind coupling**, MoonMind should consume the upstream PentestGPT container through the generic workload launcher (`moonmind/workloads/*`, which already has no pentest coupling) rather than carry a bespoke execution and governance stack. What must not regress is safety: the runner still runs on Docker `bridge`, which is not an enforced egress boundary, so external targets stay gated.
 
-**Recommended disposition (product decision pending):** keep a thin version — the runner image plus a small skill/preset that launches it through the generic workload path and publishes one `security_pentest_report` artifact — and delete the MoonMind-specific pentest machinery (the bulk of `moonmind/integrations/pentest/models.py`, the provider-lease/heartbeat/orphan-cleanup block in `activity_runtime.py`, most of `pentest_activities.py` and `PentestSettings`, and the scope-authoring UI). Fold enforced egress into the generic launched-workload/host **network-policy** substrate (Milestone 3 host launch and the omnipresent **safety** goal) so it is a substrate property, not a pentest-only feature. If the decision is instead full removal, delete the capability, its docs (`docs/Steps/PentestTool.md`, `docs/Security/PentestOperations.md`), and its pinned docs-policy tests in one cohesive change per the **Pre-release means delete, don't deprecate** policy.
+**Recommended disposition (product decision pending):** keep a thin version — the runner image plus a small skill/preset that launches it through the generic workload path and publishes one `security_pentest_report` artifact — and delete the MoonMind-specific pentest machinery (the bulk of `moonmind/integrations/pentest/models.py`, the provider-lease/heartbeat/orphan-cleanup block in `activity_runtime.py`, most of `pentest_activities.py` and `PentestSettings`, and the scope-authoring UI). Fold enforced egress into the generic launched-workload/host **network-policy** substrate (Milestone 4 host launch and the omnipresent **safety** goal) so it is a substrate property, not a pentest-only feature. If the decision is instead full removal, delete the capability, its docs (`docs/Steps/PentestTool.md`, `docs/Security/PentestOperations.md`), and its pinned docs-policy tests in one cohesive change per the **Pre-release means delete, don't deprecate** policy.
 
 ### Retained safety gate
 
@@ -305,13 +321,13 @@ These are not active roadmap milestones, but they are important assumptions for 
 
 | Previous theme | New disposition |
 | --- | --- |
-| Claude Code parity on the direct shared managed-session plane | Reframed as Claude Code via Omnigent host auth volumes, profiles, host launch, bridge events, and Workflow Chat. A parallel direct Claude controller is no longer the primary path. |
+| Claude Code parity on the direct shared managed-session plane | Reframed as Claude Code via Settings-created Omnigent host OAuth, bridge events/Workflow Chat, workflow-requested host launch, and host-independent checkpoint recovery. A parallel direct Claude controller is no longer the primary path. |
 | Automatic RAG context injection and RAG context packs | Moved into Milestone 7, with Omnigent first-message delivery and host-initiated retrieval gateway support as the acceptance path. |
-| Dashboard artifact browsing and remediation panels | Split across Milestone 1 for reusable navigation/list surfaces, Milestone 4 for Omnigent chat/artifact projection, and Milestone 6 for remediation-specific panels. |
-| Resume-from-checkpoint and recovery actions | Consolidated into Milestone 5 as checkpoint resume/branching, with Milestone 6 owning remediation’s custom-instruction branch flow. |
-| Safety guardrails, governance telemetry, and secret lifecycle | Reframed as the omnipresent **safety** goal applied to every milestone, and embedded in Milestones 2, 3, 6, and 8 as auth-volume boundaries, host launch/network policy, remediation audit, and Omnigent policy enforcement. Standalone safety work should be added only when it is not tied to those paths. |
+| Dashboard artifact browsing and remediation panels | Split across Milestone 1 for reusable navigation/list surfaces, Milestone 3 for Omnigent chat/artifact projection, and Milestone 6 for remediation-specific panels. |
+| Resume-from-checkpoint and recovery actions | Consolidated into Milestone 5 as Omnigent host-session checkpoint resume/branching, with Milestone 6 owning remediation’s custom-instruction branch flow. |
+| Safety guardrails, governance telemetry, and secret lifecycle | Reframed as the omnipresent **safety** goal applied to every milestone, and embedded in Milestones 2, 3, 4, 6, and 8 as OAuth concurrency/auth-volume boundaries, bridge authorization, host launch/network policy, remediation audit, and Omnigent policy enforcement. Standalone safety work should be added only when it is not tied to those paths. |
 | PentestGPT restricted egress and external target safety | Pentest is de-scoped from a first-class feature to a thin skill over the generic workload path (Milestone 11). Enforced egress becomes a generic launched-workload/host safety property under the omnipresent safety goal; the current Docker `bridge` runner is not a restricted-egress boundary, so external targets stay gated until enforcement exists. |
-| Deep observability, live logs, and trace/log links | Embedded into Milestones 4, 5, and 6 as bridge chat replay, checkpoint evidence, remediation evidence access, and artifact diagnostics. Full OTel/cost expansion can follow after Omnigent-host execution is stable. |
+| Deep observability, live logs, and trace/log links | Embedded into Milestones 3, 5, and 6 as bridge chat replay, checkpoint evidence, remediation evidence access, and artifact diagnostics. Full OTel/cost expansion can follow after Omnigent-host execution is stable. |
 | Responses API feature parity | Not on the critical path for Omnigent host cutover unless a concrete Omnigent/cloud-agent integration requires it. |
 | Completed resiliency, sandbox, memory, vendor portability, and baseline observability milestones | Removed from active roadmap tracking. They remain part of the product substrate and should be documented elsewhere, not tracked as unfinished roadmap items. |
 
@@ -322,11 +338,11 @@ These are not active roadmap milestones, but they are important assumptions for 
 | Priority | Milestone | Status | Primary dependency |
 | --- | --- | --- | --- |
 | 🔴 P0 | 1 — Dashboard navigation, sidebars, and full-page lists | ✅ Complete | Can proceed in parallel |
-| 🔴 P0 | 2 — Omnigent host auth volumes and runtime profile contract | 🚧 Active | Required for Codex/Claude host parity |
-| 🔴 P0 | 3 — MoonMind-launched Omnigent host containers | 🚧 Active | Depends on 2 for credentialed harnesses |
-| 🔴 P0 | 4 — Omnigent bridge communication and Workflow Detail chat | 🚧 Active | Required for usable operator experience |
-| 🔴 P0 | 5 — Checkpoints, resume, and branching | 🚧 Active | Required for resilient Omnigent execution |
-| 🔴 P0 | 6 — Remediation workflows and evidence-based repair | 🚧 Active | Depends on 4 and 5 for full power |
+| 🔴 P0 | 2 — Omnigent host OAuth from MoonMind Settings | 🚧 Active | Required for credentialed Claude/Codex host execution |
+| 🔴 P0 | 3 — Omnigent bridge communication and Workflow Detail chat | 🚧 Active | Builds on a profile-bound OAuth host; required before dynamic launch |
+| 🔴 P0 | 4 — Workflow-requested Omnigent host containers | 🚧 Active | Depends on 2 for credentials and 3 for registration/session communication |
+| 🔴 P0 | 5 — Omnigent host-session checkpoints, resume, and branching | 🚧 Active | Depends on stable bridge evidence and host lifecycle from 3 and 4 |
+| 🔴 P0 | 6 — Remediation workflows and evidence-based repair | 🚧 Active | Depends on 3 and 5 for full power |
 | 🟠 P1 | 7 — RAG for Omnigent host agents | 🔧 Partial | Depends on basic Omnigent execution and profile selection |
 | 🟠 P1 | 8 — Omnigent policy management UI | 📐 Designed | Depends on launch/bridge enforcement points |
 | 🟠 P1 | 9 — Omnigent agent profiles UI | 📐 Designed | Depends on endpoint/profile/policy data model |
