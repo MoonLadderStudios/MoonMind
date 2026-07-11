@@ -1,0 +1,19 @@
+{
+  "artifactType": "remediation.verification",
+  "attempt": 3,
+  "issueRef": "MM-1202",
+  "verificationTarget": "issue_brief",
+  "remediationAttemptArtifact": "reports/remediation_attempt-3.json",
+  "authoritativeVerifierArtifact": "artifacts/jira-implement-verify.json",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
+  "recoverableInCurrentRuntime": true,
+  "remainingWork": [
+    "Implement trusted resolved-skill native binding independent of publish authority.",
+    "Extract and adopt one provider-neutral resolver core with cross-host parity fixtures.",
+    "Implement immutable/versioned rollout and stale-worker exclusion.",
+    "Add operator capability-failure classification, budget protection, diagnostics, metrics, and alerts.",
+    "Add the readiness-gating parent-to-resolver canary and required Temporal/Compose/restart regression coverage."
+  ],
+  "summary": "Attempt 3 verifies the required architecture and operator documentation, but five concrete MM-1202 production and verification gaps remain. The complete structured findings and mandatory next-remediation input are in artifacts/jira-implement-verify.json."
+}
