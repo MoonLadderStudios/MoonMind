@@ -3221,7 +3221,7 @@ describe('Dashboard shared entry', () => {
     expect(desktopMastheadRule('.workflow-list-display-control')).toBe('');
     expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 2;');
     expect(desktopMastheadRule('.masthead-nav')).not.toContain('overflow');
-    expect(desktopMastheadRule('.route-nav-primary')).toContain('overflow-x: auto;');
+    expect(desktopMastheadRule('.route-nav-primary')).not.toContain('overflow');
     expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 3;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });
