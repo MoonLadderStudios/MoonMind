@@ -4923,10 +4923,11 @@ class MoonMindRunWorkflow:
                 "phase": "after_execution_checkpoint",
                 "criticality": criticality,
                 "failureCode": failure_code,
+                "terminalFailureCode": None,
                 "retryCount": 0,
                 "checkpointRef": None,
                 "message": "Checkpoint capture is unsupported by this runtime.",
-                "updatedAt": workflow.now().isoformat(),
+                "updatedAt": updated_at.isoformat(),
             }
             return
         row["finalizationOutcome"] = {

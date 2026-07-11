@@ -2973,6 +2973,7 @@ async def test_managed_checkpoint_capability_gap_reaches_finalization_outcome(
         "phase": "after_execution_checkpoint",
         "criticality": "recoverability_only",
         "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+        "terminalFailureCode": None,
         "retryCount": 0,
         "checkpointRef": None,
         "message": "Checkpoint capture is unsupported by this runtime.",
