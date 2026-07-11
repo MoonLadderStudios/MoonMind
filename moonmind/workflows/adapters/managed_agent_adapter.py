@@ -998,14 +998,19 @@ class ManagedAgentAdapter:
                 f"got '{request.agent_kind}'"
             )
 
+        runtime_for_profile = self._runtime_id or request.agent_id
+        # Status and result collection consume the same canonical capability
+        # descriptor, so reject unsupported generic runtimes before launching
+        # a process that could never be polled to completion.
+        capabilities = resolve_runtime_execution_capabilities(runtime_for_profile)
+        runtime_for_profile = capabilities.runtime_id
+
         profile = await self._resolve_profile(
             execution_profile_ref=request.execution_profile_ref,
-            runtime_id=self._runtime_id or request.agent_id,
+            runtime_id=runtime_for_profile,
             profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True) if hasattr(request, "profile_selector") and request.profile_selector else None,
         )
         profile_id: str = profile["profile_id"]
-        runtime_for_profile = self._runtime_id or request.agent_id
-
         # --- Strategy delegation for defaults (Phase 1) ---
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
 

@@ -101,6 +101,9 @@ with workflow.unsafe.imports_passed_through():
         StepExecutionCheckpointBoundary,
         build_step_checkpoint_id,
     )
+    from moonmind.workflows.executions.runtime_capabilities import (
+        RuntimeCapabilityError,
+    )
     from moonmind.workflows.temporal.checkpoint_policy import (
         resolve_checkpoint_policy,
     )
@@ -4630,27 +4633,30 @@ class MoonMindRunWorkflow:
         managed_checkpoint_authority_enabled = workflow.patched(
             RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH
         )
+        declared_authority = (
+            capture_input.get("captureAuthority")
+            if managed_checkpoint_authority_enabled
+            and capture_input.get("captureAuthority")
+            in {
+                "moonmind_sandbox",
+                "managed_runtime",
+                "external_provider",
+                "none",
+            }
+            else None
+        )
         resolved_policy = resolve_checkpoint_policy(
             boundary=str(boundary),
             recovery_source=self._recovery_source
             if isinstance(self._recovery_source, Mapping)
             else None,
             runtime_kind=(
-                self._target_runtime if managed_checkpoint_authority_enabled else None
-            ),
-            external_agent_id=self._step_external_agent_ids.get(logical_step_id),
-            workspace_authority=(
-                capture_input.get("captureAuthority")
-                if managed_checkpoint_authority_enabled
-                and capture_input.get("captureAuthority")
-                in {
-                    "moonmind_sandbox",
-                    "managed_runtime",
-                    "external_provider",
-                    "none",
-                }
+                self._target_runtime
+                if declared_authority in {"managed_runtime", "external_provider"}
                 else None
             ),
+            external_agent_id=self._step_external_agent_ids.get(logical_step_id),
+            workspace_authority=declared_authority,
             agent_kind=(
                 "managed"
                 if managed_checkpoint_authority_enabled
@@ -4682,7 +4688,11 @@ class MoonMindRunWorkflow:
                 "supportedCheckpointKind": resolved_policy.checkpoint_kind,
                 "captureAuthority": resolved_policy.capture_authority,
             }
-            return None
+            raise RuntimeCapabilityError(
+                f"checkpoint kind '{claimed_kind}' is incompatible with "
+                f"{resolved_policy.capture_authority} capture; supported kinds: "
+                f"{', '.join(resolved_policy.supported_checkpoint_kinds) or '(none)'}"
+            )
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "workspace.capture_checkpoint"

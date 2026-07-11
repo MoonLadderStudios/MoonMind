@@ -30,6 +30,7 @@ def test_every_registered_runtime_descriptor_is_valid_and_versioned() -> None:
 
 def test_alias_resolves_before_lookup_and_unknown_runtime_fails() -> None:
     assert resolve_runtime_execution_capabilities("codex").runtime_id == "codex_cli"
+    assert resolve_runtime_execution_capabilities("jules_api").runtime_id == "jules"
     with pytest.raises(RuntimeCapabilityError, match="unknown agent runtime"):
         resolve_runtime_execution_capabilities("new_runtime")
 

@@ -45,6 +45,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     _pr_resolver_status,
     build_managed_profile_launch_context,
 )
+from moonmind.workflows.executions.runtime_capabilities import RuntimeCapabilityError
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
@@ -1075,6 +1076,37 @@ async def test_start_rejects_non_managed_agent_kind():
     )
     with pytest.raises(ValueError, match="managed"):
         await adapter.start(request)
+
+
+async def test_start_rejects_unknown_runtime_before_profile_lookup_or_launch():
+    profile_lookups = 0
+
+    async def profile_fetcher(**_kwargs: Any) -> list[dict[str, Any]]:
+        nonlocal profile_lookups
+        profile_lookups += 1
+        return [{"profile_id": "custom", "credential_source": "secret_ref"}]
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=profile_fetcher,
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-custom",
+        runtime_id="custom_runtime",
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="custom_runtime",
+        executionProfileRef="auto",
+        correlationId="corr-custom",
+        idempotencyKey="idem-custom",
+    )
+    with pytest.raises(RuntimeCapabilityError, match="unknown agent runtime"):
+        await adapter.start(request)
+    assert profile_lookups == 0
 
 # ---------------------------------------------------------------------------
 # Slot release and 429 cooldown tests
