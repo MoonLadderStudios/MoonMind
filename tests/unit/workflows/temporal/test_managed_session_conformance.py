@@ -128,9 +128,12 @@ def test_unsupported_runtimes_report_capability_gaps_not_partial(
     assert report["sessionCapableClaim"] is False
     assert report["claimTruthful"] is True
     assert report["result"] == "passed"
-    assert len(report["capabilityGaps"]) == len(REQUIRED_MANAGED_SESSION_BEHAVIORS)
+    assert len(report["capabilityGaps"]) == len(REQUIRED_MANAGED_SESSION_BEHAVIORS) + 1
     gap_behaviors = {gap["behavior"] for gap in report["capabilityGaps"]}
-    assert gap_behaviors == set(REQUIRED_MANAGED_SESSION_BEHAVIORS)
+    assert gap_behaviors == {
+        *REQUIRED_MANAGED_SESSION_BEHAVIORS,
+        "runtime_identity",
+    }
     assert all(gap["reason"] for gap in report["capabilityGaps"])
     assert "partial" not in str(report).lower()
 
@@ -208,6 +211,33 @@ def test_non_canonical_runtime_cannot_be_session_capable_even_if_fully_declared(
     assert any(
         gap["behavior"] == "runtime_identity" for gap in report["capabilityGaps"]
     )
+
+
+def test_non_canonical_runtime_reports_identity_gap_alongside_checkpoint_gaps() -> None:
+    behaviors = list(_fully_supported_behaviors())
+    capture_index = next(
+        index
+        for index, support in enumerate(behaviors)
+        if support.behavior == "step_workspace_checkpoint_capture"
+    )
+    behaviors[capture_index] = ManagedSessionBehaviorSupport(
+        behavior="step_workspace_checkpoint_capture",
+        supported=False,
+        gapReason="workspace capture is not implemented",
+    )
+    capabilities = ManagedSessionRuntimeCapabilities(
+        runtimeId="future_runtime",
+        runtimeFamily="future",
+        sessionCapableClaim=False,
+        behaviors=tuple(behaviors),
+    )
+
+    report = evaluate_managed_session_conformance(capabilities)
+
+    assert {gap["behavior"] for gap in report["capabilityGaps"]} == {
+        "runtime_identity",
+        "step_workspace_checkpoint_capture",
+    }
 
 
 def test_summary_only_surfaces_codex_as_session_capable() -> None:
@@ -440,6 +470,46 @@ def test_v1_summary_migration_updates_nested_reports_and_required_behaviors() ->
     nested = migrated["reports"][0]
     assert nested["reportSchemaVersion"] == 2
     assert len(nested["capabilityGaps"]) == 2
+
+
+def test_v1_compact_result_migration_updates_runtime_gap_map() -> None:
+    legacy = {
+        "suite": MANAGED_SESSION_CONFORMANCE_SUITE_ID,
+        "overallResult": "passed",
+        "capabilityGaps": {
+            "codex_cli": [
+                {"behavior": "checkpoint", "reason": "legacy checkpoint gap"}
+            ]
+        },
+    }
+
+    migrated = migrate_managed_session_conformance_report(legacy)
+
+    assert migrated["reportSchemaVersion"] == 2
+    assert {
+        gap["behavior"] for gap in migrated["capabilityGaps"]["codex_cli"]
+    } == {
+        "session_state_checkpoint",
+        "step_workspace_checkpoint_capture",
+        "step_workspace_checkpoint_restore",
+    }
+
+
+def test_checkpoint_claim_rejects_blank_checkpoint_kind() -> None:
+    with pytest.raises(ValidationError, match="blank checkpointKind"):
+        ManagedSessionBehaviorSupport(
+            behavior="session_state_checkpoint",
+            supported=True,
+            invocation="SessionStateRequest",
+            owner="session.activity",
+            workspaceAuthorities=("managed_runtime",),
+            checkpointKinds=("  ",),
+            evidence=("sessionStateRef",),
+            idempotency="stable request key",
+            retryReplay="same invocation on retry and replay",
+            securityBoundary="owning worker resolves local state",
+            boundaryTest="test_session_state_boundary",
+        )
 
 
 def test_checkpoint_claim_requires_boundary_test_fixture() -> None:

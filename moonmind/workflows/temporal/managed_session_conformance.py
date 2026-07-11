@@ -185,6 +185,11 @@ class ManagedSessionBehaviorSupport(BaseModel):
                         f"checkpoint behavior '{self.behavior}' is supported but "
                         f"is missing required conformance fields: {', '.join(missing)}"
                     )
+                if any(not kind.strip() for kind in self.checkpoint_kinds):
+                    raise ValueError(
+                        f"checkpoint behavior '{self.behavior}' is supported but "
+                        "declares a blank checkpointKind"
+                    )
                 if (
                     self.behavior == "step_workspace_checkpoint_restore"
                     and not self.compatible_workspace_policies
@@ -402,7 +407,7 @@ def evaluate_managed_session_conformance(
     canonical_runtime_id = canonical_managed_session_runtime_id(capabilities.runtime_id)
     # Defense in depth: a runtime with no canonical managed-session id must never
     # be determined session-capable, even if it declares every behavior.
-    if canonical_runtime_id is None and not capability_gaps:
+    if canonical_runtime_id is None:
         reason = (
             f"runtime '{capabilities.runtime_id}' has no canonical managed-session "
             "runtime id and must not be surfaced as session-capable"
@@ -477,6 +482,35 @@ def migrate_managed_session_conformance_report(
         return migrated_summary
 
     migrated = dict(report)
+
+    compact_gaps = report.get("capabilityGaps")
+    if isinstance(compact_gaps, dict):
+        migrated_compact_gaps: dict[str, list[dict[str, Any]]] = {}
+        for runtime_id, raw_gaps in compact_gaps.items():
+            gaps = []
+            for raw_gap in raw_gaps:
+                gap = dict(raw_gap)
+                if gap.get("behavior") == "checkpoint":
+                    gap["behavior"] = "session_state_checkpoint"
+                gaps.append(gap)
+            existing = {gap.get("behavior") for gap in gaps}
+            for behavior in (
+                "step_workspace_checkpoint_capture",
+                "step_workspace_checkpoint_restore",
+            ):
+                if behavior not in existing:
+                    gaps.append(
+                        _gap(
+                            behavior,
+                            f"legacy v1 report for runtime '{runtime_id}' did not "
+                            f"distinguish or prove {behavior}",
+                        )
+                    )
+            migrated_compact_gaps[runtime_id] = gaps
+        migrated["reportSchemaVersion"] = MANAGED_SESSION_CONFORMANCE_REPORT_VERSION
+        migrated["capabilityGaps"] = migrated_compact_gaps
+        return migrated
+
     decisions: list[dict[str, Any]] = []
     for raw in report.get("behaviorDecisions", []):
         decision = dict(raw)
