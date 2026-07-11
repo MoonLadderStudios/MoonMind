@@ -28,6 +28,7 @@ from pr_resolve_contract import (  # noqa: E402
     classify_retry_action,
     compute_backoff_seconds,
     merge_automation_disposition_for_result,
+    normalize_terminal_status,
     normalize_text,
     now_utc_iso,
     parse_reason,
@@ -51,17 +52,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return None
 
 def _normalize_status(payload: dict[str, Any]) -> str:
-    status = normalize_text(payload.get("status")).lower()
-    if status in {"merged", "blocked", "failed", "attempts_exhausted"}:
-        return status
-    merge_outcome = normalize_text(payload.get("merge_outcome")).lower()
-    if merge_outcome == "merged":
-        return "merged"
-    if merge_outcome == "failed":
-        return "failed"
-    if merge_outcome == "attempts_exhausted":
-        return "attempts_exhausted"
-    return "blocked"
+    return normalize_terminal_status(payload)
 
 def _normalize_full_status(payload: dict[str, Any]) -> str:
     status = normalize_text(payload.get("status")).lower()

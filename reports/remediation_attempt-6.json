@@ -1,0 +1,85 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 6,
+  "issue_ref": "MM-1202",
+  "source_verification_artifact": "reports/remediation_verification-5.json",
+  "source_verdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Unified the standalone resolver's retry, backoff, and terminal normalization with the provider-neutral core and added direct cross-host parity coverage. The remaining capability-alert, real Temporal canary, replay, and production rollout gaps could not be safely represented by local metadata or mocks and remain explicit.",
+  "changed_files": [
+    ".agents/skills/pr-resolver/bin/pr_resolve_contract.py",
+    ".agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py",
+    "moonmind/pr_resolver_core/__init__.py",
+    "moonmind/pr_resolver_core/retry.py",
+    "tests/unit/pr_resolver_core/test_transition.py",
+    "reports/remediation_attempt-6.json"
+  ],
+  "gap_statuses": [
+    {
+      "requirement": "Shared portable resolver semantics",
+      "gap_type": "implementation",
+      "status": "partial",
+      "evidence": "The standalone contract now imports classify_retry_action, compute_backoff_seconds, normalize_terminal_status, normalize_text, and the shared reason sets from moonmind.pr_resolver_core; pr_resolve_orchestrate delegates terminal status normalization to that core. Snapshot collection and some terminal evidence construction remain host-specific adapters."
+    },
+    {
+      "requirement": "Shared parity and replay fixtures",
+      "gap_type": "verification",
+      "status": "partial",
+      "evidence": "tests/unit/pr_resolver_core/test_transition.py loads the standalone contract directly and compares retry and terminal results with the core, including unknown-state fail-closed behavior. A real Temporal history replay corpus is still absent."
+    },
+    {
+      "requirement": "Capability observability and alerts",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "No repository-backed fleet aggregation/alerting substrate was found in the bounded resolver path. No inert metric or alert configuration was added."
+    },
+    {
+      "requirement": "Readiness canary and deployment boundary coverage",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "Readiness still reflects worker construction rather than a harmless real parent-to-MoonMind.PRResolver execution tied to queue, build, and registry identity. This was not replaced with a local-registration check because that would not prove the required Temporal authority handoff."
+    },
+    {
+      "requirement": "Production rollout regression coverage",
+      "gap_type": "verification",
+      "status": "remaining",
+      "evidence": "No repo-controlled Compose fixtures currently exercise deployed-entrypoint parent-child start, restart/replay, failure budgets, fingerprint stability, and stale-worker exclusion. The broad integration suite would not supply these missing fixtures."
+    }
+  ],
+  "targeted_checks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest -q tests/unit/pr_resolver_core tests/unit/test_pr_resolver_tools.py --tb=short",
+      "result": "PASS",
+      "notes": "81 passed in 0.50 seconds."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest -q tests/unit/pr_resolver_core tests/unit/test_pr_resolver_tools.py tests/unit/workflows/skills/test_native_binding.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/workflows/temporal/workflows/test_run_signals_updates.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_worker_healthcheck.py tests/unit/workflows/temporal/workflows/test_pr_resolver.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py --tb=short",
+      "result": "PASS",
+      "notes": "398 passed and 2 subtests passed in 8.90 seconds."
+    },
+    {
+      "command": "python -m compileall -q moonmind/pr_resolver_core .agents/skills/pr-resolver/bin/pr_resolve_contract.py .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py",
+      "result": "PASS",
+      "notes": "Changed production modules compiled successfully."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors."
+    },
+    {
+      "command": "./tools/test_integration.sh",
+      "result": "NOT_RUN",
+      "notes": "The verifier identified absent resolver-specific canary, replay, restart, stale-worker, and rollout fixtures; the broad Compose suite cannot substitute for those missing boundary tests."
+    }
+  ],
+  "remaining_work": [
+    "Add a real parent-to-MoonMind.PRResolver canary and gate readiness on its queue/build/registry evidence.",
+    "Add a concrete fleet capability aggregation and operator alert path for repeated registration or child-start mismatches.",
+    "Build replay and Compose production-boundary fixtures covering restart, stale-worker exclusion, failure budgets, and fingerprint stability."
+  ],
+  "scope_controls": {
+    "pull_request_created": false,
+    "jira_status_changed": false,
+    "scope_broadened": false
+  }
+}

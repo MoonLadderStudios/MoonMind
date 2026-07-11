@@ -4,23 +4,25 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
+import sys
 from typing import Any
 
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "moonmind" / "pr_resolver_core").is_dir():
+        sys.path.insert(0, str(_parent))
+        break
+
+from moonmind.pr_resolver_core import (  # noqa: E402
+    FINALIZE_ONLY_RETRY_REASONS,
+    FULL_REMEDIATION_REASONS,
+    classify_retry_action,
+    compute_backoff_seconds,
+    normalize_terminal_status,
+    normalize_text,
+)
+
 RESULT_SCHEMA_VERSION = 2
-
-FULL_REMEDIATION_REASONS = {
-    "actionable_comments",
-    "ci_failures",
-    "merge_conflicts",
-}
-
-FINALIZE_ONLY_RETRY_REASONS = {
-    "ci_running",
-    "codex_review_grace_wait",
-    "comments_unavailable",
-    "ci_signal_degraded",
-    "snapshot_refresh_failed",
-}
 
 NON_RETRYABLE_REASONS = {
     "comment_policy_not_enforced",
@@ -44,42 +46,10 @@ MERGE_AUTOMATION_DISPOSITION_FAILED = "failed"
 def now_utc_iso() -> str:
     return datetime.now(UTC).isoformat()
 
-def normalize_text(value: Any) -> str:
-    return str(value or "").strip()
-
 def parse_reason(result_payload: dict[str, Any]) -> str:
     return normalize_text(
         result_payload.get("final_reason") or result_payload.get("reason")
     )
-
-def classify_retry_action(
-    reason: str,
-    *,
-    merge_not_ready_grace_remaining: int,
-) -> str:
-    normalized = normalize_text(reason)
-    if not normalized:
-        return "stop"
-    if normalized in FULL_REMEDIATION_REASONS:
-        return "full_remediation"
-    if normalized in FINALIZE_ONLY_RETRY_REASONS:
-        return "finalize_only_retry"
-    if normalized == "merge_not_ready" and merge_not_ready_grace_remaining > 0:
-        return "finalize_only_retry"
-    return "stop"
-
-def compute_backoff_seconds(
-    retry_index: int,
-    *,
-    base_sleep_seconds: int,
-    max_sleep_seconds: int,
-) -> int:
-    base = max(0, int(base_sleep_seconds))
-    max_sleep = max(0, int(max_sleep_seconds))
-    if base == 0 or max_sleep == 0:
-        return 0
-    value = base * (2 ** max(0, int(retry_index)))
-    return min(max_sleep, value)
 
 def remediation_next_step(reason: str) -> str:
     normalized = normalize_text(reason)

@@ -1,3 +1,6 @@
+import importlib.util
+from pathlib import Path
+
 import pytest
 
 from moonmind.pr_resolver_core import (
@@ -6,6 +9,8 @@ from moonmind.pr_resolver_core import (
     ResolverState,
     classify_github_snapshot,
     reduce_resolver_state,
+    classify_retry_action,
+    normalize_terminal_status,
 )
 
 
@@ -58,3 +63,36 @@ def test_blockers_select_bounded_remediation():
 )
 def test_shared_host_parity_corpus(snapshot, classification):
     assert classify_github_snapshot(snapshot)["classification"] == classification
+
+
+def test_standalone_host_uses_shared_retry_and_terminal_policy():
+    path = Path(".agents/skills/pr-resolver/bin/pr_resolve_contract.py")
+    spec = importlib.util.spec_from_file_location("portable_contract", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    cases = [
+        ("merge_conflicts", 0),
+        ("ci_running", 0),
+        ("merge_not_ready", 1),
+        ("publish_unavailable", 0),
+        ("unknown_new_state", 0),
+    ]
+    for reason, grace in cases:
+        expected = classify_retry_action(
+            reason, merge_not_ready_grace_remaining=grace
+        )
+        assert module.classify_retry_action(
+            reason, merge_not_ready_grace_remaining=grace
+        ) == expected
+
+    payloads = [
+        {"status": "merged"},
+        {"merge_outcome": "attempts_exhausted"},
+        {"status": "new_provider_status"},
+    ]
+    for payload in payloads:
+        assert module.normalize_terminal_status(payload) == normalize_terminal_status(
+            payload
+        )
