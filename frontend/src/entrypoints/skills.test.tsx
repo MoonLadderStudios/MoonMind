@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -99,9 +99,8 @@ describe('Skills Entrypoint', () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 
     expect(screen.getByRole('heading', { name: 'Skills' })).toBeTruthy();
-    expect(screen.getByText('Skills catalog loading placeholder').closest('[role="status"]')).toBeTruthy();
+    expect(screen.getByText('Loading skills...')).toBeTruthy();
     expect(screen.getByText('Skills preview loading placeholder').closest('[role="status"]')).toBeTruthy();
-    expect(screen.getByTestId('loading-placeholder-catalog')).toBeTruthy();
   });
 
   it('lists skills and previews markdown for the selected item', async () => {
@@ -120,15 +119,17 @@ describe('Skills Entrypoint', () => {
   it('names the skill navigation, exposes selection, and focuses the selected detail', async () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 
-    const navigation = await screen.findByRole('navigation', { name: 'Skill navigation' });
+    const navigation = await screen.findByRole('complementary', { name: 'Skill navigation' });
     expect(navigation).toBeTruthy();
+    expect(navigation.classList.contains('collection-sidebar')).toBe(true);
+    expect(within(navigation).getByRole('table', { name: 'Skill list table slice' })).toBeTruthy();
     const skill = await screen.findByRole('button', { name: 'pr-resolver' });
     expect(skill.getAttribute('aria-current')).toBeNull();
 
     fireEvent.click(skill);
 
     await waitFor(() => {
-      expect(skill.getAttribute('aria-current')).toBe('true');
+      expect(skill.getAttribute('aria-current')).toBe('page');
       expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'pr-resolver' }));
     });
   });
@@ -265,7 +266,7 @@ describe('Skills Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('No skills match your filter.')).toBeTruthy();
       expect(screen.getByRole('rowgroup', { name: 'Current skill' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Current skill: speckit-orchestrate' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Current skill.*speckit-orchestrate/ })).toBeTruthy();
     });
   });
 
@@ -275,7 +276,7 @@ describe('Skills Entrypoint', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
 
     expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
-    expect(screen.getByRole('navigation', { name: 'Skill navigation' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Skill navigation' })).toBeTruthy();
     expect(screen.getByRole('table', { name: 'Skill list table slice' })).toBeTruthy();
     expect(screen.queryByText('Available Skills')).toBeNull();
     expect(screen.queryByText('Workflow')).toBeNull();

@@ -5,6 +5,7 @@ import {
   DASHBOARD_REACT_ROUTE_PATHS,
   destinationState,
   matchesDashboardDestinationRegistry,
+  payloadForDashboardRoute,
   resolveDashboardRoute,
 } from './dashboardRoutes';
 
@@ -126,6 +127,28 @@ describe('dashboard route resolution', () => {
       page: 'remediations',
       dataWidePanel: true,
       currentPath: '/remediations',
+    });
+  });
+
+  it('attaches the remediation capability and compact endpoint contract to route payloads', () => {
+    const route = resolveDashboardRoute('/remediations');
+
+    expect(route).not.toBeNull();
+    expect(payloadForDashboardRoute(
+      { page: 'dashboard', apiBase: '/api' },
+      route!,
+      {
+        features: { remediationCollection: true },
+        endpoints: { remediations: '/api/executions/remediations' },
+      },
+    )).toMatchObject({
+      page: 'remediations',
+      features: { remediationCollection: true },
+      initialData: {
+        dashboardConfig: { initialPath: '/remediations' },
+        layout: { dataWidePanel: true },
+        uiEndpoints: { remediations: '/api/executions/remediations' },
+      },
     });
   });
 });
