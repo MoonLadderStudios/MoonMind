@@ -257,7 +257,12 @@ def _terminal_contract_from_side_effect(
     relative_path = str(side_effect.get("outcomeArtifact") or "").strip()
     normalized_path = relative_path.replace("\\", "/")
     path = Path(normalized_path)
-    if not relative_path or path.is_absolute() or ".." in path.parts:
+    if (
+        not relative_path
+        or normalized_path.startswith("/")
+        or path.is_absolute()
+        or ".." in path.parts
+    ):
         raise ValueError(f"skill '{owner}' terminal outcomeArtifact is unsafe")
     return SkillTerminalContract(
         contract_id=contract_id,

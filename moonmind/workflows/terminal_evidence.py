@@ -68,6 +68,10 @@ def evaluate_terminal_evidence(
             )
         if disposition in {"merged", "already_merged"}:
             publish_path = (workspace / "artifacts/publish_result.json").resolve()
+            if artifact_spool_path and not publish_path.is_file():
+                publish_path = (
+                    Path(artifact_spool_path) / "publish_result.json"
+                ).resolve()
             if not publish_path.is_file():
                 return TerminalEvidenceEvaluation(
                     False,

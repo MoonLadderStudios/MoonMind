@@ -15,6 +15,7 @@ from moonmind.services.skill_resolution import (
     LocalSkillLoader,
     RepoSkillLoader,
     DeploymentSkillLoader,
+    _terminal_contract_from_side_effect,
     extract_side_effect_metadata_from_skill_markdown,
 )
 
@@ -41,6 +42,17 @@ metadata:
         "owner": "agent",
         "outcomeArtifact": "artifacts/result.json",
     }
+
+
+async def test_terminal_contract_rejects_rooted_posix_path() -> None:
+    with pytest.raises(ValueError, match="outcomeArtifact is unsafe"):
+        _terminal_contract_from_side_effect(
+            {
+                "terminalContractId": "batch_workflows_fanout.v1",
+                "outcomeArtifact": "/absolute/result.json",
+            },
+            owner="batch-workflows",
+        )
 
 
 async def test_resolver_can_resolve_empty_selector():

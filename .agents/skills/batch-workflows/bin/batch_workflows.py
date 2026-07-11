@@ -743,7 +743,7 @@ def _submit_jobs_via_http(
             )
         except urllib.error.HTTPError as exc:
             try:
-                detail = exc.read().decode("utf-8")
+                detail = exc.read(65536).decode("utf-8", errors="replace")
                 error_message = f"{exc}: {detail}"
             except Exception:
                 error_message = str(exc)

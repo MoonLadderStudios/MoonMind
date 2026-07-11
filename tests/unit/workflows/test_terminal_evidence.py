@@ -108,3 +108,30 @@ def test_pr_resolver_terminal_requires_result_and_publish_evidence(tmp_path: Pat
     publish_path.parent.mkdir()
     publish_path.write_text("{}", encoding="utf-8")
     assert evaluate_terminal_evidence(contract, workspace_path=str(tmp_path)).satisfied
+
+
+def test_pr_resolver_terminal_accepts_publish_evidence_from_spool(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    result_path = workspace / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps({"mergeAutomationDisposition": "already_merged"}),
+        encoding="utf-8",
+    )
+    spool.mkdir()
+    (spool / "publish_result.json").write_text("{}", encoding="utf-8")
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(
+        contract,
+        workspace_path=str(workspace),
+        artifact_spool_path=str(spool),
+    )
+
+    assert result.satisfied is True
