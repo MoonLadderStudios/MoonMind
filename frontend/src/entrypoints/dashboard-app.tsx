@@ -925,22 +925,24 @@ function AppShell({
         </div>
 
         <div className="dashboard-content">
-          <div
-            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
-          >
-            {listDisplayMode ? (
-              <div className="dashboard-collection-utilities">
-                <CollectionListDisplayModeControl
-                  {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-                  {...(listDisplayTableLabel ? { tableLabel: listDisplayTableLabel } : {})}
-                  effectiveMode={listDisplayMode}
-                  status={listDisplayStatus}
-                  onSelect={onListDisplayModeSelect}
-                />
+          <div className="dashboard-state-strip">
+            <div
+              className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
+            >
+              {listDisplayMode ? (
+                <div className="dashboard-collection-utilities">
+                  <CollectionListDisplayModeControl
+                    {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                    {...(listDisplayTableLabel ? { tableLabel: listDisplayTableLabel } : {})}
+                    effectiveMode={listDisplayMode}
+                    status={listDisplayStatus}
+                    onSelect={onListDisplayModeSelect}
+                  />
+                </div>
+              ) : null}
+              <div className="dashboard-alerts-region">
+                <DashboardAlerts />
               </div>
-            ) : null}
-            <div className="dashboard-alerts-region">
-              <DashboardAlerts />
             </div>
           </div>
           <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
