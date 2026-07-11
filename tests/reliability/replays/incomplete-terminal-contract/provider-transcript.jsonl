@@ -1,0 +1,3 @@
+{"kind": "tool_call", "name": "exec", "result": {"session_id": "inner-shell-3145", "status": "running"}}
+{"kind": "tool_call", "name": "wait-wrapper", "result": {"status": "completed"}}
+{"kind": "assistant", "text": "First turn ended before terminal evidence was written."}

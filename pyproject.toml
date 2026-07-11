@@ -99,6 +99,7 @@ markers = [
     "asyncio: marks tests that require an asyncio event loop.",
     "integration: marks integration tests that exercise workflows.",
     "integration_ci: marks hermetic integration tests that are safe for required CI.",
+    "reliability_journey: hermetic escaped-failure replays across production reliability boundaries.",
     "provider_verification: marks live external-provider verification tests.",
     "codex: marks tests specific to the Codex provider.",
     "jules: marks tests specific to the Jules provider.",

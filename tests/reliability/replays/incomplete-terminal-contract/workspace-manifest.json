@@ -1,0 +1,6 @@
+{
+  "artifacts": [
+    {"path": "var/pr_resolver/attempts/attempt-1.json", "content": {"status": "blocked", "reason": "ci_running"}},
+    {"path": "var/pr_resolver/attempts/attempt-2.json", "content": {"status": "blocked", "reason": "checks_pending"}}
+  ]
+}
