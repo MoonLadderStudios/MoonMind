@@ -385,6 +385,8 @@ class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     proposals_submitted: int
     mergeAutomationDisposition: str
     headSha: str
+    executionOutcome: dict[str, Any]
+    finalizationOutcome: dict[str, Any]
 
 USER_WORKFLOW_NAME = "MoonMind.UserWorkflow"
 WORKFLOW_NAME = USER_WORKFLOW_NAME
@@ -536,6 +538,10 @@ RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
+RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
+FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
+FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
+FINALIZATION_RETRY_EXHAUSTED = "FINALIZATION_RETRY_EXHAUSTED"
 RUN_EMIT_EPHEMERAL_STEP_CHECKPOINTS_PATCH = (
     "run-emit-ephemeral-step-checkpoints-v1"
 )
@@ -4577,6 +4583,19 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_kind:
                 capture_input["kind"] = checkpoint_kind
+            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
+                if base_commit:
+                    capture_input["kind"] = "git_patch"
+                else:
+                    capture_input["kind"] = "worktree_archive"
+
+            criticality = self._checkpoint_capture_text(
+                candidate,
+                "checkpointCriticality",
+                "checkpoint_criticality",
+            )
+            if criticality in {"required", "recoverability_only", "unsupported"}:
+                capture_input["criticality"] = criticality
             break
 
         if capture_input:
@@ -4704,6 +4723,167 @@ class MoonMindRunWorkflow:
         if checkpoint_ref:
             self._step_checkpoint_refs[logical_step_id] = checkpoint_ref
         return checkpoint_ref or None
+
+    def _record_primary_execution_outcome(
+        self,
+        logical_step_id: str,
+        *,
+        execution_result: Any,
+        result_status: str,
+        recorded_at: datetime,
+    ) -> None:
+        """Record canonical result refs before any auxiliary finalization starts."""
+
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, dict):
+            return
+        compact_refs = self._proposal_step_output_refs(logical_step_id)
+        output_refs = list(
+            dict.fromkeys(
+                str(value).strip()
+                for key, value in compact_refs.items()
+                if key.endswith("Ref") and isinstance(value, str) and value.strip()
+            )
+        )
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            outputs = {}
+        diagnostics_ref = self._coerce_text(
+            compact_refs.get("diagnosticsRef")
+            or outputs.get("diagnosticsRef")
+            or outputs.get("diagnostics_ref"),
+            max_chars=400,
+        )
+        capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
+        workspace_locator = self._coerce_text(
+            capture_input.get("workspaceRootRef")
+            or capture_input.get("workspacePath")
+            or capture_input.get("externalStateRef"),
+            max_chars=500,
+        )
+        result_ref = next(
+            (
+                compact_refs[key]
+                for key in ("primaryRef", "summaryRef", "logsRef", "diagnosticsRef")
+                if isinstance(compact_refs.get(key), str)
+            ),
+            None,
+        )
+        row["executionOutcome"] = {
+            "status": "succeeded" if result_status == "COMPLETED" else "failed",
+            "resultRef": result_ref,
+            "outputRefs": output_refs,
+            "diagnosticsRef": diagnostics_ref,
+            "workspaceLocator": workspace_locator,
+            "recordedAt": recorded_at.isoformat(),
+        }
+        row["finalizationOutcome"] = {
+            "status": "not_started",
+            "phase": "after_execution_checkpoint",
+            "criticality": self._checkpoint_criticality(logical_step_id),
+            "retryCount": 0,
+            "updatedAt": recorded_at.isoformat(),
+        }
+        self._sync_progress_snapshot(updated_at=recorded_at)
+
+    def _checkpoint_criticality(self, logical_step_id: str) -> str:
+        capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
+        criticality = str(capture_input.get("criticality") or "required").strip()
+        if criticality in {"required", "recoverability_only", "unsupported"}:
+            return criticality
+        return "required"
+
+    async def _finalize_after_execution_checkpoint(
+        self,
+        logical_step_id: str,
+        *,
+        updated_at: datetime,
+    ) -> None:
+        """Isolate idempotent checkpoint finalization from the primary result."""
+
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, dict):
+            return
+        criticality = self._checkpoint_criticality(logical_step_id)
+        if criticality == "unsupported":
+            row["finalizationOutcome"] = {
+                "status": "unsupported",
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": None,
+                "retryCount": 0,
+                "message": "Checkpoint capture is unsupported by this workspace.",
+                "updatedAt": updated_at.isoformat(),
+            }
+            return
+        try:
+            checkpoint_ref = await self._record_canonical_step_checkpoint(
+                logical_step_id,
+                boundary="after_execution",
+                updated_at=updated_at,
+            )
+        except Exception as exc:
+            status = "degraded" if criticality == "recoverability_only" else "failed"
+            row["finalizationOutcome"] = {
+                "status": status,
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": FINALIZATION_CHECKPOINT_FAILED,
+                "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+                "retryCount": 1,
+                "message": self._coerce_text(exc, max_chars=500),
+                "updatedAt": workflow.now().isoformat(),
+            }
+            self._summary = (
+                "Execution succeeded; finalization failed during the "
+                "after-execution checkpoint."
+            )
+            self._attention_required = criticality == "required"
+            self._update_memo()
+            return
+        row["finalizationOutcome"] = {
+            "status": "succeeded" if checkpoint_ref else "unsupported",
+            "phase": "after_execution_checkpoint",
+            "criticality": criticality,
+            "failureCode": None,
+            "retryCount": 0,
+            "checkpointRef": checkpoint_ref,
+            "message": None if checkpoint_ref else "No checkpoint-capable workspace was available.",
+            "updatedAt": workflow.now().isoformat(),
+        }
+
+    def _record_publication_finalization_failure(
+        self,
+        logical_step_id: str,
+        *,
+        exc: Exception,
+        updated_at: datetime,
+    ) -> None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, dict):
+            return
+        previous = row.get("finalizationOutcome")
+        retry_count = 1
+        if isinstance(previous, Mapping):
+            retry_count = int(previous.get("retryCount") or 0) + 1
+        row["finalizationOutcome"] = {
+            "status": "failed",
+            "phase": "publication",
+            "criticality": "required",
+            "failureCode": FINALIZATION_PUBLICATION_FAILED,
+            "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+            "retryCount": retry_count,
+            "message": self._coerce_text(exc, max_chars=500),
+            "updatedAt": updated_at.isoformat(),
+        }
+        previous_publish_reason = self._publish_reason
+        self._publish_status = "failed"
+        self._publish_reason = previous_publish_reason or (
+            "Execution succeeded; finalization failed during publication."
+        )
+        self._summary = "Execution succeeded; finalization failed during publication."
+        self._attention_required = True
+        self._update_memo()
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
@@ -7054,6 +7234,16 @@ class MoonMindRunWorkflow:
             "status": output_status,
             "message": output_message,
         }
+        if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+            for row in reversed(self._step_ledger_rows):
+                execution_outcome = row.get("executionOutcome")
+                finalization_outcome = row.get("finalizationOutcome")
+                if isinstance(execution_outcome, Mapping):
+                    output["executionOutcome"] = dict(execution_outcome)
+                if isinstance(finalization_outcome, Mapping):
+                    output["finalizationOutcome"] = dict(finalization_outcome)
+                if execution_outcome or finalization_outcome:
+                    break
         if self._proposals_generated > 0 or self._proposals_submitted > 0:
             output["proposals_generated"] = self._proposals_generated
             output["proposals_submitted"] = self._proposals_submitted
@@ -8257,11 +8447,25 @@ class MoonMindRunWorkflow:
                         execution_result=execution_result,
                         updated_at=workflow.now(),
                     )
-                    await self._record_canonical_step_checkpoint(
-                        node_id,
-                        boundary="after_execution",
-                        updated_at=workflow.now(),
-                    )
+                    if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                        outcome_recorded_at = workflow.now()
+                        self._record_primary_execution_outcome(
+                            node_id,
+                            execution_result=execution_result,
+                            result_status=result_status,
+                            recorded_at=outcome_recorded_at,
+                        )
+                        self._update_memo()
+                        await self._finalize_after_execution_checkpoint(
+                            node_id,
+                            updated_at=outcome_recorded_at,
+                        )
+                    else:
+                        await self._record_canonical_step_checkpoint(
+                            node_id,
+                            boundary="after_execution",
+                            updated_at=workflow.now(),
+                        )
                     if (
                         result_status == "COMPLETED"
                         and workflow.patched(RUN_JIRA_BLOCKER_RECHECK_PATCH)
@@ -8299,6 +8503,19 @@ class MoonMindRunWorkflow:
                                     "status field"
                                 )
                             break
+                        self._record_step_result_evidence(
+                            node_id,
+                            execution_result=execution_result,
+                            updated_at=workflow.now(),
+                        )
+                        if workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                            self._record_primary_execution_outcome(
+                                node_id,
+                                execution_result=execution_result,
+                                result_status=result_status,
+                                recorded_at=workflow.now(),
+                            )
+                            self._update_memo()
                     if result_status != "COMPLETED":
                         failure_message = self._activity_result_failure_message(
                             execution_result
@@ -8847,15 +9064,63 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            await self._record_canonical_step_checkpoint(
-                node_id,
-                boundary="before_publication",
-                updated_at=workflow.now(),
-            )
-            await self._record_publish_result_from_execution(
-                parameters=parameters,
-                execution_result=execution_result,
-            )
+            prepublication_checkpoint_failed = False
+            try:
+                await self._record_canonical_step_checkpoint(
+                    node_id,
+                    boundary="before_publication",
+                    updated_at=workflow.now(),
+                )
+            except Exception as exc:
+                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                    raise
+                row = self._step_ledger_row_for(node_id)
+                if isinstance(row, dict):
+                    row["finalizationOutcome"] = {
+                        "status": "failed",
+                        "phase": "before_publication_checkpoint",
+                        "criticality": "required",
+                        "failureCode": FINALIZATION_CHECKPOINT_FAILED,
+                        "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+                        "retryCount": 1,
+                        "message": self._coerce_text(exc, max_chars=500),
+                        "updatedAt": workflow.now().isoformat(),
+                    }
+                self._summary = (
+                    "Execution succeeded; finalization failed during the "
+                    "pre-publication checkpoint."
+                )
+                self._attention_required = True
+                self._update_memo()
+                prepublication_checkpoint_failed = True
+            if prepublication_checkpoint_failed:
+                break
+            publication_raised = False
+            try:
+                await self._record_publish_result_from_execution(
+                    parameters=parameters,
+                    execution_result=execution_result,
+                )
+            except Exception as exc:
+                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                    raise
+                self._record_publication_finalization_failure(
+                    node_id,
+                    exc=exc,
+                    updated_at=workflow.now(),
+                )
+                publication_raised = True
+            if (
+                not publication_raised
+                and self._publish_status == "failed"
+                and publish_status_before != "failed"
+                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+            ):
+                self._record_publication_finalization_failure(
+                    node_id,
+                    exc=RuntimeError(self._publish_reason or "Publish failed"),
+                    updated_at=workflow.now(),
+                )
             if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
                 outputs_for_gate = self._get_from_result(execution_result, "outputs")
                 if (
@@ -12503,6 +12768,24 @@ class MoonMindRunWorkflow:
     ) -> tuple[str, str, bool]:
         if self._plan_blocked_message:
             return ("failed", self._plan_blocked_message, True)
+
+        for row in self._step_ledger_rows:
+            finalization_outcome = row.get("finalizationOutcome")
+            if not isinstance(finalization_outcome, Mapping):
+                continue
+            if (
+                finalization_outcome.get("status") == "failed"
+                and finalization_outcome.get("criticality") == "required"
+            ):
+                return (
+                    "failed",
+                    self._coerce_text(
+                        finalization_outcome.get("message"), max_chars=500
+                    )
+                    or self._summary
+                    or "Required step finalization failed.",
+                    True,
+                )
 
         publish_mode = self._publish_mode(parameters)
         if self._publish_status == "skipped":
@@ -17180,7 +17463,7 @@ class MoonMindRunWorkflow:
 
     @workflow.query
     def get_status(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "state": self._state,
             "paused": self._paused,
             "cancel_requested": self._cancel_requested,
@@ -17190,6 +17473,14 @@ class MoonMindRunWorkflow:
             "awaiting_external": self._awaiting_external,
             "waiting_reason": self._waiting_reason,
         }
+        for row in reversed(self._step_ledger_rows):
+            if isinstance(row.get("executionOutcome"), Mapping):
+                payload["executionOutcome"] = dict(row["executionOutcome"])
+            if isinstance(row.get("finalizationOutcome"), Mapping):
+                payload["finalizationOutcome"] = dict(row["finalizationOutcome"])
+            if "executionOutcome" in payload or "finalizationOutcome" in payload:
+                break
+        return payload
 
     @workflow.query
     def get_progress(self) -> dict[str, Any]:

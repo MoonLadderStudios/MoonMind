@@ -233,3 +233,35 @@ Operator flow:
    ```
 
 Codex subscription OAuth remains owned by MoonMind's managed Codex runtime and the OAuth flow documented in [OAuth Terminal](../ManagedAgents/OAuthTerminal.md). If Omnigent needs Codex subscription credentials later, add them at a Codex-specific launch boundary or a dedicated trusted host profile rather than exposing `codex_auth_volume` to every process in the generic host container.
+
+### Dedicated Claude OAuth Host
+
+The `docker-compose.claude-host.yaml` overlay provides a Claude-only Omnigent host without exposing Claude credentials to the generic host. Complete Claude OAuth through MoonMind first so that `claude_auth_volume` contains the durable login state. The overlay runs as the same uid and gid (`1000:1000`) as MoonMind's Claude OAuth flow and mounts that named volume, writable, at `/home/app/.claude`. It pins `HOME`, `CLAUDE_HOME`, `CLAUDE_VOLUME_PATH`, and `CLAUDE_CONFIG_DIR` to the mounted path and uses an explicit environment allowlist instead of injecting `.env` into the third-party host.
+
+Start the dedicated host with the base Compose file and overlay together:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f docker-compose.claude-host.yaml \
+  --profile omnigent-host-claude \
+  up -d omnigent-host-claude
+```
+
+Validate the merged configuration and confirm the host can see the OAuth directory:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f docker-compose.claude-host.yaml \
+  --profile omnigent-host-claude \
+  config --quiet
+
+docker compose \
+  -f docker-compose.yaml \
+  -f docker-compose.claude-host.yaml \
+  --profile omnigent-host-claude \
+  exec omnigent-host-claude sh -lc 'test -d /home/app/.claude && ls -la /home/app/.claude'
+```
+
+The dedicated host uses `omnigent-host-claude-state`, separate from the generic host identity. It retains the same sanitized `/workspaces` and read-only MoonMind workspace policy. Do not add provider API keys to this service or mount `claude_auth_volume` into the generic host.

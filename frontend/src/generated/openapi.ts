@@ -10053,6 +10053,30 @@ export interface components {
             stepExecutions?: components["schemas"]["StepExecutionProjectionModel"][];
         };
         /**
+         * StepExecutionOutcomeModel
+         * @description Authoritative primary execution outcome, independent of finalization.
+         */
+        StepExecutionOutcomeModel: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "failed";
+            /** Resultref */
+            resultRef?: string | null;
+            /** Outputrefs */
+            outputRefs?: string[];
+            /** Diagnosticsref */
+            diagnosticsRef?: string | null;
+            /** Workspacelocator */
+            workspaceLocator?: string | null;
+            /**
+             * Recordedat
+             * Format: date-time
+             */
+            recordedAt: string;
+        };
+        /**
          * StepExecutionProjectionModel
          * @description Bounded Step Execution projection derived from manifest refs.
          */
@@ -10107,6 +10131,42 @@ export interface components {
             stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
             recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
             compatibilityDecision?: components["schemas"]["CompatibilityBoundaryDecisionModel"] | null;
+        };
+        /**
+         * StepFinalizationOutcomeModel
+         * @description Outcome of retryable work performed after primary execution.
+         */
+        StepFinalizationOutcomeModel: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_started" | "succeeded" | "retry_pending" | "failed" | "degraded" | "unsupported";
+            /** Phase */
+            phase?: string | null;
+            /**
+             * Criticality
+             * @enum {string}
+             */
+            criticality: "required" | "recoverability_only" | "unsupported";
+            /** Failurecode */
+            failureCode?: string | null;
+            /** Terminalfailurecode */
+            terminalFailureCode?: string | null;
+            /**
+             * Retrycount
+             * @default 0
+             */
+            retryCount: number;
+            /** Checkpointref */
+            checkpointRef?: string | null;
+            /** Message */
+            message?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
         };
         /**
          * StepLedgerArtifactsModel
@@ -10250,6 +10310,8 @@ export interface components {
             stepCheckpointRef?: string | null;
             recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
+            executionOutcome?: components["schemas"]["StepExecutionOutcomeModel"] | null;
+            finalizationOutcome?: components["schemas"]["StepFinalizationOutcomeModel"] | null;
             timing?: components["schemas"]["StepTimingModel"] | null;
             /** Lasterror */
             lastError?: string | null;

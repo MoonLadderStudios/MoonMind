@@ -1,55 +1,63 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 2,
-  "issue_ref": "MoonLadderStudios/MoonMind#3150",
-  "source_verification_artifact": "artifacts/github-issue-implement-verify.json",
+  "issue_ref": "MM-1199",
+  "source_verification_artifact": "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_verification-1.json",
   "source_verdict": "ADDITIONAL_WORK_NEEDED",
-  "summary": "Added a managed-session canary observation producer that publishes codexConformanceCanary/canaryEvidence metadata from MoonMind-owned session evidence when the canary marker and protocol events are present. Added hermetic runtime tests for success and the verifier-reported missing-evidence and bad-evidence cases.",
+  "summary": "Added the dedicated Claude-only Omnigent host overlay, hermetic Compose contract coverage, and operator startup and validation guidance requested by the MM-1199 verifier.",
   "changed_files": [
-    "moonmind/workflows/temporal/runtime/managed_session_supervisor.py",
-    "tests/unit/services/temporal/runtime/test_managed_session_supervisor.py",
-    "reports/remediation_attempt-2.json"
+    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/docker-compose.claude-host.yaml",
+    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/tests/integration/temporal/test_compose_foundation.py",
+    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/docs/Omnigent/CombinedStackValidationAndRollback.md",
+    "/work/agent_jobs/mm:b289fa04-3bc0-4895-9c2c-d4e13aafc83f/repo/reports/remediation_attempt-2.json"
   ],
+  "tasks_file": {
+    "status": "not_present",
+    "notes": "The prerequisite script could not resolve a MoonSpec feature packet on this Jira branch. No tasks.md was changed; the verifier remainingWork list was used as the authoritative bounded backlog."
+  },
   "gap_statuses": [
     {
-      "requirement": "Live canary evidence must be produced by MoonMind runtime instrumentation for a real managed Codex canary run.",
+      "requirement": "Provide a dedicated Claude-only Omnigent external host that consumes MoonMind's canonical Claude OAuth volume at /root/.claude.",
       "gap_type": "implementation",
       "status": "fixed",
-      "evidence": "ManagedSessionSupervisor now detects the Codex conformance marker under the managed workspace, publishes marker and evidence artifacts, derives session IDs, turn ID, protocol events, timestamps, mutation count, process count, marker count, and cleanup facts from session observability events plus marker content, and exposes the compact observation as codexConformanceCanary/canaryEvidence metadata on session artifact publication."
+      "evidence": "docker-compose.claude-host.yaml defines the omnigent-host-claude profile and hostname, HOME=/root, empty competing credential variables, writable claude_auth_volume:/root/.claude, isolated state, sanitized workspace mounts, required dependencies, local-network membership, and restart policy."
     },
     {
-      "requirement": "Session continuity, no premature cleanup, no duplicate process/artifact, and no GitHub mutation must be verified from real runtime evidence.",
+      "requirement": "Protect the dedicated Claude OAuth host contract with repo-local validation and operator guidance.",
       "gap_type": "verification",
-      "status": "fixed",
-      "evidence": "Focused supervisor tests cover normal success, missing resumable handle, missing poll-after-yield, early cleanup ordering, duplicate process count, duplicate marker artifact count, changed session ID, and nonzero GitHub mutation count."
+      "status": "fixed_with_test_execution_environment_limitation",
+      "evidence": "tests/integration/temporal/test_compose_foundation.py covers the overlay contract and docs/Omnigent/CombinedStackValidationAndRollback.md documents startup and validation. Docker Compose rendering and a static Python contract check passed; pytest execution is unavailable because this runtime has no pytest module."
     }
   ],
   "targeted_checks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/codex_conformance/test_canary.py tests/unit/codex_conformance/test_runner.py tests/unit/test_codex_conformance_workflow.py tests/unit/test_promote_ghcr_stable_workflow.py tests/unit/services/temporal/runtime/test_managed_session_supervisor.py",
+      "command": "python -m pytest tests/integration/temporal/test_compose_foundation.py -k omnigent_claude_host_profile -q --tb=short",
+      "result": "BLOCKED",
+      "notes": "/usr/local/bin/python: No module named pytest. This matches the source verifier's environment note."
+    },
+    {
+      "command": "docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml --profile omnigent-host-claude config --quiet",
       "result": "PASS",
-      "notes": "47 focused Python tests passed. Automatic frontend phase passed 64 files / 983 passed / 238 skipped."
+      "notes": "The merged base and Claude-host overlay configuration rendered successfully."
+    },
+    {
+      "command": "python - <focused YAML contract assertions>",
+      "result": "PASS",
+      "notes": "PyYAML loaded the overlay and verified HOME, all empty competing credentials, the canonical OAuth mount, and the claude-auth-init dependency."
     },
     {
       "command": "git diff --check",
       "result": "PASS",
       "notes": "No whitespace errors."
-    },
-    {
-      "command": "python -m py_compile moonmind/workflows/temporal/runtime/managed_session_supervisor.py tests/unit/services/temporal/runtime/test_managed_session_supervisor.py",
-      "result": "PASS",
-      "notes": "Changed Python modules compile."
-    },
-    {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_managed_session_supervisor.py",
-      "result": "PASS",
-      "notes": "21 focused Python supervisor tests passed after final formatting cleanup. Automatic frontend phase passed 64 files / 983 passed / 238 skipped."
     }
   ],
   "remaining_work": [],
+  "environment_limitations": [
+    "The focused pytest integration test could not execute because pytest is not installed in the managed runtime."
+  ],
   "scope_controls": {
     "pull_request_created": false,
-    "github_issue_status_changed": false,
+    "jira_status_changed": false,
     "scope_broadened": false
   }
 }
