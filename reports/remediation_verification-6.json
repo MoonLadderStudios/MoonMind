@@ -1,0 +1,42 @@
+{
+  "artifactType": "remediation.verification",
+  "verificationTarget": "issue_brief",
+  "issueRef": "MM-1202",
+  "remediationAttempt": 6,
+  "remediationAttemptArtifact": "reports/remediation_attempt-6.json",
+  "authoritativeVerifierResult": "artifacts/jira-implement-verify.json",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "needs_human",
+  "recoverableInCurrentRuntime": true,
+  "summary": "Attempt 6 passes all focused checks and improves standalone/core parity, but the authoritative whole-target verdict remains ADDITIONAL_WORK_NEEDED due to the missing real resolver readiness canary, capability mismatch alert path, and replay/production rollout fixtures.",
+  "remainingWork": [
+    {
+      "requirement": "Readiness canary and deployment boundary coverage",
+      "gapType": "implementation",
+      "remainingWork": "Gate resolver readiness on a harmless real parent-child canary tied to queue, build/deployment identity, and registry fingerprint.",
+      "suggestedEvidence": "Canary implementation and Temporal parent-child boundary tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Capability observability and alerts",
+      "gapType": "implementation",
+      "remainingWork": "Add fleet aggregation and operator alerting for repeated registration or child-start capability mismatch.",
+      "suggestedEvidence": "Failure classification, metrics/alerts, operator projection, and tests",
+      "recoverableInCurrentRuntime": true
+    },
+    {
+      "requirement": "Replay and production rollout regression coverage",
+      "gapType": "verification",
+      "remainingWork": "Add Temporal replay and deployed-entrypoint/Compose tests for restart, budgets, fingerprint stability, rollout, and stale-worker exclusion.",
+      "suggestedEvidence": "Replay corpus and integration_ci-compatible fixtures",
+      "recoverableInCurrentRuntime": true
+    }
+  ],
+  "testResults": [
+    {"result": "PASS", "notes": "Focused suite: 398 passed and 2 subtests passed in 9.66 seconds."},
+    {"result": "PASS", "notes": "Changed resolver modules compiled successfully."},
+    {"result": "PASS", "notes": "git diff --check."},
+    {"result": "NOT RUN", "notes": "Broad Compose integration cannot supply the absent resolver-specific canary, replay, and rollout fixtures."}
+  ],
+  "scopeLimitations": []
+}
