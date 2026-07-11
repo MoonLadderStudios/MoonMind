@@ -46,7 +46,9 @@ built, the Temporal client is connected, workers are constructed, and pollers
 have started. Its bounded response includes task queues, registered workflow and
 activity types, build/deployment identity, registry fingerprint, versioning
 state, and resolver-core identity. `MoonMind.PRResolver` may appear only when
-that exact workflow class was supplied to the SDK worker.
+that exact workflow class was supplied to the SDK worker. Its registration is
+replay support for previously recorded histories, not an active host-selection
+surface for new `pr-resolver` runs.
 
 Worker topology construction validates the canonical catalog against the
 concrete runtime-handler inventory before any fleet starts polling. A handler

@@ -101,14 +101,19 @@ MoonMind's lifecycle model already expects `MoonMind.UserWorkflow` to mix direct
 
 ### 6.3 Why the resolver itself is a child `MoonMind.UserWorkflow`
 
-The current MoonMind execution model routes a trusted, native-compatible
-`pr-resolver` resolved snapshot to the dedicated `MoonMind.PRResolver` child
-workflow. Skill name and auto-publish mode alone are insufficient. That workflow owns the durable
-gate loop and starts bounded `MoonMind.AgentRun` children only for
-`fix-comments`, `fix-ci`, or `fix-merge-conflicts`. It owns merge verification
-and terminal evidence; managed agents do not host the polling loop.
+`MoonMind.MergeAutomation` starts a child **`MoonMind.UserWorkflow`** so the
+resolver uses MoonMind's ordinary resolved-Skill execution path. The child
+materializes the exact `pr-resolver` bundle and runs it in `MoonMind.AgentRun`;
+the Skill markdown and packaged portable helpers own PR snapshots, comment
+retrieval, classification, remediation selection, retries, merge gating, and
+terminal evidence.
 
-Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.UserWorkflow`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
+MoonMind must not route `pr-resolver` to a dedicated native semantic
+implementation. The former `MoonMind.PRResolver` workflow remains registered
+only while required to replay histories that already recorded that child type;
+new executions must not select it.
+
+The child `MoonMind.UserWorkflow` boundary reuses:
 
 - existing workspace/runtime setup,
 - artifact publishing,
@@ -126,9 +131,9 @@ MoonMind.UserWorkflow (root parent workflow)
   |- child: MoonMind.MergeAutomation
   |    |- gate wait / external events / Jira checks
   |    |- child: MoonMind.UserWorkflow (resolver attempt 1)
-  |    |     `- child: MoonMind.PRResolver, publishMode=auto
+  |    |     `- child: MoonMind.AgentRun (resolved pr-resolver Skill)
   |    `- child: MoonMind.UserWorkflow (resolver attempt 2, if needed)
-  |          `- child: MoonMind.PRResolver, publishMode=auto
+  |          `- child: MoonMind.AgentRun (resolved pr-resolver Skill)
   `- terminal completion only after MergeAutomation returns success
 ```
 
@@ -629,18 +634,24 @@ failure rather than asking the gate to continue.
 
 ---
 
-## 15. Shared Gate Semantics Between Gate and Resolver
+## 15. Resolver Skill Authority
 
-To avoid early merge after resolver-generated pushes, MoonMind SHOULD align the merge gate and `pr-resolver` on one shared semantic contract.
+The merge-automation gate decides only when to launch or relaunch the resolver
+child. It must not decide that the PR is safe to merge. The resolved
+`pr-resolver` Skill is the sole authority for head-SHA rules, review-comment
+retrieval and freshness, required-check completeness, blocker classification,
+remediation selection, and the final merge attempt.
 
-This does **not** require the same runtime process or exact same Python module. It does require the same logical contract:
+MoonMind may observe compact external state to avoid launching a resolver while
+a configured upstream review provider or required check is visibly pending. That
+observation is scheduling evidence only. It cannot bypass the resolver's fresh
+portable snapshot and cannot be treated as merge authorization.
 
-- same head-SHA rules,
-- same review-provider freshness rules,
-- same required-check completeness rules,
-- same blocker categories.
-
-The merge gate and the resolver snapshot/finalize logic may use different implementations, but they MUST agree on contract semantics.
+The gate and resolver must not maintain separate implementations that merely aim
+to agree. If merge automation needs a resolver semantic decision, it must launch
+the resolved Skill or consume terminal evidence produced by that Skill. A
+cross-implementation comparison test is not a substitute for this single-authority
+rule.
 
 Before any resolver child has launched, `MoonMind.MergeAutomation` MAY adopt the
 latest observed PR head SHA when a readiness evaluation sees that the published

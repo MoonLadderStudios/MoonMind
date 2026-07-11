@@ -6,6 +6,7 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.workflows.temporal.native_skill_bindings import (
     evaluate_pr_resolver_native_binding,
+    require_skill_owned_pr_resolver_execution,
 )
 
 
@@ -17,31 +18,59 @@ def _entry(source: AgentSkillSourceKind) -> ResolvedSkillEntry:
         provenance=AgentSkillProvenance(source_kind=source),
         implementation=SkillImplementationContract(
             contract="pr-resolver-core/v1",
-            supportedHosts=["cli", "temporal"],
-            nativeHostEligible=True,
-            nativeHostPolicy="moonmind_trusted",
+            supportedHosts=["cli"],
+            nativeHostEligible=False,
         ),
     )
 
 
-def test_trusted_built_in_pr_resolver_is_native_eligible() -> None:
+def test_built_in_pr_resolver_is_not_native_eligible() -> None:
     result = evaluate_pr_resolver_native_binding(_entry(AgentSkillSourceKind.BUILT_IN))
-    assert result.eligible is True
-    assert result.host == "temporal"
+    assert result.eligible is False
+    assert result.host == "cli"
+    assert result.reason_code == "temporal_host_not_supported"
 
 
-def test_repo_or_local_name_collision_uses_observable_portable_fallback() -> None:
+def test_repo_or_local_pr_resolver_uses_skill_owned_execution() -> None:
     for source in (AgentSkillSourceKind.REPO, AgentSkillSourceKind.LOCAL):
         result = evaluate_pr_resolver_native_binding(_entry(source))
         assert result.eligible is False
         assert result.host == "cli"
-        assert result.reason_code == "untrusted_skill_source"
+        assert result.reason_code == "temporal_host_not_supported"
 
 
 def test_missing_immutable_content_evidence_rejects_native_host() -> None:
     entry = _entry(AgentSkillSourceKind.BUILT_IN).model_copy(
-        update={"content_digest": None}
+        update={
+            "content_digest": None,
+            "implementation": SkillImplementationContract(
+                contract="pr-resolver-core/v1",
+                supportedHosts=["cli", "temporal"],
+                nativeHostEligible=True,
+                nativeHostPolicy="moonmind_trusted",
+            ),
+        }
     )
     result = evaluate_pr_resolver_native_binding(entry)
     assert result.eligible is False
     assert result.reason_code == "immutable_content_evidence_missing"
+
+
+def test_skill_owned_cutover_rejects_even_legacy_native_eligible_content() -> None:
+    entry = _entry(AgentSkillSourceKind.BUILT_IN).model_copy(
+        update={
+            "implementation": SkillImplementationContract(
+                contract="pr-resolver-core/v1",
+                supportedHosts=["cli", "temporal"],
+                nativeHostEligible=True,
+                nativeHostPolicy="moonmind_trusted",
+            )
+        }
+    )
+
+    result = require_skill_owned_pr_resolver_execution(entry)
+
+    assert result.eligible is False
+    assert result.host == "cli"
+    assert result.reason_code == "skill_owned_execution_required"
+    assert result.identity["contentDigest"] == "sha256:abc"

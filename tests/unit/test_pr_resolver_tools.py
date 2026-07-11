@@ -134,6 +134,27 @@ def test_parse_repo_slug_accepts_remote_urls_and_owner_repo_forms(
     with pytest.raises(ValueError, match="Invalid --repo value"):
         parse_repo_slug("owner_only")
 
+
+def test_normalize_review_comment_preserves_thread_node_identity(
+    get_pr_comments_module: dict[str, Any],
+) -> None:
+    normalize = get_pr_comments_module["normalize_review_comment"]
+
+    result = normalize(
+        {"id": 42, "user": {"login": "review-bot"}, "body": "Fix this."},
+        {
+            42: {
+                "threadId": "PRRT_kwDOExample",
+                "isResolved": False,
+                "isOutdated": False,
+            }
+        },
+    )
+
+    assert result["thread_id"] == "PRRT_kwDOExample"
+    assert result["thread_resolved"] is False
+    assert result["thread_outdated"] is False
+
 def test_infer_repo_from_pr_url_handles_pull_url(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1363,6 +1384,20 @@ def test_contract_external_state_transient_is_finalize_only_retry(
         == "retry_finalize_after_backoff"
     )
 
+def test_contract_merge_pending_is_finalize_only_retry(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    classify_retry_action = pr_resolve_contract_module["classify_retry_action"]
+    remediation_next_step = pr_resolve_contract_module["remediation_next_step"]
+
+    action = classify_retry_action(
+        "merge_pending",
+        merge_not_ready_grace_remaining=0,
+    )
+
+    assert action == "finalize_only_retry"
+    assert remediation_next_step("merge_pending") == "retry_finalize_after_backoff"
+
 def test_contract_codex_review_grace_wait_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],
 ) -> None:
@@ -1654,6 +1689,76 @@ def test_finalize_already_merged_pr_returns_already_merged(
 
     assert decision == {"action": "already_merged", "reason": "already_merged"}
 
+def test_finalize_merge_request_waits_for_authoritative_merged_state(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import json
+
+    main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
+    exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
+
+    snapshot = {
+        "pr": {
+            "number": 3210,
+            "state": "OPEN",
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+        },
+        "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+        "commentsFetch": {"succeeded": True, "source": "fixture"},
+        "commentsSummary": {
+            "hasActionableComments": False,
+            "includeBotReviewComments": True,
+        },
+    }
+
+    def _write_snapshot(
+        _snapshot_script: Path,
+        _pr: str | None,
+        snapshot_path: Path,
+    ) -> None:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    merge_calls: list[tuple[str, str]] = []
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _write_snapshot)
+    monkeypatch.setitem(
+        globals_dict,
+        "_merge_pr",
+        lambda selector, method: merge_calls.append((selector, method)),
+    )
+    monkeypatch.setitem(globals_dict, "_check_pr_merged", lambda _selector: False)
+
+    result_path = tmp_path / "result.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--strict-exit-codes",
+            "--pr",
+            "3210",
+            "--snapshot-path",
+            str(snapshot_path),
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+
+    assert int(raised.value.code) == int(exit_code_blocked)
+    assert merge_calls == [("3210", "squash")]
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "merge_pending"
+    assert payload["merge_outcome"] == "blocked"
+    assert payload["mergeAutomationDisposition"] == "reenter_gate"
+
 def test_finalize_pr_not_found_but_merged_succeeds(
     pr_resolve_finalize_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -1711,13 +1816,13 @@ def test_finalize_pr_not_found_but_merged_succeeds(
     assert payload["mergeAutomationDisposition"] == "already_merged"
 
 # ---------------------------------------------------------------------------
-# Stale-commit bot comment filtering (Phase 1)
+# Review-thread authority
 # ---------------------------------------------------------------------------
 
-def test_stale_bot_comment_on_old_commit_is_not_actionable(
+def test_unresolved_bot_comment_on_old_commit_remains_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
-    """Bot review comment whose commit_id != HEAD should be classified as stale."""
+    """A pushed head does not replace authoritative GitHub thread resolution."""
     classify = pr_resolve_snapshot_module["_classify_comment_actionability"]
 
     comment = {
@@ -1732,8 +1837,8 @@ def test_stale_bot_comment_on_old_commit_is_not_actionable(
         include_bot_review_comments=True,
         head_commit_sha="bbb222",
     )
-    assert actionable is False
-    assert reason == "stale_bot_comment"
+    assert actionable is True
+    assert reason == "actionable"
 
 def test_human_comment_on_old_commit_stays_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1756,7 +1861,7 @@ def test_human_comment_on_old_commit_stays_actionable(
     assert actionable is True
     assert reason == "actionable"
 
-def test_stale_bot_comment_with_matching_sha_stays_actionable(
+def test_bot_comment_on_current_sha_stays_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
     """Bot comment on the current HEAD commit should still be actionable."""
@@ -1776,6 +1881,31 @@ def test_stale_bot_comment_with_matching_sha_stays_actionable(
     )
     assert actionable is True
     assert reason == "actionable"
+
+
+def test_local_ledger_cannot_clear_unresolved_review_thread(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    summary = summarize_comments(
+        [
+            {
+                "type": "review_comment",
+                "id": 42,
+                "user": "chatgpt-codex-connector",
+                "body": "This remains unresolved on GitHub.",
+                "thread_resolved": False,
+                "thread_outdated": False,
+                "commit_id": "old-head",
+            }
+        ],
+        addressed_comment_ids={42},
+        head_commit_sha="new-head",
+    )
+
+    assert summary["hasActionableComments"] is True
+    assert summary["actionableCommentIds"] == [42]
 
 # ---------------------------------------------------------------------------
 # Ledger path/format normalization (Phase 2)
@@ -1884,12 +2014,17 @@ def test_review_comment_with_thread_resolved_via_enrichment(
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"].get("thread_resolved") == 1
 
-def test_pr_resolver_skill_delegates_orchestration_to_temporal() -> None:
+def test_pr_resolver_skill_owns_behavior_in_every_host() -> None:
     skill_text = (
         REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "Temporal ownership contract" in skill_text
+    assert "Skill authority and host boundary" in skill_text
+    assert "sole semantic implementation" in skill_text
+    assert "MoonMind must execute this Skill through the ordinary agent Skill path" in skill_text
+    assert "MoonMind must not" in skill_text
+    assert "collect or classify PR comments" in skill_text
+    assert "## Workflow" in skill_text
     assert "Terminal Success Contract" in skill_text
     assert "Bounded remediation actions" in skill_text
     assert "A local fix, local commit" in skill_text
@@ -1900,12 +2035,12 @@ def test_pr_resolver_skill_delegates_orchestration_to_temporal() -> None:
     assert "status=blocked" in skill_text
     assert "mergeAutomationDisposition=manual_review" in skill_text
     assert "branch is ahead of origin" in skill_text
-    assert "`MoonMind.PRResolver` owns snapshot polling" in skill_text
-    assert "must never run `pr_resolve_orchestrate.py`" in skill_text
-    assert "single classified action named in the instruction" in skill_text
-    assert "python3 .agents/skills/pr-resolver/bin/" not in skill_text
-    assert "read `.agents/skills/fix-" not in skill_text
-    assert "After the child ends, Temporal independently checks" in skill_text
+    assert "pr_resolve_finalize.py" in skill_text
+    assert "actionable_comments" in skill_text
+    assert "fix-comments" in skill_text
+    assert "Never reuse a pre-remediation snapshot" in skill_text
+    assert "MOONMIND_ACTIVE_SKILLS_DIR" in skill_text
+    assert "fresh `gh pr view` reports `state=MERGED`" in skill_text
 
 
 def test_pr_resolver_snapshot_resolves_required_skill_from_active_root(
@@ -1943,3 +2078,5 @@ def test_fix_comments_skill_requires_fresh_comments_and_remote_verification() ->
     assert "Never print raw environment variables" in skill_text
     assert "var/pr_resolver/result.json" in skill_text
     assert "mergeAutomationDisposition=manual_review" in skill_text
+    assert "every\n  non-outdated comment in that thread" in skill_text
+    assert "leave the entire thread unresolved" in skill_text

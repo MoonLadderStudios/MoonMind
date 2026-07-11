@@ -60,7 +60,6 @@ _NON_VISIBLE_COMMENT_REASONS = {
     "addressed_in_ledger",
     "command_comment",
     "empty_body",
-    "stale_bot_comment",
     "thread_outdated",
     "thread_resolved",
 }
@@ -373,8 +372,6 @@ def _classify_comment_actionability(
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
     - Ignore review comments only when explicitly marked resolved/outdated.
-    - Treat bot review comments on a *previous* commit as stale when the HEAD
-      commit differs (the fix was already pushed).
     - Treat issue comments and review bodies as actionable.
     - Treat review comments as actionable except resolved/outdated threads and
       bot-authored comments (unless explicitly enabled).
@@ -392,15 +389,6 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
-        # Bot review comments left on a previous commit are stale — the agent
-        # already pushed a fix and the bot cannot re-evaluate its own feedback.
-        if (
-            head_commit_sha
-            and is_bot_user(comment.get("user") or "")
-            and comment.get("commit_id")
-            and str(comment["commit_id"]).strip() != head_commit_sha
-        ):
-            return False, "stale_bot_comment"
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
@@ -534,7 +522,11 @@ def summarize_comments(
 
     for comment in comments:
         cid = comment.get("id")
-        if isinstance(cid, int) and cid in resolved_ids:
+        if (
+            isinstance(cid, int)
+            and cid in resolved_ids
+            and comment.get("type") != "review_comment"
+        ):
             actionable = False
             reason = "addressed_in_ledger"
         else:

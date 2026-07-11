@@ -226,10 +226,10 @@ def api_post_json(
 
 def fetch_review_thread_status(
     owner: str, repo: str, pr_number: int, token: str | None
-) -> dict[int, dict[str, bool]]:
+) -> dict[int, dict[str, Any]]:
     """Fetch isResolved/isOutdated for each review thread comment via GraphQL.
 
-    Returns a mapping of comment database ID to {isResolved, isOutdated}.
+    Returns a mapping of comment database ID to thread identity and state.
     Returns {} on any failure so callers gracefully fall back.
     """
     if not token:
@@ -242,6 +242,7 @@ def fetch_review_thread_status(
           reviewThreads(first: 100, after: $cursor) {
             pageInfo { hasNextPage endCursor }
             nodes {
+              id
               isResolved
               isOutdated
               comments(first: 100) {
@@ -254,7 +255,7 @@ def fetch_review_thread_status(
     }
     """
 
-    result: dict[int, dict[str, bool]] = {}
+    result: dict[int, dict[str, Any]] = {}
     cursor: str | None = None
 
     try:
@@ -288,6 +289,7 @@ def fetch_review_thread_status(
                     db_id = comment.get("databaseId")
                     if db_id is not None:
                         result[db_id] = {
+                            "threadId": thread.get("id"),
                             "isResolved": is_resolved,
                             "isOutdated": is_outdated,
                         }
@@ -336,7 +338,7 @@ def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_review_comment(
     comment: dict[str, Any],
-    thread_status: dict[int, dict[str, bool]] | None = None,
+    thread_status: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     normalized: dict[str, Any] = {
         "type": "review_comment",
@@ -356,6 +358,7 @@ def normalize_review_comment(
         comment_id = comment.get("id")
         status = thread_status.get(comment_id) if comment_id else None
         if status:
+            normalized["thread_id"] = status.get("threadId")
             normalized["thread_resolved"] = status["isResolved"]
             normalized["thread_outdated"] = status["isOutdated"]
     return normalized

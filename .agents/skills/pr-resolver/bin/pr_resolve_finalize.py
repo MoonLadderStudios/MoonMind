@@ -325,6 +325,17 @@ def main() -> None:
                 print("Merge gate passed (dry-run).")
                 sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
             _merge_pr(pr_selector, args.merge_method)
+            if not _check_pr_merged(pr_selector):
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision="merge requested; awaiting authoritative merged state",
+                    merge_outcome="blocked",
+                    status="blocked",
+                    reason="merge_pending",
+                )
+                print("Blocked: merge_pending")
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
             _write_result(
                 result_path,
                 snapshot=snapshot,

@@ -27,9 +27,9 @@ The built-in repository auto-publish skills are `pr-resolver`, `fix-comments`, `
 
 Publishing does not choose an implementation host. In particular,
 `publish.mode = auto` grants the selected skill agent-owned publishing authority
-and requires evidence; it does not select `MoonMind.PRResolver`. Native hosting
-is a separate trusted binding over the immutable resolved-skill contract,
-provenance, content ref, and digest.
+and requires evidence; it does not select or authorize a native semantic
+implementation. `pr-resolver` always executes its resolved Skill bundle through
+the ordinary agent runtime path.
 
 Resolution rules:
 

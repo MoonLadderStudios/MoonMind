@@ -4969,7 +4969,11 @@ class TemporalIntegrationActivities:
         return result.model_dump(by_alias=True, mode="json")
 
     async def pr_resolver_read_snapshot(self, payload, /, **kwargs):
-        """Capture one compact, immutable GitHub gate snapshot."""
+        """Replay-only snapshot support for previously recorded native runs.
+
+        New pr-resolver executions must collect state through their resolved
+        Skill bundle and must not call this Activity.
+        """
 
         from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -4992,7 +4996,10 @@ class TemporalIntegrationActivities:
         return result
 
     async def pr_resolver_finalize_merge(self, payload, /, **kwargs):
-        """Perform one idempotent merge attempt for an exact PR revision."""
+        """Replay-only merge support for previously recorded native runs.
+
+        New pr-resolver executions merge through the portable Skill helper.
+        """
 
         from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -5040,7 +5047,7 @@ class TemporalIntegrationActivities:
         return output
 
     async def pr_resolver_classify_gate(self, payload, /, **kwargs):
-        """Classify only the captured snapshot supplied by the workflow."""
+        """Replay-only classifier for previously recorded native runs."""
 
         from moonmind.workflows.temporal.workflows.pr_resolver import (
             classify_pr_resolver_snapshot,

@@ -21,14 +21,17 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
+    SkillImplementationContract,
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
+    RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
 
@@ -380,6 +383,96 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             ["moonspec-breakdown"],
         )
         self.assertEqual(kwargs["args"][1:], ["owner-1", "/workspace/repo", False, False])
+
+    async def test_new_pr_resolver_run_requires_skill_owned_execution(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-pr-resolver",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/pr-resolver",
+            skills=[_resolved_skill("pr-resolver")],
+        )
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(return_value=resolved),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+        ):
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={
+                    "selectedSkill": "pr-resolver",
+                    "workspaceRoot": "/workspace/repo",
+                },
+                node_id="resolver-step",
+                existing_skillset_ref=None,
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/pr-resolver")
+        binding = wf._native_skill_binding_by_step["resolver-step"]
+        self.assertFalse(binding["eligible"])
+        self.assertEqual(binding["host"], "cli")
+        self.assertEqual(binding["reasonCode"], "skill_owned_execution_required")
+        self.assertEqual(binding["identity"]["skillName"], "pr-resolver")
+
+    async def test_existing_pr_resolver_history_preserves_native_child_for_replay(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        legacy_entry = ResolvedSkillEntry(
+            skill_name="pr-resolver",
+            content_ref="art-legacy-pr-resolver",
+            content_digest="sha256:legacy",
+            provenance=AgentSkillProvenance(
+                source_kind=AgentSkillSourceKind.BUILT_IN
+            ),
+            implementation=SkillImplementationContract(
+                contract="pr-resolver-core/v1",
+                supportedHosts=["cli", "temporal"],
+                nativeHostEligible=True,
+                nativeHostPolicy="moonmind_trusted",
+            ),
+        )
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-legacy-pr-resolver",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/legacy-pr-resolver",
+            skills=[legacy_entry],
+        )
+
+        def replay_patch(patch_id: str) -> bool:
+            if patch_id == RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH:
+                return False
+            return patch_id == RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(return_value=resolved),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=replay_patch,
+            ),
+        ):
+            await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "pr-resolver"},
+                node_id="legacy-resolver-step",
+                existing_skillset_ref=None,
+            )
+
+        binding = wf._native_skill_binding_by_step["legacy-resolver-step"]
+        self.assertTrue(binding["eligible"])
+        self.assertEqual(binding["host"], "temporal")
+        self.assertEqual(binding["reasonCode"], "native_binding_accepted")
 
     async def test_agent_node_adds_selected_skill_to_task_level_selector(self) -> None:
         wf = MoonMindRunWorkflow()
