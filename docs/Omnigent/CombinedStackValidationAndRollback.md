@@ -248,6 +248,22 @@ docker compose \
   up -d omnigent-host-claude
 ```
 
+If you prefer `COMPOSE_FILE`, do not pass a colon-separated value in the
+command string on Windows. Use the OS-specific separator:
+
+```text
+# Linux / macOS
+COMPOSE_FILE=docker-compose.yaml:docker-compose.claude-host.yaml docker compose --profile omnigent-host-claude up -d omnigent-host-claude
+
+# Windows PowerShell
+$env:COMPOSE_FILE = "docker-compose.yaml;docker-compose.claude-host.yaml"
+docker compose --profile omnigent-host-claude up -d omnigent-host-claude
+
+# Windows CMD
+set COMPOSE_FILE=docker-compose.yaml;docker-compose.claude-host.yaml
+docker compose --profile omnigent-host-claude up -d omnigent-host-claude
+```
+
 Validate the merged configuration and confirm the host can see the OAuth directory:
 
 ```bash
