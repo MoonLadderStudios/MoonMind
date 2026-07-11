@@ -87,6 +87,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.native_skill_bindings import (
         evaluate_pr_resolver_native_binding,
+        require_skill_owned_pr_resolver_execution,
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
@@ -619,6 +620,9 @@ RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH = (
 )
 RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH = (
     "run-trusted-pr-resolver-native-binding-v1"
+)
+RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH = (
+    "run-pr-resolver-skill-owned-execution-v1"
 )
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
     "run-pr-resolver-selector-resolution-v1"
@@ -8521,11 +8525,12 @@ class MoonMindRunWorkflow:
                                 )
                                 if not temporal_pr_resolver:
                                     portable_note = (
-                                        "\n\nNative host decision: use the portable CLI host "
-                                        f"because {binding.get('reasonCode')}. Run the "
-                                        "portable pr-resolver loop and publish its terminal "
-                                        "evidence; do not substitute MoonMind's built-in "
-                                        "native implementation."
+                                        "\n\nHost decision: execute the resolved pr-resolver "
+                                        "Skill directly because "
+                                        f"{binding.get('reasonCode')}. Follow its SKILL.md "
+                                        "workflow and packaged helpers, and publish its "
+                                        "terminal evidence. MoonMind must not substitute "
+                                        "native PR snapshot, comment, gate, or merge logic."
                                     )
                                     request = request.model_copy(
                                         update={
@@ -14176,7 +14181,19 @@ class MoonMindRunWorkflow:
                     resolved,
                     normalized_skill,
                 )
-                if workflow.patched(RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH):
+                if workflow.patched(
+                    RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH
+                ):
+                    decision = require_skill_owned_pr_resolver_execution(
+                        selected_entry
+                    )
+                    self._native_skill_binding_by_step[node_id] = {
+                        "eligible": decision.eligible,
+                        "host": decision.host,
+                        "reasonCode": decision.reason_code,
+                        "identity": dict(decision.identity),
+                    }
+                elif workflow.patched(RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH):
                     decision = evaluate_pr_resolver_native_binding(selected_entry)
                     self._native_skill_binding_by_step[node_id] = {
                         "eligible": decision.eligible,

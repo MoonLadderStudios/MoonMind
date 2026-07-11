@@ -54,6 +54,16 @@ When writing code that interacts with skills:
 - Keep skills runnable outside MoonMind; isolate any MoonMind-specific services, paths, metadata, or runtime behavior behind an explicit adapter boundary.
 - Add workflow/activity or adapter-boundary tests.
 
+### Skill semantic authority
+
+- A resolved Skill bundle is the authoritative implementation of its behavior in every host. `SKILL.md` and the portable files shipped beside it must define the same decisions, data collection, ordering, and terminal evidence whether the Skill runs in Codex directly or through MoonMind.
+- Native integration may provide execution substrate only: resolution and immutable materialization, credentials, workspace isolation, process launch, durable scheduling, timeout/cancellation enforcement, logs, artifacts, approvals, and validation of declared terminal contracts.
+- Native workflows, Activities, adapters, and service clients must not reimplement Skill semantics such as provider data collection, comment or issue classification, blocker priority, retry decisions, remediation selection, or completion rules when the resolved Skill already performs that behavior.
+- A native host may execute the portable Skill implementation at a controlled Activity or runtime boundary. It may not replace that implementation with parallel logic merely for performance, durability, or convenience.
+- If required behavior cannot be executed from the resolved Skill bundle, select an explicit portable host or fail before mutation. Never substitute behavior based on Skill name, built-in provenance, publish mode, or a stale native binding.
+- Any proposed native binding must identify the irreducibly native capability it supplies and the exact portable semantic entrypoint it executes. If it cannot do both, do not add the binding.
+- Tests must prove that MoonMind executes the resolved Skill behavior, not merely that a separate native implementation produces similar classifications. Cross-host comparison tests are supplemental and never justify duplicate semantic implementations.
+
 ## Documentation: canonical vs feature artifacts
 
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.

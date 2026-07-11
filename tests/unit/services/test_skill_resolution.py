@@ -109,7 +109,7 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].provenance.source_path
 
 
-async def test_built_in_pr_resolver_declares_portable_native_contract():
+async def test_built_in_pr_resolver_requires_skill_owned_cli_execution():
     results = await BuiltInSkillLoader().load_skills(
         SkillSelector(include=[{"name": "pr-resolver"}]),
         SkillResolutionContext(snapshot_id="snap-pr-resolver"),
@@ -118,8 +118,8 @@ async def test_built_in_pr_resolver_declares_portable_native_contract():
     entry = next(item for item in results if item.skill_name == "pr-resolver")
     assert entry.implementation is not None
     assert entry.implementation.contract == "pr-resolver-core/v1"
-    assert entry.implementation.supported_hosts == ["cli", "temporal"]
-    assert entry.implementation.native_host_eligible is True
+    assert entry.implementation.supported_hosts == ["cli"]
+    assert entry.implementation.native_host_eligible is False
     assert entry.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert entry.terminal_contract is not None
     assert entry.terminal_contract.contract_id == "pr_resolver_terminal.v1"

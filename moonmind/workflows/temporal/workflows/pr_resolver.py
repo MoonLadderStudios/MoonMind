@@ -1,4 +1,9 @@
-"""Durable Temporal-owned pull-request resolution state machine."""
+"""Replay support for the superseded native PR-resolver state machine.
+
+New resolver runs execute the exact resolved Skill bundle through
+``MoonMind.AgentRun``. Keep this workflow registered only for histories that
+already recorded ``MoonMind.PRResolver`` before the skill-owned cutover.
+"""
 
 from __future__ import annotations
 

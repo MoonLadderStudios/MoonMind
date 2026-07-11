@@ -253,7 +253,22 @@ Normalization does **not** belong in:
 * parent-to-child orchestration glue
 * ad hoc workflow coercion helpers
 
-### 3.2 Compatibility direction
+### 3.2 Skill semantics are not adapter normalization
+
+Provider/runtime normalization must not be used to move resolved Skill behavior
+into an adapter. When a Skill already defines how to retrieve and interpret
+provider data, select remediation, order work, or decide completion, the adapter
+may only expose the credentials, transport, workspace, process, and artifact
+capabilities needed to execute that Skill implementation. It must not perform a
+parallel provider query and return a MoonMind-authored semantic conclusion.
+
+For example, a Skill that retrieves GitHub review comments must retrieve and
+classify those comments through its resolved portable implementation in both a
+direct Codex run and a MoonMind-managed run. A MoonMind GitHub adapter may supply
+authenticated transport or execute that portable entrypoint in a controlled
+Activity, but it must not maintain a second comment-readiness algorithm.
+
+### 3.3 Compatibility direction
 
 Older compatibility code may continue to exist temporarily for replay safety or migration windows, but the target state is:
 

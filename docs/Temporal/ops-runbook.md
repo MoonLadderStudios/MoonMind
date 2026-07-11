@@ -20,9 +20,13 @@ Keys for model providers (e.g. Google and OpenAI) are injected from this user's 
 
 ### Workflow worker deployment and resolver registration
 
-Use `/healthz` only for liveness and `/readyz` for traffic readiness. Resolver
-traffic is ready only when the response is ready and lists the expected task
-queue, `MoonMind.PRResolver`, immutable build identity, and registry fingerprint.
+Use `/healthz` only for liveness and `/readyz` for traffic readiness. New
+`pr-resolver` traffic uses `MoonMind.UserWorkflow` plus `MoonMind.AgentRun` and
+must execute the resolved Skill bundle. `MoonMind.PRResolver` registration is
+required only while older histories that already recorded that child type remain
+within the replay/support window; its presence must not be used to route new
+resolver work. Readiness still requires the expected task queues, immutable build
+identity, and registry fingerprint.
 Production mode fails startup unless `MOONMIND_BUILD_SHA` or
 `MOONMIND_IMAGE_DIGEST` is set and Temporal worker deployment versioning is
 enabled. Deploy immutable images, promote a controlled worker version, drain old
@@ -32,9 +36,11 @@ workers from the queue, and run:
 python tools/run_pr_resolver_deployment_canary.py
 ```
 
-The canary starts the real workflow type on the deployed queue and follows a
-non-mutating dry-run path. Do not recover affected executions until it reports
-the expected build and registry identity.
+This legacy canary validates replay registration for the old workflow type. It
+does not validate the active Skill-owned resolver path. Validate new resolver
+deployments with a `MoonMind.UserWorkflow` dry run that resolves `pr-resolver`,
+records `skill_owned_execution_required`, starts `MoonMind.AgentRun`, and
+produces the Skill's terminal artifact without selecting the native child.
 
 Python workers do not hot-reload mounted workflow source. After workflow code or
 registration changes in local Compose, recreate the complete workflow worker

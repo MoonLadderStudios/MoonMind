@@ -39,7 +39,7 @@ def _implementation_payload(entry: Any) -> Mapping[str, Any]:
 
 
 def evaluate_pr_resolver_native_binding(entry: Any) -> NativeSkillBindingDecision:
-    """Select native hosting only for the trusted built-in portable contract."""
+    """Replay-only evaluator for histories that predate skill-owned execution."""
 
     name = str(_field(entry, "skill_name", "skillName", "name") or "").strip()
     provenance = _field(entry, "provenance")
@@ -90,4 +90,18 @@ def evaluate_pr_resolver_native_binding(entry: Any) -> NativeSkillBindingDecisio
             return NativeSkillBindingDecision(False, "cli", reason, identity)
     return NativeSkillBindingDecision(
         True, "temporal", "native_binding_accepted", identity
+    )
+
+
+def require_skill_owned_pr_resolver_execution(
+    entry: Any,
+) -> NativeSkillBindingDecision:
+    """Route every new resolver run through its exact resolved Skill bundle."""
+
+    legacy = evaluate_pr_resolver_native_binding(entry)
+    return NativeSkillBindingDecision(
+        eligible=False,
+        host="cli",
+        reason_code="skill_owned_execution_required",
+        identity=legacy.identity,
     )
