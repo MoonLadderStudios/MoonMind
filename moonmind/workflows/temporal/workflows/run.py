@@ -979,6 +979,7 @@ class MoonMindRunWorkflow:
         message: str,
         child_workflow_id: str | None = None,
         diagnostics_ref: str | None = None,
+        terminal_evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Capture a failure diagnostic from a completed-but-failed step result."""
 
@@ -1006,6 +1007,17 @@ class MoonMindRunWorkflow:
             "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
         }
         compact = {key: value for key, value in diagnostic.items() if value is not None}
+        if isinstance(terminal_evidence, Mapping):
+            for key in (
+                "failureCode",
+                "terminalContractId",
+                "terminalContractMissingEvidence",
+                "queuedChildCount",
+                "queuedChildren",
+            ):
+                value = terminal_evidence.get(key)
+                if value is not None:
+                    compact[key] = value
         if self._failure_diagnostic is None:
             self._failure_diagnostic = compact
         return compact
@@ -8696,6 +8708,7 @@ class MoonMindRunWorkflow:
                                 message=step_failure_summary,
                                 child_workflow_id=child_workflow_id,
                                 diagnostics_ref=diagnostics_ref,
+                                terminal_evidence=outputs,
                             )
                             # MM-884: capture the sanitized provider failure
                             # envelope and observed cost (first failure wins) so

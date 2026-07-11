@@ -6,11 +6,16 @@ from pathlib import Path
 import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionRunFailedError,
     _pr_resolver_terminal_contract,
 )
-from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
+    TemporalSandboxActivities,
+)
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
@@ -41,6 +46,45 @@ async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
     assert evaluation.satisfied is False
     assert evaluation.failure_code == expected["failureCode"]
     assert expected["parentState"] == "failed"
+
+
+async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the escaped MM-1201 journey through AgentRun's authority handoff."""
+    replay_id = "batch-workflows-missing-fanout-evidence"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    agent_run = MoonMindAgentRun()
+
+    async def execute_activity(name: str, payload: dict, **_kwargs: object) -> dict:
+        assert name == "agent_runtime.evaluate_terminal_evidence"
+        activities = TemporalAgentRuntimeActivities(client_adapter=object())
+        evaluated = await activities.agent_runtime_evaluate_terminal_evidence(payload)
+        return evaluated.model_dump(mode="json", by_alias=True)
+
+    monkeypatch.setattr(agent_run, "_execute_routed_activity", execute_activity)
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="mm-1201",
+        idempotencyKey="mm-1201:replay",
+        workspaceSpec={"workspacePath": manifest["workspacePath"]},
+        terminalContract=manifest["terminalContract"],
+    )
+    provider_result = AgentRunResult(
+        summary=manifest["agentTurn"]["assistantText"],
+        metadata={"workspacePath": manifest["workspacePath"]},
+    )
+
+    result = await agent_run._evaluate_terminal_contract(
+        request=request, result=provider_result
+    )
+
+    assert result.failure_class == expected["failureClass"]
+    assert result.metadata["failureCode"] == expected["failureCode"]
+    assert result.metadata["terminalContractMissingEvidence"] == expected["missingEvidence"]
+    assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
 
 
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:
