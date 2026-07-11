@@ -104,6 +104,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.runtime_capabilities import (
         RuntimeCapabilityError,
+        RuntimeExecutionCapabilities,
+        resolve_runtime_execution_capabilities,
     )
     from moonmind.workflows.temporal.checkpoint_policy import (
         resolve_checkpoint_policy,
@@ -546,6 +548,7 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
 FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
@@ -4548,7 +4551,33 @@ class MoonMindRunWorkflow:
         previous_capture = self._step_workspace_capture_inputs.get(
             logical_step_id, {}
         )
-        if (
+        capabilities: RuntimeExecutionCapabilities | None = None
+        capability_snapshot = outputs.get("runtimeCapabilities") or outputs.get(
+            "runtime_capabilities"
+        )
+        try:
+            capability_policy_enabled = workflow.patched(
+                RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH
+            )
+        except workflow._NotInWorkflowEventLoopError:
+            # Pure unit callers model newly started histories.
+            capability_policy_enabled = True
+        if capability_policy_enabled:
+            if isinstance(capability_snapshot, Mapping):
+                capabilities = RuntimeExecutionCapabilities.model_validate(
+                    capability_snapshot
+                )
+            elif agent_id:
+                capabilities = resolve_runtime_execution_capabilities(agent_id)
+            if capabilities is not None:
+                capture_input["runtimeCapabilities"] = capabilities.model_dump(
+                    by_alias=True, mode="json"
+                )
+                capture_input["captureAuthority"] = capabilities.workspace_authority
+                capture_input["criticality"] = (
+                    capabilities.post_execution_checkpoint_criticality
+                )
+        elif (
             agent_kind == "managed"
             or previous_capture.get("captureAuthority") == "managed_runtime"
         ):
@@ -4602,7 +4631,10 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_kind:
                 capture_input["kind"] = checkpoint_kind
-            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
+            elif capabilities is None and (
+                capability_policy_enabled
+                or self._step_external_agent_ids.get(logical_step_id) != "omnigent"
+            ):
                 if base_commit:
                     capture_input["kind"] = "git_patch"
                 else:
@@ -4613,7 +4645,11 @@ class MoonMindRunWorkflow:
                 "checkpointCriticality",
                 "checkpoint_criticality",
             )
-            if criticality in {"required", "recoverability_only", "unsupported"}:
+            if capabilities is None and criticality in {
+                "required",
+                "recoverability_only",
+                "unsupported",
+            }:
                 capture_input["criticality"] = criticality
             break
 
@@ -4651,6 +4687,18 @@ class MoonMindRunWorkflow:
         )
         resolved_policy = resolve_checkpoint_policy(
             boundary=str(boundary),
+            capabilities=(
+                RuntimeExecutionCapabilities.model_validate(
+                    capture_input["runtimeCapabilities"]
+                )
+                if isinstance(capture_input.get("runtimeCapabilities"), Mapping)
+                else None
+            ),
+            workspace_locator=(
+                capture_input.get("workspaceLocator")
+                if isinstance(capture_input.get("workspaceLocator"), Mapping)
+                else None
+            ),
             recovery_source=self._recovery_source
             if isinstance(self._recovery_source, Mapping)
             else None,

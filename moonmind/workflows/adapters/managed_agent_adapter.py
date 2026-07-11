@@ -121,6 +121,7 @@ def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
         "runtimeId": capabilities.runtime_id,
         "capabilitySetVersion": capabilities.capability_set_version,
         "capabilityDigest": capabilities.capability_digest,
+        "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
     }
     if record.workspace_path:
         metadata["workspaceLocator"] = {
