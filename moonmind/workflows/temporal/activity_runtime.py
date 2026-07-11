@@ -42,18 +42,18 @@ from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
     PENTEST_RUNTIME_ID,
     PentestApprovedScope,
+    PentestExecutionPolicy,
     PentestLaunchPolicyError,
     PentestProviderMaterializationError,
     PentestScopeValidationError,
-    PentestExecutionPolicy,
     PentestWorkloadRequest,
     PentestWorkloadResult,
     build_pentest_execution_materialization,
-    build_pentest_publication_result,
+    build_pentest_launch_plan,
     build_pentest_provider_cooldown_diagnostic,
     build_pentest_progress_annotation,
+    build_pentest_publication_result,
     build_pentest_terminal_cleanup_result,
-    build_pentest_launch_plan,
     classify_pentest_failure,
     materialize_pentest_provider_profile,
     pentest_cleanup_selector,
@@ -1268,6 +1268,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "pr_resolver_verify_remote_head",
     ),
     "pr_resolver.verify_merged": ("integrations", "pr_resolver_verify_merged"),
+    "worker.verify_workflow_capability": (
+        "integrations",
+        "worker_verify_workflow_capability",
+    ),
     "pr_resolver.write_terminal_result": (
         "artifacts",
         "pr_resolver_write_terminal_result",
@@ -4698,6 +4702,104 @@ class TemporalIntegrationActivities:
     async def repo_merge_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
         return await repo_merge_pr_activity(payload)
+
+    async def worker_verify_workflow_capability(self, payload, /, **kwargs):
+        """Fail closed unless the deployed workflow fleet proves registration."""
+
+        request = dict(payload) if isinstance(payload, Mapping) else {}
+        workflow_type = str(request.get("workflowType") or "").strip()
+        task_queue = str(request.get("taskQueue") or "").strip()
+        url = str(
+            os.environ.get("TEMPORAL_WORKFLOW_READINESS_URL")
+            or "http://temporal-worker-workflow:8080/readyz"
+        ).strip()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                readiness = response.json()
+        except Exception as exc:
+            return {
+                "available": False,
+                "status": "blocked_operator",
+                "reasonCode": "worker_capability_unavailable",
+                "workflowType": workflow_type,
+                "taskQueue": task_queue,
+                "agentExecutionLaunched": False,
+                "diagnostic": exc.__class__.__name__,
+            }
+        if not isinstance(readiness, Mapping):
+            readiness = {}
+        workflow_types = {
+            str(item) for item in (readiness.get("workflowTypes") or [])
+        }
+        task_queues = {str(item) for item in (readiness.get("taskQueues") or [])}
+        available = (
+            readiness.get("ready") is True
+            and workflow_type in workflow_types
+            and task_queue in task_queues
+        )
+        fingerprints = [
+            str(item) for item in (readiness.get("registryFingerprints") or [])
+        ]
+        if not fingerprints and readiness.get("registryFingerprint"):
+            fingerprints = [str(readiness["registryFingerprint"])]
+        build_ids = [str(item) for item in (readiness.get("buildIds") or [])]
+        if not build_ids and readiness.get("buildId"):
+            build_ids = [str(readiness["buildId"])]
+        children = [
+            item
+            for item in (readiness.get("children") or [])
+            if isinstance(item, Mapping)
+            and workflow_type
+            in {str(value) for value in (item.get("workflowTypes") or [])}
+            and task_queue in {str(value) for value in (item.get("taskQueues") or [])}
+        ]
+        if not children and workflow_type in workflow_types and task_queue in task_queues:
+            children = [readiness]
+
+        def _single_value(key: str) -> str | None:
+            values = {
+                str(item.get(key))
+                for item in children
+                if item.get(key) is not None and str(item.get(key)).strip()
+            }
+            return next(iter(values)) if len(values) == 1 else None
+
+        result = {
+            "available": available,
+            "status": "ready" if available else "blocked_operator",
+            "reasonCode": (
+                "worker_capability_ready"
+                if available
+                else "worker_capability_unavailable"
+            ),
+            "workflowType": workflow_type,
+            "taskQueue": task_queue,
+            "agentExecutionLaunched": False,
+            "registryFingerprint": fingerprints[0] if len(fingerprints) == 1 else None,
+            "observedRegistryFingerprints": fingerprints,
+            "observedWorkerBuilds": build_ids,
+            "buildId": build_ids[0] if len(build_ids) == 1 else None,
+            "buildSha": _single_value("buildSha"),
+            "imageDigest": _single_value("imageDigest"),
+            "deploymentId": _single_value("deploymentId"),
+            "resolverCore": (
+                dict(children[0].get("resolverCore") or {})
+                if len(children) == 1
+                else {}
+            ),
+        }
+        if not available:
+            logger.error(
+                "workflow capability unavailable workflow_type=%s task_queue=%s "
+                "build_ids=%s registry_fingerprints=%s",
+                workflow_type,
+                task_queue,
+                build_ids,
+                fingerprints,
+            )
+        return result
 
     async def merge_automation_evaluate_readiness(self, payload, /, **kwargs):
         from moonmind.workflows.adapters.github_service import GitHubService

@@ -2,7 +2,7 @@
 
 Status: Active
 Owners: MoonMind Engineering
-Last Updated: 2026-07-10
+Last Updated: 2026-07-11
 
 ## 1. Purpose
 
@@ -15,6 +15,12 @@ The **PR Resolver** skill is invoked from the dashboard (via Temporal `AgentTask
 
 The durable umbrella is a Temporal workflow, not a managed agent shell. Specialized agents do one remediation action; Temporal owns polling, timers, retry budgets, merge attempts, remote verification, cancellation, and terminal evidence.
 
+The checked-in skill is also a portable contract. Its provider-neutral models,
+normalization, classification, transition, and evidence rules live in
+`pr_resolver_core`; both the local scripts and the Temporal host consume that
+package. The core performs no network, filesystem, process, credential, clock,
+or Temporal operations. Host adapters gather state and perform actions.
+
 ---
 
 ## 2. Assumptions and Constraints
@@ -23,6 +29,8 @@ The durable umbrella is a Temporal workflow, not a managed agent shell. Speciali
 * The worker environment has GitHub auth available for private repo operations and includes `gh` usage in existing workflows.
 * Specialized sub-skills (like `fix-merge-conflicts`) are available in the `.agents/skills/` directory.
 * Resolver workflows use `publish.mode=auto`. Remediation children may commit and push when their selected skill requires it; trusted resolver activities own merge and terminal publication.
+* Publish authority and implementation hosting are independent decisions.
+  `publish.mode=auto` does not authorize native Temporal execution.
 
 ---
 
@@ -46,16 +54,31 @@ Shared repo skill mirror:
     pr_resolver_result.schema.json
 ```
 
-The Python scripts remain single-pass local helpers and migration fixtures. Normal execution routes through `MoonMind.PRResolver`; `pr_resolve_orchestrate.py` is not the default runtime path.
+The Python scripts remain a supported portable host. MoonMind routes the trusted
+built-in snapshot to `MoonMind.PRResolver`; standalone environments and
+non-native-compatible snapshots use the portable host.
 
-### 3.2 Required Worker Capabilities
+### 3.2 Trusted native binding
 
-The Temporal Workflow Task Queue routing should derive/declare:
+The portable contract declares `implementation.contract =
+pr-resolver-core/v1`, supported hosts, and native-host policy separately from
+publish metadata. Native routing requires the immutable resolved-skill entry to
+prove all of the following: canonical name, compatible contract, Temporal host
+support, trusted policy, built-in provenance, and non-empty content ref and
+digest. A repository or local override named `pr-resolver` does not inherit the
+native workflow or trusted privileges. It runs through the explicit CLI fallback
+with an observable reason code, or is rejected before launch when policy forbids
+that host.
 
-* `git`
-* `gh`
+Temporal workers load `pr_resolver_core` from their immutable application
+artifact. They never import repository skill code during workflow replay.
 
-This matches the standard `AgentTaskWorkflow` capability derivation pattern.
+### 3.3 Required Worker Capabilities
+
+The workflow fleet is orchestration-only and has no `git`, `gh`, repository
+write, sandbox, or agent-runtime privilege. GitHub reads and merge attempts run
+on the integrations activity fleet; remediation runs in bounded
+`MoonMind.AgentRun` children.
 
 ---
 

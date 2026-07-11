@@ -18,6 +18,15 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+for package_root in (SCRIPT_DIR.parent / "lib", *SCRIPT_DIR.parents):
+    if (package_root / "pr_resolver_core").is_dir():
+        sys.path.insert(0, str(package_root))
+        break
+
+from pr_resolver_core import (  # noqa: E402
+    classify_snapshot,
+    normalize_portable_snapshot,
+)
 
 from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_BLOCKED,
@@ -95,45 +104,14 @@ def _is_conflicting(pr: dict[str, Any]) -> bool:
     return mergeable_text in CONFLICTING_MERGEABLE
 
 def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
-    pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
-    ci = snapshot.get("ci") if isinstance(snapshot.get("ci"), dict) else {}
-    comments_fetch = (
-        snapshot.get("commentsFetch")
-        if isinstance(snapshot.get("commentsFetch"), dict)
-        else {}
-    )
-    comments_summary = (
-        snapshot.get("commentsSummary")
-        if isinstance(snapshot.get("commentsSummary"), dict)
-        else {}
-    )
-
-    if normalize_text(pr.get("state")).upper() == "MERGED":
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+    if decision.classification == "already_merged":
         return {"action": "already_merged", "reason": "already_merged"}
-
-    if _is_conflicting(pr):
-        return {"action": "blocked", "reason": "merge_conflicts"}
-    if not bool(comments_fetch.get("succeeded")):
-        return {"action": "blocked", "reason": "comments_unavailable"}
-    if comments_summary.get("includeBotReviewComments") is not True:
-        return {"action": "blocked", "reason": "comment_policy_not_enforced"}
-    if bool(comments_summary.get("hasActionableComments")):
-        return {"action": "blocked", "reason": "actionable_comments"}
-    if normalize_text(ci.get("signalQuality")).lower() not in {"", "ok"}:
-        return {"action": "blocked", "reason": "ci_signal_degraded"}
-    if bool(ci.get("hasFailures")):
-        return {"action": "blocked", "reason": "ci_failures"}
-    if bool(ci.get("isRunning")):
-        return {"action": "blocked", "reason": "ci_running"}
-    codex_review_grace = comments_summary.get("codexReviewGrace")
-    if isinstance(codex_review_grace, dict) and codex_review_grace.get("active") is True:
+    if decision.classification == "review_grace":
         return {"action": "blocked", "reason": "codex_review_grace_wait"}
-
-    merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
-    if merge_state in DIRECT_MERGE_STATE:
+    if decision.classification == "ready_to_merge":
         return {"action": "merge_now", "reason": "ci_complete"}
-
-    return {"action": "blocked", "reason": "merge_not_ready"}
+    return {"action": "blocked", "reason": decision.reason_code}
 
 def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
     cmd = [sys.executable, str(snapshot_script)]

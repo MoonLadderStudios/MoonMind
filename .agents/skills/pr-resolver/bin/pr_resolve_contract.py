@@ -19,6 +19,7 @@ FINALIZE_ONLY_RETRY_REASONS = {
     "codex_review_grace_wait",
     "comments_unavailable",
     "ci_signal_degraded",
+    "external_state_transient",
     "snapshot_refresh_failed",
 }
 
@@ -92,6 +93,8 @@ def remediation_next_step(reason: str) -> str:
     if normalized in {"ci_signal_degraded", "comments_unavailable"}:
         return "inspect_ci_and_comment_signal"
     if normalized == "snapshot_refresh_failed":
+        return "retry_finalize_after_backoff"
+    if normalized == "external_state_transient":
         return "retry_finalize_after_backoff"
     if normalized == "ci_running":
         return "wait_for_ci_and_retry_finalize"

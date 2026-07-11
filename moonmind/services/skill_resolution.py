@@ -17,6 +17,7 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
+    SkillImplementationContract,
     SkillTerminalContract,
     SkillSelector,
 )
@@ -179,6 +180,10 @@ class DeploymentSkillLoader(SkillLoader):
                     metadata,
                     owner=definition.slug,
                 )
+                implementation = _implementation_from_artifact_metadata(
+                    metadata,
+                    owner=definition.slug,
+                )
                 results.append(
                     ResolvedSkillEntry(
                         skill_name=definition.slug,
@@ -187,6 +192,7 @@ class DeploymentSkillLoader(SkillLoader):
                         content_digest=definition.content_digest,
                         required_skills=list(required_skills),
                         required_capabilities=list(required_capabilities),
+                        implementation=implementation,
                         provenance=AgentSkillProvenance(
                             source_kind=AgentSkillSourceKind.DEPLOYMENT
                         ),
@@ -220,6 +226,10 @@ def _scan_for_skills(
             results.append(
                 ResolvedSkillEntry(
                     skill_name=item.name,
+                    implementation=_implementation_from_frontmatter(
+                        frontmatter,
+                        owner=item.name,
+                    ),
                     provenance=AgentSkillProvenance(
                         source_kind=source_kind,
                         source_path=str(item),
@@ -486,6 +496,39 @@ def _side_effect_metadata_from_frontmatter(
     if not isinstance(raw_side_effect, dict):
         raise ValueError(f"skill '{owner}' metadata.sideEffect must be a mapping")
     return dict(raw_side_effect)
+
+
+def _implementation_from_frontmatter(
+    frontmatter: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> SkillImplementationContract | None:
+    metadata = frontmatter.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"skill '{owner}' metadata must be a mapping")
+    raw = metadata.get("implementation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"skill '{owner}' metadata.implementation must be a mapping"
+        )
+    return SkillImplementationContract.model_validate(raw)
+
+
+def _implementation_from_artifact_metadata(
+    metadata: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> SkillImplementationContract | None:
+    raw = metadata.get("implementation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"skill '{owner}' artifact metadata.implementation must be a mapping"
+        )
+    return SkillImplementationContract.model_validate(raw)
 
 
 def extract_publish_metadata_from_skill_markdown(

@@ -11,6 +11,13 @@ metadata:
   required-capabilities:
     - git
     - gh
+  implementation:
+    contract: pr-resolver-core/v1
+    supportedHosts:
+      - cli
+      - temporal
+    nativeHostEligible: true
+    nativeHostPolicy: moonmind_trusted
 ---
 
 # PR Resolver Skill
@@ -42,10 +49,16 @@ The task is not complete until the target PR is merged or is proven already merg
 
 ## Temporal ownership contract
 
-`MoonMind.PRResolver` owns snapshot polling, classification, durable timers,
+When the resolved native-host decision is `temporal`, `MoonMind.PRResolver` owns snapshot polling, classification, durable timers,
 retry budgets, merge attempts, remote verification, cancellation, and terminal
 evidence. A managed agent must never run `pr_resolve_orchestrate.py` or host the
 outer retry loop in a shell process.
+
+When MoonMind explicitly records a `cli` native-host decision, this exact
+resolved Skill content remains authoritative and the portable CLI host owns the
+outer loop. That fallback must be visible in execution metadata and must never
+silently substitute MoonMind's built-in native implementation for repo, local,
+or otherwise incompatible content.
 
 When Temporal dispatches this skill as a remediation child, perform exactly the
 single classified action named in the instruction. Use the active immutable skill

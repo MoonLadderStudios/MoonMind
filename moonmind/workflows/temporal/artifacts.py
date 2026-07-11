@@ -2847,21 +2847,38 @@ class TemporalArtifactActivities:
         from moonmind.schemas.temporal_activity_models import (
             ExecutionTerminalStateInput,
         )
-        from moonmind.workflows.temporal.service import TemporalExecutionService
+        from moonmind.workflows.temporal.service import (
+            TemporalExecutionNotFoundError,
+            TemporalExecutionService,
+        )
 
         model = ExecutionTerminalStateInput.model_validate(request or {})
 
         async with get_async_session_context() as session:
             service = TemporalExecutionService(session)
-            record = await service.record_terminal_state(
-                workflow_id=model.workflow_id,
-                state=model.state,
-                close_status=model.close_status,
-                summary=model.summary,
-                error_category=model.error_category,
-                finish_outcome_code=model.finish_outcome_code,
-                finish_summary=model.finish_summary,
-            )
+            try:
+                record = await service.record_terminal_state(
+                    workflow_id=model.workflow_id,
+                    state=model.state,
+                    close_status=model.close_status,
+                    summary=model.summary,
+                    error_category=model.error_category,
+                    finish_outcome_code=model.finish_outcome_code,
+                    finish_summary=model.finish_summary,
+                )
+            except TemporalExecutionNotFoundError:
+                # Internally-started child workflows can reach terminal state
+                # before the asynchronous Temporal projection sees their start.
+                # Temporal history remains authoritative; the projector will
+                # reconcile the row after close, so this auxiliary handoff must
+                # not turn primary success into an Activity failure.
+                return {
+                    "workflowId": model.workflow_id,
+                    "state": model.state,
+                    "closeStatus": model.close_status,
+                    "projectionDeferred": True,
+                    "reasonCode": "temporal_projection_pending",
+                }
 
         await self._write_run_digest_best_effort(record)
 
@@ -3316,7 +3333,6 @@ class TemporalArtifactActivities:
         error causing workflow task failures). Terminates the existing manager
         if running, then starts a fresh one.
         """
-        from temporalio.exceptions import WorkflowAlreadyStartedError
         from temporalio.service import RPCError
 
         from moonmind.workflows.temporal.client import TemporalClientAdapter

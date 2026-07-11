@@ -1345,6 +1345,24 @@ def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
     )
     assert action == "finalize_only_retry"
 
+
+def test_contract_external_state_transient_is_finalize_only_retry(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    classify_retry_action = pr_resolve_contract_module["classify_retry_action"]
+    remediation_next_step = pr_resolve_contract_module["remediation_next_step"]
+
+    action = classify_retry_action(
+        "external_state_transient",
+        merge_not_ready_grace_remaining=0,
+    )
+
+    assert action == "finalize_only_retry"
+    assert (
+        remediation_next_step("external_state_transient")
+        == "retry_finalize_after_backoff"
+    )
+
 def test_contract_codex_review_grace_wait_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],
 ) -> None:

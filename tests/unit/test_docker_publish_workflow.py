@@ -222,11 +222,15 @@ def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
 
     moonmind_copy_index = dockerfile.index("COPY moonmind /app/moonmind/")
+    resolver_core_copy_index = dockerfile.index(
+        "COPY pr_resolver_core /app/pr_resolver_core/"
+    )
     project_install_index = dockerfile.index(
         "pip install --disable-pip-version-check --no-deps ."
     )
 
     assert moonmind_copy_index < project_install_index
+    assert resolver_core_copy_index < project_install_index
     for copied_path in (
         "COPY api_service /app/api_service/",
         "COPY config /app/config/",

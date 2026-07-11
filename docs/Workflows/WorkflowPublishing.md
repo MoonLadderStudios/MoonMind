@@ -25,6 +25,12 @@ metadata:
 
 The built-in repository auto-publish skills are `pr-resolver`, `fix-comments`, `fix-ci`, and `fix-merge-conflicts`. The backend may retain a narrow migration fallback when metadata is temporarily unavailable, but catalog metadata is authoritative when present.
 
+Publishing does not choose an implementation host. In particular,
+`publish.mode = auto` grants the selected skill agent-owned publishing authority
+and requires evidence; it does not select `MoonMind.PRResolver`. Native hosting
+is a separate trusted binding over the immutable resolved-skill contract,
+provenance, content ref, and digest.
+
 Resolution rules:
 
 - Omitted publish mode resolves to `auto` for auto-publish-capable skills.
@@ -61,6 +67,13 @@ Finish outcome mapping is evidence-driven:
 - verified no-op -> `NO_COMMIT`, not `PUBLISH_DISABLED`;
 - blocked or failed evidence -> publish-stage failure/block;
 - missing evidence -> publish-stage failure with `auto_publish_evidence_missing`.
+
+Native resolver terminal publication returns artifact references at the child
+result boundary. The parent must load `publishEvidence` from either the direct
+result field or `outputRefs` before determining its finish outcome. A terminal
+projection row that has not yet been created is auxiliary lag: Temporal history
+and terminal artifacts remain authoritative, and projection lag must not replace
+a verified merge with a finalization failure.
 
 ### Non-Repository Side-Effect Outcomes
 

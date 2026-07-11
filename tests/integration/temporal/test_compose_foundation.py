@@ -287,6 +287,19 @@ def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
     assert workflow_env["TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY"] == (
         "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}"
     )
+    assert workflow_env["TEMPORAL_WORKER_VERSIONING_ENABLED"] == (
+        "${TEMPORAL_WORKER_VERSIONING_ENABLED:-false}"
+    )
+    assert workflow_env["MOONMIND_DEPLOYMENT_MODE"] == (
+        "${MOONMIND_DEPLOYMENT_MODE:-development}"
+    )
+    assert workflow_env["TEMPORAL_WORKFLOW_READINESS_URL"] == (
+        "${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}"
+    )
+    healthcheck = " ".join(
+        str(part) for part in workflow_worker["healthcheck"]["test"]
+    )
+    assert "http://localhost:8080/readyz" in healthcheck
 
 
 def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
@@ -531,6 +544,7 @@ def test_runtime_image_includes_agent_skill_sources():
     )
 
     assert "COPY .agents /app/.agents/" in dockerfile
+    assert "COPY pr_resolver_core /app/pr_resolver_core/" in dockerfile
 
 
 def test_omnigent_shared_postgres_compose_topology_for_mm_970():

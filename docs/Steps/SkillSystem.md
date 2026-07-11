@@ -2,7 +2,7 @@
 
 Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-04-29
+Last Updated: 2026-07-11
 Canonical for: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
 Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `AGENTS.md`
 
@@ -68,6 +68,19 @@ The desired-state skill model is:
 8. Managed runtimes receive a compact activation summary inline and a full read-only active skill bundle at the materialized `visiblePath`; `.agents/skills` is used only as a safe compatibility alias.
 9. Runtime adapters consume the resolved snapshot; they must not rediscover, broaden, or re-resolve Skills during execution.
 10. `.agents/skills/local` remains a local-only overlay input convention, not the active runtime projection.
+11. A native host is selected from trusted resolved-skill evidence, never from
+    canonical skill name or publish mode alone.
+
+### Native implementation contracts
+
+Skills may declare a portable semantic implementation contract and supported
+hosts independently of their publish metadata. The resolved entry preserves the
+winning source, content ref, digest, contract, supported hosts, and native-host
+policy. Native bindings consume that immutable evidence. Later-precedence repo
+or local content with the same skill name remains different content and receives
+no built-in native privileges by name. When a compatible binding is unavailable,
+the runtime records an explicit portable-host decision or rejects the step before
+launch with a policy diagnostic; it must not substitute other skill content.
 
 ---
 

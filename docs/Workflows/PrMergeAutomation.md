@@ -101,8 +101,9 @@ MoonMind's lifecycle model already expects `MoonMind.UserWorkflow` to mix direct
 
 ### 6.3 Why the resolver itself is a child `MoonMind.UserWorkflow`
 
-The current MoonMind execution model routes a selected `pr-resolver` step to the
-dedicated `MoonMind.PRResolver` child workflow. That workflow owns the durable
+The current MoonMind execution model routes a trusted, native-compatible
+`pr-resolver` resolved snapshot to the dedicated `MoonMind.PRResolver` child
+workflow. Skill name and auto-publish mode alone are insufficient. That workflow owns the durable
 gate loop and starts bounded `MoonMind.AgentRun` children only for
 `fix-comments`, `fix-ci`, or `fix-merge-conflicts`. It owns merge verification
 and terminal evidence; managed agents do not host the polling loop.
@@ -125,9 +126,9 @@ MoonMind.UserWorkflow (root parent workflow)
   |- child: MoonMind.MergeAutomation
   |    |- gate wait / external events / Jira checks
   |    |- child: MoonMind.UserWorkflow (resolver attempt 1)
-  |    |     `- executes tool=skill(pr-resolver), publishMode=none
+  |    |     `- child: MoonMind.PRResolver, publishMode=auto
   |    `- child: MoonMind.UserWorkflow (resolver attempt 2, if needed)
-  |          `- executes tool=skill(pr-resolver), publishMode=none
+  |          `- child: MoonMind.PRResolver, publishMode=auto
   `- terminal completion only after MergeAutomation returns success
 ```
 

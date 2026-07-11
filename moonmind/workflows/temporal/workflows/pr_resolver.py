@@ -13,6 +13,17 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from pr_resolver_core import (
+        IMPLEMENTATION_CONTRACT,
+        RESOLVER_CORE_DIGEST,
+        RESOLVER_CORE_VERSION,
+        ResolverEvent,
+        ResolverPolicy,
+        ResolverState,
+        classify_snapshot,
+        normalize_temporal_snapshot,
+        reduce_resolver_state,
+    )
     from moonmind.config.settings import settings
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     from moonmind.schemas.temporal_models import (
@@ -26,6 +37,8 @@ with workflow.unsafe.imports_passed_through():
 
 
 WORKFLOW_NAME = "MoonMind.PRResolver"
+PR_RESOLVER_IMPLEMENTATION_IDENTITY_PATCH = "pr-resolver-implementation-identity-v1"
+PR_RESOLVER_SHARED_CORE_PATCH = "pr-resolver-shared-core-v1"
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
@@ -45,6 +58,15 @@ REMEDIATION_SKILLS = {
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _workflow_patch_enabled(patch_id: str) -> bool:
+    try:
+        return workflow.patched(patch_id)
+    except Exception as exc:
+        if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+            return True
+        raise
 
 
 def pr_resolver_identity_selector(
@@ -80,44 +102,14 @@ def pr_resolver_identity_selector(
 
 def classify_pr_resolver_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Deterministically classify a captured GitHub snapshot."""
-
-    if snapshot.get("pullRequestMerged") is True:
-        return {"classification": "already_merged", "reasonCode": "already_merged"}
-    if snapshot.get("pullRequestOpen") is False:
-        return {"classification": "manual_review", "reasonCode": "pull_request_closed"}
-
-    blockers = [item for item in snapshot.get("blockers", ()) if isinstance(item, Mapping)]
-    kinds = {_text(item.get("kind")) for item in blockers}
-    summaries = " ".join(_text(item.get("summary")).lower() for item in blockers)
-
-    if "merge_conflict" in kinds or "merge_conflicts" in kinds:
-        return {"classification": "merge_conflicts", "reasonCode": "merge_conflicts"}
-    if snapshot.get("checksComplete") is True and snapshot.get("checksPassing") is False:
-        return {"classification": "ci_failures", "reasonCode": "ci_failures"}
-    if "checks_failed" in kinds:
-        return {"classification": "ci_failures", "reasonCode": "ci_failures"}
-    if "checks_running" in kinds or snapshot.get("checksComplete") is False:
-        return {"classification": "ci_running", "reasonCode": "ci_running"}
-    if "automated_review_pending" in kinds:
-        if "requested changes" in summaries or "changes requested" in summaries:
-            return {
-                "classification": "actionable_comments",
-                "reasonCode": "actionable_comments",
-            }
-        return {"classification": "review_grace", "reasonCode": "review_grace"}
-    if snapshot.get("ready") is True and not blockers:
-        return {"classification": "ready_to_merge", "reasonCode": "ready_to_merge"}
-    if blockers and all(bool(item.get("retryable", True)) for item in blockers):
-        return {
-            "classification": "mergeability_transient",
-            "reasonCode": "external_state_transient",
-        }
-    return {"classification": "manual_review", "reasonCode": "unknown_blocker"}
+    decision = classify_snapshot(normalize_temporal_snapshot(snapshot))
+    return {
+        "classification": decision.classification,
+        "reasonCode": decision.reason_code,
+    }
 
 
-def blocker_progress_signature(
-    snapshot: Mapping[str, Any], classification: str
-) -> str:
+def blocker_progress_signature(snapshot: Mapping[str, Any], classification: str) -> str:
     """Return a stable signature used to bound identical no-progress blockers."""
 
     parts = [
@@ -141,6 +133,8 @@ def build_pr_resolver_start_input(
     principal: str,
     step_id: str,
     resolved_pull_request: Mapping[str, Any] | None = None,
+    implementation_identity: Mapping[str, Any] | None = None,
+    worker_capability: Mapping[str, Any] | None = None,
 ) -> PRResolverStartInput:
     """Build the resolver boundary from an already prepared agent request."""
 
@@ -158,9 +152,7 @@ def build_pr_resolver_start_input(
     merge_gate = workflow_parameters.get("mergeGate")
     merge_gate = merge_gate if isinstance(merge_gate, Mapping) else {}
     resolved = (
-        resolved_pull_request
-        if isinstance(resolved_pull_request, Mapping)
-        else {}
+        resolved_pull_request if isinstance(resolved_pull_request, Mapping) else {}
     )
     try:
         pr_number = int(resolved.get("prNumber") or pr_value)
@@ -215,6 +207,8 @@ def build_pr_resolver_start_input(
             "policy": policy,
             "shadowMode": bool(skill_inputs.get("shadowMode", False)),
             "ownedByMergeAutomationGate": bool(merge_gate),
+            "implementationIdentity": dict(implementation_identity or {}),
+            "workerCapability": dict(worker_capability or {}),
         }
     )
 
@@ -295,7 +289,9 @@ class MoonMindPRResolverWorkflow:
         self._record_timeline("github_snapshot", transition=transition, attempt=attempt)
         return snapshot
 
-    def _remediation_request(self, *, skill: str, snapshot: Mapping[str, Any]) -> AgentExecutionRequest:
+    def _remediation_request(
+        self, *, skill: str, snapshot: Mapping[str, Any]
+    ) -> AgentExecutionRequest:
         assert self._input is not None
         base = AgentExecutionRequest.model_validate(self._input.base_agent_request)
         count = self._remediation_counts[skill]
@@ -350,27 +346,50 @@ class MoonMindPRResolverWorkflow:
             disposition = "manual_review"
         elif status == "failed":
             disposition = "failed"
+        terminal_payload = {
+            "status": status,
+            "mergeOutcome": status,
+            "mergeAutomationDisposition": disposition,
+            "reason": reason,
+            "reasonCode": reason_code,
+            "nextStep": "done"
+            if status in {"merged", "already_merged"}
+            else "manual_review",
+            "repository": self._input.repository,
+            "prNumber": self._input.pr_number,
+            "prUrl": self._input.pr_url,
+            "verifiedHeadSha": self._head_sha,
+            "verifiedMergeSha": merge_sha,
+            "finalizeAttemptCount": self._finalize_attempts,
+            "remediationCounts": self._remediation_counts,
+            "latestSnapshot": self._latest_snapshot,
+            "timeline": self._timeline[-20:],
+            "workflowId": workflow.info().workflow_id,
+            "stepId": self._input.step_id,
+            "correlationId": self._input.correlation_id,
+        }
+        if _workflow_patch_enabled(PR_RESOLVER_IMPLEMENTATION_IDENTITY_PATCH):
+            identity = self._input.implementation_identity
+            capability = self._input.worker_capability
+            terminal_payload.update(
+                {
+                    "implementationContract": IMPLEMENTATION_CONTRACT,
+                    "resolverCoreVersion": RESOLVER_CORE_VERSION,
+                    "resolverCoreDigest": RESOLVER_CORE_DIGEST,
+                    "resolvedSkillContentDigest": identity.get("contentDigest"),
+                    "resolvedSkillSource": identity.get("sourceKind"),
+                    "workerBuildSha": capability.get("buildSha"),
+                    "workerImageDigest": capability.get("imageDigest"),
+                    "workerDeploymentId": capability.get("deploymentId"),
+                    "workflowRegistryFingerprint": capability.get(
+                        "registryFingerprint"
+                    ),
+                    "taskQueue": capability.get("taskQueue"),
+                    "workflowType": WORKFLOW_NAME,
+                }
+            )
         result = PRResolverTerminalResultModel.model_validate(
-            {
-                "status": status,
-                "mergeOutcome": status,
-                "mergeAutomationDisposition": disposition,
-                "reason": reason,
-                "reasonCode": reason_code,
-                "nextStep": "done" if status in {"merged", "already_merged"} else "manual_review",
-                "repository": self._input.repository,
-                "prNumber": self._input.pr_number,
-                "prUrl": self._input.pr_url,
-                "verifiedHeadSha": self._head_sha,
-                "verifiedMergeSha": merge_sha,
-                "finalizeAttemptCount": self._finalize_attempts,
-                "remediationCounts": self._remediation_counts,
-                "latestSnapshot": self._latest_snapshot,
-                "timeline": self._timeline[-20:],
-                "workflowId": workflow.info().workflow_id,
-                "stepId": self._input.step_id,
-                "correlationId": self._input.correlation_id,
-            }
+            terminal_payload
         ).model_dump(by_alias=True, mode="json")
         publication = await workflow.execute_activity(
             "pr_resolver.write_terminal_result",
@@ -418,6 +437,18 @@ class MoonMindPRResolverWorkflow:
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = PRResolverStartInput.model_validate(payload)
         self._head_sha = self._input.head_sha
+        if self._input.canary_mode:
+            return {
+                "summary": "MoonMind.PRResolver deployment canary accepted.",
+                "failureClass": None,
+                "outputRefs": {},
+                "metadata": {
+                    "canary": True,
+                    "workflowType": WORKFLOW_NAME,
+                    "implementationIdentity": self._input.implementation_identity,
+                    "workerCapability": self._input.worker_capability,
+                },
+            }
         self._base_sha = self._input.base_sha
         started_at = workflow.now()
         iteration = 0
@@ -434,7 +465,9 @@ class MoonMindPRResolverWorkflow:
                     )
 
                 self._state = "read_pr_snapshot"
-                snapshot = await self._read_snapshot(transition="snapshot", attempt=iteration)
+                snapshot = await self._read_snapshot(
+                    transition="snapshot", attempt=iteration
+                )
                 self._state = "classify_gate"
                 classified = await workflow.execute_activity(
                     "pr_resolver.classify_gate",
@@ -455,8 +488,46 @@ class MoonMindPRResolverWorkflow:
                     else classify_pr_resolver_snapshot(snapshot)
                 )
                 self._classification = decision["classification"]
+                progress_signature = blocker_progress_signature(
+                    snapshot, self._classification
+                )
+                transition = None
+                if _workflow_patch_enabled(PR_RESOLVER_SHARED_CORE_PATCH):
+                    transition = reduce_resolver_state(
+                        previous_state=ResolverState(
+                            finalize_attempts=self._finalize_attempts,
+                            remediation_counts=tuple(
+                                sorted(self._remediation_counts.items())
+                            ),
+                            identical_blocker_count=self._identical_no_progress_count,
+                            last_progress_signature=self._last_progress_signature,
+                        ),
+                        snapshot=normalize_temporal_snapshot(snapshot),
+                        policy=ResolverPolicy(
+                            max_finalize_attempts=(
+                                self._input.policy.max_finalize_attempts
+                            ),
+                            max_remediations_per_type=(
+                                self._input.policy.max_remediations_per_type
+                            ),
+                            max_identical_blockers_without_progress=(
+                                self._input.policy.max_identical_blockers_without_progress
+                            ),
+                        ),
+                        event=ResolverEvent(
+                            kind="snapshot",
+                            progress_signature=progress_signature,
+                        ),
+                    )
+                    self._classification = transition.decision.classification
+                transition_reason = (
+                    transition.decision.reason_code
+                    if transition is not None
+                    else _text(decision.get("reasonCode"))
+                )
                 self._record_timeline(
-                    "gate_classified", reasonCode=decision.get("reasonCode")
+                    "gate_classified",
+                    reasonCode=transition_reason,
                 )
 
                 if self._classification == "already_merged":
@@ -484,6 +555,24 @@ class MoonMindPRResolverWorkflow:
                         )
                     self._classification = "mergeability_transient"
 
+                if transition_reason == "finalize_budget_exhausted":
+                    self._state = "failed"
+                    return await self._publish_terminal(
+                        status="failed",
+                        reason_code="finalize_budget_exhausted",
+                        reason="PR merge finalize-attempt budget was exhausted.",
+                    )
+                if transition_reason == "repeated_blocker_without_progress":
+                    self._state = "manual_review"
+                    return await self._publish_terminal(
+                        status="manual_review",
+                        reason_code="repeated_blocker_without_progress",
+                        reason=(
+                            "The same actionable blocker repeated without a remote "
+                            "head change."
+                        ),
+                    )
+
                 if self._classification == "ready_to_merge":
                     if self._input.shadow_mode:
                         self._state = "shadow_complete"
@@ -492,15 +581,23 @@ class MoonMindPRResolverWorkflow:
                             reason_code="shadow_ready_to_merge",
                             reason="Shadow resolver classified the pull request as ready; mutations were disabled.",
                         )
-                    if self._finalize_attempts >= self._input.policy.max_finalize_attempts:
-                        self._state = "failed"
-                        return await self._publish_terminal(
-                            status="failed",
-                            reason_code="finalize_budget_exhausted",
-                            reason="PR merge finalize-attempt budget was exhausted.",
-                        )
+                    if transition is None:
+                        if (
+                            self._finalize_attempts
+                            >= self._input.policy.max_finalize_attempts
+                        ):
+                            self._state = "failed"
+                            return await self._publish_terminal(
+                                status="failed",
+                                reason_code="finalize_budget_exhausted",
+                                reason=(
+                                    "PR merge finalize-attempt budget was exhausted."
+                                ),
+                            )
+                        self._finalize_attempts += 1
+                    else:
+                        self._finalize_attempts = transition.state.finalize_attempts
                     self._state = "finalize_merge"
-                    self._finalize_attempts += 1
                     self._record_timeline(
                         "finalize_started", attempt=self._finalize_attempts
                     )
@@ -552,38 +649,28 @@ class MoonMindPRResolverWorkflow:
                             reason="Pull request merge was independently verified on GitHub.",
                             merge_sha=(
                                 _text(verified.get("mergeSha"))
-                                or (_text(finalize.get("mergeSha")) if isinstance(finalize, Mapping) else "")
+                                or (
+                                    _text(finalize.get("mergeSha"))
+                                    if isinstance(finalize, Mapping)
+                                    else ""
+                                )
                                 or None
                             ),
                         )
-                    await workflow.sleep(timedelta(seconds=self._input.policy.poll_interval_seconds))
+                    await workflow.sleep(
+                        timedelta(seconds=self._input.policy.poll_interval_seconds)
+                    )
                     continue
 
                 if self._classification in WAIT_CLASSIFICATIONS:
                     self._state = "durable_wait"
-                    await workflow.sleep(timedelta(seconds=self._input.policy.poll_interval_seconds))
+                    await workflow.sleep(
+                        timedelta(seconds=self._input.policy.poll_interval_seconds)
+                    )
                     continue
 
                 skill = REMEDIATION_SKILLS.get(self._classification or "")
                 if skill is not None:
-                    signature = blocker_progress_signature(snapshot, self._classification or "")
-                    if signature == self._last_progress_signature:
-                        self._identical_no_progress_count += 1
-                    else:
-                        self._last_progress_signature = signature
-                        self._identical_no_progress_count = 0
-                    if (
-                        self._identical_no_progress_count
-                        >= self._input.policy.max_identical_blockers_without_progress
-                        or self._remediation_counts[skill]
-                        >= self._input.policy.max_remediations_per_type
-                    ):
-                        self._state = "manual_review"
-                        return await self._publish_terminal(
-                            status="manual_review",
-                            reason_code="repeated_blocker_without_progress",
-                            reason="The same actionable blocker repeated without a remote head change.",
-                        )
                     if self._input.shadow_mode:
                         self._state = "shadow_complete"
                         return await self._publish_terminal(
@@ -591,7 +678,38 @@ class MoonMindPRResolverWorkflow:
                             reason_code=f"shadow_{self._classification}",
                             reason=f"Shadow resolver selected {skill}; child dispatch was disabled.",
                         )
-                    self._remediation_counts[skill] += 1
+                    if transition is None:
+                        if progress_signature == self._last_progress_signature:
+                            self._identical_no_progress_count += 1
+                        else:
+                            self._last_progress_signature = progress_signature
+                            self._identical_no_progress_count = 0
+                        if (
+                            self._identical_no_progress_count
+                            >= self._input.policy.max_identical_blockers_without_progress
+                            or self._remediation_counts[skill]
+                            >= self._input.policy.max_remediations_per_type
+                        ):
+                            self._state = "manual_review"
+                            return await self._publish_terminal(
+                                status="manual_review",
+                                reason_code="repeated_blocker_without_progress",
+                                reason=(
+                                    "The same actionable blocker repeated without "
+                                    "a remote head change."
+                                ),
+                            )
+                        self._remediation_counts[skill] += 1
+                    else:
+                        self._remediation_counts = dict(
+                            transition.state.remediation_counts
+                        )
+                        self._identical_no_progress_count = (
+                            transition.state.identical_blocker_count
+                        )
+                        self._last_progress_signature = (
+                            transition.state.last_progress_signature
+                        )
                     request = self._remediation_request(skill=skill, snapshot=snapshot)
                     child_id = (
                         f"{workflow.info().workflow_id}:remediation:{skill}:"
@@ -620,7 +738,8 @@ class MoonMindPRResolverWorkflow:
                         childWorkflowId=child_id,
                     )
                     failure = (
-                        child_result.get("failureClass") or child_result.get("failure_class")
+                        child_result.get("failureClass")
+                        or child_result.get("failure_class")
                         if isinstance(child_result, Mapping)
                         else getattr(child_result, "failure_class", None)
                     )
@@ -646,7 +765,11 @@ class MoonMindPRResolverWorkflow:
                         start_to_close_timeout=timedelta(minutes=2),
                         retry_policy=ACTIVITY_RETRY_POLICY,
                     )
-                    observed = _text(verified.get("headSha")) if isinstance(verified, Mapping) else ""
+                    observed = (
+                        _text(verified.get("headSha"))
+                        if isinstance(verified, Mapping)
+                        else ""
+                    )
                     if observed and observed != previous_head:
                         self._head_sha = observed
                         self._last_progress_signature = None
