@@ -124,7 +124,6 @@ BACKEND_PREFIXES = (
     "moonmind/",
     "tests/unit/",
     "tests/integration/",
-    "tests/integration/reliability/",
     "tests/contract/",
     "tests/api_service/",
     "tests/component/",
