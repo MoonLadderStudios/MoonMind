@@ -1,0 +1,20 @@
+{
+  "artifactType": "remediation.verification",
+  "verificationTarget": "issue_brief",
+  "issueRef": "MM-1202",
+  "remediationAttempt": 4,
+  "remediationAttemptArtifact": "reports/remediation_attempt-4.json",
+  "authoritativeVerifierResult": "artifacts/jira-implement-verify.json",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
+  "recoverableInCurrentRuntime": true,
+  "summary": "Attempt 4 is sound but incomplete: both hosts still need shared-core adoption/parity, rollout needs immutable identity and stale-worker exclusion, capability metrics/alerts remain absent, and readiness needs the real parent-child canary and boundary tests.",
+  "remainingWork": [
+    {"requirement": "Shared portable resolver semantics", "gapType": "implementation", "remainingWork": "Migrate both hosts to the core and add parity/replay fixtures.", "suggestedEvidence": "Resolver hosts, core, shared tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Immutable rollout", "gapType": "implementation", "remainingWork": "Enforce versioned deployment, drain/recreate, and stale-worker exclusion.", "suggestedEvidence": "Worker runtime, Compose/settings, rollout tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Capability observability", "gapType": "implementation", "remainingWork": "Add build/registry diagnostics, metrics, and alerts.", "suggestedEvidence": "Failure diagnostics and monitoring tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Readiness canary and boundary coverage", "gapType": "verification", "remainingWork": "Implement readiness-gating parent-child canary and Temporal/Compose/restart/rollout coverage.", "suggestedEvidence": "Canary implementation and integration tests", "recoverableInCurrentRuntime": true}
+  ],
+  "testResults": [{"result": "PASS", "notes": "Focused suite: 210 passed and 2 subtests passed."}, {"result": "PASS", "notes": "git diff --check."}, {"result": "NOT RUN", "notes": "Advisory broad Compose integration."}],
+  "scopeLimitations": []
+}
