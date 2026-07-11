@@ -1,15 +1,17 @@
 # Shimmer Sweep Effect — Status-Aware Implementation Design
 Status: Active  
 Owners: MoonMind Engineering  
-Last updated: 2026-06-29
+Last updated: 2026-07-11
 
 ## 1. Intent
 
 Define the shared dashboard shimmer treatment used by active and transition workflow status pills.
 
-The effect communicates **active progress, preparation, or wrap-up** without implying error, urgency, or instability. It should feel like a premium “thinking” shimmer: focused, calm, phase-locked, readable at small sizes, and tied to the status pill’s semantic color.
+The effect communicates **active progress, preparation, or wrap-up** without implying error, urgency, or instability. It should feel like a premium “thinking” shimmer: focused, calm, phase-locked, and readable at small sizes.
 
-The shimmer must **not** always render in the executing/cyan hue. If a `planning` pill is blue, its shimmer should read as blue. If a `finalizing` pill is slate, its shimmer should read as slate. `executing` and `running` remain cyan because their pill color remains the live/executing hue.
+The **approved sweep palette is fixed and status-agnostic**: a translucent accent halo (`--mm-accent` at 14%) beneath a translucent accent-2 core (`--mm-accent-2` at 34%), giving the subtle purple/cyan two-tone edge interaction operators reviewed and approved (MM-1036 as shipped). Only the **glyph fallback letter treatment** is status-aware (`currentColor`-derived), because that is the MM-1048 portion that actually rendered and was accepted.
+
+History note: MM-1048 proposed re-tinting the whole sweep from the pill hue with brighter mixes (30% halo, fully opaque whitened core), but the same change broke gradient resolution, so that treatment never rendered. When the shimmer was later restored, the latent MM-1048 palette appeared for the first time and was rejected by the operator as far brighter and thicker than the approved look. The values in this document are the operator-approved on-screen aesthetic; do not change them without an operator-reviewed visual baseline update.
 
 ---
 
@@ -21,9 +23,9 @@ It defines:
 
 - the status-pill host contract
 - the shared moving light-field model
-- status-derived shimmer hue binding
+- the fixed approved sweep palette and the status-derived letter treatment
 - fill, border, and text mask behavior
-- the small horizontal-bias motion refinement
+- the approved motion path
 - reduced-motion, forced-colors, and unsupported text-mask fallbacks
 - the React/CSS implementation shape that keeps the effect reusable across list, card, and detail surfaces
 
@@ -68,7 +70,7 @@ source_of_truth:
     path: docs/UI/WorkflowStatusColorSemantics.md
     responsibility:
       - define which exact status hue each pill uses
-      - require status-aware shimmer hue when shimmer is enabled
+      - the sweep palette itself is fixed (section 8); only the glyph-fallback letter hue follows the pill color
 ```
 
 ---
@@ -145,8 +147,8 @@ Eligibility must come from `executionStatusPillProps(status)`, not from broad co
 ```yaml
 principles:
   - active_states_are_explicit_not_inferred_from_color_class_alone
-  - shimmer_hue_matches_the_status_pill_hue
-  - executing_hue_is_not_reused_for_non_executing_statuses
+  - sweep_palette_is_the_fixed_operator_approved_accent_two_tone
+  - only_the_glyph_fallback_letter_treatment_is_status_aware
   - motion_must_read_as_activity_not_alert
   - text_legibility_must_remain_primary
   - fill_border_and_text_must_share_one_moving_light_field
@@ -246,18 +248,17 @@ motion:
 
   path:
     start_x_pct: 135
-    start_y_pct_target: 120
+    start_y_pct: 160
     end_x_pct: -135
-    end_y_pct_target: -120
+    end_y_pct: -160
     y_behavior: diagonal_travel
-    horizontal_bias: horizontal travel delta (270%) exceeds vertical travel delta (240%)
-    angle_deg_target: -20
-    previous_values:
-      angle_deg: -24
-      start_y_pct: 128
-      end_y_pct: -128
+    angle_deg: -18
     keyframes: mm-status-pill-shimmer
-    note: small refinement only; do not turn the shimmer into a scanner beam or horizontal loading bar
+    note: >
+      These are the approved on-screen values (MM-1036 as shipped). MM-1048's
+      -20deg / +/-120% horizontal-bias refinement never rendered (its own
+      commit broke gradient resolution) and is retired. Do not turn the shimmer
+      into a scanner beam or horizontal loading bar.
 
   band:
     width_pct: 24
@@ -292,57 +293,39 @@ motion:
     note: fallback glyph brightening is not the primary path and exists only for browsers without text clipping support
 ```
 
-The desired motion change is intentionally small: the sweep should read **a little less vertical and a little more horizontal** than the previous `-24deg` / `±128%` vertical-travel treatment. The first implementation target is `-20deg` with a modest vertical-travel reduction to `±120%`; visual QA may keep the travel endpoints unchanged if the angle adjustment alone is sufficient.
+The motion profile is settled: `-18deg` with `±160%` vertical travel is the approved on-screen path. Any future motion refinement must ship with an operator-reviewed visual baseline update and matching computed-style test changes in the same PR.
 
 ---
 
-## 8. Status hue binding
+## 8. Shimmer palette
 
-The shimmer hue derives from the same semantic hue as the status pill. Prefer one shared status-derived token pair over copied per-status shimmer rules.
+The **sweep palette is fixed and status-agnostic** — the operator-approved MM-1036 look. Only the glyph-fallback letter treatment derives from the pill hue.
 
 ```yaml
-status_hue_binding:
-  source_of_truth: exact status pill color class
-  implementation_preference:
-    - use currentColor or status-local CSS custom properties on the host
-    - feed those values into the shared gradient token
-    - let ::before, ::after, and .status-letter-wave::after inherit the same hue inputs
-
-  expected_hues:
-    executing:
-      pill_class: status-running
-      shimmer_hue: live/executing cyan
-      token: --mm-accent-2
-    running:
-      pill_class: status-running
-      shimmer_hue: live/executing cyan
-      token: --mm-accent-2
-    initializing:
-      pill_class: status-initializing
-      shimmer_hue: near-execution blue
-      token: --mm-status-setup
-    planning:
-      pill_class: status-planning
-      shimmer_hue: near-execution blue
-      token: --mm-status-setup
-    finalizing:
-      pill_class: status-finalizing
-      shimmer_hue: finalization slate
-      token: --mm-status-finalizing
+shimmer_palette:
+  sweep:
+    halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))   # purple @ 14%
+    core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity)) # cyan @ 34%
+    translucency: every gradient stop stays translucent (max alpha 0.34); an opaque or whitened stop is a regression
+    status_aware: false
+  letters:
+    halo: color-mix(in srgb, currentColor 32%, transparent)
+    bright: color-mix(in srgb, currentColor 68%, white 32%)
+    status_aware: true
 ```
 
-Suggested CSS shape:
+Canonical CSS shape (declared on the shimmer host rule):
 
 ```css
 .status[data-effect="shimmer-sweep"] {
-  --mm-status-shimmer-halo: color-mix(in srgb, currentColor 30%, transparent);
-  --mm-status-shimmer-core: color-mix(in srgb, currentColor 70%, white 30%);
+  --mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity));
+  --mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity));
   --mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent);
   --mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%);
 }
 ```
 
-The exact percentages may be tuned for contrast, but the binding principle is stable: **the shimmer follows the pill hue**. `planning` should not receive the executing/cyan shimmer merely because the original shimmer was created for `executing`.
+MM-1048's status-derived sweep hue binding (`color-mix` from `currentColor`, whitened opaque core) is retired: it never rendered while it was in the tree, and when finally revealed it read as a different, far brighter effect than the approved design. If a status-aware sweep is ever wanted, it must be proposed as a new visual change with operator review and updated computed-style baselines — not reintroduced as part of a repair.
 
 ---
 
@@ -408,7 +391,8 @@ implementation_shape:
     overflow: hidden
     isolation: isolate
     background_color: preserve exact status class background
-    hue_tokens: derive from currentColor or status-local variables
+    sweep_palette_tokens: fixed accent halo/core declared on the host (see section 8)
+    letter_hue_tokens: derive from currentColor
 
   rendering_strategy:
     fill_mask: host::before
@@ -437,7 +421,7 @@ implementation_shape:
     - page_local_status_pill_wrappers
 ```
 
-Changing hue and angle should remain a low-risk CSS token update. It should not add DOM, change layout, or add animation work beyond the existing pseudo-element/text-mask animation.
+Palette and angle changes stay CSS-token updates — no DOM, layout, or animation-model changes — but they are **never** low-ceremony: the approved values are pinned by computed-style browser tests and require an operator-reviewed baseline update in the same PR.
 
 ---
 
@@ -489,25 +473,22 @@ forced_colors:
 
 ```yaml
 state_matrix:
+  # The sweep palette is identical for every shimmer state (fixed accent
+  # two-tone); only the glyph-fallback letter hue follows the pill color.
   executing:
     shimmer_sweep: on
-    shimmer_hue: live/executing cyan
 
   running:
     shimmer_sweep: on
-    shimmer_hue: live/executing cyan
 
   initializing:
     shimmer_sweep: on
-    shimmer_hue: near-execution blue
 
   planning:
     shimmer_sweep: on
-    shimmer_hue: near-execution blue
 
   finalizing:
     shimmer_sweep: on
-    shimmer_hue: finalization slate
 
   queued:
     shimmer_sweep: off
@@ -580,7 +561,7 @@ tone:
 ```yaml
 effect_tokens:
   --mm-executing-sweep-cycle-duration: 2600ms
-  --mm-executing-sweep-angle: -20deg
+  --mm-executing-sweep-angle: -18deg
   --mm-executing-sweep-band-width: 24%
   --mm-executing-sweep-band-height: 180%
   --mm-executing-sweep-halo-width-multiplier: 10
@@ -588,9 +569,9 @@ effect_tokens:
   --mm-executing-sweep-core-opacity: 0.34
   --mm-executing-sweep-halo-opacity: 0.14
   --mm-executing-sweep-start-x: 135%
-  --mm-executing-sweep-start-y: 120%
+  --mm-executing-sweep-start-y: 160%
   --mm-executing-sweep-end-x: -135%
-  --mm-executing-sweep-end-y: -120%
+  --mm-executing-sweep-end-y: -160%
   --mm-executing-sweep-layer-offset-x: -12%
   --mm-executing-sweep-layer-offset-y: -10%
   --mm-executing-border-glint-outset: 1px
@@ -600,14 +581,14 @@ effect_tokens:
   --mm-executing-letter-sweep-start-ratio: 0.2
   --mm-executing-letter-sweep-travel-ratio: 0.18
   --mm-executing-letter-sweep-direction: 1
-  --mm-status-shimmer-halo: status-derived halo color
-  --mm-status-shimmer-core: status-derived core color
-  --mm-status-shimmer-letter-halo: status-derived fallback glyph halo
-  --mm-status-shimmer-letter-bright: status-derived fallback glyph bright color
-  --mm-status-moving-light-gradient: shared halo/core linear-gradient stack using status-derived inputs (pill-scoped, never :root)
+  --mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))
+  --mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity))
+  --mm-status-shimmer-letter-halo: status-derived fallback glyph halo (currentColor mix)
+  --mm-status-shimmer-letter-bright: status-derived fallback glyph bright color (currentColor mix)
+  --mm-status-moving-light-gradient: shared halo/core linear-gradient stack (pill-scoped, never :root)
 ```
 
-The `--mm-executing-*` geometry names are retained for compatibility even though the visual effect is now status-aware. Do not rename them in isolation unless all tests and references are migrated together.
+The `--mm-executing-*` geometry names are retained for compatibility even though the effect serves every shimmer status. Do not rename them in isolation unless all tests and references are migrated together.
 
 ---
 
@@ -619,10 +600,10 @@ acceptance_criteria:
   - executing, running, initializing, planning, and finalizing receive data-effect shimmer-sweep while enabled
   - non-shimmer statuses do not render glyph-wave markup
   - active shimmer hosts match the shared selector contract and remain reusable across list, card, and detail surfaces
-  - the shimmer hue follows the status pill hue rather than always using executing cyan
-  - planning and initializing shimmer as near-execution blue, not live/executing cyan
+  - the sweep renders the fixed approved palette (translucent accent halo, translucent accent-2 core) with no opaque stop
+  - only the glyph-fallback letter treatment derives from the pill hue
   - fill, border, and text masks use the same moving light-field token and keyframe animation
-  - the shimmer angle/path reads slightly less vertical and more horizontal than the previous -24deg treatment
+  - the sweep travels the approved -18deg / +/-160% path
   - the active pill remains readable throughout the sweep
   - the shimmer never escapes the rounded visual bounds of the pill
   - the effect produces no measurable layout shift
@@ -643,8 +624,8 @@ acceptance_criteria:
 verification:
   css_contract_tests:
     assert:
-      - status-derived shimmer color variables exist on the shimmer host
-      - shared gradient token uses status-derived color variables instead of hard-coded executing colors
+      - shimmer color variables exist on the shimmer host and carry the approved fixed accent palette
+      - shared gradient token consumes those host-scoped variables (never :root-scoped)
       - fill mask uses shared gradient and mm-status-pill-shimmer
       - border mask uses shared gradient, mm-status-pill-shimmer, and ring mask geometry
       - text mask uses shared gradient, mm-status-pill-shimmer, content attr(data-label), and text clipping

@@ -2972,21 +2972,20 @@ describe('Dashboard shared entry', () => {
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
     expect(dashboardCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
-    // MM-1048: angle and vertical travel are slightly more horizontal than the
-    // previous -24deg / +/-128% treatment.
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-20deg/);
+    // Approved shimmer geometry (MM-1036 as shipped and operator-reviewed).
+    // MM-1048's -20deg / +/-120% re-angle never rendered (its own commit broke
+    // gradient resolution), so it is not the approved look.
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-18deg/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
     expect(dashboardCss).not.toContain('--mm-executing-sweep-halo-peak-width-multiplier');
     expect(dashboardCss).not.toContain('--mm-executing-sweep-core-peak-width-multiplier');
-    // MM-1048: vertical travel is reduced to +/-120% so the horizontal delta
-    // exceeds the vertical delta and the sweep travels more horizontally.
     expect(dashboardCss).toMatch(/--mm-executing-sweep-start-x:\s*135%/);
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*120%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*160%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-end-x:\s*-135%/);
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-120%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
     expect(dashboardCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
@@ -2998,14 +2997,23 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).toContain('--mm-executing-border-glint-outset: 1px');
     expect(dashboardCss).toContain('--mm-executing-border-glint-width: 3px');
     expect(dashboardCss).toContain('--mm-executing-border-glint-opacity: 0.95');
-    expect(dashboardCss).toContain('--mm-status-shimmer-halo: color-mix(in srgb, currentColor 30%, transparent)');
-    expect(dashboardCss).toContain('--mm-status-shimmer-core: color-mix(in srgb, currentColor 70%, white 30%)');
+    // Approved shimmer palette (MM-1036 as shipped): translucent accent halo
+    // under a translucent accent-2 core. MM-1048's brighter currentColor mixes
+    // (30% halo, opaque whitened core) never rendered on screen and are
+    // explicitly rejected below so a "restore the shimmer" fix cannot silently
+    // reintroduce them.
+    expect(dashboardCss).toContain(
+      '--mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))',
+    );
+    expect(dashboardCss).toContain(
+      '--mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity))',
+    );
+    expect(dashboardCss).not.toContain('--mm-status-shimmer-halo: color-mix');
+    expect(dashboardCss).not.toContain('--mm-status-shimmer-core: color-mix');
     expect(dashboardCss).toContain('--mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent)');
     expect(dashboardCss).toContain('--mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%)');
     expect(dashboardCss).toContain('var(--mm-status-shimmer-halo) 50%');
     expect(dashboardCss).toContain('var(--mm-status-shimmer-core) 50%');
-    expect(dashboardCss).not.toContain('rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity)) 50%');
-    expect(dashboardCss).not.toContain('rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity)) 50%');
 
     const shimmerBlock = cssRuleBlocks(
       dashboardCss,

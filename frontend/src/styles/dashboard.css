@@ -54,18 +54,20 @@
   --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.88);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
-  /* MM-1048: slightly more horizontal shimmer path while preserving the shared
-     compatibility token names used by existing status-pill selectors. */
-  --mm-executing-sweep-angle: -20deg;
+  /* Approved shimmer geometry (MM-1036 as shipped and operator-reviewed).
+     MM-1048 later re-angled the path to -20deg / +/-120%, but that commit also
+     broke gradient resolution, so its geometry never rendered; the approved
+     on-screen look is this one. Change only with an operator-reviewed visual
+     baseline update. */
+  --mm-executing-sweep-angle: -18deg;
   --mm-executing-sweep-band-width: 24%;
   --mm-executing-sweep-band-height: 180%;
   --mm-executing-sweep-halo-width-multiplier: 10;
   --mm-executing-sweep-core-width-multiplier: 9.1667;
-  /* MM-1048: horizontal travel delta (270%) exceeds the vertical delta (240%). */
   --mm-executing-sweep-start-x: 135%;
-  --mm-executing-sweep-start-y: 120%;
+  --mm-executing-sweep-start-y: 160%;
   --mm-executing-sweep-end-x: -135%;
-  --mm-executing-sweep-end-y: -120%;
+  --mm-executing-sweep-end-y: -160%;
   --mm-executing-sweep-layer-offset-x: -12%;
   --mm-executing-sweep-layer-offset-y: -10%;
   --mm-executing-sweep-core-opacity: 0.34;
@@ -3307,8 +3309,14 @@ tr[data-proposal-id].proposal-consuming td {
 
 .status[data-effect="shimmer-sweep"],
 .status-running.is-executing {
-  --mm-status-shimmer-halo: color-mix(in srgb, currentColor 30%, transparent);
-  --mm-status-shimmer-core: color-mix(in srgb, currentColor 70%, white 30%);
+  /* Approved shimmer palette (MM-1036 as shipped and operator-reviewed): a
+     translucent accent halo under a translucent accent-2 core. MM-1048 swapped
+     these for brighter currentColor mixes (30% halo, opaque whitened core),
+     but the same commit broke gradient resolution, so that treatment never
+     rendered on screen; restoring the effect must not silently adopt it.
+     Change only with an operator-reviewed visual baseline update. */
+  --mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity));
+  --mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity));
   --mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent);
   --mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%);
   --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
