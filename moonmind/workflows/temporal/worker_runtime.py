@@ -2698,7 +2698,16 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        worker_spec = workflow_fleet_worker_spec(settings.temporal)
+        worker_spec = workflow_fleet_worker_spec(
+            settings.temporal,
+            task_queues=topology.task_queues,
+            activity_types=(
+                "resolve_adapter_metadata",
+                "get_activity_route",
+                "resolve_external_adapter",
+                "external_adapter_execution_style",
+            ),
+        )
         workflows = worker_spec.workflow_classes
         activities = [
             resolve_adapter_metadata,
@@ -2729,19 +2738,34 @@ async def main_async() -> None:
             for task_queue in topology.task_queues
         ]
 
-        mark_worker_ready(
-            task_queues=topology.task_queues,
-            workflow_types=(worker_spec.workflow_types if topology.fleet == WORKFLOW_FLEET else ()),
-            registry_fingerprint=(worker_spec.fingerprint if topology.fleet == WORKFLOW_FLEET else None),
-        )
-
-        logger.info(
-            "Worker started, polling task queues: %s",
-            ", ".join(topology.task_queues),
-        )
         async with asyncio.TaskGroup() as tg:
+            polling_started = asyncio.Event()
+
+            async def run_worker(worker: Worker) -> None:
+                # The coroutine is now scheduled and about to enter the SDK polling loop.
+                polling_started.set()
+                await worker.run()
+
             for worker in workers:
-                tg.create_task(worker.run())
+                tg.create_task(run_worker(worker))
+            await polling_started.wait()
+            mark_worker_ready(
+                task_queues=topology.task_queues,
+                workflow_types=(
+                    worker_spec.workflow_types
+                    if topology.fleet == WORKFLOW_FLEET
+                    else ()
+                ),
+                registry_fingerprint=(
+                    worker_spec.fingerprint
+                    if topology.fleet == WORKFLOW_FLEET
+                    else None
+                ),
+            )
+            logger.info(
+                "Worker started, polling task queues: %s",
+                ", ".join(topology.task_queues),
+            )
     finally:
         mark_worker_not_ready()
         if runtime_resources is not None:

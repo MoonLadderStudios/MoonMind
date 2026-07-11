@@ -34,11 +34,13 @@ class WorkflowWorkerSpec:
 
     workflow_types: tuple[str, ...]
     workflow_classes: tuple[type[Any], ...]
+    task_queues: tuple[str, ...]
+    activity_types: tuple[str, ...]
     fingerprint: str
 
 
-def _registry_fingerprint(workflow_types: tuple[str, ...]) -> str:
-    payload = "\n".join(workflow_types).encode("utf-8")
+def _registry_fingerprint(parts: tuple[str, ...]) -> str:
+    payload = "\n".join(parts).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -121,6 +123,9 @@ def workflow_fleet_workflow_types(
 
 def workflow_fleet_worker_spec(
     temporal_settings: TemporalSettings,
+    *,
+    task_queues: tuple[str, ...] | None = None,
+    activity_types: tuple[str, ...] = (),
 ) -> WorkflowWorkerSpec:
     """Return the single immutable specification for construction and diagnostics."""
 
@@ -128,8 +133,30 @@ def workflow_fleet_worker_spec(
     workflow_classes = workflow_fleet_workflow_classes()
     if len(workflow_types) != len(workflow_classes):
         raise RuntimeError("workflow registry type/class count mismatch")
+    from temporalio import workflow
+
+    loaded_types = tuple(
+        workflow._Definition.must_from_class(workflow_class).name
+        for workflow_class in workflow_classes
+    )
+    if loaded_types != workflow_types:
+        raise RuntimeError(
+            "workflow registry declared/loaded type mismatch: "
+            f"declared={workflow_types!r} loaded={loaded_types!r}"
+        )
+    resolved_task_queues = task_queues or (
+        temporal_settings.workflow_task_queue,
+    )
+    fingerprint_parts = (
+        "fleet=workflow",
+        *(f"queue={value}" for value in resolved_task_queues),
+        *(f"workflow={value}" for value in workflow_types),
+        *(f"activity={value}" for value in activity_types),
+    )
     return WorkflowWorkerSpec(
         workflow_types=workflow_types,
         workflow_classes=workflow_classes,
-        fingerprint=_registry_fingerprint(workflow_types),
+        task_queues=resolved_task_queues,
+        activity_types=activity_types,
+        fingerprint=_registry_fingerprint(fingerprint_parts),
     )

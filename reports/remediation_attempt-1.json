@@ -2,64 +2,89 @@
   "artifact_type": "remediation.attempt",
   "attempt": 1,
   "issueProvider": "jira",
-  "issueRef": "MM-1200",
+  "issueRef": "MM-1202",
   "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "completed",
-  "summary": "Added only the focused frontend regression coverage requested by the latest MM-1200 verification report. No production code or route behavior changed.",
+  "status": "partial",
+  "summary": "Strengthened the executable workflow-worker specification and startup readiness evidence. The broader resolver binding, portable-core, rollout, capability-failure, canary, and documentation work remains for later bounded remediation attempts.",
   "changedFiles": [
-    "frontend/src/entrypoints/dashboard.test.tsx",
-    "frontend/src/styles/dashboardBrand.test.ts",
+    "moonmind/workflows/temporal/workflow_registry.py",
+    "moonmind/workflows/temporal/worker_healthcheck.py",
+    "moonmind/workflows/temporal/worker_runtime.py",
+    "tests/unit/workflows/temporal/test_temporal_workers.py",
+    "tests/unit/workflows/temporal/test_worker_healthcheck.py",
     "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "System trigger active state on every child route",
-      "gapType": "verification",
-      "status": "remediated",
-      "evidence": "Rendered component coverage asserts System active and the primary Workflows link inactive for /manifests, /artifacts/*, /observability/*, /remediations/*, and /settings/*."
+      "requirement": "Complete executable worker specification",
+      "gapType": "implementation",
+      "status": "partial",
+      "evidence": "WorkflowWorkerSpec now owns workflow classes/types, task queues, activity identities, and a composition fingerprint; it validates loaded Temporal type names against declarations before Worker construction. The complete multi-fleet activity-handler composition is not yet centralized in this type."
     },
     {
-      "requirement": "Accessible System interaction contract and mobile inline navigation",
-      "gapType": "verification",
-      "status": "remediated",
-      "evidence": "Focused tests cover Enter, Space, ArrowDown, ArrowUp, Home, End, Escape focus restoration, client-side selection and closure, outside click, focus departure, disabled destinations, and mobile inline children without a nested menu."
+      "requirement": "Trusted native resolver binding",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "No changes in this attempt; provenance, digest, policy, compatibility, and portable fallback require a cohesive skill-resolution contract change."
     },
     {
-      "requirement": "System-specific desktop, mobile, focus, dark-mode, and reduced-motion styling coverage",
+      "requirement": "Portable semantic core and parity",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "No changes in this attempt; shared provider-neutral core and cross-host fixtures remain absent."
+    },
+    {
+      "requirement": "Readiness, build identity, and versioned deployment",
+      "gapType": "implementation",
+      "status": "partial",
+      "evidence": "Readiness is now asserted only after Worker.run tasks are scheduled, and exposes build, image, deployment, resolver-core, queues, workflows, and fingerprint identities. Temporal deployment versioning, immutable identity enforcement, and drain/recreate controls remain."
+    },
+    {
+      "requirement": "Operator capability failure and observability",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "No changes in this attempt; capability-failure classification, budget protection, diagnostics, metrics, and alerts remain."
+    },
+    {
+      "requirement": "Canary and full verification coverage",
       "gapType": "verification",
-      "status": "remediated",
-      "evidence": "CSS regression assertions cover the end-aligned stacked desktop popover, theme-token panel/active/focus styling (including tokens overridden by the dark theme), mobile flattening, and reduced-motion suppression."
+      "status": "partial",
+      "evidence": "Added unit coverage proving queue/activity changes alter the executable fingerprint and readiness exposes deployment identities. Parent-child, replay/restart, parity, and Compose canary coverage remain."
+    },
+    {
+      "requirement": "Required architecture and operations documentation",
+      "gapType": "documentation",
+      "status": "remaining",
+      "evidence": "No documentation changes were made in this attempt."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "npm run ui:test -- frontend/src/entrypoints/dashboard.test.tsx frontend/src/styles/dashboardBrand.test.ts",
-      "result": "PASS",
-      "details": "2 files passed; 120 tests passed."
-    },
-    {
-      "command": "npm run ui:test -- frontend/src/entrypoints/dashboard.test.tsx frontend/src/lib/dashboardRoutes.test.ts frontend/src/styles/dashboardBrand.test.ts",
-      "result": "PASS",
-      "details": "3 files passed; 155 tests passed."
-    },
-    {
-      "command": "./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json",
+      "command": "python -m py_compile moonmind/workflows/temporal/workflow_registry.py moonmind/workflows/temporal/worker_runtime.py moonmind/workflows/temporal/worker_healthcheck.py",
       "result": "PASS"
     },
     {
-      "command": "./node_modules/.bin/eslint -c frontend/eslint.config.mjs frontend/src",
-      "result": "PASS"
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_worker_healthcheck.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py",
+      "result": "BLOCKED",
+      "details": "Repository preliminary audits passed, but /usr/local/bin/python reported: No module named pytest."
     },
     {
-      "command": "npm run ui:clean-dist && ./node_modules/.bin/vite build --config frontend/vite.config.ts && npm run ui:verify-manifest",
-      "result": "PASS",
-      "details": "Production build and manifest verification passed; the existing non-fatal chunk-size warning remained."
+      "command": "git diff --check",
+      "result": "PASS"
     }
   ],
-  "knownRemainingGaps": [],
+  "knownRemainingGaps": [
+    "Centralize complete multi-fleet activity composition in the executable spec.",
+    "Implement trusted native binding eligibility independently of publish authority.",
+    "Extract a shared portable resolver core and parity fixtures.",
+    "Add immutable/versioned Temporal deployment and stale-worker controls.",
+    "Add deployment capability failure classification and observability.",
+    "Add parent-child, replay/restart, parity, and Compose canary tests.",
+    "Update the MM-1202 architecture, operations, restart, and failure documentation."
+  ],
   "scopeNotes": [
-    "No production implementation changes were necessary because the verifier marked implementationStatus VERIFIED for the partially verified requirements.",
-    "No integration_ci run was required for this frontend-only verification remediation."
+    "Changes are limited to gaps explicitly listed in the latest verification report.",
+    "No pull request was created and Jira status was not changed."
   ]
 }

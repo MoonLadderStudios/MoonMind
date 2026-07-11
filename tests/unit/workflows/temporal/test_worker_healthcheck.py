@@ -39,6 +39,7 @@ def test_readiness_exposes_bounded_worker_identity():
         assert body["task_queues"] == ["workflow"]
         assert body["workflow_types"] == ["MoonMind.PRResolver"]
         assert body["registry_fingerprint"] == "a" * 64
+        assert {"build_id", "image_id", "deployment_id", "resolver_core_version"} <= body.keys()
     finally:
         mark_worker_not_ready()
 

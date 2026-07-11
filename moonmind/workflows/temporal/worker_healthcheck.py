@@ -36,6 +36,17 @@ class WorkerReadiness:
     task_queues: tuple[str, ...] = ()
     workflow_types: tuple[str, ...] = ()
     registry_fingerprint: str | None = None
+    image_id: str = field(
+        default_factory=lambda: os.environ.get("MOONMIND_IMAGE_ID", "unknown")
+    )
+    deployment_id: str = field(
+        default_factory=lambda: os.environ.get("MOONMIND_DEPLOYMENT_ID", "unknown")
+    )
+    resolver_core_version: str = field(
+        default_factory=lambda: os.environ.get(
+            "MOONMIND_PR_RESOLVER_CORE_VERSION", "unknown"
+        )
+    )
     build_id: str = field(
         default_factory=lambda: os.environ.get("MOONMIND_BUILD_ID", "unknown")
     )
@@ -86,6 +97,9 @@ def _build_response_body(*, readiness: bool = False) -> bytes:
         "uptime_seconds": uptime,
         "ready": _readiness.ready,
         "build_id": _readiness.build_id,
+        "image_id": _readiness.image_id,
+        "deployment_id": _readiness.deployment_id,
+        "resolver_core_version": _readiness.resolver_core_version,
     }
     if readiness:
         body.update(
