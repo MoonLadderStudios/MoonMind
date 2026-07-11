@@ -4547,6 +4547,9 @@ class MoonMindRunWorkflow:
         ):
             capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
+            workspace_locator = candidate.get("workspaceLocator") or candidate.get(
+                "workspace_locator"
+            )
             workspace_path = self._checkpoint_capture_text(
                 candidate,
                 "workspacePath",
@@ -4564,7 +4567,9 @@ class MoonMindRunWorkflow:
                 "externalStateRef",
                 "external_state_ref",
             )
-            if workspace_path:
+            if isinstance(workspace_locator, Mapping):
+                capture_input["workspaceLocator"] = dict(workspace_locator)
+            elif workspace_path:
                 capture_input["workspacePath"] = workspace_path
             elif workspace_root_ref:
                 capture_input["workspaceRootRef"] = workspace_root_ref
@@ -4658,6 +4663,8 @@ class MoonMindRunWorkflow:
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
+        if isinstance(capture_input.get("workspaceLocator"), Mapping):
+            payload["workspaceLocator"] = dict(capture_input["workspaceLocator"])
         if capture_input.get("workspacePath"):
             payload["workspacePath"] = capture_input["workspacePath"]
         if capture_input.get("workspaceRootRef"):

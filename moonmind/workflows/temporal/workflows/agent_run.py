@@ -1208,6 +1208,7 @@ class MoonMindAgentRun:
             workspace_spec = dict(request.workspace_spec)
             metadata.setdefault("workspaceSpec", workspace_spec)
             for key in (
+                "workspaceLocator",
                 "workspacePath",
                 "workspaceRootRef",
                 "workspaceRoot",
