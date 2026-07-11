@@ -2928,6 +2928,59 @@ async def test_run_degrades_managed_checkpoint_without_sandbox_capture(
     ] == "managed_runtime"
 
 
+@pytest.mark.asyncio
+async def test_managed_checkpoint_capability_gap_reaches_finalization_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "workspaceRoot": "/work/agent_jobs/managed-run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("managed workspace must not reach a sandbox activity")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["finalizationOutcome"] == {
+        "status": "unsupported",
+        "phase": "after_execution_checkpoint",
+        "criticality": "recoverability_only",
+        "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+        "terminalFailureCode": None,
+        "retryCount": 0,
+        "checkpointRef": None,
+        "message": "Checkpoint capture is unsupported by this runtime.",
+        "updatedAt": "2026-06-13T12:00:00Z",
+    }
+
+
 def test_run_derives_managed_authority_from_agent_id() -> None:
     workflow = MoonMindRunWorkflow()
 
