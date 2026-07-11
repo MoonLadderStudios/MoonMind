@@ -62,12 +62,38 @@ describe('Remediations', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('keeps the collection shell pending while UI info has not provided capabilities yet', () => {
+    const fetchSpy = vi.spyOn(window, 'fetch');
+
+    renderPage({
+      ...payload,
+      features: {},
+      initialData: {},
+    });
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Refresh' }).hasAttribute('disabled')).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('requires the compact list endpoint to be same-origin and shell-provided', () => {
     const fetchSpy = vi.spyOn(window, 'fetch');
 
     renderPage({
       ...payload,
       initialData: { uiEndpoints: { remediations: 'https://example.test/remediations' } },
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain('not enabled');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects backslash-prefixed endpoint URLs before they reach fetch', () => {
+    const fetchSpy = vi.spyOn(window, 'fetch');
+
+    renderPage({
+      ...payload,
+      initialData: { uiEndpoints: { remediations: '/\\example.test/remediations' } },
     });
 
     expect(screen.getByRole('alert').textContent).toContain('not enabled');

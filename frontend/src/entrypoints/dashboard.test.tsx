@@ -617,7 +617,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
     expect(screen.getByRole('radiogroup', { name: 'Recurring list display' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
 
     fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
 
@@ -819,12 +819,12 @@ describe('Dashboard shared entry', () => {
     });
     expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Full table' }));
     await waitFor(() => {
       expect(window.location.pathname).toBe('/schedules');
     });
     expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('MM-1150 restores deterministic focus after keyboard-driven Recurring mode switches', async () => {
@@ -879,7 +879,7 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
-    const tableRadio = screen.getByRole('radio', { name: 'Full screen table' });
+    const tableRadio = screen.getByRole('radio', { name: 'Full table' });
     tableRadio.focus();
     fireEvent.keyDown(tableRadio, { key: 'ArrowLeft' });
 
@@ -925,7 +925,7 @@ describe('Dashboard shared entry', () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(selectedTableRow);
     });
-    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Full table' }).getAttribute('aria-checked')).toBe('true');
   });
 
   // MM-1145: persistence + reseeding of the Recurring list display mode and the
@@ -1770,15 +1770,21 @@ describe('Dashboard shared entry', () => {
 
   it('MM-1181 keeps route roots fluid and edge-anchored', async () => {
     const contentRule = cssRuleBlock(dashboardCss, '.dashboard-content');
+    const stateStripRule = cssRuleBlock(dashboardCss, '.dashboard-state-strip');
+    const stateStripInnerRule = cssRuleBlock(dashboardCss, '.dashboard-state-strip__inner');
     const panelRule = cssRuleBlock(dashboardCss, '.panel');
     expect(contentRule).toContain('min-width: 0;');
     expect(contentRule).toContain('width: 100%;');
+    expect(stateStripRule).toContain('min-width: 0;');
+    expect(stateStripRule).toContain('width: 100%;');
+    expect(stateStripInnerRule).toContain('max-width: min(72rem, calc(100vw - 2rem));');
     expect(panelRule).toContain('margin-left: 0;');
     expect(panelRule).toContain('margin-right: 0;');
     expect(panelRule).toContain('max-width: none;');
     expect(panelRule).toContain('min-width: 0;');
     expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain('max-width: none;');
     expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
+    expect(dashboardCss).not.toContain('dashboard-shell-constrained');
   });
 
   it('keeps workflow collection workspaces fluid', async () => {

@@ -105,6 +105,174 @@ _SKILL_INPUT_CONTRACT_CACHE_MAX = 256
 
 
 @dataclass(frozen=True, slots=True)
+class DashboardDestination:
+    key: str
+    label: str
+    icon_key: str
+    canonical_path: str
+    path_patterns: tuple[str, ...]
+    navigation_group: str
+    page_classification: str
+    capability_key: str
+    endpoint_key: str | None = None
+    display_mode: str | None = None
+    page: str = "dashboard"
+    data_wide_panel: bool = True
+
+    def to_ui_info(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "key": self.key,
+            "label": self.label,
+            "iconKey": self.icon_key,
+            "canonicalPath": self.canonical_path,
+            "pathPatterns": list(self.path_patterns),
+            "navigationGroup": self.navigation_group,
+            "pageClassification": self.page_classification,
+            "capabilityKey": self.capability_key,
+        }
+        if self.endpoint_key is not None:
+            payload["endpointKey"] = self.endpoint_key
+        if self.display_mode is not None:
+            payload["displayMode"] = self.display_mode
+        return payload
+
+
+DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
+    DashboardDestination(
+        key="workflows",
+        label="Workflows",
+        icon_key="scroll-text",
+        canonical_path="/workflows",
+        path_patterns=(
+            "/workflows",
+            "/workflows/:workflowId",
+            "/workflows/:workflowId/:detailTab",
+        ),
+        navigation_group="primary",
+        page_classification="workspace",
+        capability_key="workflowList",
+        endpoint_key="workflows",
+        display_mode="workflow-list",
+        page="workflows-workspace",
+    ),
+    DashboardDestination(
+        key="create",
+        label="Create",
+        icon_key="rocket",
+        canonical_path="/workflows/new",
+        path_patterns=("/workflows/new",),
+        navigation_group="primary",
+        page_classification="create",
+        capability_key="workflowActions",
+        page="workflows-workspace",
+    ),
+    DashboardDestination(
+        key="recurring",
+        label="Recurring",
+        icon_key="moon",
+        canonical_path="/schedules",
+        path_patterns=("/schedules", "/schedules/:definitionId"),
+        navigation_group="primary",
+        page_classification="workspace",
+        capability_key="schedules",
+        endpoint_key="schedules",
+        display_mode="recurring-list",
+        page="schedules",
+    ),
+    DashboardDestination(
+        key="skills",
+        label="Skills",
+        icon_key="sparkles",
+        canonical_path="/skills",
+        path_patterns=("/skills/*",),
+        navigation_group="primary",
+        page_classification="workspace",
+        capability_key="skills",
+        endpoint_key="skills",
+        page="skills",
+        data_wide_panel=False,
+    ),
+    DashboardDestination(
+        key="manifests",
+        label="RAG / Manifests",
+        icon_key="manifest",
+        canonical_path="/manifests",
+        path_patterns=("/manifests", "/manifests/:manifestName"),
+        navigation_group="operations",
+        page_classification="collection",
+        capability_key="manifests",
+        endpoint_key="manifests",
+        page="manifests",
+    ),
+    DashboardDestination(
+        key="omnigent-agents",
+        label="Omnigent Agents",
+        icon_key="bot",
+        canonical_path="/omnigent/agents",
+        path_patterns=("/omnigent/agents/*",),
+        navigation_group="operations",
+        page_classification="collection",
+        capability_key="omnigentAgents",
+        endpoint_key="omnigentAgents",
+        page="omnigent-inventory",
+    ),
+    DashboardDestination(
+        key="omnigent-policies",
+        label="Omnigent Policies",
+        icon_key="shield-check",
+        canonical_path="/omnigent/policies",
+        path_patterns=("/omnigent/policies/*",),
+        navigation_group="operations",
+        page_classification="collection",
+        capability_key="omnigentPolicies",
+        endpoint_key="omnigentPolicies",
+        page="omnigent-inventory",
+    ),
+    DashboardDestination(
+        key="remediation",
+        label="Remediation",
+        icon_key="wrench",
+        canonical_path="/remediations",
+        path_patterns=("/remediations/*",),
+        navigation_group="operations",
+        page_classification="collection",
+        capability_key="remediationCollection",
+        endpoint_key="remediations",
+        page="remediations",
+    ),
+    DashboardDestination(
+        key="artifacts",
+        label="Artifacts / Observability",
+        icon_key="archive",
+        canonical_path="/artifacts",
+        path_patterns=("/artifacts/*", "/observability/*"),
+        navigation_group="operations",
+        page_classification="collection",
+        capability_key="artifacts",
+        endpoint_key="artifacts",
+        page="artifacts",
+    ),
+    DashboardDestination(
+        key="settings",
+        label="Settings",
+        icon_key="settings",
+        canonical_path="/settings",
+        path_patterns=("/settings/*",),
+        navigation_group="system",
+        page_classification="utility",
+        capability_key="settings",
+        endpoint_key="settings",
+        page="settings",
+    ),
+)
+
+
+_DASHBOARD_DESTINATIONS_BY_KEY = {
+    destination.key: destination for destination in DASHBOARD_DESTINATIONS
+}
+
+
+@dataclass(frozen=True, slots=True)
 class _CachedSkillInputContract:
     content_digest: str
     contract: dict[str, object]
@@ -390,6 +558,30 @@ def _is_extensionless_dashboard_path(path: str) -> bool:
         "." not in segment and segment not in {"", ".", ".."}
         for segment in normalized.split("/")
     )
+
+
+def _dashboard_destination(key: str) -> DashboardDestination:
+    return _DASHBOARD_DESTINATIONS_BY_KEY[key]
+
+
+def _dashboard_destination_info() -> list[dict[str, object]]:
+    return [destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS]
+
+
+def _is_extensionless_collection_route(request: Request, destination_keys: set[str]) -> bool:
+    path = request.url.path
+    if not path.startswith("/"):
+        return False
+    for key in destination_keys:
+        destination = _dashboard_destination(key)
+        for pattern in destination.path_patterns:
+            if not pattern.endswith("/*"):
+                continue
+            prefix = pattern[:-2]
+            if not path.startswith(f"{prefix}/"):
+                continue
+            return _is_extensionless_dashboard_path(path[len(prefix) + 1 :])
+    return False
 
 
 def _worker_pause_sources() -> dict[str, str]:
@@ -1015,12 +1207,12 @@ async def workflow_console_root(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered workflow list page."""
-    list_path = "/workflows"
+    destination = _dashboard_destination("workflows")
     return await _render_react_page(
         request,
         "workflow-list",
-        list_path,
-        data_wide_panel=True,
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1033,8 +1225,14 @@ async def schedules_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered schedules page."""
+    destination = _dashboard_destination("recurring")
     return await _render_react_page(
-        request, "schedules", "/schedules", session=session, user=_user
+        request,
+        destination.page,
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
+        session=session,
+        user=_user,
     )
 
 
@@ -1048,10 +1246,12 @@ async def schedule_detail_route(
     """Serve the schedules shell for schedule deep links."""
     if not _is_safe_detail_segment(schedule_id) or schedule_id.lower() == "new":
         raise HTTPException(status_code=404, detail="Not Found")
+    destination = _dashboard_destination("recurring")
     return await _render_react_page(
         request,
-        "schedules",
+        destination.page,
         f"/schedules/{schedule_id}",
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1064,8 +1264,14 @@ async def manifests_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered manifests page."""
+    destination = _dashboard_destination("manifests")
     return await _render_react_page(
-        request, "manifests", "/manifests", session=session, user=_user
+        request,
+        "workflow-start",
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
+        session=session,
+        user=_user,
     )
 
 
@@ -1088,10 +1294,12 @@ async def task_manifest_detail_route(
     """Serve the manifests shell for manifest deep links."""
     if not _is_safe_detail_segment(manifest_name):
         _raise_dashboard_route_not_found()
+    destination = _dashboard_destination("manifests")
     return await _render_react_page(
         request,
-        "manifests",
+        destination.page,
         f"/manifests/{manifest_name}",
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1121,11 +1329,12 @@ async def remediations_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the capability-gated remediation inventory shell."""
+    destination = _dashboard_destination("remediation")
     return await _render_react_page(
         request,
-        "remediations",
-        "/remediations",
-        data_wide_panel=True,
+        destination.page,
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1139,12 +1348,13 @@ async def artifact_collection_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the capability-gated artifact and observability collection shell."""
+    destination = _dashboard_destination("artifacts")
     current_path = request.url.path
     return await _render_react_page(
         request,
-        "artifacts",
+        destination.page,
         current_path,
-        data_wide_panel=True,
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1166,11 +1376,12 @@ async def task_settings_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
+    destination = _dashboard_destination("settings")
     return await _render_react_page(
         request,
-        "settings",
-        "/settings",
-        data_wide_panel=True,
+        destination.page,
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1217,11 +1428,16 @@ async def omnigent_inventory_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve reloadable capability-gated Omnigent inventory routes."""
+    destination = _dashboard_destination(
+        "omnigent-policies"
+        if request.url.path.startswith("/omnigent/policies")
+        else "omnigent-agents"
+    )
     return await _render_react_page(
         request,
-        "omnigent-inventory",
+        destination.page,
         request.url.path,
-        data_wide_panel=True,
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1234,11 +1450,12 @@ async def task_create_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered workflow start page."""
-    current_path = "/workflows/new"
+    destination = _dashboard_destination("create")
     return await _render_react_page(
         request,
-        "workflow-start",
-        current_path,
+        destination.page,
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1251,8 +1468,14 @@ async def skills_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered skills page."""
+    destination = _dashboard_destination("skills")
     return await _render_react_page(
-        request, "skills", "/skills", session=session, user=_user
+        request,
+        destination.page,
+        destination.canonical_path,
+        data_wide_panel=destination.data_wide_panel,
+        session=session,
+        user=_user,
     )
 
 
@@ -1266,10 +1489,12 @@ async def skills_spa_fallback_route(
     """Serve the skills SPA shell for extensionless skills sub-routes."""
     if not _is_extensionless_dashboard_path(dashboard_path):
         _raise_dashboard_route_not_found()
+    destination = _dashboard_destination("skills")
     return await _render_react_page(
         request,
-        "skills",
+        destination.page,
         f"/skills/{dashboard_path.strip('/')}",
+        data_wide_panel=destination.data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1293,6 +1518,7 @@ async def workflow_console_route(
         request,
         "workflow-detail",
         detail_path,
+        data_wide_panel=_dashboard_destination("workflows").data_wide_panel,
         session=session,
         user=_user,
     )
@@ -1310,7 +1536,15 @@ async def collection_spa_fallback_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve recognized extensionless collection deep links from the SPA shell."""
-    if not _is_extensionless_dashboard_path(dashboard_path):
+    if not _is_extensionless_collection_route(
+        request,
+        {
+            "artifacts",
+            "omnigent-agents",
+            "omnigent-policies",
+            "remediation",
+        },
+    ):
         _raise_dashboard_route_not_found()
     return await _render_react_page(
         request,
@@ -1392,123 +1626,7 @@ async def get_dashboard_ui_info(
                 else {}
             ),
         },
-        destinations=[
-            {
-                "key": "workflows",
-                "label": "Workflows",
-                "iconKey": "scroll-text",
-                "canonicalPath": "/workflows",
-                "pathPatterns": [
-                    "/workflows",
-                    "/workflows/:workflowId",
-                    "/workflows/:workflowId/:detailTab",
-                ],
-                "navigationGroup": "primary",
-                "pageClassification": "workspace",
-                "capabilityKey": "workflowList",
-                "endpointKey": "workflows",
-                "displayMode": "workflow-list",
-            },
-            {
-                "key": "create",
-                "label": "Create",
-                "iconKey": "rocket",
-                "canonicalPath": "/workflows/new",
-                "pathPatterns": ["/workflows/new"],
-                "navigationGroup": "primary",
-                "pageClassification": "create",
-                "capabilityKey": "workflowActions",
-            },
-            {
-                "key": "recurring",
-                "label": "Recurring",
-                "iconKey": "moon",
-                "canonicalPath": "/schedules",
-                "pathPatterns": ["/schedules", "/schedules/:definitionId"],
-                "navigationGroup": "primary",
-                "pageClassification": "workspace",
-                "capabilityKey": "schedules",
-                "endpointKey": "schedules",
-                "displayMode": "recurring-list",
-            },
-            {
-                "key": "skills",
-                "label": "Skills",
-                "iconKey": "sparkles",
-                "canonicalPath": "/skills",
-                "pathPatterns": ["/skills/*"],
-                "navigationGroup": "primary",
-                "pageClassification": "workspace",
-                "capabilityKey": "skills",
-                "endpointKey": "skills",
-            },
-            {
-                "key": "manifests",
-                "label": "RAG / Manifests",
-                "iconKey": "manifest",
-                "canonicalPath": "/manifests",
-                "pathPatterns": ["/manifests", "/manifests/:manifestName"],
-                "navigationGroup": "operations",
-                "pageClassification": "collection",
-                "capabilityKey": "manifests",
-                "endpointKey": "manifests",
-            },
-            {
-                "key": "omnigent-agents",
-                "label": "Omnigent Agents",
-                "iconKey": "bot",
-                "canonicalPath": "/omnigent/agents",
-                "pathPatterns": ["/omnigent/agents/*"],
-                "navigationGroup": "operations",
-                "pageClassification": "collection",
-                "capabilityKey": "omnigentAgents",
-                "endpointKey": "omnigentAgents",
-            },
-            {
-                "key": "omnigent-policies",
-                "label": "Omnigent Policies",
-                "iconKey": "shield-check",
-                "canonicalPath": "/omnigent/policies",
-                "pathPatterns": ["/omnigent/policies/*"],
-                "navigationGroup": "operations",
-                "pageClassification": "collection",
-                "capabilityKey": "omnigentPolicies",
-                "endpointKey": "omnigentPolicies",
-            },
-            {
-                "key": "remediation",
-                "label": "Remediation",
-                "iconKey": "wrench",
-                "canonicalPath": "/remediations",
-                "pathPatterns": ["/remediations/*"],
-                "navigationGroup": "operations",
-                "pageClassification": "collection",
-                "capabilityKey": "remediationCollection",
-                "endpointKey": "remediations",
-            },
-            {
-                "key": "artifacts",
-                "label": "Artifacts / Observability",
-                "iconKey": "archive",
-                "canonicalPath": "/artifacts",
-                "pathPatterns": ["/artifacts/*", "/observability/*"],
-                "navigationGroup": "operations",
-                "pageClassification": "collection",
-                "capabilityKey": "artifacts",
-                "endpointKey": "artifacts",
-            },
-            {
-                "key": "settings",
-                "label": "Settings",
-                "iconKey": "settings",
-                "canonicalPath": "/settings",
-                "pathPatterns": ["/settings/*"],
-                "navigationGroup": "system",
-                "pageClassification": "utility",
-                "capabilityKey": "settings",
-                "endpointKey": "settings",
-            },
-        ],
+        destinations=_dashboard_destination_info(),
         dashboardConfig=dashboard_config,
         settingsPermissions=sorted(settings_permissions_for_user(_user)),
         workerPause=_worker_pause_sources(),

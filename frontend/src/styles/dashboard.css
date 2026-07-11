@@ -206,15 +206,19 @@ samp {
   width: 100%;
 }
 
-/* Most pages read best in a centered working container; data-table routes opt into wide. */
-.dashboard-shell-constrained {
+.dashboard-state-strip {
+  min-width: 0;
+  width: 100%;
+}
+
+.dashboard-state-strip__inner {
   max-width: min(72rem, calc(100vw - 2rem));
   margin-left: auto;
   margin-right: auto;
   width: 100%;
 }
 
-.dashboard-shell-constrained--data-wide {
+.dashboard-state-strip__inner--data-wide {
   max-width: min(112rem, calc(100vw - 2rem));
 }
 
