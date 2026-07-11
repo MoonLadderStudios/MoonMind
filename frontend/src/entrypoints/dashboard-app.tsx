@@ -662,7 +662,7 @@ function CollectionListDisplayModeControl({
   );
 }
 
-function ApplicationRail({
+function DashboardNavigation({
   uiInfo,
 }: {
   uiInfo: DashboardUiInfo | null;
@@ -735,7 +735,7 @@ function ApplicationRail({
   }, [open]);
 
   return (
-    <aside className="application-rail" aria-label="Application rail">
+    <header className="masthead">
       <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
         <img
           className="masthead-logo"
@@ -775,7 +775,7 @@ function ApplicationRail({
         />
       ) : null}
 
-      <div className="application-rail-nav">
+      <div className="masthead-nav">
         <nav
           ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
@@ -853,14 +853,14 @@ function ApplicationRail({
         </nav>
       </div>
 
-      <div className="application-rail-utilities">
-        {buildId ? (
+      {buildId ? (
+        <div className="masthead-title-meta">
           <div className="version-badge" title="MoonMind image version">
             <span className="version-badge-value">v{buildId}</span>
           </div>
-        ) : null}
-      </div>
-    </aside>
+        </div>
+      ) : null}
+    </header>
   );
 }
 
@@ -884,68 +884,46 @@ function AppShell({
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
-        <ApplicationRail uiInfo={uiInfo} />
-        <DashboardContent
-          dataWidePanel={dataWidePanel}
-          listDisplayAccessibleName={listDisplayAccessibleName}
-          listDisplayMode={listDisplayMode}
-          listDisplayStatus={listDisplayStatus}
-          onListDisplayModeSelect={onListDisplayModeSelect}
-        >
-          {children}
-        </DashboardContent>
+        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+          <p>
+            <span className="worker-pause-label" data-worker-pause-status>
+              Workers: Running
+            </span>
+            <span className="worker-pause-reason" data-worker-pause-reason />
+            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+              Manage operations
+            </Link>
+          </p>
+        </section>
+
+        <div className="dashboard-shell-full">
+          <DashboardNavigation uiInfo={uiInfo} />
+        </div>
+
+        <div className="dashboard-content">
+          <div
+            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+          >
+            {listDisplayMode ? (
+              <div className="dashboard-collection-utilities">
+                <CollectionListDisplayModeControl
+                  {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                  effectiveMode={listDisplayMode}
+                  status={listDisplayStatus}
+                  onSelect={onListDisplayModeSelect}
+                />
+              </div>
+            ) : null}
+            <div className="dashboard-alerts-region">
+              <DashboardAlerts />
+            </div>
+          </div>
+          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+            {children}
+          </section>
+        </div>
       </main>
     </DashboardLiveUpdateProvider>
-  );
-}
-
-function DashboardContent({
-  dataWidePanel,
-  listDisplayAccessibleName,
-  listDisplayMode,
-  listDisplayStatus,
-  onListDisplayModeSelect,
-  children,
-}: {
-  dataWidePanel: boolean;
-  listDisplayAccessibleName?: string | undefined;
-  listDisplayMode: CollectionListDisplayMode | null;
-  listDisplayStatus?: string | null | undefined;
-  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="dashboard-content">
-      <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-        <p>
-          <span className="worker-pause-label" data-worker-pause-status>
-            Workers: Running
-          </span>
-          <span className="worker-pause-reason" data-worker-pause-reason />
-          <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-            Manage operations
-          </Link>
-        </p>
-      </section>
-
-      {listDisplayMode ? (
-        <div className="dashboard-collection-utilities">
-          <CollectionListDisplayModeControl
-            {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-            effectiveMode={listDisplayMode}
-            status={listDisplayStatus}
-            onSelect={onListDisplayModeSelect}
-          />
-        </div>
-      ) : null}
-
-      <div className="dashboard-alerts-region">
-        <DashboardAlerts />
-      </div>
-      <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-        {children}
-      </section>
-    </div>
   );
 }
 

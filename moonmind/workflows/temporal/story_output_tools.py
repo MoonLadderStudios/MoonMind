@@ -1169,6 +1169,33 @@ def _story_id(story: Mapping[str, Any], *, index: int) -> str:
             return value
     return f"STORY-{index:03d}"
 
+def _story_dependency_ids(story: Mapping[str, Any]) -> list[str]:
+    """Return the story IDs a story declares as prerequisites, in order.
+
+    moonspec-breakdown emits a per-story ``dependencies`` field ("story IDs this
+    story truly depends on"). Each entry may be a plain ID string or an object
+    carrying the ID. Values are normalized to stable, de-duplicated ID strings.
+    """
+    raw = (
+        story.get("dependencies")
+        or story.get("dependencyIds")
+        or story.get("dependency_ids")
+    )
+    ids: list[str] = []
+    for item in _list(raw):
+        if isinstance(item, Mapping):
+            value = _string(
+                item.get("id")
+                or item.get("storyId")
+                or item.get("story_id")
+                or item.get("key")
+            )
+        else:
+            value = _string(item)
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
 def _issue_mappings_from_inputs(
     inputs: Mapping[str, Any],
     *,
@@ -1216,7 +1243,12 @@ def _issue_mappings_from_inputs(
             index = 0
         return index, _string(item.get("storyId") or item.get("story_id"))
 
-    return sorted(mappings, key=sort_key)
+    # Order by declared story dependencies (prerequisites first) so the
+    # downstream workflow dependsOn chain matches the Jira blocker chain built by
+    # _create_dependency_links. storyIndex order is the stable tie-breaker, so
+    # breakdowns without dependencies keep their original creation order.
+    ordered = _order_issue_mappings_by_dependencies(sorted(mappings, key=sort_key))
+    return [dict(item) for item in ordered]
 
 def _source_issue_key(
     *,
@@ -1498,6 +1530,35 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
     failures: list[dict[str, Any]] = []
     skipped_stories: list[dict[str, Any]] = []
     previous_workflow_id = ""
+    previous_story_id = ""
+    # Map declared story IDs to their created workflow IDs so each downstream
+    # task depends on the stories it declares as prerequisites (matching the Jira
+    # blocker chain). ``issue_mappings`` is already ordered prerequisites-first by
+    # ``_issue_mappings_from_inputs`` so every prerequisite is created first.
+    workflow_id_by_story: dict[str, str] = {}
+    mapping_story_ids = {
+        _string(mapping.get("storyId") or mapping.get("story_id"))
+        for mapping in issue_mappings
+        if _string(mapping.get("storyId") or mapping.get("story_id"))
+    }
+
+    def _declared_prerequisites(mapping: Mapping[str, Any], story_id: str) -> list[str]:
+        return [
+            dep
+            for dep in _story_dependency_ids(mapping)
+            if dep in mapping_story_ids and dep != story_id
+        ]
+
+    # When no story declares a resolvable dependency, keep the historical linear
+    # chain so dependency-free breakdowns still block each later story by the one
+    # before it.
+    declared_dependencies = any(
+        _declared_prerequisites(
+            mapping,
+            _string(mapping.get("storyId") or mapping.get("story_id")),
+        )
+        for mapping in issue_mappings
+    )
 
     for index, mapping in enumerate(issue_mappings, start=1):
         story_id = _string(mapping.get("storyId") or mapping.get("story_id")) or f"STORY-{index:03d}"
@@ -1520,7 +1581,17 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
             skipped_stories.append({**base_result, "summary": summary})
             continue
 
-        depends_on = [previous_workflow_id] if previous_workflow_id else []
+        if declared_dependencies:
+            depends_on_pairs = [
+                (dep, workflow_id_by_story[dep])
+                for dep in _declared_prerequisites(mapping, story_id)
+                if dep in workflow_id_by_story
+            ]
+        elif previous_workflow_id:
+            depends_on_pairs = [(previous_story_id, previous_workflow_id)]
+        else:
+            depends_on_pairs = []
+        depends_on = [workflow_id for _dep_story_id, workflow_id in depends_on_pairs]
         title, task = _downstream_task_payload(
             mapping=mapping,
             task_payload=task_payload,
@@ -1605,17 +1676,20 @@ async def _create_jira_downstream_tasks_from_issue_mappings(
             "idempotencyKey": idempotency_key,
         }
         tasks.append(task_result)
-        if depends_on:
+        for dep_story_id, dep_workflow_id in depends_on_pairs:
             dependencies.append(
                 {
-                    "fromWorkflowId": depends_on[0],
+                    "fromWorkflowId": dep_workflow_id,
                     "toWorkflowId": workflow_id,
-                    "fromStoryId": tasks[-2]["storyId"] if len(tasks) > 1 else "",
+                    "fromStoryId": dep_story_id,
                     "toStoryId": story_id,
                     "status": "created",
                 }
             )
+        if story_id:
+            workflow_id_by_story[story_id] = workflow_id
         previous_workflow_id = workflow_id
+        previous_story_id = story_id
 
     if not issue_mappings:
         status = "no_downstream_tasks"
@@ -2425,12 +2499,104 @@ def _issue_mapping(
     mapping["storyId"] = _story_id(story, index=index)
     mapping["storyIndex"] = index
     mapping["summary"] = summary
+    mapping["dependencies"] = _story_dependency_ids(story)
     source_reference = _story_source_reference(
         story, fallback_path=fallback_source_path
     )
     mapping["sourceDesignPath"] = _string(source_reference.get("path"))
     mapping["sourceClaimIds"] = _story_source_claim_ids(source_reference)
     return mapping
+
+def _order_issue_mappings_by_dependencies(
+    issue_mappings: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Order mappings so each story's declared prerequisites precede it.
+
+    The linear blocker chain links consecutive mappings so the earlier one
+    blocks the later one; that is only correct when prerequisites appear before
+    the stories that depend on them. moonspec-breakdown is asked to emit stories
+    in dependency order, but that ordering is advisory LLM guidance, whereas the
+    per-story ``dependencies`` field is the authoritative signal. This performs a
+    stable topological sort by that field so an out-of-order (or fully reversed)
+    breakdown still produces a chain that runs prerequisites first instead of
+    reversing the dependencies. Stories without dependencies keep their original
+    relative order, and any dependency cycle falls back to original order for the
+    unresolved remainder rather than dropping stories or failing.
+    """
+
+    known_ids = {
+        _string(mapping.get("storyId"))
+        for mapping in issue_mappings
+        if _string(mapping.get("storyId"))
+    }
+    remaining: list[Mapping[str, Any]] = list(issue_mappings)
+    ordered: list[Mapping[str, Any]] = []
+    resolved: set[str] = set()
+    while remaining:
+        for position, mapping in enumerate(remaining):
+            story_id = _string(mapping.get("storyId"))
+            prerequisites = [
+                dep
+                for dep in _story_dependency_ids(mapping)
+                if dep in known_ids and dep != story_id
+            ]
+            if all(dep in resolved for dep in prerequisites):
+                ordered.append(mapping)
+                if story_id:
+                    resolved.add(story_id)
+                remaining.pop(position)
+                break
+        else:
+            # No remaining story has all prerequisites resolved (dependency
+            # cycle, or only self/unknown references remain). Preserve the
+            # remaining mappings in their original order to stay deterministic.
+            ordered.extend(remaining)
+            break
+    return ordered
+
+def _dependency_link_pairs(
+    ordered_mappings: Sequence[Mapping[str, Any]],
+) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
+    """Return ``(blocker, blocked)`` mapping pairs for the linear blocker chain.
+
+    Each story is linked to the stories it declares as prerequisites, so a
+    fan-out breakdown (for example STORY-002 and STORY-003 both depending only on
+    STORY-001) produces the direct ``001 blocks 002`` and ``001 blocks 003``
+    links instead of a misleading ``001 -> 002 -> 003`` adjacent chain that would
+    fabricate ``002 blocks 003`` and drop the real ``001 blocks 003`` edge. When
+    no story declares a resolvable dependency, fall back to linking each story to
+    the immediately preceding one so dependency-free breakdowns keep the
+    historical linear chain. A declared cycle emits a single deterministic link
+    per story pair rather than reciprocal ``Blocks`` links.
+    """
+
+    mapping_by_id: dict[str, Mapping[str, Any]] = {}
+    for mapping in ordered_mappings:
+        story_id = _string(mapping.get("storyId"))
+        if story_id and story_id not in mapping_by_id:
+            mapping_by_id[story_id] = mapping
+
+    def _prerequisites(mapping: Mapping[str, Any]) -> list[str]:
+        story_id = _string(mapping.get("storyId"))
+        return [
+            dep
+            for dep in _story_dependency_ids(mapping)
+            if dep in mapping_by_id and dep != story_id
+        ]
+
+    if not any(_prerequisites(mapping) for mapping in ordered_mappings):
+        return list(zip(ordered_mappings, ordered_mappings[1:]))
+
+    pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    for mapping in ordered_mappings:
+        story_id = _string(mapping.get("storyId"))
+        for dep in _prerequisites(mapping):
+            if (dep, story_id) in seen or (story_id, dep) in seen:
+                continue
+            seen.add((dep, story_id))
+            pairs.append((mapping_by_id[dep], mapping))
+    return pairs
 
 async def _create_dependency_links(
     *,
@@ -2443,8 +2609,9 @@ async def _create_dependency_links(
     if dependency_mode != JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN:
         raise ValueError(f"Unsupported Jira dependencyMode '{dependency_mode}'.")
 
+    ordered_mappings = _order_issue_mappings_by_dependencies(issue_mappings)
     link_results: list[dict[str, Any]] = []
-    for previous, current in zip(issue_mappings, issue_mappings[1:]):
+    for previous, current in _dependency_link_pairs(ordered_mappings):
         blocks_issue_key = _string(previous.get("issueKey"))
         blocked_issue_key = _string(current.get("issueKey"))
         base_result = {

@@ -7,7 +7,7 @@ Last updated: 2026-07-10
 
 Define the desired-state design system for the MoonMind dashboard: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what the dashboard should look and feel like when it is correct.
 
-For application-rail placement, shared collection sidebars, and the common entity-detail frame, see `docs/UI/CollectionWorkspaceLayout.md`. For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`. For the workflow-specific desktop sidebar/workspace addendum that applies these surface, focus, and motion rules, see `docs/UI/WorkflowWorkspaceSidebar.md`.
+For masthead placement, shared collection sidebars, and the common entity-detail frame, see `docs/UI/CollectionWorkspaceLayout.md`. For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`. For the workflow-specific desktop sidebar/workspace addendum that applies these surface, focus, and motion rules, see `docs/UI/WorkflowWorkspaceSidebar.md`.
 
 ---
 
@@ -219,13 +219,13 @@ The dashboard uses two desktop width modes:
 
 The page shell may transition between these two modes within the same route.
 
-### 7.2 Application rail and workspace geometry
+### 7.2 Masthead and workspace geometry
 
-Desktop primary navigation uses a persistent far-left application rail, not viewport-centered masthead pills. The content region begins immediately to its right. When a collection sidebar is present, it is the content region's first column and the primary pane starts immediately after it.
+Desktop primary navigation remains in the masthead. When a collection sidebar is present, it is the workspace's first column and the primary pane starts immediately after it.
 
-The application rail, collection sidebar, and primary pane are siblings at their respective shell/workspace layers. Do not place either rail inside a constrained or centered page shell. Constrained and data-wide widths apply only inside the primary pane.
+The collection sidebar and primary pane are siblings at the workspace layer. Do not put the collection sidebar inside a detail frame or render a page-navigation sidebar beside it. Constrained and data-wide widths apply only inside the primary pane.
 
-The application rail and every collection sidebar share token-driven glass/matte surfaces, border light, icon sizing, hover brightening, visible focus, active state, tooltip posture, and responsive collapse behavior. Workflows, Recurring, and Skills use the same collection-sidebar component family.
+Workflows, Recurring, and Skills use the same token-driven collection-sidebar component family while masthead navigation remains a distinct shell component.
 
 ### 7.3 Control deck + data slab pattern
 
@@ -383,7 +383,7 @@ Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or a
 
 ### 10.1 Application rail and collection sidebars
 
-Top-level destinations render in the far-left application rail. The rail is a persistent shell primitive rather than a page-level card or a centered row of navigation pills.
+Top-level destinations render in the masthead. Collection sidebars are contextual entity lists, not a second home for page navigation.
 
 Application-rail rules:
 
@@ -543,7 +543,7 @@ Use subtle atmospheric separators instead of hard utilitarian dividers everywher
 
 Examples:
 
-- horizon or edge-light separator at the application-rail/content boundary or beneath a page header
+- horizon or edge-light separator beneath the masthead or a page header
 - soft orbital gradient behind section transitions
 - restrained border glows on major surface edges
 

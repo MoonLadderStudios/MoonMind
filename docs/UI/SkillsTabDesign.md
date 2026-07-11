@@ -15,7 +15,7 @@ On desktop, `/skills` is a list–detail workspace that reuses the dashboard's e
 
 ## 2. Goals
 
-- Dedicated dashboard entry point for skills (route `/skills`) in the shared far-left application rail.
+- Dedicated dashboard entry point for skills (route `/skills`) in the shared masthead navigation.
 - Reuse the geometry and neutral primitives in [`CollectionWorkspaceLayout.md`](CollectionWorkspaceLayout.md).
 - Reuse the shared workspace/sidebar foundation defined by [`WorkflowWorkspaceSidebar.md`](WorkflowWorkspaceSidebar.md) and [`WorkflowListDisplayModes.md`](WorkflowListDisplayModes.md); do not create a parallel Skills-only sidebar implementation or copy its CSS.
 - List skills in the shared sidebar and preview the selected skill's `SKILL.md` content (Markdown → HTML) in the main pane.
@@ -27,13 +27,13 @@ On desktop, `/skills` is a list–detail workspace that reuses the dashboard's e
 
 ### 3.1 Navigation
 
-- Top-level **Skills** destination in the shared application rail → `/skills`, using the same icon/label, active, hover, focus, tooltip, and responsive behavior as Workflows and Recurring.
+- Top-level **Skills** destination in the shared masthead → `/skills`, using the same icon/label, active, hover, focus, tooltip, and responsive behavior as Workflows and Recurring.
 - The Skills sidebar is page-local content navigation. It complements rather than replaces the top-level **Skills** route entry.
 - Reusing the sidebar does not make Skills part of the workflow `hidden` / `sidebar` / `table` display-mode state machine. Unless that system is explicitly generalized later, `/skills` owns its own skills list and does not show workflow-list controls or workflow rows.
 
 ### 3.2 Desktop Workspace Layout
 
-- `/skills` uses the shared `CollectionWorkspace`: the Skills sidebar is the first content-region column immediately right of the far-left application rail, and the primary pane is its sibling.
+- `/skills` uses the shared `CollectionWorkspace`: the Skills sidebar is the first workspace column, lists skills only, and the primary pane is its sibling.
 - The Skills sidebar is always present for desktop preview and create states; it is not optional Workflow list-display state.
 - The sidebar starts at the dashboard content region's far-left edge and is never inside a centered/max-width page wrapper. It follows the shared sidebar width, divider, row-height, and independent-scroll behavior.
 - The primary pane uses the remaining width for the selected skill preview or create form. Readable-width constraints may be applied inside the pane, but not around the entire split workspace.
