@@ -21,6 +21,7 @@ FINALIZE_ONLY_RETRY_REASONS = {
     "comments_unavailable",
     "ci_signal_degraded",
     "external_state_transient",
+    "merge_pending",
     "snapshot_refresh_failed",
 }
 
@@ -104,6 +105,8 @@ def remediation_next_step(reason: str) -> str:
         return "wait_for_ci_and_retry_finalize"
     if normalized == "codex_review_grace_wait":
         return "wait_for_codex_review_and_retry_finalize"
+    if normalized == "merge_pending":
+        return "retry_finalize_after_backoff"
     if normalized == "comment_policy_not_enforced":
         return "inspect_comment_policy"
     if normalized == "merge_not_ready":

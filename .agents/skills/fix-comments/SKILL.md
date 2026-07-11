@@ -82,7 +82,16 @@ If no constraints are provided, default to addressing all applicable feedback.
 - If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
 - Push the current branch after committing.
 - If there was nothing to commit, still prove the current branch is published: verify the exact local `HEAD` SHA is visible on the remote PR branch using `gh pr view`, `git ls-remote`, or an equivalent GitHub connector path.
-- After the exact pushed/no-op head is verified, resolve every current GitHub review thread whose ledger disposition is `addressed` or `not-applicable`. The refreshed comments artifact exposes its GraphQL node as `thread_id`; resolve it with GitHub's `resolveReviewThread` mutation. Never resolve an outdated thread or a deferred comment. If a handled current thread cannot be resolved, stop as blocked with reason `publish_unavailable`; an unresolved current thread remains an authoritative merge blocker.
+- After the exact pushed/no-op head is verified, group review comments by
+  `thread_id`. Resolve a current GitHub review thread only when every
+  non-outdated comment in that thread has a ledger disposition of `addressed` or
+  `not-applicable`. If any comment in the thread is deferred, unclassified, or
+  still applicable, leave the entire thread unresolved. The refreshed comments
+  artifact exposes the GraphQL node as `thread_id`; resolve eligible threads with
+  GitHub's `resolveReviewThread` mutation. Never resolve an outdated thread. If a
+  fully handled current thread cannot be resolved, stop as blocked with reason
+  `publish_unavailable`; an unresolved current thread remains an authoritative
+  merge blocker.
   ```bash
   gh api graphql \
     -f threadId="$THREAD_ID" \

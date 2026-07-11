@@ -77,7 +77,16 @@ metadata flag.
 1. Resolve the active `pr-resolver` directory and use only the helpers from that
    immutable active Skill set. Resolve `fix-comments`, `fix-ci`, and
    `fix-merge-conflicts` from the same active set; do not use repo-global or
-   host-native substitutes.
+   host-native substitutes. MoonMind exports the active root as
+   `MOONMIND_ACTIVE_SKILLS_DIR`. Outside MoonMind, set `PR_RESOLVER_SKILL_DIR` to
+   the directory containing this `SKILL.md`. Establish the portable paths before
+   running a helper:
+
+   ```bash
+   PR_RESOLVER_SKILL_DIR="${PR_RESOLVER_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/pr-resolver}}"
+   ACTIVE_SKILLS_DIR="${MOONMIND_ACTIVE_SKILLS_DIR:-$(dirname "$PR_RESOLVER_SKILL_DIR")}"
+   test -n "$PR_RESOLVER_SKILL_DIR" && test -f "$PR_RESOLVER_SKILL_DIR/SKILL.md"
+   ```
 2. Run the finalize gate checker. It refreshes PR metadata, CI, and the complete
    comment inventory before deciding whether merge is allowed:
 
@@ -90,7 +99,9 @@ metadata flag.
 
 3. Read `var/pr_resolver/result.json` and perform exactly the indicated action:
    - `merged` or independently verified `already_merged`: publish terminal
-     evidence and stop.
+     evidence and stop. A successful `gh pr merge` request is not terminal
+     evidence until a fresh `gh pr view` reports `state=MERGED`; merge-queue or
+     still-open states remain transient.
    - `merge_conflicts`: follow `fix-merge-conflicts` completely.
    - `ci_failures`: follow `fix-ci` completely.
    - `actionable_comments`: follow `fix-comments` completely, including fresh

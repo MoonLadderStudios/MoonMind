@@ -1384,6 +1384,20 @@ def test_contract_external_state_transient_is_finalize_only_retry(
         == "retry_finalize_after_backoff"
     )
 
+def test_contract_merge_pending_is_finalize_only_retry(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    classify_retry_action = pr_resolve_contract_module["classify_retry_action"]
+    remediation_next_step = pr_resolve_contract_module["remediation_next_step"]
+
+    action = classify_retry_action(
+        "merge_pending",
+        merge_not_ready_grace_remaining=0,
+    )
+
+    assert action == "finalize_only_retry"
+    assert remediation_next_step("merge_pending") == "retry_finalize_after_backoff"
+
 def test_contract_codex_review_grace_wait_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],
 ) -> None:
@@ -1675,6 +1689,76 @@ def test_finalize_already_merged_pr_returns_already_merged(
 
     assert decision == {"action": "already_merged", "reason": "already_merged"}
 
+def test_finalize_merge_request_waits_for_authoritative_merged_state(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import json
+
+    main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
+    exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
+
+    snapshot = {
+        "pr": {
+            "number": 3210,
+            "state": "OPEN",
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+        },
+        "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+        "commentsFetch": {"succeeded": True, "source": "fixture"},
+        "commentsSummary": {
+            "hasActionableComments": False,
+            "includeBotReviewComments": True,
+        },
+    }
+
+    def _write_snapshot(
+        _snapshot_script: Path,
+        _pr: str | None,
+        snapshot_path: Path,
+    ) -> None:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    merge_calls: list[tuple[str, str]] = []
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _write_snapshot)
+    monkeypatch.setitem(
+        globals_dict,
+        "_merge_pr",
+        lambda selector, method: merge_calls.append((selector, method)),
+    )
+    monkeypatch.setitem(globals_dict, "_check_pr_merged", lambda _selector: False)
+
+    result_path = tmp_path / "result.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--strict-exit-codes",
+            "--pr",
+            "3210",
+            "--snapshot-path",
+            str(snapshot_path),
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+
+    assert int(raised.value.code) == int(exit_code_blocked)
+    assert merge_calls == [("3210", "squash")]
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "merge_pending"
+    assert payload["merge_outcome"] == "blocked"
+    assert payload["mergeAutomationDisposition"] == "reenter_gate"
+
 def test_finalize_pr_not_found_but_merged_succeeds(
     pr_resolve_finalize_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -1955,6 +2039,8 @@ def test_pr_resolver_skill_owns_behavior_in_every_host() -> None:
     assert "actionable_comments" in skill_text
     assert "fix-comments" in skill_text
     assert "Never reuse a pre-remediation snapshot" in skill_text
+    assert "MOONMIND_ACTIVE_SKILLS_DIR" in skill_text
+    assert "fresh `gh pr view` reports `state=MERGED`" in skill_text
 
 
 def test_pr_resolver_snapshot_resolves_required_skill_from_active_root(
@@ -1992,3 +2078,5 @@ def test_fix_comments_skill_requires_fresh_comments_and_remote_verification() ->
     assert "Never print raw environment variables" in skill_text
     assert "var/pr_resolver/result.json" in skill_text
     assert "mergeAutomationDisposition=manual_review" in skill_text
+    assert "every\n  non-outdated comment in that thread" in skill_text
+    assert "leave the entire thread unresolved" in skill_text
