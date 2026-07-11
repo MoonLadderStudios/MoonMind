@@ -114,6 +114,13 @@ def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
     """Return compact status metadata that is safe for workflow history."""
 
     metadata: dict[str, Any] = {"runtimeId": record.runtime_id}
+    if record.workspace_path:
+        metadata["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": record.runtime_id,
+            "agentRunId": record.run_id,
+            "relativePath": "repo",
+        }
     timestamp_fields = {
         "startedAt": record.started_at,
         "finishedAt": record.finished_at,

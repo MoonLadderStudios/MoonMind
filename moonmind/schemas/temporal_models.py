@@ -20,6 +20,7 @@ from pydantic.json_schema import SkipJsonSchema
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
+from moonmind.schemas.workspace_locator_models import ExternalStateLocator, WorkspaceLocator
 from moonmind.statuses.step_execution import (
     StepExecutionReason,
     StepExecutionStatus,
@@ -1209,6 +1210,7 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     identity: StepExecutionIdentityModel = Field(..., alias="identity")
     boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
     kind: WorkspaceCheckpointKind = Field(..., alias="kind")
+    workspace_locator: WorkspaceLocator | None = Field(None, alias="workspaceLocator")
     workspace_root_ref: str | None = Field(None, alias="workspaceRootRef")
     workspace_path: str | None = Field(None, alias="workspacePath")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
@@ -1249,12 +1251,22 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     @model_validator(mode="after")
     def _validate_input(self) -> "WorkspaceCheckpointCaptureInput":
         if self.kind == "external_state_ref":
-            if self.external_state_ref is None and self.workspace_root_ref is None:
+            if (
+                not isinstance(self.workspace_locator, ExternalStateLocator)
+                and self.external_state_ref is None
+                and self.workspace_root_ref is None
+            ):
                 raise ValueError(
                     "external_state_ref checkpoint capture requires externalStateRef"
                 )
-        elif self.workspace_root_ref is None and self.workspace_path is None:
-            raise ValueError("workspace capture requires workspaceRootRef or workspacePath")
+        elif (
+            self.workspace_locator is None
+            and self.workspace_root_ref is None
+            and self.workspace_path is None
+        ):
+            raise ValueError(
+                "workspace capture requires workspaceLocator, workspaceRootRef, or workspacePath"
+            )
         if self.kind == "git_patch" and self.base_commit is None:
             raise ValueError("git_patch checkpoint capture requires baseCommit")
         _reject_raw_secret_text(self.model_dump(by_alias=True), "captureInput")
