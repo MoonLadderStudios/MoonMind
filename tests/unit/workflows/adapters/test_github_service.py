@@ -565,11 +565,16 @@ async def test_merge_pr_success(monkeypatch):
         svc = GitHubService()
         result = await svc.merge_pull_request(
             pr_url="https://github.com/owner/repo/pull/99",
+            expected_head_sha="expected123",
         )
 
     assert isinstance(result, MergePRResult)
     assert result.merged is True
     assert result.merge_sha == "abc123"
+    assert mock_client.put.await_args.kwargs["json"] == {
+        "merge_method": "merge",
+        "sha": "expected123",
+    }
 
 @pytest.mark.asyncio
 async def test_merge_pr_invalid_url():

@@ -130,6 +130,7 @@ STATIC_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.AgentRun",
     "MoonMind.OAuthSession",
     "MoonMind.MergeAutomation",
+    "MoonMind.PRResolver",
 )
 
 class TemporalWorkerBootstrapError(ValueError):

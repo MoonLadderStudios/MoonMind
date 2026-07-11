@@ -40,58 +40,18 @@ The task is not complete until the target PR is merged or is proven already merg
   minutes before merging. Any additional visible comment/review ends the grace
   wait immediately.
 
-## Primary Command (mandatory first action)
-Resolve the active snapshot directory before making repository changes:
+## Temporal ownership contract
 
-- Read the active skill path from the runtime activation summary that selected this
-  skill. Set `ACTIVE_SKILLS_DIR` to that path and `PR_RESOLVER_SKILL_DIR` to its
-  `pr-resolver` child.
-- Do not substitute the repository's `.agents/skills` directory when the activation
-  summary says it is repo-authored source rather than the active snapshot.
-- Fail as blocked if `$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_orchestrate.py` is
-  missing. Do not search for or execute a different copy.
+`MoonMind.PRResolver` owns snapshot polling, classification, durable timers,
+retry budgets, merge attempts, remote verification, cancellation, and terminal
+evidence. A managed agent must never run `pr_resolve_orchestrate.py` or host the
+outer retry loop in a shell process.
 
-Run the orchestration entrypoint before making manual changes. **You MUST provide the `--pr` argument** (using either the PR number or the branch name) to ensure the script targets the correct PR, even if you are on a different branch or detached HEAD:
-
-```bash
-python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_orchestrate.py" \
-  --pr <pr_number_or_branch> \
-  --merge-method <merge|squash|rebase> \
-  --fix-max-iterations <maxIterations> \
-  --finalize-max-retries <finalizeMaxRetries> \
-  --base-sleep-seconds <finalizeBackoffSeconds> \
-  --max-sleep-seconds <finalizeMaxSleepSeconds> \
-  --max-elapsed-seconds <finalizeMaxElapsedSeconds>
-```
-
-This writes:
-- `var/pr_resolver/result.json` (terminal orchestration summary)
-- `var/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
-- `artifacts/publish_result.json` (canonical auto-publish evidence, generated
-  by `$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py`)
-
-If this command does not run, does not write `var/pr_resolver/result.json`, does not write `artifacts/publish_result.json`, or exits before producing parseable artifacts, stop as blocked with the command output and do not report success.
-
-## Foreground Execution Contract (no backgrounding)
-This skill runs inside a one-shot managed agent run. When your process exits, the
-run is over — there is no event loop that will "notify you on completion" and no
-scheduled wakeup that will resume you later. Those are interactive-harness concepts
-that do not exist here.
-
-Therefore:
-- You MUST run the orchestration command in the **foreground** and block on it until
-  it returns. Do NOT launch it with `&`, `nohup`, a background job, a detached
-  process, or any "run in background and notify me" mechanism.
-- The orchestration command already polls long-running states (especially
-  `ci_running`) internally up to its elapsed budget (`--max-elapsed-seconds`,
-  default 7200s) and finalizes the merge when CI passes. Let it run to completion;
-  do not exit while it is still polling.
-- Do NOT end your turn expecting a callback, notification, or fallback wakeup to
-  finish the merge for you. If you exit while CI is still running, the merge is
-  abandoned and the PR is left unresolved even though your local work succeeded.
-- A run that stops at `ci_running` (or any other non-terminal state) because you
-  backgrounded the orchestrator or returned early is **not** a successful PR
-  resolution.
+When Temporal dispatches this skill as a remediation child, perform exactly the
+single classified action named in the instruction. Use the active immutable skill
+snapshot, commit and push only when the selected specialized skill requires it,
+return structured evidence, and stop. Do not wait for CI, retry merge, dispatch a
+second skill, or write a terminal resolver result; the parent workflow does those.
 
 ## Terminal Success Contract
 Allowed successful terminal states:
@@ -122,50 +82,16 @@ Never print raw environment variables while diagnosing GitHub auth or publish fa
 
 When a delegated remediation step cannot publish, overwrite `var/pr_resolver/result.json` before stopping so parent workflows do not report stale gate state. Use `status=blocked`, `merge_outcome=blocked`, `mergeAutomationDisposition=manual_review`, `reason=publish_unavailable`, `final_reason=publish_unavailable`, and `next_step=manual_review`.
 
-## Main Loop
-Repeat this state machine until a terminal success or manual blocker:
+## Bounded remediation actions
 
-1. Run the Primary Command.
-2. Read `var/pr_resolver/result.json`.
-3. If `status=merged` and `merge_outcome=merged`, confirm the PR is merged and finish.
-4. If `status=blocked` or `status=attempts_exhausted`, inspect `next_step`.
-5. If the same blocker repeats after its specialized skill ran and no remote PR branch change is visible, stop as blocked and report the artifact details.
-6. Execute the matching specialized skill exactly once for that blocker, then return to step 1.
-7. If the blocker is transient CI or mergeability state, wait only within the configured retry/backoff caps, then return to step 1.
+- `merge_conflicts` selects `fix-merge-conflicts` once.
+- `ci_failures` selects `fix-ci` once.
+- `actionable_comments` selects `fix-comments` once.
+- Transient waits and unknown/manual blockers never launch an agent remediation turn.
 
-## Retry Policy
-- Full-remediation escalation reasons:
-  - `actionable_comments`
-  - `ci_failures`
-  - `merge_conflicts`
-- Finalize-only retry reasons:
-  - `ci_running`
-  - `codex_review_grace_wait`
-  - `comments_unavailable`
-  - `ci_signal_degraded`
-  - `merge_not_ready` (limited grace retries)
-- `ci_running` should be allowed to consume the long finalize elapsed budget so
-  queued or running checks can reach a terminal state; if they then become
-  `ci_failures`, continue into `run_fix_ci_skill` instead of stopping early.
-- `ci_running` should not poll faster than once per minute.
-- `codex_review_grace_wait` polls once per minute and should be allowed to
-  expire naturally before finalizing the merge.
-- If retries transition from transient CI states into actionable `ci_failures`, continue into `run_fix_ci_skill` instead of stopping at manual review.
-- If `merge_not_ready` resolves into an actionable blocker such as `merge_conflicts`, continue into the matching remediation skill instead of stopping at manual review.
-- Non-retryable stop reasons:
-  - `comment_policy_not_enforced`
-  - any unknown blocker
-
-## Manual Remediation Loop (only when needed)
-When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `var/pr_resolver/result.json`:
-
-- `run_fix_merge_conflicts_skill`: read `$ACTIVE_SKILLS_DIR/fix-merge-conflicts/SKILL.md` and execute it.
-- `run_fix_comments_skill`: read `$ACTIVE_SKILLS_DIR/fix-comments/SKILL.md` and execute it.
-- `run_fix_ci_skill`: read `$ACTIVE_SKILLS_DIR/fix-ci/SKILL.md` and execute it.
-- `wait_for_ci_and_retry_finalize` / `retry_finalize_after_backoff`: do not mutate; wait and re-run orchestration.
-- `manual_review`: stop and report the blocker with artifact details.
-
-After applying any fix, run the orchestration command again. Do not summarize the task as complete before the rerun returns the Terminal Success Contract.
+After the child ends, Temporal independently checks the remote PR head. A child
+must not claim outer-loop success based on local commits, process output, or its
+own artifact alone.
 
 ## Lightweight Commands
 - Finalize-only gate checker:
@@ -190,4 +116,4 @@ python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_full.py" --pr <pr_number_or_branc
     --result var/pr_resolver/result.json
   ```
 - A failed push, missing GitHub auth, or missing remote branch update is an unresolved PR blocker, even if all code changes are committed locally.
-- Never background the orchestration command or rely on notifications/scheduled wakeups to finish the merge; run it in the foreground and wait for it to return (see Foreground Execution Contract).
+- Never run the legacy orchestration command during normal workflow execution.

@@ -82,6 +82,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
+    from moonmind.workflows.temporal.workflows.pr_resolver import (
+        build_pr_resolver_start_input,
+    )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
         ExecutionProgressModel,
@@ -598,6 +601,7 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 # docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
+RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
 _MANAGED_AGENT_IDS = frozenset(
@@ -8292,6 +8296,15 @@ class MoonMindRunWorkflow:
                                 child_workflow_id = (
                                     f"{child_workflow_id}:retry{system_retries}"
                                 )
+                            temporal_pr_resolver = (
+                                str(selected_skill_for_repair or "").strip().lower()
+                                == "pr-resolver"
+                                and workflow.patched(
+                                    RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH
+                                )
+                            )
+                            if temporal_pr_resolver:
+                                child_workflow_id = f"{child_workflow_id}:pr-resolver"
                             self._active_agent_child_workflow_id = child_workflow_id
                             self._active_agent_id = request.agent_id
                             self._mark_step_waiting(
@@ -8306,12 +8319,34 @@ class MoonMindRunWorkflow:
                                 ),
                             )
                             try:
-                                child_result = await workflow.execute_child_workflow(
-                                    "MoonMind.AgentRun",
-                                    request,
-                                    id=child_workflow_id,
-                                    task_queue=self._workflow_child_task_queue(),
-                                )
+                                if temporal_pr_resolver:
+                                    resolver_input = build_pr_resolver_start_input(
+                                        request=request,
+                                        node_inputs=node_inputs,
+                                        workflow_parameters=parameters,
+                                        parent_workflow_id=workflow.info().workflow_id,
+                                        parent_run_id=workflow.info().run_id,
+                                        principal=self._principal(),
+                                        step_id=node_id,
+                                    )
+                                    child_result = await workflow.execute_child_workflow(
+                                        "MoonMind.PRResolver",
+                                        resolver_input.model_dump(
+                                            by_alias=True, mode="json"
+                                        ),
+                                        id=child_workflow_id,
+                                        task_queue=self._workflow_child_task_queue(),
+                                        cancellation_type=(
+                                            ChildWorkflowCancellationType.TRY_CANCEL
+                                        ),
+                                    )
+                                else:
+                                    child_result = await workflow.execute_child_workflow(
+                                        "MoonMind.AgentRun",
+                                        request,
+                                        id=child_workflow_id,
+                                        task_queue=self._workflow_child_task_queue(),
+                                    )
                             finally:
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None

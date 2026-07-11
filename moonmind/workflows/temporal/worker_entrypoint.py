@@ -34,6 +34,9 @@ from moonmind.workflows.temporal.workflows.run import (
 from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow,
 )
+from moonmind.workflows.temporal.workflows.pr_resolver import (
+    MoonMindPRResolverWorkflow,
+)
 
 async def main():
     logging.basicConfig(level=logging.INFO)
@@ -59,6 +62,7 @@ async def main():
                 MoonMindAgentRun,
                 MoonMindOAuthSessionWorkflow,
                 MoonMindMergeAutomationWorkflow,
+                MoonMindPRResolverWorkflow,
             ]
         )
         # Import ManifestIngest workflow if it exists

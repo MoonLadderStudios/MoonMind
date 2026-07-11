@@ -35,6 +35,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
+from moonmind.workflows.temporal.publish_auto_evidence import parse_auto_publish_evidence
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
@@ -104,7 +105,56 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.AgentRun",
         "MoonMind.OAuthSession",
         "MoonMind.MergeAutomation",
+        "MoonMind.PRResolver",
     )
+
+
+def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
+    async def _run() -> None:
+        service, session, engine = await _artifact_service(tmp_path)
+        try:
+            activities = TemporalArtifactActivities(service)
+            request = {
+                "principal": "resolver-user",
+                "idempotencyKey": "resolver:wf:terminal:merged",
+                "executionRef": {
+                    "namespace": "default",
+                    "workflow_id": "resolver-wf",
+                    "run_id": "resolver-run",
+                },
+                "terminalResult": {
+                    "status": "merged",
+                    "mergeAutomationDisposition": "merged",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3150",
+                    "verifiedHeadSha": "abc",
+                    "reasonCode": "merged",
+                },
+            }
+
+            first = await activities.pr_resolver_write_terminal_result(request)
+            second = await activities.pr_resolver_write_terminal_result(request)
+
+            assert second == first
+            _artifact, publish_payload = await service.read(
+                artifact_id=first["publishEvidenceRef"],
+                principal="resolver-user",
+            )
+            evidence = parse_auto_publish_evidence(publish_payload)
+            assert evidence.merged is True
+            assert evidence.action == "merge"
+            artifacts = await service.list_for_execution(
+                namespace="default",
+                workflow_id="resolver-wf",
+                run_id="resolver-run",
+                principal="resolver-user",
+            )
+            assert len(artifacts) == 2
+        finally:
+            await session.close()
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     temporal_settings = settings.temporal.model_copy(

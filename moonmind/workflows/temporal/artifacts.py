@@ -2501,6 +2501,124 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
+    async def pr_resolver_write_terminal_result(
+        self, request: Mapping[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Publish resolver terminal and auto-publish evidence in one activity."""
+
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "pr_resolver.write_terminal_result requires an object"
+            )
+        principal = str(request.get("principal") or "").strip()
+        terminal = request.get("terminalResult")
+        idempotency_key = str(request.get("idempotencyKey") or "").strip()
+        execution = request.get("executionRef")
+        if not principal or not isinstance(terminal, Mapping) or not idempotency_key:
+            raise TemporalArtifactValidationError(
+                "principal, terminalResult, and idempotencyKey are required"
+            )
+        execution = execution if isinstance(execution, Mapping) else {}
+        namespace = str(execution.get("namespace") or self._service._default_namespace)
+        workflow_id = str(execution.get("workflow_id") or "").strip()
+        run_id = str(execution.get("run_id") or "").strip()
+
+        async def existing_ref(*, name: str, link_type: str) -> str | None:
+            if not workflow_id or not run_id:
+                return None
+            artifacts = await self._service.list_for_execution(
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                principal=principal,
+                link_type=link_type,
+            )
+            for artifact in artifacts:
+                metadata = dict(artifact.metadata_json or {})
+                if (
+                    metadata.get("idempotencyKey") == idempotency_key
+                    and metadata.get("name") == name
+                    and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+                ):
+                    return artifact.artifact_id
+            return None
+
+        async def write_json(
+            *, name: str, payload: Mapping[str, Any], link_type: str
+        ) -> str:
+            prior = await existing_ref(name=name, link_type=link_type)
+            if prior:
+                return prior
+            encoded = (json.dumps(dict(payload), sort_keys=True, indent=2) + "\n").encode(
+                "utf-8"
+            )
+            link = None
+            if workflow_id and run_id:
+                link = ExecutionRef(
+                    namespace=namespace,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    link_type=link_type,
+                )
+            artifact, _upload = await self._service.create(
+                principal=principal,
+                content_type="application/json",
+                size_bytes=len(encoded),
+                link=link,
+                metadata_json={
+                    "name": name,
+                    "producer": "activity:pr_resolver.write_terminal_result",
+                    "labels": ["pr-resolver", "terminal"],
+                    "idempotencyKey": idempotency_key,
+                },
+            )
+            completed = await self._service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                payload=encoded,
+                content_type="application/json",
+            )
+            return build_artifact_ref(completed).artifact_id
+
+        status = str(terminal.get("status") or "failed")
+        publish_payload = {
+            "schemaVersion": "moonmind.publish.auto.v1",
+            "mode": "auto",
+            "owner": "agent",
+            "skillId": "pr-resolver",
+            "status": "verified"
+            if status in {"merged", "already_merged"}
+            else "blocked",
+            "action": "merge"
+            if status in {"merged", "already_merged"}
+            else "none",
+            "repository": terminal.get("repository"),
+            "branch": terminal.get("headBranch")
+            or f"pull-request/{terminal.get('prNumber') or 'unknown'}",
+            "localHead": terminal.get("verifiedHeadSha"),
+            "remoteBranchHead": terminal.get("verifiedHeadSha"),
+            "remoteVerified": status in {"merged", "already_merged"},
+            "pushed": False,
+            "merged": status in {"merged", "already_merged"},
+            "prUrl": terminal.get("prUrl"),
+            "blockedReason": None if status in {"merged", "already_merged"} else terminal.get("reasonCode"),
+            "verificationCommands": ["pr_resolver.verify_merged"],
+            "idempotencyKey": idempotency_key,
+        }
+        publish_ref = await write_json(
+            name="artifacts/publish_result.json",
+            payload=publish_payload,
+            link_type="pr_resolver.publish_evidence",
+        )
+        terminal_payload = dict(terminal)
+        terminal_payload["publishEvidenceRef"] = publish_ref
+        result_ref = await write_json(
+            name="var/pr_resolver/result.json",
+            payload=terminal_payload,
+            link_type="pr_resolver.terminal_result",
+        )
+        return {"resultRef": result_ref, "publishEvidenceRef": publish_ref}
+
     @staticmethod
     def _normalize_activity_artifact_id(
         artifact_ref: ArtifactRef | Mapping[str, Any] | str,
