@@ -1366,6 +1366,45 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_skill.request_on_demand": ("agent_skills", "request_on_demand"),
 }
 
+# ``mm.tool.execute`` is registered as a capability-routed alias on multiple
+# fleets rather than as one catalog route. The workflow-fleet helper is bound
+# by ``workflow_registry`` because workflow workers do not use this module's
+# side-effecting activity implementations.
+_CAPABILITY_ROUTED_ACTIVITY_ALIASES = frozenset({"mm.tool.execute"})
+_EXTERNALLY_BOUND_CATALOG_ACTIVITIES = frozenset(
+    {"integration.resolve_adapter_metadata"}
+)
+
+
+def validate_activity_catalog_runtime_bindings(
+    catalog: TemporalActivityCatalog,
+) -> None:
+    """Fail startup when canonical routes and concrete handlers drift apart."""
+    catalog_types = {definition.activity_type for definition in catalog.activities}
+    runtime_types = set(_ACTIVITY_HANDLER_ATTRS)
+    missing_catalog_routes = sorted(
+        runtime_types - catalog_types - _CAPABILITY_ROUTED_ACTIVITY_ALIASES
+    )
+    missing_runtime_handlers = sorted(
+        catalog_types - runtime_types - _EXTERNALLY_BOUND_CATALOG_ACTIVITIES
+    )
+    if not missing_catalog_routes and not missing_runtime_handlers:
+        return
+
+    details: list[str] = []
+    if missing_catalog_routes:
+        details.append(
+            "handlers without catalog routes: " + ", ".join(missing_catalog_routes)
+        )
+    if missing_runtime_handlers:
+        details.append(
+            "catalog routes without handlers: " + ", ".join(missing_runtime_handlers)
+        )
+    raise TemporalActivityRuntimeError(
+        "Temporal activity catalog/runtime binding mismatch; " + "; ".join(details)
+    )
+
+
 def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     if isinstance(value, ArtifactRef):
         return value.artifact_id
@@ -13118,4 +13157,5 @@ __all__ = [
     "TemporalSkillActivities",
     "TemporalSandboxActivities",
     "build_activity_bindings",
+    "validate_activity_catalog_runtime_bindings",
 ]

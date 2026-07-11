@@ -1,0 +1,24 @@
+{
+  "failureShapeId": "agent-run-terminal-evidence-routing",
+  "incidentWorkflowId": "mm:72c1d916-2c9b-4a59-8240-b2a5a3c9bcb0",
+  "activityName": "agent_runtime.evaluate_terminal_evidence",
+  "expectedTaskQueue": "mm.activity.agent_runtime",
+  "terminalContract": {
+    "contractId": "batch_workflows_fanout.v1",
+    "relativePath": "artifacts/batch-workflows-result.json",
+    "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+    "executionRef": "workflow:run:batch-workflows:execution:1"
+  },
+  "resolvedTargets": [],
+  "terminalEvidence": {
+    "schemaVersion": "moonmind.batch-workflows-result.v1",
+    "contractId": "batch_workflows_fanout.v1",
+    "executionRef": "workflow:run:batch-workflows:execution:1",
+    "status": "no_op",
+    "requested": 0,
+    "created": 0,
+    "queued": [],
+    "skipped": [],
+    "errors": []
+  }
+}
