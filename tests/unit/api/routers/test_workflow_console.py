@@ -23,6 +23,7 @@ from api_service.api.routers import workflow_console as workflow_console_router
 from api_service.db.base import get_async_session
 from api_service.main import app as main_app
 from api_service.api.routers.workflow_console import (
+    DASHBOARD_DESTINATIONS,
     _get_temporal_service,
     _is_allowed_path,
     _resolve_user_dependency_overrides,
@@ -170,6 +171,58 @@ def test_workflow_console_api_routes_are_workflow_native() -> None:
     assert "/api/workflows/skills/upload" in route_paths
 
 
+def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
+    route_paths = {getattr(route, "path", "") for route in router.routes}
+    expected_route_paths = {
+        "/workflows",
+        "/workflows/new",
+        "/workflows/{workflow_path:path}",
+        "/schedules",
+        "/schedules/{schedule_id}",
+        "/skills",
+        "/skills/{dashboard_path:path}",
+        "/settings",
+        "/settings/{dashboard_path:path}",
+        "/manifests",
+        "/manifests/{manifest_name}",
+        "/omnigent/agents",
+        "/omnigent/policies",
+        "/omnigent/agents/{dashboard_path:path}",
+        "/omnigent/policies/{dashboard_path:path}",
+        "/remediations",
+        "/remediations/{dashboard_path:path}",
+        "/artifacts",
+        "/artifacts/{dashboard_path:path}",
+        "/observability",
+        "/observability/{dashboard_path:path}",
+    }
+
+    registry_paths = {
+        destination.canonical_path for destination in DASHBOARD_DESTINATIONS
+    }
+    registry_paths.update(
+        pattern[:-2]
+        for destination in DASHBOARD_DESTINATIONS
+        for pattern in destination.path_patterns
+        if pattern.endswith("/*")
+    )
+
+    assert expected_route_paths <= route_paths
+    assert {
+        "/workflows",
+        "/workflows/new",
+        "/schedules",
+        "/skills",
+        "/settings",
+        "/manifests",
+        "/omnigent/agents",
+        "/omnigent/policies",
+        "/remediations",
+        "/artifacts",
+        "/observability",
+    } <= registry_paths
+
+
 def test_allowed_path_helper_accepts_known_routes() -> None:
     assert not _is_allowed_path("system")
     assert not _is_allowed_path("queue")
@@ -283,17 +336,8 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert isinstance(payload["features"]["omnigentAgents"], bool)
     assert payload["features"]["omnigentPolicies"] is False
     assert payload["features"]["manifests"] is True
-    assert [destination["key"] for destination in payload["destinations"]] == [
-        "workflows",
-        "create",
-        "recurring",
-        "skills",
-        "manifests",
-        "omnigent-agents",
-        "omnigent-policies",
-        "remediation",
-        "artifacts",
-        "settings",
+    assert payload["destinations"] == [
+        destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
     ]
     assert len({item["canonicalPath"] for item in payload["destinations"]}) == 10
     skills_destination = next(
