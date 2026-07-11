@@ -44,6 +44,15 @@ def _load_compose() -> dict:
         Loader=UniqueKeySafeLoader,
     )
 
+
+def _load_claude_host_compose() -> dict:
+    compose_path = REPO_ROOT / "docker-compose.claude-host.yaml"
+    return yaml.load(
+        compose_path.read_text(encoding="utf-8"),
+        Loader=UniqueKeySafeLoader,
+    )
+
+
 def _require_docker_compose() -> None:
     if shutil.which("docker") is None:
         pytest.skip("docker CLI is not available")
@@ -428,6 +437,55 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert "omnigent-host-state" in volumes
     assert "codex_auth_volume" in volumes
     assert "omnigent-server-state" not in volumes
+
+
+def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
+    compose = _load_claude_host_compose()
+    host_service = compose["services"]["omnigent-host-claude"]
+
+    assert host_service["profiles"] == ["omnigent-host-claude"]
+    assert host_service["hostname"] == "omnigent-host-claude"
+    assert host_service["image"] == (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
+    assert host_service["command"] == [
+        "omnigent",
+        "host",
+        "--server",
+        "http://omnigent:8000",
+        "--non-interactive",
+    ]
+
+    host_env = _env_map(host_service["environment"])
+    assert host_env == {
+        "HOME": "/root",
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_AUTH_TOKEN": "",
+        "CLAUDE_API_KEY": "",
+        "CLAUDE_CODE_OAUTH_TOKEN": "",
+        "OPENAI_API_KEY": "",
+        "GEMINI_API_KEY": "",
+        "GOOGLE_API_KEY": "",
+    }
+
+    host_volumes = set(host_service["volumes"])
+    assert "omnigent-host-claude-state:/root/.omnigent" in host_volumes
+    assert "claude_auth_volume:/root/.claude" in host_volumes
+    assert "./omnigent_workspaces:/workspaces" in host_volumes
+    assert (
+        "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
+        "/workspaces/MoonMind:ro"
+    ) in host_volumes
+    assert compose["volumes"] == {"omnigent-host-claude-state": None}
+
+    assert host_service["depends_on"] == {
+        "omnigent": {"condition": "service_started"},
+        "claude-auth-init": {"condition": "service_completed_successfully"},
+    }
+    assert _network_names(host_service) == {"local-network"}
+    assert host_service["restart"] == "unless-stopped"
+
 
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
