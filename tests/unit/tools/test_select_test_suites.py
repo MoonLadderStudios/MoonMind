@@ -16,6 +16,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites() -> None:
         "api_component": "false",
         "temporal_boundary": "false",
         "integration_ci": "false",
+        "reliability_journey": "false",
         "full_backend": "false",
     }
 
@@ -53,6 +54,55 @@ def test_temporal_workflow_change_selects_temporal_boundary() -> None:
     assert outputs["unit_fast"] == "true"
     assert outputs["temporal_boundary"] == "true"
     assert outputs["api_component"] == "false"
+    assert outputs["reliability_journey"] == "true"
+
+
+def test_workflow_visible_adapters_select_boundary_and_reliability() -> None:
+    for path in (
+        "moonmind/workflows/adapters/managed_agent_adapter.py",
+        "moonmind/workflows/adapters/codex_session_adapter.py",
+    ):
+        outputs = _outputs([path])
+
+        assert outputs["temporal_boundary"] == "true"
+        assert outputs["reliability_journey"] == "true"
+
+
+def test_reliability_journey_production_seams_are_selected() -> None:
+    paths = (
+        "moonmind/workflows/temporal/workflows/run.py",
+        "moonmind/workflows/temporal/checkpoint_policy.py",
+        "moonmind/schemas/agent_runtime_models.py",
+        "moonmind/schemas/execution_checkpoint_models.py",
+        ".agents/skills/pr-resolver/SKILL.md",
+        ".agents/skills/pr-resolver/tools/orchestrate.py",
+        "api_service/Dockerfile",
+        "api_service/docker/install_cli_tooling.sh",
+        "tests/reliability/replays/incomplete-terminal-contract/manifest.json",
+        "tests/helpers/codex_session_runtime.py",
+    )
+
+    for path in paths:
+        assert _outputs([path])["reliability_journey"] == "true", path
+
+
+def test_managed_session_schema_selects_boundary_and_reliability() -> None:
+    outputs = _outputs(["moonmind/schemas/managed_session_models.py"])
+
+    assert outputs["temporal_boundary"] == "true"
+    assert outputs["reliability_journey"] == "true"
+
+
+def test_mixed_frontend_and_adapter_change_selects_reliability() -> None:
+    outputs = _outputs(
+        [
+            "frontend/src/components/Workflow.tsx",
+            "moonmind/workflows/adapters/managed_agent_adapter.py",
+        ]
+    )
+
+    assert outputs["temporal_boundary"] == "true"
+    assert outputs["reliability_journey"] == "true"
 
 
 def test_temporal_schema_change_selects_temporal_boundary() -> None:

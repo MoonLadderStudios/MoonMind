@@ -77,6 +77,10 @@ def _is_temporal_boundary_test_path(path: Path) -> bool:
     )
 
 
+def _is_reliability_journey_test_path(path: Path) -> bool:
+    return path.parts[:2] == ("tests", "reliability")
+
+
 def _item_has_marker(item: pytest.Item, name: str) -> bool:
     return item.get_closest_marker(name) is not None
 
@@ -95,12 +99,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             _item_has_marker(item, "temporal_boundary")
             or _is_temporal_boundary_test_path(rel_path)
         )
+        is_reliability_journey = (
+            _item_has_marker(item, "reliability_journey")
+            or _is_reliability_journey_test_path(rel_path)
+        )
         is_slow = _item_has_marker(item, "slow") or rel_path in _SLOW_TEST_MODULES
 
         if is_component:
             item.add_marker(pytest.mark.component)
         if is_temporal_boundary:
             item.add_marker(pytest.mark.temporal_boundary)
+        if is_reliability_journey:
+            item.add_marker(pytest.mark.reliability_journey)
         if is_slow:
             item.add_marker(pytest.mark.slow)
 
@@ -109,6 +119,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             and rel_path.parts[:2] == ("tests", "unit")
             and not is_component
             and not is_temporal_boundary
+            and not is_reliability_journey
             and not is_slow
             and not _item_has_marker(item, "integration")
             and not _item_has_marker(item, "provider_verification")
