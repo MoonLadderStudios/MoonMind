@@ -60,6 +60,16 @@ class AgentSkillProvenance(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+class NativeSkillImplementation(BaseModel):
+    """Trusted, immutable evidence permitting a resolved skill's native host."""
+
+    contract: str
+    core_version: str
+    supported_hosts: list[str] = Field(default_factory=list)
+    native_host_allowed: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
 class ResolvedSkillEntry(BaseModel):
     """An individual agent skill selected for a run."""
 
@@ -68,6 +78,7 @@ class ResolvedSkillEntry(BaseModel):
     content_ref: str | None = None
     content_digest: str | None = None
     provenance: AgentSkillProvenance
+    implementation: NativeSkillImplementation | None = None
     required_skills: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
     selection_reason: str | None = None

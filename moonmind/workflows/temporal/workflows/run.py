@@ -123,6 +123,7 @@ from moonmind.workflows.skills.approval_policy import (
     recommended_next_actions,
 )
 from moonmind.workflows.skills.tool_plan_contracts import REVIEW_VERDICTS
+from moonmind.workflows.skills.native_binding import pr_resolver_native_binding
 from moonmind.workflows.temporal.step_ledger import (
     TERMINAL_STEP_STATUSES,
     build_initial_step_rows,
@@ -910,6 +911,18 @@ class MoonMindRunWorkflow:
             ),
             "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
         }
+        lowered = bounded_message.lower()
+        if (
+            "moonmind.prresolver" in lowered
+            and ("not registered" in lowered or "not found" in lowered)
+        ):
+            diagnostic.update(
+                reasonCode="worker_capability_unavailable",
+                workflowType="MoonMind.PRResolver",
+                taskQueue=self._workflow_child_task_queue(),
+                agentExecutionLaunched=False,
+                budgetConsumed=False,
+            )
         # Drop empty optional keys to keep the structure compact.
         return {key: value for key, value in diagnostic.items() if value is not None}
 
@@ -8351,6 +8364,7 @@ class MoonMindRunWorkflow:
                             temporal_pr_resolver = (
                                 str(selected_skill_for_repair or "").strip().lower()
                                 == "pr-resolver"
+                                and self._pr_resolver_native_binding_allowed(node_id)
                                 and workflow.patched(
                                     RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH
                                 )
@@ -13848,6 +13862,7 @@ class MoonMindRunWorkflow:
         """Resolve effective workflow/step skill intent before AgentRun launch."""
 
         if existing_skillset_ref:
+            self._record_pr_resolver_native_binding(node_id, None)
             return existing_skillset_ref
 
         effective = build_effective_workflow_skill_selectors(
@@ -13911,6 +13926,7 @@ class MoonMindRunWorkflow:
                     f"selected skill '{selected_skill}' was not resolved into the "
                     "agent skill snapshot"
                 )
+        self._record_pr_resolver_native_binding(node_id, resolved)
         manifest_ref = self._resolved_skillset_field(
             resolved,
             "manifest_ref",
@@ -13924,6 +13940,35 @@ class MoonMindRunWorkflow:
             "snapshotId",
         )
         return str(snapshot_id) if snapshot_id else None
+
+    def _record_pr_resolver_native_binding(self, node_id: str, resolved: Any) -> None:
+        """Keep compact deterministic routing evidence; snapshot refs alone never grant trust."""
+
+        decisions = getattr(self, "_pr_resolver_native_bindings", None)
+        if decisions is None:
+            decisions = {}
+            self._pr_resolver_native_bindings = decisions
+        skills = (
+            resolved.get("skills")
+            if isinstance(resolved, WorkflowMapping)
+            else getattr(resolved, "skills", ())
+        ) if resolved is not None else ()
+        decision = None
+        for entry in skills or ():
+            candidate = pr_resolver_native_binding(entry)
+            name = (
+                entry.get("skill_name") or entry.get("skillName") or entry.get("name")
+                if isinstance(entry, WorkflowMapping)
+                else getattr(entry, "skill_name", None)
+            )
+            if str(name or "").strip().lower() == "pr-resolver":
+                decision = candidate
+                break
+        decisions[node_id] = decision
+
+    def _pr_resolver_native_binding_allowed(self, node_id: str) -> bool:
+        decision = getattr(self, "_pr_resolver_native_bindings", {}).get(node_id)
+        return bool(decision and decision.eligible)
 
     @staticmethod
     def _resolved_skillset_skill_names(resolved: Any) -> set[str]:

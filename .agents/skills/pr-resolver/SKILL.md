@@ -2,6 +2,11 @@
 name: pr-resolver
 description: Master orchestrator to resolve a PR by diagnosing state and delegating to specialized skills.
 metadata:
+  implementation:
+    contract: pr-resolver-core/v1
+    core_version: "1"
+    supported_hosts: [cli, temporal]
+    native_host_allowed: true
   publish:
     mode: auto
     owner: agent

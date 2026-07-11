@@ -1,5 +1,6 @@
 import abc
 import asyncio
+import hashlib
 import re
 import typing
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     AgentSkillProvenance,
     AgentSkillSourceKind,
+    NativeSkillImplementation,
     ResolvedSkillEntry,
     ResolvedSkillSet,
     SkillSelector,
@@ -24,6 +26,7 @@ _REQUIRED_SKILLS_METADATA_KEY = "required-skills"
 _REQUIRED_CAPABILITIES_METADATA_KEY = "required-capabilities"
 _PUBLISH_METADATA_KEY = "publish"
 _SIDE_EFFECT_METADATA_KEY = "sideEffect"
+_IMPLEMENTATION_METADATA_KEY = "implementation"
 _AGENT_SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 _CAPABILITY_TOKEN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.:-]{0,126}[a-z0-9])?$")
 
@@ -209,9 +212,11 @@ def _scan_for_skills(
         if item.name in skip_names:
             continue
         if item.is_dir() and (item / "SKILL.md").exists():
+            skill_bytes = (item / "SKILL.md").read_bytes()
             results.append(
                 ResolvedSkillEntry(
                     skill_name=item.name,
+                    content_digest="sha256:" + hashlib.sha256(skill_bytes).hexdigest(),
                     provenance=AgentSkillProvenance(
                         source_kind=source_kind,
                         source_path=str(item),
@@ -528,6 +533,24 @@ async def _required_capabilities_for_entry(entry: ResolvedSkillEntry) -> tuple[s
     return _required_capabilities_from_frontmatter(frontmatter, owner=entry.skill_name)
 
 
+async def _implementation_for_entry(
+    entry: ResolvedSkillEntry,
+) -> NativeSkillImplementation | None:
+    """Load native-host permission only from the winning immutable skill source."""
+
+    if entry.implementation is not None:
+        return entry.implementation
+    source_path = entry.provenance.source_path
+    if not source_path or not entry.content_digest:
+        return None
+    frontmatter = await asyncio.to_thread(_load_skill_frontmatter, Path(source_path))
+    metadata = frontmatter.get("metadata") or {}
+    raw = metadata.get(_IMPLEMENTATION_METADATA_KEY) if isinstance(metadata, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    return NativeSkillImplementation.model_validate(raw)
+
+
 def _required_skill_names_from_artifact_metadata(
     metadata: dict[str, typing.Any],
     *,
@@ -700,10 +723,12 @@ class AgentSkillResolver:
                 entry = resolved_map[name]
                 reason = "selected" if name in requested_names else "required"
                 required_capabilities = await _required_capabilities_for_entry(entry)
+                implementation = await _implementation_for_entry(entry)
                 final_skills.append(
                     entry.model_copy(
                         update={
                             "required_capabilities": list(required_capabilities),
+                            "implementation": implementation,
                             "selection_reason": reason,
                             "required_by": sorted(required_by.get(name, set())),
                         }

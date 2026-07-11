@@ -197,6 +197,21 @@ def test_failure_diagnostic_classifies_profile_resolution_as_integration() -> No
     assert diag["category"] == "integration_error"
 
 
+def test_unregistered_pr_resolver_is_operator_capability_failure(monkeypatch) -> None:
+    wf = _make_workflow_for_diagnostic()
+    monkeypatch.setattr(wf, "_workflow_child_task_queue", lambda: "mm.workflow")
+    failure = RuntimeError(
+        "Workflow class MoonMind.PRResolver is not registered on this worker"
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="executing")
+
+    assert diag["reasonCode"] == "worker_capability_unavailable"
+    assert diag["workflowType"] == "MoonMind.PRResolver"
+    assert diag["agentExecutionLaunched"] is False
+    assert diag["budgetConsumed"] is False
+
+
 def test_record_failure_diagnostic_keeps_first_root_cause() -> None:
     wf = _make_workflow_for_diagnostic()
     first = RuntimeError(

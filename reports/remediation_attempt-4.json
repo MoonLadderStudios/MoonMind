@@ -1,0 +1,92 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 4,
+  "issue_ref": "MM-1202",
+  "source_verification_artifact": "reports/remediation_verification-3.json",
+  "source_verdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Implemented fail-closed trusted native-binding evidence and routing, introduced a pure provider-neutral resolver transition core, and classified unregistered resolver starts as operator capability failures without consuming resolver budgets. Immutable rollout enforcement, full two-host core adoption/parity, metrics/alerts, and the real readiness canary remain bounded gaps.",
+  "changed_files": [
+    ".agents/skills/pr-resolver/SKILL.md",
+    "moonmind/pr_resolver_core/__init__.py",
+    "moonmind/pr_resolver_core/models.py",
+    "moonmind/pr_resolver_core/transition.py",
+    "moonmind/schemas/agent_skill_models.py",
+    "moonmind/services/skill_resolution.py",
+    "moonmind/workflows/skills/native_binding.py",
+    "moonmind/workflows/temporal/workflows/run.py",
+    "tests/unit/pr_resolver_core/test_transition.py",
+    "tests/unit/workflows/skills/test_native_binding.py",
+    "tests/unit/workflows/temporal/workflows/test_run_signals_updates.py",
+    "reports/remediation_attempt-4.json"
+  ],
+  "gap_statuses": [
+    {
+      "requirement": "Trusted native resolver binding",
+      "gap_type": "implementation",
+      "status": "fixed",
+      "evidence": "Resolved skill entries now carry an explicit implementation contract parsed from the winning content-addressed source. Native routing requires identity, digest/ref, provenance, compatible contract/core version, temporal host support, and explicit native-host permission; name-only and opaque existing refs use the portable AgentRun path. Publish metadata remains separate."
+    },
+    {
+      "requirement": "Shared portable resolver semantics",
+      "gap_type": "implementation",
+      "status": "partial",
+      "evidence": "A dependency-free canonical snapshot/state/decision/terminal model and deterministic reduce_resolver_state core now exist with fail-closed unknown/degraded behavior and bounded remediation. The existing Temporal and standalone classifiers have not both been migrated to this core, and the full shared parity corpus remains absent."
+    },
+    {
+      "requirement": "Immutable deployment identity and rollout safety",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "No production worker versioning/drain enforcement or stale-worker exclusion was added in attempt 4."
+    },
+    {
+      "requirement": "Capability failure handling and observability",
+      "gap_type": "implementation",
+      "status": "partial",
+      "evidence": "Parent diagnostics now classify an unregistered MoonMind.PRResolver child as worker_capability_unavailable and record workflow type, task queue, agentExecutionLaunched=false, and budgetConsumed=false. Worker build/fingerprint distribution, metrics, and alerts remain absent."
+    },
+    {
+      "requirement": "Real deployment canary and comprehensive regression evidence",
+      "gap_type": "verification",
+      "status": "remaining",
+      "evidence": "Unit regression coverage was added for native binding, fail-closed transitions, and capability failure classification. No parent-to-resolver readiness canary, Compose entrypoint test, restart/rollout test, or complete Temporal parity/replay corpus was added."
+    }
+  ],
+  "targeted_checks": [
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/pr_resolver_core tests/unit/workflows/skills/test_native_binding.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/workflows/temporal/test_temporal_workers.py",
+      "result": "BLOCKED_THEN_RECOVERED",
+      "notes": "The managed image initially lacked pytest. Installed the pyproject-declared pytest test extras in the disposable job environment and reran the same focused coverage with python -m pytest."
+    },
+    {
+      "command": "python -m pytest -q tests/unit/pr_resolver_core tests/unit/workflows/skills/test_native_binding.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/workflows/temporal/workflows/test_run_signals_updates.py tests/unit/workflows/temporal/test_temporal_workers.py --tb=short",
+      "result": "PASS",
+      "notes": "175 passed, 2 subtests passed in 3.94 seconds."
+    },
+    {
+      "command": "python -m compileall -q moonmind/pr_resolver_core moonmind/workflows/skills/native_binding.py moonmind/schemas/agent_skill_models.py moonmind/services/skill_resolution.py moonmind/workflows/temporal/workflows/run.py",
+      "result": "PASS",
+      "notes": "All changed production Python modules compiled successfully."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors."
+    },
+    {
+      "command": "./tools/test_integration.sh",
+      "result": "NOT_RUN",
+      "notes": "The required Compose/canary implementation does not yet exist; running the broad integration suite would not supply the missing boundary evidence."
+    }
+  ],
+  "remaining_work": [
+    "Migrate both the standalone and Temporal resolver hosts to the new pure core and add the complete provider-neutral parity fixture corpus.",
+    "Implement immutable worker deployment/version rollout, drain/recreate enforcement, and stale-worker exclusion.",
+    "Add bounded worker build/fingerprint diagnostics, registration-mismatch and child-start metrics, and operational alerts.",
+    "Implement the readiness-gating dry-run parent-to-resolver canary and the required Temporal, Compose entrypoint, restart, replay, and rollout regression coverage."
+  ],
+  "scope_controls": {
+    "pull_request_created": false,
+    "jira_status_changed": false,
+    "scope_broadened": false
+  }
+}
