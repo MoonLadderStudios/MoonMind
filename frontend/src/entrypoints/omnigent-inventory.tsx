@@ -47,7 +47,10 @@ function compactRows(payload: unknown): InventoryRow[] {
 export default function OmnigentInventoryPage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const kind: InventoryKind = location.pathname.endsWith('/policies') ? 'policies' : 'agents';
+  const kind: InventoryKind = location.pathname === '/omnigent/policies'
+    || location.pathname.startsWith('/omnigent/policies/')
+    ? 'policies'
+    : 'agents';
   const featureKey = kind === 'agents' ? 'omnigentAgents' : 'omnigentPolicies';
   const label = kind === 'agents' ? 'Agents' : 'Policies';
   const queryKey = kind === 'agents' ? 'omnigent_agents_q' : 'omnigent_policies_q';

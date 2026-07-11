@@ -33,7 +33,84 @@ export type DashboardUiInfo = {
   dashboardConfig?: unknown;
   settingsPermissions?: unknown;
   workerPause?: unknown;
+  destinations?: DashboardDestinationInfo[];
 };
+
+export type DashboardNavigationGroup = 'primary' | 'operations' | 'system';
+export type DashboardPageClassification = 'collection' | 'create' | 'workspace' | 'utility';
+export type DashboardDisplayMode = 'workflow-list' | 'recurring-list';
+export type DashboardIconKey =
+  | 'archive' | 'bot' | 'manifest' | 'moon' | 'rocket' | 'scroll-text'
+  | 'settings' | 'shield-check' | 'sparkles' | 'wrench';
+
+export type DashboardDestinationInfo = {
+  key: string;
+  label: string;
+  iconKey: DashboardIconKey;
+  canonicalPath: string;
+  pathPatterns: string[];
+  navigationGroup: DashboardNavigationGroup;
+  pageClassification: DashboardPageClassification;
+  capabilityKey: string;
+  endpointKey?: string;
+  displayMode?: DashboardDisplayMode;
+};
+
+export type DashboardDestination = DashboardDestinationInfo & {
+  page: DashboardPage;
+  dataWidePanel: boolean;
+};
+
+export const DASHBOARD_DESTINATIONS: readonly DashboardDestination[] = [
+  { key: 'workflows', label: 'Workflows', iconKey: 'scroll-text', canonicalPath: '/workflows', pathPatterns: ['/workflows', '/workflows/:workflowId', '/workflows/:workflowId/:detailTab'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'workflowList', endpointKey: 'workflows', displayMode: 'workflow-list', page: 'workflows-workspace', dataWidePanel: true },
+  { key: 'create', label: 'Create', iconKey: 'rocket', canonicalPath: '/workflows/new', pathPatterns: ['/workflows/new'], navigationGroup: 'primary', pageClassification: 'create', capabilityKey: 'workflowActions', page: 'workflows-workspace', dataWidePanel: true },
+  { key: 'recurring', label: 'Recurring', iconKey: 'moon', canonicalPath: '/schedules', pathPatterns: ['/schedules', '/schedules/:definitionId'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'schedules', endpointKey: 'schedules', displayMode: 'recurring-list', page: 'schedules', dataWidePanel: true },
+  { key: 'skills', label: 'Skills', iconKey: 'sparkles', canonicalPath: '/skills', pathPatterns: ['/skills/*'], navigationGroup: 'primary', pageClassification: 'workspace', capabilityKey: 'skills', endpointKey: 'skills', page: 'skills', dataWidePanel: false },
+  { key: 'manifests', label: 'RAG / Manifests', iconKey: 'manifest', canonicalPath: '/manifests', pathPatterns: ['/manifests', '/manifests/:manifestName'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'manifests', endpointKey: 'manifests', page: 'manifests', dataWidePanel: true },
+  { key: 'omnigent-agents', label: 'Omnigent Agents', iconKey: 'bot', canonicalPath: '/omnigent/agents', pathPatterns: ['/omnigent/agents/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentAgents', endpointKey: 'omnigentAgents', page: 'omnigent-inventory', dataWidePanel: true },
+  { key: 'omnigent-policies', label: 'Omnigent Policies', iconKey: 'shield-check', canonicalPath: '/omnigent/policies', pathPatterns: ['/omnigent/policies/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'omnigentPolicies', endpointKey: 'omnigentPolicies', page: 'omnigent-inventory', dataWidePanel: true },
+  { key: 'remediation', label: 'Remediation', iconKey: 'wrench', canonicalPath: '/remediations', pathPatterns: ['/remediations/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'remediationCollection', endpointKey: 'remediations', page: 'remediations', dataWidePanel: true },
+  { key: 'artifacts', label: 'Artifacts / Observability', iconKey: 'archive', canonicalPath: '/artifacts', pathPatterns: ['/artifacts/*', '/observability/*'], navigationGroup: 'operations', pageClassification: 'collection', capabilityKey: 'artifacts', endpointKey: 'artifacts', page: 'artifacts', dataWidePanel: true },
+  { key: 'settings', label: 'Settings', iconKey: 'settings', canonicalPath: '/settings', pathPatterns: ['/settings/*'], navigationGroup: 'system', pageClassification: 'utility', capabilityKey: 'settings', endpointKey: 'settings', page: 'settings', dataWidePanel: true },
+];
+
+export type DashboardDestinationState = 'shown' | 'hidden' | 'unavailable';
+
+export function destinationState(
+  destination: DashboardDestination,
+  uiInfo: DashboardUiInfo | null | undefined,
+): DashboardDestinationState {
+  const value = uiInfo?.features?.[destination.capabilityKey];
+  if (value === true) return 'shown';
+  if (value === false) return 'unavailable';
+  return 'hidden';
+}
+
+export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
+  new Set(DASHBOARD_DESTINATIONS.flatMap((destination) => destination.pathPatterns)),
+);
+
+export function matchesDashboardDestinationRegistry(
+  destinations: DashboardDestinationInfo[] | undefined,
+): boolean {
+  if (!destinations || destinations.length !== DASHBOARD_DESTINATIONS.length) return false;
+  return DASHBOARD_DESTINATIONS.every((local, index) => {
+    const remote = destinations[index];
+    if (!remote) return false;
+    return (
+      local.key === remote.key &&
+      local.label === remote.label &&
+      local.iconKey === remote.iconKey &&
+      local.canonicalPath === remote.canonicalPath &&
+      local.navigationGroup === remote.navigationGroup &&
+      local.pageClassification === remote.pageClassification &&
+      local.capabilityKey === remote.capabilityKey &&
+      local.endpointKey === remote.endpointKey &&
+      local.displayMode === remote.displayMode &&
+      JSON.stringify(local.pathPatterns) === JSON.stringify(remote.pathPatterns)
+    );
+  });
+}
 
 const DETAIL_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const WORKFLOW_ID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$/;
@@ -109,7 +186,7 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/workflows') {
     return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
   }
-  if (path === '/artifacts' || path === '/observability') {
+  if (path === '/artifacts' || path.startsWith('/artifacts/') || path === '/observability' || path.startsWith('/observability/')) {
     return { page: 'artifacts', dataWidePanel: true, currentPath: path };
   }
   if (path === '/workflows/new') {
@@ -130,19 +207,34 @@ export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
   if (path === '/manifests' || isDetailPath(path, 'manifests')) {
     return { page: 'manifests', dataWidePanel: true, currentPath: path };
   }
-  if (path === '/omnigent/agents' || path === '/omnigent/policies') {
+  if (path === '/omnigent/agents' || path.startsWith('/omnigent/agents/') || path === '/omnigent/policies' || path.startsWith('/omnigent/policies/')) {
     return { page: 'omnigent-inventory', dataWidePanel: true, currentPath: path };
   }
   if (path === '/index-health') {
     return { page: 'index-health', dataWidePanel: true, currentPath: path };
   }
-  if (path === '/remediations') {
+  if (path === '/remediations' || path.startsWith('/remediations/')) {
     return { page: 'remediations', dataWidePanel: true, currentPath: path };
   }
   if (path === '/oauth-terminal') {
     return { page: 'oauth-terminal', dataWidePanel: true, currentPath: path };
   }
   return null;
+}
+
+export function destinationForPath(pathname: string): DashboardDestination | null {
+  const route = resolveDashboardRoute(pathname);
+  if (!route) return null;
+  if (pathname === '/workflows/new') return DASHBOARD_DESTINATIONS[1] ?? null;
+  return DASHBOARD_DESTINATIONS.find((destination) => (
+    destination.page === route.page && (
+      destination.key !== 'artifacts' || pathname.startsWith('/artifacts') || pathname.startsWith('/observability')
+    ) && (
+      destination.key !== 'omnigent-agents' || pathname.startsWith('/omnigent/agents')
+    ) && (
+      destination.key !== 'omnigent-policies' || pathname.startsWith('/omnigent/policies')
+    )
+  )) ?? null;
 }
 
 export function isDashboardInternalUrl(url: URL): boolean {

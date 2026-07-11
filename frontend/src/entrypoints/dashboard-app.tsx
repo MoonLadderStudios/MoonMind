@@ -41,6 +41,9 @@ import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  DASHBOARD_REACT_ROUTE_PATHS,
+  DASHBOARD_DESTINATIONS,
+  matchesDashboardDestinationRegistry,
   type DashboardPage,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
@@ -83,6 +86,12 @@ const PAGE_IMPORTS = {
   'workflows-home': () => import('./workflows-home'),
   'workflow-list': () => import('./workflow-list'),
 } satisfies Record<DashboardPage, PageImport>;
+
+for (const destination of DASHBOARD_DESTINATIONS) {
+  if (!Object.hasOwn(PAGE_IMPORTS, destination.page)) {
+    throw new Error(`Dashboard destination ${destination.key} has no lazy page import`);
+  }
+}
 
 const NAV_ICON_SIZE = 16;
 const LIST_MODE_ICON_SIZE = 15;
@@ -406,7 +415,11 @@ function useDashboardUiInfo() {
       if (!response.ok) {
         throw new Error(`UI info request failed: ${response.status}`);
       }
-      return (await response.json()) as DashboardUiInfo;
+      const uiInfo = (await response.json()) as DashboardUiInfo;
+      if (uiInfo.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations)) {
+        throw new Error('Dashboard destination registry does not match /api/ui/info');
+      }
+      return uiInfo;
     },
     staleTime: 30_000,
     retry: 1,
@@ -662,7 +675,7 @@ function CollectionListDisplayModeControl({
   );
 }
 
-function ApplicationRail({
+function DashboardNavigation({
   uiInfo,
 }: {
   uiInfo: DashboardUiInfo | null;
@@ -735,7 +748,7 @@ function ApplicationRail({
   }, [open]);
 
   return (
-    <aside className="application-rail" aria-label="Application rail">
+    <header className="masthead">
       <Link className="masthead-brand" to="/workflows" aria-label="MoonMind workflows">
         <img
           className="masthead-logo"
@@ -775,7 +788,7 @@ function ApplicationRail({
         />
       ) : null}
 
-      <div className="application-rail-nav">
+      <div className="masthead-nav">
         <nav
           ref={navRef}
           className={`route-nav${open ? ' route-nav--open' : ''}`}
@@ -823,7 +836,13 @@ function ApplicationRail({
           >
             Skills
           </AnimatedRouteNavLink>
-          {uiInfo?.features?.artifacts !== false ? (
+          {uiInfo?.features?.manifests === true ? (
+            <NavLink to="/manifests" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <Rows3 size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              RAG / Manifests
+            </NavLink>
+          ) : null}
+          {uiInfo?.features?.artifacts === true ? (
             <NavLink
               to="/artifacts"
               className={({ isActive }) => (
@@ -853,14 +872,14 @@ function ApplicationRail({
         </nav>
       </div>
 
-      <div className="application-rail-utilities">
-        {buildId ? (
+      {buildId ? (
+        <div className="masthead-title-meta">
           <div className="version-badge" title="MoonMind image version">
             <span className="version-badge-value">v{buildId}</span>
           </div>
-        ) : null}
-      </div>
-    </aside>
+        </div>
+      ) : null}
+    </header>
   );
 }
 
@@ -884,68 +903,46 @@ function AppShell({
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
-        <ApplicationRail uiInfo={uiInfo} />
-        <DashboardContent
-          dataWidePanel={dataWidePanel}
-          listDisplayAccessibleName={listDisplayAccessibleName}
-          listDisplayMode={listDisplayMode}
-          listDisplayStatus={listDisplayStatus}
-          onListDisplayModeSelect={onListDisplayModeSelect}
-        >
-          {children}
-        </DashboardContent>
+        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+          <p>
+            <span className="worker-pause-label" data-worker-pause-status>
+              Workers: Running
+            </span>
+            <span className="worker-pause-reason" data-worker-pause-reason />
+            <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
+              Manage operations
+            </Link>
+          </p>
+        </section>
+
+        <div className="dashboard-shell-full">
+          <DashboardNavigation uiInfo={uiInfo} />
+        </div>
+
+        <div className="dashboard-content">
+          <div
+            className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+          >
+            {listDisplayMode ? (
+              <div className="dashboard-collection-utilities">
+                <CollectionListDisplayModeControl
+                  {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
+                  effectiveMode={listDisplayMode}
+                  status={listDisplayStatus}
+                  onSelect={onListDisplayModeSelect}
+                />
+              </div>
+            ) : null}
+            <div className="dashboard-alerts-region">
+              <DashboardAlerts />
+            </div>
+          </div>
+          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+            {children}
+          </section>
+        </div>
       </main>
     </DashboardLiveUpdateProvider>
-  );
-}
-
-function DashboardContent({
-  dataWidePanel,
-  listDisplayAccessibleName,
-  listDisplayMode,
-  listDisplayStatus,
-  onListDisplayModeSelect,
-  children,
-}: {
-  dataWidePanel: boolean;
-  listDisplayAccessibleName?: string | undefined;
-  listDisplayMode: CollectionListDisplayMode | null;
-  listDisplayStatus?: string | null | undefined;
-  onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="dashboard-content">
-      <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-        <p>
-          <span className="worker-pause-label" data-worker-pause-status>
-            Workers: Running
-          </span>
-          <span className="worker-pause-reason" data-worker-pause-reason />
-          <Link className="worker-pause-manage" to="/settings?section=operations" data-worker-pause-manage>
-            Manage operations
-          </Link>
-        </p>
-      </section>
-
-      {listDisplayMode ? (
-        <div className="dashboard-collection-utilities">
-          <CollectionListDisplayModeControl
-            {...(listDisplayAccessibleName ? { accessibleName: listDisplayAccessibleName } : {})}
-            effectiveMode={listDisplayMode}
-            status={listDisplayStatus}
-            onSelect={onListDisplayModeSelect}
-          />
-        </div>
-      ) : null}
-
-      <div className="dashboard-alerts-region">
-        <DashboardAlerts />
-      </div>
-      <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
-        {children}
-      </section>
-    </div>
   );
 }
 
@@ -1345,30 +1342,11 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/workflows" replace />} />
-      <Route path="/workflows" element={routedDashboardPage} />
-      <Route path="/workflows/new" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/chat" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/overview" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/execution" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/evidence" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/steps" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/debug" element={routedDashboardPage} />
-      <Route path="/omnigent/agents" element={routedDashboardPage} />
-      <Route path="/omnigent/policies" element={routedDashboardPage} />
-      <Route path="/schedules" element={routedDashboardPage} />
-      <Route path="/schedules/:definitionId" element={routedDashboardPage} />
-      <Route path="/skills/*" element={routedDashboardPage} />
-      <Route path="/settings/*" element={routedDashboardPage} />
-      <Route path="/manifests" element={routedDashboardPage} />
-      <Route path="/manifests/:manifestName" element={routedDashboardPage} />
+      {DASHBOARD_REACT_ROUTE_PATHS.map((path) => (
+        <Route key={path} path={path} element={routedDashboardPage} />
+      ))}
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
-      <Route path="/remediations" element={routedDashboardPage} />
-      <Route path="/artifacts" element={routedDashboardPage} />
-      <Route path="/observability" element={routedDashboardPage} />
       <Route
         path="*"
         element={

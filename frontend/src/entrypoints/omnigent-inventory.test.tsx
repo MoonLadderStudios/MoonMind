@@ -52,4 +52,17 @@ describe('OmnigentInventoryPage', () => {
     await waitFor(() => expect(fetch).not.toHaveBeenCalled());
     expect(screen.queryByRole('button')).toBeNull();
   });
+
+  it('keeps policy deep links on the policies inventory', async () => {
+    window.history.replaceState({}, '', '/omnigent/policies/default');
+    renderPage({
+      page: 'omnigent-inventory',
+      apiBase: '/api',
+      features: { omnigentPolicies: true },
+      initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/api/policies' } },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith('/api/omnigent/api/policies', { credentials: 'same-origin' });
+  });
 });

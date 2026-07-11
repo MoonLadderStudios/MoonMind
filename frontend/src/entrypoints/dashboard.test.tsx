@@ -269,7 +269,19 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     app: 'moonmind',
     buildId: 'test-build',
     apiBase: '/api',
-    features: { workflowLiveUpdates: true },
+    features: {
+      workflowList: true,
+      workflowActions: true,
+      workflowLiveUpdates: true,
+      artifacts: true,
+      schedules: true,
+      skills: true,
+      settings: true,
+      manifests: true,
+      remediationCollection: false,
+      omnigentAgents: false,
+      omnigentPolicies: false,
+    },
     limits: {},
     endpoints: {
       workflows: '/api/executions',
@@ -487,7 +499,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(6);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(7);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -2591,14 +2603,14 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardShellSource).toContain('className="dashboard-root"');
-    expect(dashboardShellSource).toContain('className="application-rail"');
+    expect(dashboardShellSource).toContain('className="masthead"');
     expect(dashboardShellSource).toContain('className={`route-nav');
     expect(dashboardShellSource).not.toContain('/proposals');
     expect(dashboardShellSource).not.toContain('Proposals');
 
     for (const selector of [
       '.dashboard-root',
-      '.application-rail',
+      '.masthead',
       '.route-nav',
       '.panel',
       '.card',
@@ -2617,30 +2629,6 @@ describe('Dashboard shared entry', () => {
     ]) {
       expect(cssRuleBlock(dashboardCss, selector)).not.toBe('');
     }
-  });
-
-  it('MM-1180 makes the application rail the first desktop column with non-color-only selection', async () => {
-    window.history.replaceState({}, '', '/workflows');
-    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
-
-    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
-    const root = document.querySelector('.dashboard-root');
-    const rail = screen.getByRole('complementary', { name: 'Application rail' });
-    expect(root?.firstElementChild).toBe(rail);
-    expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(true);
-    expect(screen.queryByRole('link', { name: 'Omnigent Agents' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
-    expect(screen.getByText('vtest-build')).toBeTruthy();
-
-    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain(
-      'grid-template-columns: var(--mm-app-rail-width) minmax(0, 1fr);',
-    );
-    const activeRule = cssRuleBlock(dashboardCss, '.application-rail .route-nav a.active');
-    expect(activeRule).toContain('border-color: rgb(var(--mm-accent) / 0.5);');
-    expect(activeRule).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
-    expect(cssRuleBlock(dashboardCss, '.application-rail .route-nav')).toContain(
-      'flex-wrap: nowrap;',
-    );
   });
 
   it('colors only Moon white in the masthead brand', async () => {
@@ -3061,7 +3049,7 @@ describe('Dashboard shared entry', () => {
     );
   });
 
-  it('keeps the masthead brand and list display grouped left, with version aligned right on desktop', async () => {
+  it('keeps collection controls outside the masthead and constrains desktop navigation', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/dashboard.css`,
@@ -3069,7 +3057,7 @@ describe('Dashboard shared entry', () => {
     );
 
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
@@ -3093,9 +3081,10 @@ describe('Dashboard shared entry', () => {
           rule.parent.params.includes('min-width: 1181px'),
       );
     expect(desktopMastheadRule('.masthead-brand')).toContain('grid-column: 1;');
-    expect(desktopMastheadRule('.workflow-list-display-control')).toContain('grid-column: 2;');
-    expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 1 / -1;');
-    expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 4;');
+    expect(desktopMastheadRule('.workflow-list-display-control')).toBe('');
+    expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 2;');
+    expect(desktopMastheadRule('.masthead-nav')).toContain('overflow-x: auto;');
+    expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 3;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });
 
@@ -3180,20 +3169,6 @@ describe('Dashboard shared entry', () => {
     expect(
       activeBlocks.some(
         (block) =>
-          block.includes('background: linear-gradient(') &&
-          block.includes('var(--mm-mobile-nav-active-start)') &&
-          block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
-      ),
-    ).toBe(true);
-
-    const scopedActiveBlocks = cssRuleBlocks(
-      dashboardCss,
-      '.application-rail .route-nav a.active',
-    );
-    expect(
-      scopedActiveBlocks.some(
-        (block) =>
-          block.includes('color: white;') &&
           block.includes('background: linear-gradient(') &&
           block.includes('var(--mm-mobile-nav-active-start)') &&
           block.includes('inset 3px 0 0 var(--mm-mobile-nav-active-edge)'),
