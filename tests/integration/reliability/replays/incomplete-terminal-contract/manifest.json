@@ -1,0 +1,8 @@
+{
+  "failureShapeId": "incomplete-terminal-contract",
+  "incident": "MoonLadderStudios/MoonMind#3145 journey A",
+  "runtime": "codex_cli",
+  "protocolVersion": "app-server-v1",
+  "eventScript": ["inner_process_started", "inner_yielded", "wrapper_yielded", "wrapper_completed", "agent_turn_completed"],
+  "invariant": "Only var/pr_resolver/result.json is authoritative terminal evidence"
+}
