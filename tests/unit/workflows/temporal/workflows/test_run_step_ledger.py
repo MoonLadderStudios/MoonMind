@@ -2920,6 +2920,8 @@ async def test_run_degrades_managed_checkpoint_without_sandbox_capture(
         "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
         "boundary": "after_execution",
         "captureAuthority": "managed_runtime",
+        "captureActivity": None,
+        "capabilityCriticality": "recoverability_only",
     }
     assert workflow._step_workspace_capture_inputs["implement"][
         "captureAuthority"
@@ -3302,7 +3304,9 @@ async def test_run_keeps_non_omnigent_and_legacy_checkpoint_capture_defaults(
         for call in captured
         if call["activity"] == "workspace.capture_checkpoint"
     ]
-    assert capture_kinds == ["git_patch", "git_patch"]
+    # A newly recognized external runtime cannot silently enter local capture;
+    # only the explicit legacy sandbox path retains its replay behavior.
+    assert capture_kinds == ["git_patch"]
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,9 @@ from datetime import UTC, datetime
 from enum import Enum
 
 from moonmind.schemas.temporal_models import StepExecutionIdentityModel
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_payload,
@@ -45,7 +48,7 @@ def test_resolve_checkpoint_policy_uses_enum_value() -> None:
 def test_resolve_checkpoint_policy_uses_omnigent_external_state_after_execution() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.AFTER_EXECUTION,
-        runtime_kind="integration.omnigent.execute",
+        capabilities=resolve_runtime_execution_capabilities("omnigent"),
     )
 
     assert policy.workspace_policy == "continue_from_previous_execution"
@@ -54,14 +57,14 @@ def test_resolve_checkpoint_policy_uses_omnigent_external_state_after_execution(
     assert policy.required_evidence == (
         "externalStateRef",
         "diagnosticsRef",
-        "omnigentSessionId",
+        "runtimeSessionId",
     )
 
 
 def test_resolve_checkpoint_policy_uses_omnigent_external_state_before_execution() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
-        runtime_kind="external:omnigent",
+        capabilities=resolve_runtime_execution_capabilities("omnigent"),
     )
 
     assert policy.workspace_policy == "continue_from_previous_execution"
@@ -69,37 +72,35 @@ def test_resolve_checkpoint_policy_uses_omnigent_external_state_before_execution
     assert policy.required_evidence == (
         "externalStateRef",
         "idempotencyKey",
-        "omnigentSessionId",
+        "runtimeSessionId",
     )
 
 
-def test_resolve_checkpoint_policy_uses_exact_external_agent_identity() -> None:
+def test_resolve_checkpoint_policy_uses_canonical_external_capabilities() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
-        runtime_kind="external",
-        external_agent_id="Omnigent",
+        capabilities=resolve_runtime_execution_capabilities("omnigent"),
     )
     control = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
-        runtime_kind="external",
-        external_agent_id="jules",
+        capabilities=resolve_runtime_execution_capabilities("jules"),
     )
 
     assert policy.workspace_policy == "continue_from_previous_execution"
     assert policy.checkpoint_kind == "external_state_ref"
     assert control.workspace_policy == "restore_pre_execution"
-    assert control.checkpoint_kind == "worktree_archive"
+    assert control.checkpoint_kind is None
 
 
-def test_resolve_checkpoint_policy_keeps_local_after_execution_default() -> None:
+def test_resolve_checkpoint_policy_does_not_default_managed_runtime_to_local_capture() -> None:
     policy = resolve_checkpoint_policy(
         boundary="after_execution",
         runtime_kind="codex_cli",
     )
 
     assert policy.workspace_policy == "restore_pre_execution"
-    assert policy.checkpoint_kind == "git_patch"
-    assert policy.required_evidence == ("patchRef", "manifestRef")
+    assert policy.checkpoint_kind is None
+    assert policy.required_evidence == ()
 
 
 def test_resolve_checkpoint_policy_assigns_managed_runtime_authority() -> None:
@@ -110,12 +111,12 @@ def test_resolve_checkpoint_policy_assigns_managed_runtime_authority() -> None:
     )
 
     assert policy.capture_authority == "managed_runtime"
-    assert policy.checkpoint_kind == "git_patch"
+    assert policy.checkpoint_kind is None
     assert policy.resumable is False
     assert policy.required_evidence == ()
 
 
-def test_omnigent_runtime_does_not_override_recovery_restoration_policy() -> None:
+def test_omnigent_unsupported_recovery_boundary_does_not_invent_local_capture() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_RECOVERY_RESTORATION,
         runtime_kind="omnigent",
@@ -126,8 +127,8 @@ def test_omnigent_runtime_does_not_override_recovery_restoration_policy() -> Non
         },
     )
 
-    assert policy.checkpoint_kind == "worktree_archive"
-    assert policy.workspace_policy == "start_from_last_passed_commit"
+    assert policy.checkpoint_kind is None
+    assert policy.workspace_policy == "restore_pre_execution"
 
 
 def test_external_state_checkpoint_is_continue_only() -> None:

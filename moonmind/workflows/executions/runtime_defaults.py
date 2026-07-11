@@ -26,6 +26,7 @@ _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
 _RUNTIME_ALIASES: dict[str, str] = {
     "codex": "codex_cli",
     "claude": "claude_code",
+    "jules_api": "jules",
 }
 
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {

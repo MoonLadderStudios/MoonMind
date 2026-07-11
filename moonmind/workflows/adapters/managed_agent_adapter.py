@@ -46,8 +46,11 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
     build_docker_sidecar_launch_plan,
 )
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready_from_payload,
 )
@@ -113,11 +116,16 @@ _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
 def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
     """Return compact status metadata that is safe for workflow history."""
 
-    metadata: dict[str, Any] = {"runtimeId": record.runtime_id}
+    capabilities = resolve_runtime_execution_capabilities(record.runtime_id)
+    metadata: dict[str, Any] = {
+        "runtimeId": capabilities.runtime_id,
+        "capabilitySetVersion": capabilities.capability_set_version,
+        "capabilityDigest": capabilities.capability_digest,
+    }
     if record.workspace_path:
         metadata["workspaceLocator"] = {
             "kind": "managed_runtime",
-            "runtimeId": record.runtime_id,
+            "runtimeId": capabilities.runtime_id,
             "agentRunId": record.run_id,
             "relativePath": "repo",
         }
@@ -832,6 +840,7 @@ def _derive_pr_resolver_metadata(
     workspace_path: str | None,
     *,
     merge_gate_owned: bool = False,
+    supports_same_session_continuation: bool = False,
     run_id: str | None = None,
     workflow_id: str | None = None,
     not_before: datetime | None = None,
@@ -871,7 +880,9 @@ def _derive_pr_resolver_metadata(
                 "terminalResultPresent": False,
                 "missingEvidence": [_PR_RESOLVER_RESULT_PATHS[0].as_posix()],
                 "retryRecommendation": (
-                    "continue_same_session" if merge_gate_owned else "retry_new_session"
+                    "continue_same_session"
+                    if merge_gate_owned and supports_same_session_continuation
+                    else "retry_new_session"
                 ),
             }
         )
@@ -987,14 +998,19 @@ class ManagedAgentAdapter:
                 f"got '{request.agent_kind}'"
             )
 
+        runtime_for_profile = self._runtime_id or request.agent_id
+        # Status and result collection consume the same canonical capability
+        # descriptor, so reject unsupported generic runtimes before launching
+        # a process that could never be polled to completion.
+        capabilities = resolve_runtime_execution_capabilities(runtime_for_profile)
+        runtime_for_profile = capabilities.runtime_id
+
         profile = await self._resolve_profile(
             execution_profile_ref=request.execution_profile_ref,
-            runtime_id=self._runtime_id or request.agent_id,
+            runtime_id=runtime_for_profile,
             profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True) if hasattr(request, "profile_selector") and request.profile_selector else None,
         )
         profile_id: str = profile["profile_id"]
-        runtime_for_profile = self._runtime_id or request.agent_id
-
         # --- Strategy delegation for defaults (Phase 1) ---
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
 
@@ -1193,6 +1209,10 @@ class ManagedAgentAdapter:
                 metadata = _derive_pr_resolver_metadata(
                     record.workspace_path,
                     merge_gate_owned=pr_resolver_merge_gate_owned,
+                    supports_same_session_continuation=(
+                        resolve_runtime_execution_capabilities(record.runtime_id)
+                        .supports_same_session_continuation
+                    ),
                     run_id=record.run_id,
                     workflow_id=record.workflow_id,
                     not_before=record.started_at,

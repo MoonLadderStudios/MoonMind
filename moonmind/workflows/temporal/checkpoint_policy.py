@@ -1,4 +1,4 @@
-"""Shared checkpoint policy selection for Step Execution recovery."""
+"""Capability-driven checkpoint policy selection for Step Execution recovery."""
 
 from __future__ import annotations
 
@@ -7,127 +7,186 @@ from dataclasses import dataclass
 from typing import Any
 
 from moonmind.schemas.temporal_models import WorkspacePolicy
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeCapabilityError,
+    RuntimeExecutionCapabilities,
+    WorkspaceAuthority,
+    resolve_runtime_execution_capabilities,
+    validate_runtime_preflight,
+    workspace_authority_from_locator,
+)
+
+_LEGACY_SANDBOX_CAPABILITIES = RuntimeExecutionCapabilities(
+    runtimeId="legacy_sandbox",
+    runtimeFamily="moonmind_sandbox",
+    workspaceAuthority="moonmind_sandbox",
+    checkpointCaptureKinds=("git_patch", "worktree_archive"),
+    checkpointRestoreKinds=("git_patch", "worktree_archive"),
+    checkpointCaptureActivity="workspace.capture_checkpoint",
+    checkpointRestoreActivity="workspace.apply_checkpoint",
+    supportsSameSessionContinuation=False,
+    terminalContractIds=("legacy_step_execution_result_v1",),
+    postExecutionCheckpointCriticality="recoverability_only",
+).with_digest()
+_LEGACY_MANAGED_CAPABILITIES = RuntimeExecutionCapabilities(
+    runtimeId="legacy_managed_runtime",
+    runtimeFamily="managed_cli",
+    workspaceAuthority="managed_runtime",
+    supportsSameSessionContinuation=False,
+    terminalContractIds=("legacy_managed_execution_result_v1",),
+    postExecutionCheckpointCriticality="recoverability_only",
+).with_digest()
 
 
 @dataclass(frozen=True)
 class ResolvedCheckpointPolicy:
     workspace_policy: WorkspacePolicy
-    checkpoint_kind: str
+    checkpoint_kind: str | None
     resumable: bool
     required_evidence: tuple[str, ...]
-    capture_authority: str = "sandbox"
+    capture_authority: WorkspaceAuthority
+    capture_activity: str | None = None
+    criticality: str = "unsupported"
+    supported_checkpoint_kinds: tuple[str, ...] = ()
 
 
-_OMNIGENT_EXTERNAL_STATE_BOUNDARIES = frozenset(
-    {
-        "after_prepare",
-        "before_execution",
-        "after_execution",
-        "after_gate",
-        "before_publication",
-    }
+_EXTERNAL_STATE_BOUNDARIES = frozenset(
+    {"after_prepare", "before_execution", "after_execution", "after_gate", "before_publication"}
 )
 
 
 def _boundary_token(boundary: Any) -> str:
-    boundary_value = boundary.value if hasattr(boundary, "value") else boundary
-    return str(boundary_value or "").strip()
-
-
-def _is_omnigent_runtime(runtime_kind: str | None) -> bool:
-    """Return True for Omnigent aliases without making the contract alias-heavy."""
-
-    return "omnigent" in str(runtime_kind or "").lower()
+    value = boundary.value if hasattr(boundary, "value") else boundary
+    return str(value or "").strip()
 
 
 def _workspace_policy_from_recovery_source(
     recovery_source: Mapping[str, Any] | None,
 ) -> WorkspacePolicy:
-    workspace = {}
+    workspace: Mapping[str, Any] = {}
     if isinstance(recovery_source, Mapping):
         candidate = recovery_source.get("recoveryWorkspace")
         if not isinstance(candidate, Mapping):
             candidate = recovery_source.get("recovery_workspace")
         if isinstance(candidate, Mapping):
             workspace = candidate
-    raw_policy = str(
+    raw = str(
         workspace.get("workspacePolicy")
         or workspace.get("workspace_policy")
         or "restore_pre_execution"
     ).strip()
-    if raw_policy == "start_from_last_passed_commit":
-        return "start_from_last_passed_commit"
-    return "restore_pre_execution"
-
-
-def _omnigent_required_evidence(boundary_token: str) -> tuple[str, ...]:
-    if boundary_token == "before_execution":
-        return ("externalStateRef", "idempotencyKey", "omnigentSessionId")
-    if boundary_token == "after_execution":
-        return ("externalStateRef", "diagnosticsRef", "omnigentSessionId")
-    return ("externalStateRef", "omnigentSessionId")
-
-
-def _omnigent_checkpoint_policy(
-    boundary_token: str,
-) -> ResolvedCheckpointPolicy | None:
-    if boundary_token not in _OMNIGENT_EXTERNAL_STATE_BOUNDARIES:
-        return None
-    return ResolvedCheckpointPolicy(
-        workspace_policy="continue_from_previous_execution",
-        checkpoint_kind="external_state_ref",
-        resumable=True,
-        required_evidence=_omnigent_required_evidence(boundary_token),
+    return (
+        "start_from_last_passed_commit"
+        if raw == "start_from_last_passed_commit"
+        else "restore_pre_execution"
     )
+
+
+def _external_evidence(boundary: str) -> tuple[str, ...]:
+    if boundary == "before_execution":
+        return ("externalStateRef", "idempotencyKey", "runtimeSessionId")
+    if boundary == "after_execution":
+        return ("externalStateRef", "diagnosticsRef", "runtimeSessionId")
+    return ("externalStateRef", "runtimeSessionId")
 
 
 def resolve_checkpoint_policy(
     *,
     boundary: str,
+    capabilities: RuntimeExecutionCapabilities | None = None,
+    workspace_authority: WorkspaceAuthority | None = None,
+    workspace_locator: Mapping[str, Any] | None = None,
     recovery_source: Mapping[str, Any] | None = None,
+    # Transitional input only: aliases are canonicalized by the registry before
+    # policy is selected. No identity-specific policy exists here.
     runtime_kind: str | None = None,
     external_agent_id: str | None = None,
     agent_kind: str | None = None,
 ) -> ResolvedCheckpointPolicy:
-    """Return the shared policy used for capture, manifests, and recovery apply."""
+    """Select checkpoint behavior solely from a recorded capability snapshot."""
 
-    boundary_token = _boundary_token(boundary)
-    is_omnigent_external_agent = (
-        str(external_agent_id or "").strip().lower() == "omnigent"
+    if capabilities is None:
+        runtime_id = external_agent_id or runtime_kind
+        capabilities = (
+            resolve_runtime_execution_capabilities(runtime_id)
+            if runtime_id
+            else (
+                _LEGACY_MANAGED_CAPABILITIES
+                if workspace_authority == "managed_runtime"
+                else _LEGACY_SANDBOX_CAPABILITIES
+            )
+        )
+
+    authority = (
+        workspace_authority_from_locator(workspace_locator)
+        or workspace_authority
+        or capabilities.workspace_authority
     )
-    if is_omnigent_external_agent or _is_omnigent_runtime(runtime_kind):
-        external_policy = _omnigent_checkpoint_policy(boundary_token)
-        if external_policy is not None:
-            return external_policy
+    # ``agent_kind`` is intentionally ignored: ownership comes from capability
+    # data, not the workflow's managed/external dispatch classification.
+    del agent_kind
+    validate_runtime_preflight(capabilities, workspace_authority=authority)
+    token = _boundary_token(boundary)
 
-    if str(agent_kind or "").strip().lower() == "managed":
+    if "external_state_ref" in capabilities.checkpoint_capture_kinds:
+        if token not in _EXTERNAL_STATE_BOUNDARIES:
+            return ResolvedCheckpointPolicy(
+                workspace_policy="restore_pre_execution",
+                checkpoint_kind=None,
+                resumable=False,
+                required_evidence=(),
+                capture_authority=authority,
+                criticality="unsupported",
+                supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+            )
         return ResolvedCheckpointPolicy(
-            workspace_policy="restore_pre_execution",
-            checkpoint_kind="worktree_archive"
-            if boundary_token != "after_execution"
-            else "git_patch",
+            workspace_policy="continue_from_previous_execution",
+            checkpoint_kind="external_state_ref",
+            resumable="external_state_ref" in capabilities.checkpoint_restore_kinds,
+            required_evidence=_external_evidence(token),
+            capture_authority=authority,
+            capture_activity=capabilities.checkpoint_capture_activity,
+            criticality=capabilities.post_execution_checkpoint_criticality,
+            supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+        )
+
+    if not capabilities.checkpoint_capture_kinds:
+        return ResolvedCheckpointPolicy(
+            workspace_policy=(
+                _workspace_policy_from_recovery_source(recovery_source)
+                if token == "before_recovery_restoration"
+                else "restore_pre_execution"
+            ),
+            checkpoint_kind=None,
             resumable=False,
             required_evidence=(),
-            capture_authority="managed_runtime",
+            capture_authority=authority,
+            criticality=capabilities.post_execution_checkpoint_criticality,
+            supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
         )
 
-    if boundary_token == "before_recovery_restoration":
-        return ResolvedCheckpointPolicy(
-            workspace_policy=_workspace_policy_from_recovery_source(recovery_source),
-            checkpoint_kind="worktree_archive",
-            resumable=True,
-            required_evidence=("checkpointRef", "workspacePolicy"),
-        )
-    if boundary_token == "after_execution":
-        return ResolvedCheckpointPolicy(
-            workspace_policy="restore_pre_execution",
-            checkpoint_kind="git_patch",
-            resumable=True,
-            required_evidence=("patchRef", "manifestRef"),
-        )
+    kind = "git_patch" if token == "after_execution" else "worktree_archive"
+    validate_runtime_preflight(
+        capabilities,
+        workspace_authority=authority,
+        checkpoint_kind=kind,
+        restore_required=token == "before_recovery_restoration",
+    )
     return ResolvedCheckpointPolicy(
-        workspace_policy="restore_pre_execution",
-        checkpoint_kind="worktree_archive",
-        resumable=True,
-        required_evidence=("archiveRef", "manifestRef"),
+        workspace_policy=(
+            _workspace_policy_from_recovery_source(recovery_source)
+            if token == "before_recovery_restoration"
+            else "restore_pre_execution"
+        ),
+        checkpoint_kind=kind,
+        resumable=kind in capabilities.checkpoint_restore_kinds,
+        required_evidence=(
+            ("patchRef", "manifestRef")
+            if kind == "git_patch"
+            else ("archiveRef", "manifestRef")
+        ),
+        capture_authority=authority,
+        capture_activity=capabilities.checkpoint_capture_activity,
+        criticality=capabilities.post_execution_checkpoint_criticality,
+        supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
     )
