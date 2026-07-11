@@ -22,7 +22,7 @@ type RemediationRow = {
 };
 
 type RemediationEndpointConfig = {
-  enabled: boolean;
+  status: 'enabled' | 'disabled' | 'loading';
   endpoint: string | null;
 };
 
@@ -67,17 +67,27 @@ function compactRows(payload: unknown): RemediationRow[] {
   });
 }
 
-function isSameOriginPath(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//');
+function sameOriginPath(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.startsWith('/')) return null;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    return parsed.origin === window.location.origin ? `${parsed.pathname}${parsed.search}${parsed.hash}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function remediationEndpointConfig(payload: BootPayload): RemediationEndpointConfig {
   const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown> } | undefined;
   const endpoint = initialData?.uiEndpoints?.remediations;
-  return {
-    enabled: payload.features?.remediationCollection === true && isSameOriginPath(endpoint),
-    endpoint: isSameOriginPath(endpoint) ? endpoint : null,
-  };
+  const sameOriginEndpoint = sameOriginPath(endpoint);
+  if (payload.features?.remediationCollection === false || (endpoint !== undefined && sameOriginEndpoint === null)) {
+    return { status: 'disabled', endpoint: null };
+  }
+  if (sameOriginEndpoint) {
+    return { status: 'enabled', endpoint: sameOriginEndpoint };
+  }
+  return { status: 'loading', endpoint: null };
 }
 
 async function loadRemediations(endpoint: string): Promise<RemediationRow[]> {
@@ -91,7 +101,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
   const endpointConfig = remediationEndpointConfig(payload);
   const query = useQuery({
     queryKey: ['remediations'],
-    enabled: endpointConfig.enabled,
+    enabled: endpointConfig.status === 'enabled',
     queryFn: () => loadRemediations(endpointConfig.endpoint!),
   });
   const rows = useMemo(() => {
@@ -109,14 +119,14 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     { key: 'createdAt', header: 'Created', sortable: true, render: (row) => formatDateTime(row.createdAt) },
     { key: 'updatedAt', header: 'Updated', sortable: true, render: (row) => formatDateTime(row.updatedAt) },
   ], []);
-  if (!endpointConfig.enabled) {
+  if (endpointConfig.status === 'disabled') {
     return <main className="data-wide-panel" aria-labelledby="remediations-title"><div role="alert"><h2 id="remediations-title">Remediation</h2><p>Remediation inventory is not enabled for this deployment.</p></div></main>;
   }
   if (query.isError) return <DashboardErrorState title="Remediation inventory unavailable" description="MoonMind could not load remediations." detail={query.error instanceof Error ? query.error.message : null} onRetry={() => void query.refetch()} />;
   return <main className="data-wide-panel" aria-labelledby="remediations-title">
-    <div className="page-header"><div><h2 id="remediations-title">Remediation</h2><p>Scan remediation workflows and their source Workflow provenance.</p></div><button type="button" onClick={() => void query.refetch()}>Refresh</button></div>
+    <div className="page-header"><div><h2 id="remediations-title">Remediation</h2><p>Scan remediation workflows and their source Workflow provenance.</p></div><button type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</button></div>
     <label htmlFor="remediation-filter">Filter remediations</label>
     <input id="remediation-filter" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Title, status, source, or action" />
-    <DataTable data={rows} columns={columns} getRowKey={(row) => row.remediationWorkflowId} ariaLabel="Remediation workflows" isLoading={query.isPending} emptyMessage={filter ? 'No remediations match the current filter.' : 'No remediation workflows are visible.'} responsive />
+    <DataTable data={rows} columns={columns} getRowKey={(row) => row.remediationWorkflowId} ariaLabel="Remediation workflows" isLoading={endpointConfig.status === 'loading' || query.isPending} emptyMessage={filter ? 'No remediations match the current filter.' : 'No remediation workflows are visible.'} responsive />
   </main>;
 }
