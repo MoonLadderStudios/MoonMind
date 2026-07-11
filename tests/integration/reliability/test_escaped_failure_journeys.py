@@ -120,3 +120,46 @@ async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_pa
 
     assert exc_info.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
     assert sandbox_calls == expected["sandboxResolverCalls"] == 0
+
+
+async def test_checkpoint_finalization_fault_is_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replay_id = "managed-workspace-checkpoint-routing"
+    workspace_root = tmp_path / "workspaces"
+    repo = workspace_root / "temporal_sandbox" / "run-3145" / "repo"
+    repo.mkdir(parents=True)
+    activities = TemporalSandboxActivities(workspace_root=workspace_root)
+
+    durable_execution_result = load_replay(replay_id, "execution-result.json")
+    original_capture = activities._capture_workspace_evidence
+    calls = 0
+
+    async def fail_once(model: object, workspace: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected finalization failure")
+        return await original_capture(model, workspace)
+
+    monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
+    payload = {
+        "identity": {
+            "workflowId": "wf-reliability-3145",
+            "runId": "run-3145",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+        },
+        "boundary": "after_execution",
+        "kind": "worktree_archive",
+        "workspacePath": str(repo),
+        "artifactNamespace": "checkpoint",
+        "idempotencyKey": "reliability-3145-after-execution",
+    }
+    first = await activities.workspace_capture_checkpoint(payload)
+    assert first["status"] == "invalid"
+    assert durable_execution_result["status"] == "completed"
+    second = await activities.workspace_capture_checkpoint(payload)
+    assert second["status"] == "captured"
+    assert durable_execution_result["status"] == "completed"
+    assert calls == 2

@@ -191,13 +191,12 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert len(template.steps) == 1
             step = template.steps[0]
             assert step["skill"]["id"] == "batch-workflows"
-            # The parent only orchestrates/queues; it must not hard-require the
-            # jira capability or GitHub-only batches would be blocked at launch
-            # in environments without a trusted Jira integration. Per-target
-            # jira readiness is enforced on the child workflows instead.
+            # The parent resolves a Jira status cohort before queueing children,
+            # so trusted Jira readiness must be enforced before agent launch.
             assert sorted(step["skill"]["requiredCapabilities"]) == [
                 "gh",
                 "git",
+                "jira",
             ]
 
 
@@ -266,9 +265,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
 
             assert "git" in expanded["capabilities"]
             assert "gh" in expanded["capabilities"]
-            # GitHub-only batches must not be gated on Jira readiness, so the
-            # parent preset no longer advertises the jira capability.
-            assert "jira" not in expanded["capabilities"]
+            assert "jira" in expanded["capabilities"]
 
 
 async def test_batch_workflows_expands_repository_from_context_when_not_provided(tmp_path):

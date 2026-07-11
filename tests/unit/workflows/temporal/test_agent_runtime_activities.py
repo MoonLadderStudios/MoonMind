@@ -4004,6 +4004,52 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
     assert "jira.create_issue" in result
     assert "Managed Codex CLI note:" in result
 
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_batch_jira_search_hint() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-batch",
+                "idempotencyKey": "idem-batch",
+                "parameters": {
+                    "instructions": (
+                        "Resolve project THOR issues in Selected for Development "
+                        "and queue child workflows."
+                    ),
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "batch-workflows",
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind trusted Jira tools:" in result
+    assert "GET $MOONMIND_URL/mcp/tools" in result
+    assert "POST $MOONMIND_URL/mcp/tools/call" in result
+    assert "jira.search_issues" in result
+    example_line = next(
+        line
+        for line in result.splitlines()
+        if line.startswith("- Example batch search call: ")
+    )
+    example_payload = json.loads(example_line.split("`", 2)[1])
+    assert example_payload["arguments"]["jql"] == (
+        'project = <PROJECT_KEY> AND status = "<STATUS>"'
+    )
+    assert "do not request an external Jira/Atlassian connector" in result
+    assert "do not wait for connector discovery" in result
+    assert "Managed Codex CLI note:" in result
+
+
 async def test_agent_runtime_prepare_turn_instructions_adds_pr_resolver_blocker_hint() -> None:
     activities = TemporalAgentRuntimeActivities()
 
