@@ -953,6 +953,47 @@ async def test_start_falls_back_to_runtime_default_model_when_profile_blank() ->
     assert profile_payload.get("defaultModel") == "gpt-5.5"
     assert profile_payload.get("defaultEffort") == "high"
 
+
+async def test_start_carries_launcher_terminal_contract_back_to_workflow_request() -> None:
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    async def _run_launcher(**_kwargs: Any):
+        return {
+            "status": "launching",
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "owner": "agent",
+                "evidenceKind": "workspace_json",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+        }
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "claude-default", "command_template": ["claude"]}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-terminal-contract",
+        runtime_id="claude_code",
+        run_launcher=_run_launcher,
+    )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-default",
+        correlationId="corr-terminal-contract",
+        idempotencyKey="idem-terminal-contract",
+    )
+
+    await adapter.start(request)
+
+    assert request.terminal_contract is not None
+    assert request.terminal_contract.contract_id == "batch_workflows_fanout.v1"
+
 async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
     profiles = [

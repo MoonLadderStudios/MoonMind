@@ -37,6 +37,7 @@ from moonmind.schemas.agent_runtime_models import (
     _ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
     _contains_sensitive_key,
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
@@ -1113,6 +1114,11 @@ class ManagedAgentAdapter:
                     "workspace_path": workspace_path,
                 }
             )
+            terminal_contract = record_dict.get("terminalContract")
+            if isinstance(terminal_contract, Mapping):
+                request.terminal_contract = AgentTerminalContract.model_validate(
+                    dict(terminal_contract)
+                )
             status = record_dict.get("status", "launching")
         elif self._run_store is not None:
             record = ManagedRunRecord(

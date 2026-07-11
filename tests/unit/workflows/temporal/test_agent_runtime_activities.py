@@ -6161,3 +6161,54 @@ async def test_terminal_evidence_activity_fails_completed_prose_without_artifact
     assert result.failure_class == "execution_error"
     assert result.metadata["terminalContractAuthority"] == "MoonMind.AgentRun"
     assert result.metadata["failureCode"] == "INCOMPLETE_TERMINAL_CONTRACT"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_enriches_existing_helper_failure(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    targets = workspace / "artifacts/batch-workflows-targets.json"
+    targets.parent.mkdir(parents=True)
+    targets.write_text("[]", encoding="utf-8")
+    spool.mkdir()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step-1",
+                "targetsSha256": hashlib.sha256(b"[]").hexdigest(),
+                "status": "partial_failure",
+                "requested": 2,
+                "created": 1,
+                "queued": [{"executionId": "child-1"}],
+                "skipped": [],
+                "errors": [{"ref": "MM-2", "error": "unavailable"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    activities = TemporalAgentRuntimeActivities()
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-1",
+            },
+            "result": {
+                "summary": "helper exited 1",
+                "failureClass": "execution_error",
+                "providerErrorCode": "process_exit_1",
+            },
+        }
+    )
+    assert result.summary == "helper exited 1"
+    assert result.provider_error_code == "process_exit_1"
+    assert result.metadata["failureCode"] == "BATCH_FANOUT_PARTIAL_FAILURE"
+    assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]

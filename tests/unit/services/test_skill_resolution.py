@@ -109,6 +109,9 @@ async def test_built_in_pr_resolver_declares_portable_native_contract():
     assert entry.implementation.supported_hosts == ["cli", "temporal"]
     assert entry.implementation.native_host_eligible is True
     assert entry.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+    assert entry.terminal_contract is not None
+    assert entry.terminal_contract.contract_id == "pr_resolver_terminal.v1"
+    assert entry.terminal_contract.relative_path == "var/pr_resolver/result.json"
 
 async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
     """FR-012: batch-dependabot-resolver MUST be resolvable by name through the

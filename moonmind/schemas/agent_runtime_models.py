@@ -526,7 +526,7 @@ class AgentTerminalContract(BaseModel):
     @field_validator("relative_path")
     @classmethod
     def _confine_workspace_path(cls, value: str) -> str:
-        normalized = value.strip()
+        normalized = value.strip().replace("\\", "/")
         if normalized.startswith("/") or ".." in normalized.split("/"):
             raise ValueError("terminal evidence path must be relative and traversal-free")
         return normalized

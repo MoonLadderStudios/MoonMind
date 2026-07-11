@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentTerminalContract,
     AgentRuntimeStepExecutionLaunch,
     AgentRunResult,
     AgentRunStatus,
@@ -22,6 +23,24 @@ from moonmind.schemas.agent_runtime_models import (
     is_terminal_agent_run_state,
     resolve_managed_runtime_workload_mode,
 )
+
+
+def test_terminal_contract_normalizes_backslash_separators() -> None:
+    contract = AgentTerminalContract(
+        contractId="batch_workflows_fanout.v1",
+        relativePath="artifacts\\result.json",
+        expectedSchemaVersion="v1",
+        executionRef="step-1",
+    )
+    assert contract.relative_path == "artifacts/result.json"
+
+    with pytest.raises(ValidationError, match="traversal-free"):
+        AgentTerminalContract(
+            contractId="batch_workflows_fanout.v1",
+            relativePath="..\\result.json",
+            expectedSchemaVersion="v1",
+            executionRef="step-1",
+        )
 
 
 def _removed_runtime_marker() -> str:
