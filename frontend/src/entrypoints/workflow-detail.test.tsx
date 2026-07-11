@@ -772,7 +772,10 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Header Alias Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
-    const workspaceFetch = fetchSpy.getMockImplementation()!;
+    const workspaceFetch = fetchSpy.getMockImplementation();
+    if (!workspaceFetch) {
+      throw new Error('Expected mockWorkflowWorkspaceFetches() to configure fetchSpy');
+    }
     fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = (await workspaceFetch(input, init)) as Response;
       const url = String(input);

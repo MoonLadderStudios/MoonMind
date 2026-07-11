@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
+import { resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import '../styles/dashboard.css';
 
 // Real-browser guardrail for the shimmer-sweep effect. The jsdom route tests
@@ -94,7 +95,9 @@ describe('status pill shimmer computed styles', () => {
   }
 
   it('canonicalizes a raw running status to the executing shimmer treatment', () => {
-    const pill = renderPill('running');
+    const displayStatus = resolveWorkflowDisplayStatus('running');
+    expect(displayStatus).toBe('executing');
+    const pill = renderPill(displayStatus!);
     expect(pill.dataset.effect).toBe('shimmer-sweep');
     expect(pill.dataset.state).toBe('executing');
     expect(pill.getAttribute('aria-label')).toBe('Executing');

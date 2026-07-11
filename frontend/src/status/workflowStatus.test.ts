@@ -4,6 +4,7 @@ import {
   WORKFLOW_STATUS_KEYS,
   WORKFLOW_STATUS_TRACEABILITY,
   formatWorkflowStatusLabel,
+  isWorkflowLifecycleStatus,
   resolveWorkflowDisplayStatus,
   workflowStatusPillProps,
 } from './workflowStatus';
@@ -86,18 +87,15 @@ describe('workflow status helpers', () => {
     expect(warn).toHaveBeenCalledWith('Unknown workflow lifecycle status: waiting');
   });
 
-  it('canonicalizes compatibility aliases through the single status path', () => {
-    expect(workflowStatusPillProps('no_changes')).toEqual({
-      className: 'status status-no-commit',
-    });
-    expect(formatWorkflowStatusLabel('no_changes')).toBe('No commit');
+  it('rejects compatibility aliases in canonical lifecycle helpers', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    expect(workflowStatusPillProps('running')).toMatchObject({
-      className: 'status status-running is-executing',
-      'data-state': 'executing',
-      'data-effect': 'shimmer-sweep',
-    });
-    expect(formatWorkflowStatusLabel('running')).toBe('Executing');
+    for (const alias of ['no_changes', 'running']) {
+      expect(isWorkflowLifecycleStatus(alias)).toBe(false);
+      expect(workflowStatusPillProps(alias)).toEqual({ className: 'status status-neutral' });
+      expect(formatWorkflowStatusLabel(alias, 'Unknown')).toBe('Unknown');
+      expect(warn).toHaveBeenCalledWith(`Unknown workflow lifecycle status: ${alias}`);
+    }
   });
 
   it('resolves the first recognized canonical display status from ordered candidates', () => {
@@ -105,7 +103,7 @@ describe('workflow status helpers', () => {
 
     // A raw provider value must not mask a canonical value later in the response.
     expect(resolveWorkflowDisplayStatus('unknown_raw_value', 'executing', 'running')).toBe('executing');
-    // Aliases canonicalize before matching.
+    // The display/API boundary repairs compatibility aliases before matching.
     expect(resolveWorkflowDisplayStatus('running', 'completed')).toBe('executing');
     expect(resolveWorkflowDisplayStatus('no_changes')).toBe('no_commit');
     expect(resolveWorkflowDisplayStatus(null, undefined, '', 'finalizing')).toBe('finalizing');
