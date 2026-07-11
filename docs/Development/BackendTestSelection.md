@@ -91,7 +91,7 @@ The selector enables `reliability_journey=true` for changes to:
 - `moonmind/workflows/adapters/` and `moonmind/workflows/temporal/`, including checkpoint policy, activity catalog, and worker routing
 - `moonmind/schemas/agent_runtime_models.py`, `moonmind/schemas/managed_session_models.py`, `moonmind/schemas/temporal_models.py`, and checkpoint schemas
 - `.agents/skills/` and their orchestration tools
-- `tests/reliability/` replay fixtures and `tests/helpers/codex_session_runtime.py`
+- `tests/integration/reliability/` replay fixtures and `tests/helpers/codex_session_runtime.py`
 - managed-agent runtime Dockerfiles, image build/install files under `api_service/docker/`, and runtime images under `docker/`
 - CI workflows, selector/test runners, dependency locks, and global pytest configuration through the full-backend fail-open path
 
@@ -199,7 +199,7 @@ Run hermetic integration CI:
 Run the hermetic reliability journeys:
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/reliability \
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
 ```
 

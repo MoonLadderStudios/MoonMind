@@ -54,6 +54,19 @@ def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
     assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
 
 
+def test_reliability_job_runs_the_canonical_journey_suite() -> None:
+    command = _run_command("reliability-journey", "Run hermetic reliability journeys")
+
+    assert "python -m pytest tests/integration/reliability" in command
+    assert "-m reliability_journey" in command
+    assert "skipping until #3145 lands" not in command
+
+    diagnostics = _run_command(
+        "reliability-journey", "Collect reliability journey diagnostics"
+    )
+    assert "tests/integration/reliability/replays" in diagnostics
+
+
 def test_required_unit_workflow_runs_status_token_audit() -> None:
     command = _run_command("ci-required", "Audit status token domains")
 

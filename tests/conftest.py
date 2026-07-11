@@ -78,7 +78,7 @@ def _is_temporal_boundary_test_path(path: Path) -> bool:
 
 
 def _is_reliability_journey_test_path(path: Path) -> bool:
-    return path.parts[:2] == ("tests", "reliability")
+    return path.parts[:3] == ("tests", "integration", "reliability")
 
 
 def _item_has_marker(item: pytest.Item, name: str) -> bool:
