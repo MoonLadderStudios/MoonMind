@@ -124,7 +124,7 @@ async def test_managed_workspace_uses_checkpoint_resolver_and_fault_is_retryable
             "workflowId": "wf-reliability-3145",
             "runId": "run-3145",
             "logicalStepId": "implement",
-            "stepExecution": 1,
+            "executionOrdinal": 1,
         },
         "boundary": "after_execution",
         "kind": "worktree_archive",
