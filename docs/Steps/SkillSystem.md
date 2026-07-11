@@ -8,6 +8,21 @@ Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `
 
 ---
 
+## Native implementation bindings
+
+A native host is an optional implementation binding for resolved skill content,
+not an interpretation of a skill name. Resolution produces immutable binding
+evidence containing provenance, digest, policy permission, and compatible
+contract/core versions. Runtime routing consumes that evidence only after
+materialization; it does not inspect mutable workspace files or grant native
+execution because a selected skill happens to have a built-in name.
+
+Native implementation permission and publish authority are independent policy
+decisions. Untrusted or incompatible overrides retain portable skill semantics:
+the runtime selects the portable host when allowed, otherwise it rejects the
+run before any agent execution. Native and portable hosts share canonical pure
+logic and parity fixtures wherever the binding promises semantic equivalence.
+
 ## 1. Purpose
 
 This document defines the desired-state MoonMind **Agent Skill System**.

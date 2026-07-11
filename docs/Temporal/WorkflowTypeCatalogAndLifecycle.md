@@ -51,6 +51,19 @@ This document defines the **Temporal-side contract**. Product-facing APIs and UI
 8. **Canonical runtime contracts cross the workflow boundary.** 
  Workflow code should receive canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` contracts rather than provider-shaped payloads.
 
+9. **Executable registration is deployment identity.**
+ The immutable worker specification used to construct the SDK worker is the
+ sole source for advertised workflow/activity types and its registry
+ fingerprint. Resolver readiness additionally requires an immutable build and
+ Temporal deployment identity plus a parent-to-`MoonMind.PRResolver` canary.
+ Liveness does not imply readiness.
+
+10. **Stale workers do not share resolver traffic.**
+ Registration changes create a new versioned worker deployment. Incompatible
+ versions are drained and excluded from the resolver queue before readiness is
+ published; mutable tags or process restarts without identity verification are
+ insufficient rollout evidence.
+
 ---
 
 ## 3. Naming conventions and identifiers
@@ -70,6 +83,7 @@ Current core workflow types:
 - `MoonMind.ManagedSessionReconcile`
 - `MoonMind.OAuthSession`
 - `MoonMind.MergeAutomation`
+- `MoonMind.PRResolver`
 
 Rules:
 

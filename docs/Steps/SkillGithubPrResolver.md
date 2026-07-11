@@ -4,6 +4,28 @@ Status: Active
 Owners: MoonMind Engineering
 Last Updated: 2026-07-10
 
+## Native hosting contract
+
+`pr-resolver` is a portable skill contract; its name alone never authorizes the
+Temporal-native host. Native dispatch requires immutable evidence from the
+resolved skill snapshot: source provenance, content digest, policy permission,
+a supported resolver-core version, and a compatible native-binding version.
+Publish authority is a separate decision and MUST NOT be inferred from that
+binding. A repository or local override which lacks matching trusted evidence
+uses the portable host when policy permits, or is rejected before launch.
+
+Both hosts consume the same provider-neutral resolver core. That core owns the
+canonical GitHub snapshot, classifications and transitions, retry/no-progress
+invariants, and terminal evidence schema. Host adapters only collect inputs and
+perform authorized side effects. Unknown or degraded provider state fails
+closed and can never select merge. A shared fixture corpus is the required
+parity proof for Temporal and standalone execution.
+
+Terminal and operational evidence records the contract/core versions, resolved
+skill provenance and digest, workflow type and queue, immutable worker build and
+deployment identity, and executable registry fingerprint. These values are
+bounded metadata; skill bodies and provider responses remain artifact-backed.
+
 ## 1. Purpose
 
 The **PR Resolver** skill is invoked from the dashboard (via Temporal `AgentTaskWorkflow`) to:

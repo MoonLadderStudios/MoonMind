@@ -2,6 +2,15 @@
 
 Workflow publishing controls how agent-produced changes reach the repository after execution. The `publishMode` field on a Workflow Execution determines whether publishing is disabled, owned by an auto-publish-capable agent skill, committed for MoonMind-managed branch publishing, or committed for MoonMind-managed pull-request publishing.
 
+## Resolver hosting does not grant publish authority
+
+Selecting a trusted native implementation of `pr-resolver` establishes only
+which host executes the portable resolver contract. It does not grant commit,
+push, merge, comment, or terminal-publication authority. Those side effects
+remain controlled by the resolved publish policy and trusted activity boundary.
+Resolver evidence therefore records native-binding identity separately from the
+publish mode, owner, and verified remote outcome.
+
 ## Publish Modes
 
 | Mode     | Behavior |

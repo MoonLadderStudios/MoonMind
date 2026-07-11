@@ -40,6 +40,18 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 
 ## 3. Goals
 
+### Resolver capability failure
+
+Before starting `MoonMind.PRResolver`, the parent requires a successful
+readiness canary against the same queue, immutable deployment identity, and
+registry fingerprint that will receive resolver traffic. An unavailable or
+mismatched registration is classified as `worker_capability_unavailable`, not
+as resolver no-progress or remediation failure. It consumes no resolver retry
+or remediation budget and records `agentExecutionLaunched=false` plus bounded
+queue, workflow type, build/deployment identity, and registry diagnostics.
+Repeated or fleet-wide mismatches emit an operator alert; workflow code does
+not blindly retry a capability defect.
+
 - Keep the original workflow's `workflowId` as the only dependency target needed by downstream workflow executions.
 - Ensure merge automation is durably awaited before the parent workflow reaches terminal success.
 - Avoid a fixed-delay merge strategy; use a **state-based gate** instead.

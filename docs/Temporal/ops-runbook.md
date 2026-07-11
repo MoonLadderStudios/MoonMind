@@ -30,5 +30,21 @@ Keys for model providers (e.g. Google and OpenAI) are injected from this user's 
 ## Workflow Recovery and Safeguards
 
 - **Activity Timeouts** (`StartToCloseTimeout`, `HeartbeatTimeout`): Workflows set specific timeouts for LLM activities and long-running Docker builds. If a container hangs, Temporal times out the Activity and automatically retries it according to the RetryPolicy.
-- **Stale workers**: If the `temporal-worker-sandbox` crashes, Temporal simply re-routes pending Activities to another healthy worker polling the Task Queue.
+- **Stale workers**: A replacement may poll resolver work only when its immutable build/deployment identity and executable registry fingerprint match the intended rollout. Drain incompatible worker deployments before directing resolver traffic to the new version; do not rely on a mutable image tag or a container restart as proof of compatibility.
 - **Operator recovery**: Use the **Temporal UI** to **Cancel** a stuck Workflow Execution, allowing it to run its graceful cleanup/rollback Activities. This is the normal dashboard path. **Terminate** should only be used as a last resort for runs that cannot honor cancellation (e.g., due to a bug or poison pill), as it skips workflow code entirely. There is no need to clear legacy queue rows in the database, as Temporal acts as the source of truth for all inflight workflows.
+
+### Resolver registration and rollout
+
+Resolver readiness requires Temporal connectivity, successful worker
+construction and polling, an immutable build/deployment identity, the expected
+registry fingerprint, and a successful parent-to-`MoonMind.PRResolver` canary
+on the production routing boundary. Liveness endpoints remain healthy while
+this proof is pending, but readiness stays false.
+
+If child start reports that `MoonMind.PRResolver` is unregistered or the canary
+identity differs, classify the incident as `worker_capability_unavailable`.
+Confirm the queue, workflow type, build/deployment identity, and registry
+fingerprint in bounded diagnostics. Verify that no agent execution launched and
+that resolver retry/remediation budgets were unchanged. Alert on repetition,
+drain the incompatible deployment, recreate the worker from an immutable image,
+and rerun the canary before restoring resolver readiness.

@@ -1,0 +1,87 @@
+{
+  "artifact_type": "remediation.attempt",
+  "attempt": 3,
+  "issue_ref": "MM-1202",
+  "source_verification_artifact": "reports/remediation_verification-2.json",
+  "source_verdict": "ADDITIONAL_WORK_NEEDED",
+  "summary": "Closed the canonical architecture and operator-documentation gap for the resolver native/portable boundary, publish-authority separation, deployment identity, readiness canary, stale-worker exclusion, and registration-failure response. Five implementation and verification gaps remain open and are not represented as completed.",
+  "changed_files": [
+    "docs/Steps/SkillGithubPrResolver.md",
+    "docs/Steps/SkillSystem.md",
+    "docs/Workflows/WorkflowPublishing.md",
+    "docs/Workflows/PrMergeAutomation.md",
+    "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
+    "docs/Temporal/ops-runbook.md",
+    "reports/remediation_attempt-3.json"
+  ],
+  "gap_statuses": [
+    {
+      "requirement": "Trusted native resolver binding",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "The canonical resolved-skill evidence and publish-authority boundary are now documented, but no production binding model or routing implementation was added in this attempt."
+    },
+    {
+      "requirement": "Shared portable resolver semantics",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "The canonical shared-core and fail-closed parity contract is now documented, but the pure core, host adapters, and parity fixtures remain absent."
+    },
+    {
+      "requirement": "Immutable deployment identity and rollout safety",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "The lifecycle and runbook now define immutable identity, drain, and stale-worker exclusion rules, but production rollout enforcement remains unimplemented."
+    },
+    {
+      "requirement": "Capability failure handling and observability",
+      "gap_type": "implementation",
+      "status": "remaining",
+      "evidence": "The parent behavior and operator response are now documented, but worker_capability_unavailable classification, budget preservation, diagnostics, metrics, and alerts remain unimplemented."
+    },
+    {
+      "requirement": "Real deployment canary and comprehensive regression evidence",
+      "gap_type": "verification",
+      "status": "remaining",
+      "evidence": "The readiness-gating canary contract is now documented, but the Temporal boundary, Compose, restart, and rollout tests remain absent."
+    },
+    {
+      "requirement": "Architecture and operator documentation",
+      "gap_type": "documentation",
+      "status": "fixed",
+      "evidence": "Six canonical documents now distinguish portable contract, trusted native binding, resolved content, publish authority, immutable deployment capability, canary readiness, stale-worker handling, and registration-failure operations."
+    }
+  ],
+  "targeted_checks": [
+    {
+      "command": "python tools/check_documentation_architecture.py --scope changed",
+      "result": "PASS_WITH_ADVISORIES",
+      "notes": "The advisory checker completed and reported the six pre-existing changed-document metadata omissions (missing Document Class markers); no new document was created."
+    },
+    {
+      "command": "./tools/verify_workflow_naming.sh --mode docs-spec",
+      "result": "BLOCKED",
+      "notes": "The checker cannot scan the absent specs directory and reports rg: specs: No such file or directory."
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "No whitespace errors were found."
+    }
+  ],
+  "remaining_work": [
+    "Implement trusted resolved-skill native binding independent of publish authority.",
+    "Extract and adopt one provider-neutral resolver core with cross-host parity fixtures.",
+    "Implement immutable/versioned rollout and stale-worker exclusion.",
+    "Add operator capability-failure classification, budget protection, diagnostics, metrics, and alerts.",
+    "Add the readiness-gating parent-to-resolver canary and required Temporal/Compose/restart regression coverage."
+  ],
+  "environment_limitations": [
+    "The docs-spec naming checker assumes a specs directory that is absent in this checkout."
+  ],
+  "scope_controls": {
+    "pull_request_created": false,
+    "jira_status_changed": false,
+    "scope_broadened": false
+  }
+}
