@@ -20,7 +20,10 @@ class ManagedRunRecord(Protocol):
 
 
 class ManagedRunRecordStore(Protocol):
-    def load(self, run_id: str) -> ManagedRunRecord | None: ...
+    store_root: Path
+
+    def load(self, run_id: str) -> ManagedRunRecord | None:
+        """Load the managed run record identified by ``run_id``."""
 
 
 def resolve_managed_workspace_locator(
