@@ -47,6 +47,37 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def pr_resolver_identity_selector(
+    *,
+    request: AgentExecutionRequest,
+    node_inputs: Mapping[str, Any],
+    workflow_parameters: Mapping[str, Any],
+) -> tuple[str, str]:
+    """Return the repository and authored PR selector at the resolver boundary."""
+
+    skill_payload = node_inputs.get("skill")
+    skill_payload = skill_payload if isinstance(skill_payload, Mapping) else {}
+    skill_inputs = skill_payload.get("inputs")
+    if not isinstance(skill_inputs, Mapping):
+        nested = node_inputs.get("inputs")
+        skill_inputs = nested if isinstance(nested, Mapping) else {}
+    workspace = request.workspace_spec or {}
+    repository = _text(
+        skill_inputs.get("repo")
+        or workspace.get("repository")
+        or workspace.get("repo")
+        or workflow_parameters.get("repository")
+        or workflow_parameters.get("repo")
+    )
+    selector = _text(
+        skill_inputs.get("pr")
+        or node_inputs.get("pr")
+        or skill_inputs.get("branch")
+        or node_inputs.get("branch")
+    )
+    return repository, selector
+
+
 def classify_pr_resolver_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Deterministically classify a captured GitHub snapshot."""
 
@@ -109,6 +140,7 @@ def build_pr_resolver_start_input(
     parent_run_id: str,
     principal: str,
     step_id: str,
+    resolved_pull_request: Mapping[str, Any] | None = None,
 ) -> PRResolverStartInput:
     """Build the resolver boundary from an already prepared agent request."""
 
@@ -118,25 +150,21 @@ def build_pr_resolver_start_input(
     if not isinstance(skill_inputs, Mapping):
         nested = node_inputs.get("inputs")
         skill_inputs = nested if isinstance(nested, Mapping) else {}
-    workspace = request.workspace_spec or {}
-    repository = _text(
-        skill_inputs.get("repo")
-        or workspace.get("repository")
-        or workspace.get("repo")
-        or workflow_parameters.get("repository")
-        or workflow_parameters.get("repo")
+    repository, pr_value = pr_resolver_identity_selector(
+        request=request,
+        node_inputs=node_inputs,
+        workflow_parameters=workflow_parameters,
     )
     merge_gate = workflow_parameters.get("mergeGate")
     merge_gate = merge_gate if isinstance(merge_gate, Mapping) else {}
-    pr_value = (
-        skill_inputs.get("pr")
-        or node_inputs.get("pr")
-        or skill_inputs.get("branch")
-        or node_inputs.get("branch")
+    resolved = (
+        resolved_pull_request
+        if isinstance(resolved_pull_request, Mapping)
+        else {}
     )
     try:
-        pr_number = int(str(pr_value or "").strip())
-    except ValueError as exc:
+        pr_number = int(resolved.get("prNumber") or pr_value)
+    except (TypeError, ValueError):
         pr_url_parts = _text(merge_gate.get("pullRequestUrl")).rstrip("/").split("/")
         try:
             pr_number = int(pr_url_parts[-1])
@@ -156,7 +184,7 @@ def build_pr_resolver_start_input(
         or merge_gate.get("mergeMethod")
         or "squash"
     ).lower()
-    pr_url = _text(merge_gate.get("pullRequestUrl")) or (
+    pr_url = _text(resolved.get("prUrl") or merge_gate.get("pullRequestUrl")) or (
         f"https://github.com/{repository}/pull/{pr_number}"
     )
     policy = {

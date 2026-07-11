@@ -84,6 +84,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.workflows.pr_resolver import (
         build_pr_resolver_start_input,
+        pr_resolver_identity_selector,
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
@@ -103,6 +104,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.runtime_capabilities import (
         RuntimeCapabilityError,
+        RuntimeExecutionCapabilities,
+        resolve_runtime_execution_capabilities,
     )
     from moonmind.workflows.temporal.checkpoint_policy import (
         resolve_checkpoint_policy,
@@ -545,6 +548,7 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
 FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
@@ -605,6 +609,9 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
+RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
+    "run-pr-resolver-selector-resolution-v1"
+)
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
 _MANAGED_AGENT_IDS = frozenset(
@@ -4556,7 +4563,33 @@ class MoonMindRunWorkflow:
         previous_capture = self._step_workspace_capture_inputs.get(
             logical_step_id, {}
         )
-        if (
+        capabilities: RuntimeExecutionCapabilities | None = None
+        capability_snapshot = outputs.get("runtimeCapabilities") or outputs.get(
+            "runtime_capabilities"
+        )
+        try:
+            capability_policy_enabled = workflow.patched(
+                RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH
+            )
+        except workflow._NotInWorkflowEventLoopError:
+            # Pure unit callers model newly started histories.
+            capability_policy_enabled = True
+        if capability_policy_enabled:
+            if isinstance(capability_snapshot, Mapping):
+                capabilities = RuntimeExecutionCapabilities.model_validate(
+                    capability_snapshot
+                )
+            elif agent_id:
+                capabilities = resolve_runtime_execution_capabilities(agent_id)
+            if capabilities is not None:
+                capture_input["runtimeCapabilities"] = capabilities.model_dump(
+                    by_alias=True, mode="json"
+                )
+                capture_input["captureAuthority"] = capabilities.workspace_authority
+                capture_input["criticality"] = (
+                    capabilities.post_execution_checkpoint_criticality
+                )
+        elif (
             agent_kind == "managed"
             or previous_capture.get("captureAuthority") == "managed_runtime"
         ):
@@ -4610,7 +4643,10 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_kind:
                 capture_input["kind"] = checkpoint_kind
-            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
+            elif capabilities is None and (
+                capability_policy_enabled
+                or self._step_external_agent_ids.get(logical_step_id) != "omnigent"
+            ):
                 if base_commit:
                     capture_input["kind"] = "git_patch"
                 else:
@@ -4621,7 +4657,11 @@ class MoonMindRunWorkflow:
                 "checkpointCriticality",
                 "checkpoint_criticality",
             )
-            if criticality in {"required", "recoverability_only", "unsupported"}:
+            if capabilities is None and criticality in {
+                "required",
+                "recoverability_only",
+                "unsupported",
+            }:
                 capture_input["criticality"] = criticality
             break
 
@@ -4659,6 +4699,18 @@ class MoonMindRunWorkflow:
         )
         resolved_policy = resolve_checkpoint_policy(
             boundary=str(boundary),
+            capabilities=(
+                RuntimeExecutionCapabilities.model_validate(
+                    capture_input["runtimeCapabilities"]
+                )
+                if isinstance(capture_input.get("runtimeCapabilities"), Mapping)
+                else None
+            ),
+            workspace_locator=(
+                capture_input.get("workspaceLocator")
+                if isinstance(capture_input.get("workspaceLocator"), Mapping)
+                else None
+            ),
             recovery_source=self._recovery_source
             if isinstance(self._recovery_source, Mapping)
             else None,
@@ -4911,6 +4963,32 @@ class MoonMindRunWorkflow:
             )
             self._attention_required = criticality == "required"
             self._update_memo()
+            return
+        capture_outcome = self._step_checkpoint_capture_outcomes.get(logical_step_id)
+        if not checkpoint_ref and isinstance(capture_outcome, Mapping):
+            capability_criticality = str(
+                capture_outcome.get("capabilityCriticality") or criticality
+            ).strip()
+            if capability_criticality in {
+                "required",
+                "recoverability_only",
+                "unsupported",
+            }:
+                criticality = capability_criticality
+            failure_code = self._coerce_text(
+                capture_outcome.get("failureCode"), max_chars=100
+            )
+            row["finalizationOutcome"] = {
+                "status": "unsupported",
+                "phase": "after_execution_checkpoint",
+                "criticality": criticality,
+                "failureCode": failure_code,
+                "terminalFailureCode": None,
+                "retryCount": 0,
+                "checkpointRef": None,
+                "message": "Checkpoint capture is unsupported by this runtime.",
+                "updatedAt": updated_at.isoformat(),
+            }
             return
         row["finalizationOutcome"] = {
             "status": "succeeded" if checkpoint_ref else "unsupported",
@@ -8380,6 +8458,57 @@ class MoonMindRunWorkflow:
                             )
                             try:
                                 if temporal_pr_resolver:
+                                    resolved_pull_request = None
+                                    merge_gate = parameters.get("mergeGate")
+                                    merge_gate = (
+                                        merge_gate
+                                        if isinstance(merge_gate, Mapping)
+                                        else {}
+                                    )
+                                    repository, selector = (
+                                        pr_resolver_identity_selector(
+                                            request=request,
+                                            node_inputs=node_inputs,
+                                            workflow_parameters=parameters,
+                                        )
+                                    )
+                                    try:
+                                        numeric_selector = int(selector)
+                                    except (TypeError, ValueError):
+                                        numeric_selector = 0
+                                    if (
+                                        workflow.patched(
+                                            RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH
+                                        )
+                                        and numeric_selector <= 0
+                                        and not str(
+                                            merge_gate.get("pullRequestUrl") or ""
+                                        ).strip()
+                                    ):
+                                        selector_result = await workflow.execute_activity(
+                                            "pr_resolver.resolve_selector",
+                                            {
+                                                "repository": repository,
+                                                "selector": selector,
+                                            },
+                                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                                            start_to_close_timeout=timedelta(minutes=2),
+                                            retry_policy=RetryPolicy(
+                                                maximum_attempts=3
+                                            ),
+                                        )
+                                        resolved_pull_request = (
+                                            dict(selector_result)
+                                            if isinstance(selector_result, Mapping)
+                                            else {}
+                                        )
+                                        if not resolved_pull_request.get("resolved"):
+                                            raise ValueError(
+                                                str(
+                                                    resolved_pull_request.get("summary")
+                                                    or "PR selector could not be resolved."
+                                                )
+                                            )
                                     resolver_input = build_pr_resolver_start_input(
                                         request=request,
                                         node_inputs=node_inputs,
@@ -8388,6 +8517,7 @@ class MoonMindRunWorkflow:
                                         parent_run_id=workflow.info().run_id,
                                         principal=self._principal(),
                                         step_id=node_id,
+                                        resolved_pull_request=resolved_pull_request,
                                     )
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.PRResolver",

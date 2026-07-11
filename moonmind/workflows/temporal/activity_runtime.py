@@ -1256,6 +1256,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_complete_post_merge_jira",
     ),
+    "pr_resolver.resolve_selector": (
+        "integrations",
+        "pr_resolver_resolve_selector",
+    ),
     "pr_resolver.read_snapshot": ("integrations", "pr_resolver_read_snapshot"),
     "pr_resolver.classify_gate": ("integrations", "pr_resolver_classify_gate"),
     "pr_resolver.finalize_merge": ("integrations", "pr_resolver_finalize_merge"),
@@ -4801,6 +4805,27 @@ class TemporalIntegrationActivities:
             transition_issue=transition_issue,
         )
         return decision.model_dump(by_alias=True, mode="json")
+
+    async def pr_resolver_resolve_selector(self, payload, /, **kwargs):
+        """Resolve a PR number, URL, or branch to one canonical PR identity."""
+
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.resolve_selector requires an object"
+            )
+        repository = str(payload.get("repository") or "").strip()
+        selector = str(payload.get("selector") or "").strip()
+        if not repository or not selector:
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.resolve_selector requires repository and selector"
+            )
+        result = await GitHubService().resolve_pull_request_selector(
+            repo=repository,
+            selector=selector,
+        )
+        return result.model_dump(by_alias=True, mode="json")
 
     async def pr_resolver_read_snapshot(self, payload, /, **kwargs):
         """Capture one compact, immutable GitHub gate snapshot."""

@@ -54,6 +54,7 @@ from moonmind.workflows.temporal import activity_runtime as activity_runtime_mod
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
+    TemporalIntegrationActivities,
 )
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     ManagedSessionReapResult,
@@ -4093,6 +4094,43 @@ async def test_agent_runtime_prepare_turn_instructions_adds_pr_resolver_blocker_
     assert "mergeStateStatus=DIRTY" in result
     assert "Initial blocker hint: merge_conflicts, ci_unavailable" in result
     assert "Managed Codex CLI note:" in result
+
+
+@pytest.mark.asyncio
+async def test_pr_resolver_resolve_selector_activity_preserves_canonical_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.adapters.github_service import PullRequestSelectorResult
+
+    async def resolve_selector(self, *, repo: str, selector: str, github_token=None):
+        assert repo == "MoonLadderStudios/MoonMind"
+        assert selector == "feature/mm-1200"
+        return PullRequestSelectorResult(
+            resolved=True,
+            prNumber=3192,
+            prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/3192",
+            selectorType="branch",
+            reasonCode="resolved",
+            summary="resolved",
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService.resolve_pull_request_selector",
+        resolve_selector,
+    )
+    activities = TemporalIntegrationActivities()
+
+    result = await activities.pr_resolver_resolve_selector(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "selector": "feature/mm-1200",
+        }
+    )
+
+    assert result["resolved"] is True
+    assert result["prNumber"] == 3192
+    assert result["prUrl"].endswith("/pull/3192")
+
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_adds_jira_pr_verify_tool_hint() -> None:

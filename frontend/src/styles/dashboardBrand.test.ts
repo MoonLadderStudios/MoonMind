@@ -66,4 +66,33 @@ describe('dashboard masthead brand styles', () => {
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.route-nav,[\s\S]*\.dashboard-nav-backdrop\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
     );
   });
+
+  it('MM-1200 preserves System popover geometry, focus, active, mobile, and motion contracts', () => {
+    const popover = cssRuleBlock('.dashboard-system-popover');
+    expect(popover).toContain('position: absolute;');
+    expect(popover).toContain('right: 0;');
+    expect(popover).toContain('z-index: 60;');
+    expect(popover).toContain('background: rgb(var(--mm-panel));');
+    expect(popover).toContain('box-shadow: var(--mm-elevation-panel);');
+    expect(dashboardCss).not.toMatch(
+      /@media \(min-width: 1181px\)\s*\{[\s\S]*\.route-nav-primary\s*\{[^}]*overflow-[xy]:\s*(?:auto|hidden|scroll);/s,
+    );
+    expect(dashboardCss).not.toMatch(
+      /@media \(min-width: 1181px\)\s*\{[\s\S]*\.masthead-nav\s*\{[^}]*overflow-[xy]:\s*(?:auto|hidden|scroll);/s,
+    );
+
+    expect(cssRuleBlock('.dashboard-system-trigger:focus-visible')).toContain(
+      'box-shadow: var(--mm-control-focus-ring);',
+    );
+    expect(cssRuleBlock('.dashboard-system-trigger.active')).toContain('color: rgb(var(--mm-ink));');
+    expect(cssRuleBlock('.dashboard-system-trigger.active::after')).toContain(
+      'background: rgb(var(--mm-accent));',
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.dashboard-system-menu\s*\{[^}]*display:\s*none;[\s\S]*\.dashboard-system-inline\s*\{[^}]*display:\s*block;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.dashboard-system-trigger,[\s\S]*\.dashboard-system-popover\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
+    );
+  });
 });

@@ -92,24 +92,12 @@ from moonmind.workflows.executions.execution_contract import (
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
 )
-from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow as MoonMindProviderProfileManager
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.hard_switch_cutover import registered_user_workflow_type
-from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
-from moonmind.workflows.temporal.workflows.agent_session import (
-    MoonMindAgentSessionWorkflow as MoonMindAgentSession,
-)
-from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
-    MoonMindManagedSessionReconcileWorkflow as MoonMindManagedSessionReconcile,
-)
-from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup import (
-    MoonMindManagedRuntimeWorkspaceCleanupWorkflow as MoonMindManagedRuntimeWorkspaceCleanup,
-)
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     resolve_adapter_metadata,
@@ -117,11 +105,8 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     resolve_external_adapter,
     external_adapter_execution_style,
 )
-from moonmind.workflows.temporal.workflows.oauth_session import (
-    MoonMindOAuthSessionWorkflow as MoonMindOAuthSession,
-)
-from moonmind.workflows.temporal.workflows.merge_automation import (
-    MoonMindMergeAutomationWorkflow as MoonMindMergeAutomation,
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_workflow_classes,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
@@ -2708,18 +2693,7 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        registered_user_workflow_type(settings.temporal)
-        workflows = [
-            MoonMindUserWorkflow,
-            MoonMindManifestIngest,
-            MoonMindProviderProfileManager,
-            MoonMindAgentSession,
-            MoonMindManagedSessionReconcile,
-            MoonMindManagedRuntimeWorkspaceCleanup,
-            MoonMindAgentRun,
-            MoonMindOAuthSession,
-            MoonMindMergeAutomation,
-        ]
+        workflows = workflow_fleet_workflow_classes()
         activities = [
             resolve_adapter_metadata,
             get_activity_route,

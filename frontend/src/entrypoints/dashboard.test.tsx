@@ -12,9 +12,11 @@ import postcss from 'postcss';
 import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { DashboardApp } from './dashboard-app';
 import { navigateTo } from '../lib/navigation';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import {
   readDashboardPreferences,
   resetDashboardPreferences,
@@ -391,11 +393,135 @@ describe('Dashboard shared entry', () => {
     fireEvent.mouseLeave(skillsLink);
     expect(animatedNavIconMocks.sparklesStop).toHaveBeenCalledTimes(1);
 
-    const settingsLink = screen.getByRole('link', { name: 'Settings' });
-    fireEvent.mouseEnter(settingsLink);
-    expect(animatedNavIconMocks.settingsStart).toHaveBeenCalledTimes(1);
-    fireEvent.mouseLeave(settingsLink);
-    expect(animatedNavIconMocks.settingsStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('MM-1200 groups enabled non-primary destinations under the System menu', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    const navigation = screen.getByRole('navigation', { name: 'MoonMind navigation' });
+    expect(Array.from(navigation.querySelectorAll('.route-nav-primary > a')).map((link) => link.textContent?.trim())).toEqual([
+      'Workflows', 'Create', 'Recurring', 'Skills',
+    ]);
+    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: 'RAG / Manifests' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Artifacts / Observability' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
+
+    const first = screen.getByRole('menuitem', { name: 'RAG / Manifests' });
+    first.focus();
+    fireEvent.keyDown(first, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Settings' }));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it.each([
+    '/manifests',
+    '/artifacts/example',
+    '/observability/example',
+    '/remediations/example',
+    '/settings/providers',
+  ])('MM-1200 marks System active for the child route %s', (path) => {
+    renderWithClient(
+      <MemoryRouter initialEntries={[path]}>
+        <nav aria-label="Test navigation">
+          <a href="/workflows">Workflows</a>
+          <DashboardSystemMenu
+            uiInfo={uiInfo({ features: { ...uiInfo().features, remediationCollection: true } })}
+            mobileDrawerOpen={false}
+          />
+        </nav>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: 'System' }).classList.contains('active')).toBe(true);
+    expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
+  });
+
+  it.each([
+    ['Enter', 'RAG / Manifests'],
+    [' ', 'RAG / Manifests'],
+    ['ArrowDown', 'RAG / Manifests'],
+    ['ArrowUp', 'Settings'],
+  ])('MM-1200 opens System with %s and focuses %s', async (key, expectedItem) => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.keyDown(trigger, { key });
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: expectedItem })));
+  });
+
+  it('MM-1200 supports complete menu focus movement and closes on focus departure', async () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    const first = screen.getByRole('menuitem', { name: 'RAG / Manifests' });
+    const last = screen.getByRole('menuitem', { name: 'Settings' });
+    first.focus();
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Artifacts / Observability' }));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: 'End' });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: 'Home' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.blur(first, { relatedTarget: document.body });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('MM-1200 routes selections client-side and closes on selection or outside click', () => {
+    function LocationProbe() {
+      return <output aria-label="Current path">{useLocation().pathname}</output>;
+    }
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu uiInfo={uiInfo()} mobileDrawerOpen={false} />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(trigger);
+    fireEvent.pointerDown(document.body);
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('MM-1200 renders enabled System children inline on mobile without a nested popover', () => {
+    renderWithClient(
+      <MemoryRouter initialEntries={['/workflows']}>
+        <DashboardSystemMenu
+          uiInfo={uiInfo({ features: { ...uiInfo().features, manifests: false, artifacts: false } })}
+          mobileDrawerOpen
+        />
+      </MemoryRouter>,
+    );
+    const inline = screen.getByLabelText('System destinations');
+    expect(inline.querySelector('[role="menu"]')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Settings' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -499,7 +625,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(7);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(5);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);
@@ -1395,7 +1521,8 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
-    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
 
     expect(
       await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
@@ -1728,7 +1855,8 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
-    fireEvent.click(screen.getByRole('link', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'System' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }));
     expect(await screen.findByText('Settings permissions:')).toBeTruthy();
 
     const completeList = resolveList;
@@ -3092,7 +3220,8 @@ describe('Dashboard shared entry', () => {
     expect(desktopMastheadRule('.masthead-brand-group')).toContain('grid-column: 1;');
     expect(desktopMastheadRule('.workflow-list-display-control')).toBe('');
     expect(desktopMastheadRule('.masthead-nav')).toContain('grid-column: 2;');
-    expect(desktopMastheadRule('.masthead-nav')).toContain('overflow-x: auto;');
+    expect(desktopMastheadRule('.masthead-nav')).not.toContain('overflow');
+    expect(desktopMastheadRule('.route-nav-primary')).not.toContain('overflow');
     expect(desktopMastheadRule('.masthead-title-meta')).toContain('grid-column: 3;');
     expect(cssRuleBlock(dashboardCss, '.masthead-title-meta .version-badge')).toContain('white-space: nowrap;');
   });

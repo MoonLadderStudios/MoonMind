@@ -138,6 +138,31 @@ def test_build_pr_resolver_start_input_preserves_direct_inputs_and_gate_policy()
     assert result.owned_by_merge_automation_gate is True
 
 
+def test_build_pr_resolver_start_input_accepts_resolved_standalone_branch() -> None:
+    request = _agent_request().model_copy(
+        update={"skill": {"name": "pr-resolver", "inputs": {"pr": "feature/mm-1200"}}}
+    )
+
+    result = build_pr_resolver_start_input(
+        request=request,
+        node_inputs={"skill": request.skill},
+        workflow_parameters={"repository": "MoonLadderStudios/MoonMind"},
+        parent_workflow_id="parent",
+        parent_run_id="run",
+        principal="user-1",
+        step_id="resolve",
+        resolved_pull_request={
+            "resolved": True,
+            "prNumber": 3192,
+            "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/3192",
+        },
+    )
+
+    assert result.pr_number == 3192
+    assert result.pr_url == "https://github.com/MoonLadderStudios/MoonMind/pull/3192"
+    assert result.owned_by_merge_automation_gate is False
+
+
 def _workflow_payload(**policy: Any) -> dict[str, Any]:
     return {
         "workflowType": "MoonMind.PRResolver",
