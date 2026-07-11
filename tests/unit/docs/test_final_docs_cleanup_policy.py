@@ -86,7 +86,7 @@ def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
 
     These assertions are not stylistic. The ``11.1`` line and the "external
     targets stay gated until enforcement exists" phrase encode the PentestGPT
-    external-egress safety gate; the ``5.1``/``5.2``/``5.3``/``6.2``/``7.1``
+    external-egress safety gate; the ``5.1``/``5.4``/``5.5``/``6.2``/``7.1``
     task labels pin the checkpoint-resume, remediation-evidence, and
     RAG-injection acceptance claims. Do not delete an assertion here to make a
     roadmap edit pass — update the roadmap so the invariant still holds, or
@@ -97,9 +97,9 @@ def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
     assert "Completed historical milestones have been removed from the active roadmap" in text
     assert "Omnigent host as the unified managed agent runtime" in text
     assert "checkpoint captures select the `external_state_ref` lane" in text
-    assert "- [ ] **5.1 External-state checkpoint completeness**" in text
-    assert "- [ ] **5.2 Resume-from-checkpoint default flow**" in text
-    assert "- [ ] **5.3 Checkpoint Branch UI and runtime-profile gaps**" in text
+    assert "- [ ] **5.1 Checkpoint boundary and completeness**" in text
+    assert "- [ ] **5.4 Resume-from-checkpoint default flow**" in text
+    assert "- [ ] **5.5 Checkpoint Branch UI and runtime-profile gaps**" in text
     assert "- [ ] **6.2 Omnigent remediation context enrichment**" in text
     assert "- [ ] **7.1 Initial context injection for Omnigent**" in text
     assert "- [ ] **11.1 Restricted egress boundary for PentestGPT external targets**" in text

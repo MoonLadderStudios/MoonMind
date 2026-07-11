@@ -52,7 +52,7 @@ def test_temp_plan_cleanup_matches_closed_final_definition_of_done() -> None:
     assert not TEMP_PLAN.exists()
     assert "Status: Execution plan (disposable; not canonical)" not in docs_text
     assert "Final definition of done" not in docs_text
-    assert "- [ ] **5.2 Resume-from-checkpoint default flow**" in roadmap_text
+    assert "- [ ] **5.4 Resume-from-checkpoint default flow**" in roadmap_text
 
 
 def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
@@ -60,7 +60,7 @@ def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
 
     The pinned roadmap substrings below encode durable invariants, not prose:
     the Omnigent-host direction, the checkpoint ``external_state_ref`` lane and
-    Checkpoint Branch API claims, the ``5.2``/``6.2``/``7.1`` acceptance tasks,
+    Checkpoint Branch API claims, the ``5.4``/``6.2``/``7.1`` acceptance tasks,
     and the ``11.1`` PentestGPT external-egress safety gate. Update the roadmap
     to preserve the invariant rather than deleting an assertion here.
     """
@@ -72,7 +72,7 @@ def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
     assert "Omnigent host as the unified managed agent runtime" in roadmap_text
     assert "checkpoint captures select the `external_state_ref` lane" in roadmap_text
     assert "Checkpoint Branch API and persistence model already support" in roadmap_text
-    assert "- [ ] **5.2 Resume-from-checkpoint default flow**" in roadmap_text
+    assert "- [ ] **5.4 Resume-from-checkpoint default flow**" in roadmap_text
     assert "- [ ] **6.2 Omnigent remediation context enrichment**" in roadmap_text
     assert "- [ ] **7.1 Initial context injection for Omnigent**" in roadmap_text
     assert "- [ ] **11.1 Restricted egress boundary for PentestGPT external targets**" in roadmap_text
