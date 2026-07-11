@@ -15,6 +15,7 @@ class ResolvedCheckpointPolicy:
     checkpoint_kind: str
     resumable: bool
     required_evidence: tuple[str, ...]
+    capture_authority: str = "sandbox"
 
 
 _OMNIGENT_EXTERNAL_STATE_BOUNDARIES = frozenset(
@@ -86,6 +87,7 @@ def resolve_checkpoint_policy(
     recovery_source: Mapping[str, Any] | None = None,
     runtime_kind: str | None = None,
     external_agent_id: str | None = None,
+    agent_kind: str | None = None,
 ) -> ResolvedCheckpointPolicy:
     """Return the shared policy used for capture, manifests, and recovery apply."""
 
@@ -97,6 +99,17 @@ def resolve_checkpoint_policy(
         external_policy = _omnigent_checkpoint_policy(boundary_token)
         if external_policy is not None:
             return external_policy
+
+    if str(agent_kind or "").strip().lower() == "managed":
+        return ResolvedCheckpointPolicy(
+            workspace_policy="restore_pre_execution",
+            checkpoint_kind="worktree_archive"
+            if boundary_token != "after_execution"
+            else "git_patch",
+            resumable=False,
+            required_evidence=(),
+            capture_authority="managed_runtime",
+        )
 
     if boundary_token == "before_recovery_restoration":
         return ResolvedCheckpointPolicy(

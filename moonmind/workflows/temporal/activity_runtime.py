@@ -3022,7 +3022,6 @@ class TemporalSandboxActivities:
         artifact_store: Any | None = None,
         redactor: SecretRedactor | None = None,
         workspace_root: str | Path | None = None,
-        managed_workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._artifact_store = artifact_store or InMemoryArtifactStore()
@@ -3030,10 +3029,6 @@ class TemporalSandboxActivities:
         self._workspace_root = Path(
             workspace_root or settings.workflow.workspace_root
         ).resolve()
-        self._managed_workspace_root = Path(
-            managed_workspace_root
-            or os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
-        ).expanduser().resolve()
 
     async def _put_checkpoint_bytes(
         self,
@@ -3147,7 +3142,7 @@ class TemporalSandboxActivities:
             )
             return result.model_dump(by_alias=True, mode="json")
 
-        workspace = self._resolve_checkpoint_workspace(
+        workspace = self._resolve_workspace(
             model.workspace_path or model.workspace_root_ref or "",
             must_exist=True,
         )
@@ -3851,31 +3846,6 @@ class TemporalSandboxActivities:
         if not workspace.is_relative_to(sandbox_root):
             raise TemporalActivityRuntimeError(
                 f"workspace path escapes sandbox root: {workspace}"
-            )
-        if must_exist and not workspace.exists():
-            raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
-        return workspace
-
-    def _resolve_checkpoint_workspace(
-        self, workspace_ref: str | Path, *, must_exist: bool
-    ) -> Path:
-        workspace = Path(workspace_ref).expanduser().resolve()
-        sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
-        try:
-            managed_relative = workspace.relative_to(self._managed_workspace_root)
-        except ValueError:
-            managed_relative = None
-        is_managed_repo_workspace = (
-            managed_relative is not None
-            and len(managed_relative.parts) == 2
-            and managed_relative.parts[1] == "repo"
-        )
-        if not (
-            workspace.is_relative_to(sandbox_root)
-            or is_managed_repo_workspace
-        ):
-            raise TemporalActivityRuntimeError(
-                f"workspace path escapes approved checkpoint roots: {workspace}"
             )
         if must_exist and not workspace.exists():
             raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
