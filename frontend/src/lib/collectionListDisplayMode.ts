@@ -26,8 +26,9 @@ export type WorkflowListSelection = {
 export type CollectionListDisplayRouteAction =
   | 'none'
   | 'navigate-workflows'
+  | 'navigate-recurring'
   | 'navigate-selected-detail'
-  | 'resolve-first-workflow';
+  | 'resolve-first-row';
 
 export type WorkflowListDisplayPrimarySurface =
   | 'workflow-detail'
@@ -259,7 +260,7 @@ export function resolveRecurringListDisplay(
         effectiveMode: requestedMode,
         surface: 'recurring-table',
         routeAction: selection.source === 'first-visible-row'
-          ? 'resolve-first-workflow'
+          ? 'resolve-first-row'
           : 'navigate-selected-detail',
         primarySurface: 'recurring-detail',
         listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',
@@ -292,7 +293,7 @@ export function resolveRecurringListDisplay(
       requestedMode,
       effectiveMode: 'table',
       surface: 'recurring-detail',
-      routeAction: 'navigate-workflows',
+      routeAction: 'navigate-recurring',
       primarySurface: 'recurring-table',
       listSurface: 'table',
       selection: { definitionId: detail.definitionId, source: 'route' },
@@ -342,7 +343,7 @@ export function resolveWorkflowListDisplay(
         effectiveMode: requestedMode,
         surface: 'workflows-table',
         routeAction: selection.source === 'first-visible-row'
-          ? 'resolve-first-workflow'
+          ? 'resolve-first-row'
           : 'navigate-selected-detail',
         primarySurface: 'workflow-detail',
         listSurface: requestedMode === 'hidden' ? 'none' : 'sidebar',

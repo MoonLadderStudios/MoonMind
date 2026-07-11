@@ -69,7 +69,7 @@ describe('resolveWorkflowListDisplay', () => {
       firstVisibleWorkflowId: 'mm:first-visible',
     })).toMatchObject({
       effectiveMode: 'sidebar',
-      routeAction: 'resolve-first-workflow',
+      routeAction: 'resolve-first-row',
       primarySurface: 'workflow-detail',
       listSurface: 'sidebar',
       selection: { workflowId: 'mm:first-visible', source: 'first-visible-row' },
@@ -256,7 +256,7 @@ describe('resolveRecurringListDisplay', () => {
       firstVisibleDefinitionId: 'first:recurring',
     })).toMatchObject({
       effectiveMode: 'sidebar',
-      routeAction: 'resolve-first-workflow',
+      routeAction: 'resolve-first-row',
       primarySurface: 'recurring-detail',
       listSurface: 'sidebar',
       selection: { definitionId: 'first:recurring', source: 'first-visible-row' },
@@ -308,7 +308,7 @@ describe('resolveRecurringListDisplay', () => {
       requestedMode: 'table',
     })).toMatchObject({
       effectiveMode: 'table',
-      routeAction: 'navigate-workflows',
+      routeAction: 'navigate-recurring',
       primarySurface: 'recurring-table',
       listSurface: 'table',
       targetPath: '/schedules',
