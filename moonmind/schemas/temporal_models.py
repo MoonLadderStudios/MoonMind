@@ -2859,6 +2859,37 @@ class StepLedgerWorkloadModel(BaseModel):
     )
 
 
+class StepExecutionOutcomeModel(BaseModel):
+    """Authoritative primary execution outcome, independent of finalization."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal["succeeded", "failed"]
+    result_ref: str | None = Field(None, alias="resultRef")
+    output_refs: list[str] = Field(default_factory=list, alias="outputRefs")
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    workspace_locator: str | None = Field(None, alias="workspaceLocator")
+    recorded_at: datetime = Field(..., alias="recordedAt")
+
+
+class StepFinalizationOutcomeModel(BaseModel):
+    """Outcome of retryable work performed after primary execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal[
+        "not_started", "succeeded", "retry_pending", "failed", "degraded", "unsupported"
+    ]
+    phase: str | None = None
+    criticality: Literal["required", "recoverability_only", "unsupported"]
+    failure_code: str | None = Field(None, alias="failureCode")
+    terminal_failure_code: str | None = Field(None, alias="terminalFailureCode")
+    retry_count: int = Field(0, alias="retryCount", ge=0)
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
+    message: str | None = None
+    updated_at: datetime = Field(..., alias="updatedAt")
+
+
 StepTimingPrecision = Literal["exact", "live", "fallback", "unavailable"]
 
 
@@ -2985,6 +3016,12 @@ class StepLedgerRowModel(BaseModel):
         None, alias="recoveryPreservation"
     )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
+    execution_outcome: StepExecutionOutcomeModel | None = Field(
+        None, alias="executionOutcome"
+    )
+    finalization_outcome: StepFinalizationOutcomeModel | None = Field(
+        None, alias="finalizationOutcome"
+    )
     timing: StepTimingModel | None = Field(None, alias="timing")
     last_error: str | None = Field(None, alias="lastError")
 
