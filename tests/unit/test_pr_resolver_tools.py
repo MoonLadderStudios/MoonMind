@@ -1884,7 +1884,7 @@ def test_pr_resolver_skill_delegates_orchestration_to_temporal() -> None:
     assert "branch is ahead of origin" in skill_text
     assert "`MoonMind.PRResolver` owns snapshot polling" in skill_text
     assert "must never run `pr_resolve_orchestrate.py`" in skill_text
-    assert "perform exactly the single classified action" in skill_text
+    assert "single classified action named in the instruction" in skill_text
     assert "python3 .agents/skills/pr-resolver/bin/" not in skill_text
     assert "read `.agents/skills/fix-" not in skill_text
     assert "After the child ends, Temporal independently checks" in skill_text
