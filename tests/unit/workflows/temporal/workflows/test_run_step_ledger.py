@@ -2869,6 +2869,56 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
 
 
 @pytest.mark.asyncio
+async def test_run_degrades_managed_checkpoint_without_sandbox_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "workspaceRoot": "/work/agent_jobs/managed-run-1/repo",
+            "baseCommit": "abc123",
+            "checkpointKind": "git_patch",
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("managed workspace must not reach a sandbox activity")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement", boundary="after_execution", updated_at=now
+    )
+
+    assert result is None
+    assert workflow._step_checkpoint_capture_outcomes["implement"] == {
+        "status": "unsupported",
+        "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+        "boundary": "after_execution",
+        "captureAuthority": "managed_runtime",
+    }
+    assert workflow._step_workspace_capture_inputs["implement"][
+        "captureAuthority"
+    ] == "managed_runtime"
+
+
+@pytest.mark.asyncio
 async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

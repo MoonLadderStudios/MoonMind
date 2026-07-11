@@ -102,6 +102,19 @@ def test_resolve_checkpoint_policy_keeps_local_after_execution_default() -> None
     assert policy.required_evidence == ("patchRef", "manifestRef")
 
 
+def test_resolve_checkpoint_policy_assigns_managed_runtime_authority() -> None:
+    policy = resolve_checkpoint_policy(
+        boundary="after_execution",
+        runtime_kind="codex_cli",
+        agent_kind="managed",
+    )
+
+    assert policy.capture_authority == "managed_runtime"
+    assert policy.checkpoint_kind == "git_patch"
+    assert policy.resumable is False
+    assert policy.required_evidence == ()
+
+
 def test_omnigent_runtime_does_not_override_recovery_restoration_policy() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_RECOVERY_RESTORATION,

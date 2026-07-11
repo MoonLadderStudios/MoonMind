@@ -1110,6 +1110,7 @@ class MoonMindRunWorkflow:
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
+        self._step_checkpoint_capture_outcomes: dict[str, dict[str, Any]] = {}
         self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._fresh_source_step_execution_attempts: set[str] = set()
@@ -4524,6 +4525,14 @@ class MoonMindRunWorkflow:
                     candidates.append(nested_workload)
 
         capture_input: dict[str, Any] = {}
+        previous_capture = self._step_workspace_capture_inputs.get(
+            logical_step_id, {}
+        )
+        if (
+            agent_kind == "managed"
+            or previous_capture.get("captureAuthority") == "managed_runtime"
+        ):
+            capture_input["captureAuthority"] = "managed_runtime"
         for candidate in candidates:
             workspace_path = self._checkpoint_capture_text(
                 candidate,
@@ -4568,11 +4577,6 @@ class MoonMindRunWorkflow:
             )
             if checkpoint_kind:
                 capture_input["kind"] = checkpoint_kind
-            elif self._step_external_agent_ids.get(logical_step_id) != "omnigent":
-                if base_commit:
-                    capture_input["kind"] = "git_patch"
-                else:
-                    capture_input["kind"] = "worktree_archive"
             break
 
         if capture_input:
@@ -4591,9 +4595,6 @@ class MoonMindRunWorkflow:
         if not capture_input:
             return None
 
-        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "workspace.capture_checkpoint"
-        )
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
         resolved_policy = resolve_checkpoint_policy(
             boundary=str(boundary),
@@ -4602,11 +4603,28 @@ class MoonMindRunWorkflow:
             else None,
             runtime_kind=self._target_runtime,
             external_agent_id=self._step_external_agent_ids.get(logical_step_id),
+            agent_kind=(
+                "managed"
+                if capture_input.get("captureAuthority") == "managed_runtime"
+                else None
+            ),
+        )
+        if resolved_policy.capture_authority == "managed_runtime":
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "unsupported",
+                "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+                "boundary": str(boundary),
+                "captureAuthority": "managed_runtime",
+            }
+            return None
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "workspace.capture_checkpoint"
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": capture_input.get("kind") or resolved_policy.checkpoint_kind,
+            "kind": resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
