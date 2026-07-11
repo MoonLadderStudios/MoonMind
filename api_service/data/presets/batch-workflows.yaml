@@ -11,6 +11,7 @@ tags:
 - jira
 requiredCapabilities:
 - git
+- jira
 - gh
 annotations:
   sourceSkill: batch-workflows
@@ -250,5 +251,6 @@ steps:
     id: batch-workflows
     requiredCapabilities:
     - git
+    - jira
     - gh
     args: {}
