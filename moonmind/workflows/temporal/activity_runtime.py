@@ -83,6 +83,15 @@ from moonmind.schemas.temporal_models import (
     WorkspacePolicyApplyInput,
     WorkspacePolicyApplyResult,
 )
+from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+    WORKSPACE_AUTHORITY_MISMATCH,
+    WORKSPACE_LOCATOR_UNSUPPORTED,
+    WORKSPACE_LOCATOR_ADAPTER,
+    WorkspaceLocatorResolutionError,
+)
 from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.prepared_context import (
@@ -3127,8 +3136,25 @@ class TemporalSandboxActivities:
         pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
         provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
 
+        if isinstance(model.workspace_locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot resolve a managed-runtime workspace",
+            )
+
         if model.kind == "external_state_ref":
-            source_ref = model.external_state_ref or model.workspace_root_ref or ""
+            if model.workspace_locator is not None and not isinstance(
+                model.workspace_locator, ExternalStateLocator
+            ):
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_LOCATOR_UNSUPPORTED,
+                    "filesystem workspace locator cannot be used as external state",
+                )
+            source_ref = (
+                model.workspace_locator.artifact_ref
+                if isinstance(model.workspace_locator, ExternalStateLocator)
+                else model.external_state_ref or model.workspace_root_ref or ""
+            )
             external_state_ref = await self._put_checkpoint_bytes(
                 _json_bytes(
                     {
@@ -3154,9 +3180,18 @@ class TemporalSandboxActivities:
             )
             return result.model_dump(by_alias=True, mode="json")
 
-        workspace = self._resolve_workspace(
-            model.workspace_path or model.workspace_root_ref or "",
-            must_exist=True,
+        if isinstance(model.workspace_locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used by a local checkpoint operation",
+            )
+        workspace = (
+            self._resolve_sandbox_locator(model.workspace_locator, must_exist=True)
+            if isinstance(model.workspace_locator, SandboxWorkspaceLocator)
+            else self._resolve_workspace(
+                model.workspace_path or model.workspace_root_ref or "",
+                must_exist=True,
+            )
         )
 
         if model.kind == "worktree_archive" and (
@@ -3827,9 +3862,25 @@ class TemporalSandboxActivities:
         payload = _coerce_activity_request(
             request, activity_type="workspace.classify_git_effect"
         )
-        workspace = self._resolve_workspace(
-            payload.get("workspacePath") or payload.get("workspaceRootRef") or "",
-            must_exist=True,
+        raw_locator = payload.get("workspaceLocator")
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_locator) if raw_locator else None
+        if isinstance(locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot classify a managed-runtime workspace",
+            )
+        if isinstance(locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used for git-effect classification",
+            )
+        workspace = (
+            self._resolve_sandbox_locator(locator, must_exist=True)
+            if isinstance(locator, SandboxWorkspaceLocator)
+            else self._resolve_workspace(
+                payload.get("workspacePath") or payload.get("workspaceRootRef") or "",
+                must_exist=True,
+            )
         )
         status = (
             await _run_command(["git", "status", "--porcelain"], cwd=str(workspace))
@@ -3861,6 +3912,28 @@ class TemporalSandboxActivities:
             )
         if must_exist and not workspace.exists():
             raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
+        return workspace
+
+    def _resolve_sandbox_locator(
+        self, locator: SandboxWorkspaceLocator, *, must_exist: bool
+    ) -> Path:
+        sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+        workspace_root = (sandbox_root / locator.workspace_id).resolve()
+        if workspace_root.parent != sandbox_root:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH, "sandbox workspace identity escapes its authority"
+            )
+        workspace = (
+            workspace_root
+            if locator.relative_path == "repo" and workspace_root.is_dir()
+            else (workspace_root / locator.relative_path).resolve()
+        )
+        if not workspace.is_relative_to(workspace_root):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH, "sandbox relative path escapes its workspace"
+            )
+        if must_exist and not workspace.exists():
+            raise TemporalActivityRuntimeError("workspace locator does not resolve to an existing workspace")
         return workspace
 
     def _normalize_allowed_file_paths(

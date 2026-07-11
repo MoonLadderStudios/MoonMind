@@ -122,6 +122,13 @@ def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
         "capabilitySetVersion": capabilities.capability_set_version,
         "capabilityDigest": capabilities.capability_digest,
     }
+    if record.workspace_path:
+        metadata["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": capabilities.runtime_id,
+            "agentRunId": record.run_id,
+            "relativePath": "repo",
+        }
     timestamp_fields = {
         "startedAt": record.started_at,
         "finishedAt": record.finished_at,
