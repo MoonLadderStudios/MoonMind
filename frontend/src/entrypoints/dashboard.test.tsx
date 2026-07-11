@@ -269,7 +269,19 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     app: 'moonmind',
     buildId: 'test-build',
     apiBase: '/api',
-    features: { workflowLiveUpdates: true },
+    features: {
+      workflowList: true,
+      workflowActions: true,
+      workflowLiveUpdates: true,
+      artifacts: true,
+      schedules: true,
+      skills: true,
+      settings: true,
+      manifests: true,
+      remediationCollection: false,
+      omnigentAgents: false,
+      omnigentPolicies: false,
+    },
     limits: {},
     endpoints: {
       workflows: '/api/executions',
@@ -487,7 +499,7 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Workflows' }).getAttribute('href')).toBe('/workflows');
-    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(6);
+    expect(document.querySelectorAll('.route-nav-icon')).toHaveLength(7);
     expect(screen.getByText('vtest-build')).toBeTruthy();
     expect(screen.queryByLabelText('Operational metrics')).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/metrics'))).toBe(false);

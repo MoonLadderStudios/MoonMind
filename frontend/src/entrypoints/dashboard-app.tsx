@@ -41,6 +41,9 @@ import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
   resolveDashboardRoute,
+  DASHBOARD_REACT_ROUTE_PATHS,
+  DASHBOARD_DESTINATIONS,
+  matchesDashboardDestinationRegistry,
   type DashboardPage,
   type DashboardUiInfo,
 } from '../lib/dashboardRoutes';
@@ -83,6 +86,12 @@ const PAGE_IMPORTS = {
   'workflows-home': () => import('./workflows-home'),
   'workflow-list': () => import('./workflow-list'),
 } satisfies Record<DashboardPage, PageImport>;
+
+for (const destination of DASHBOARD_DESTINATIONS) {
+  if (!Object.hasOwn(PAGE_IMPORTS, destination.page)) {
+    throw new Error(`Dashboard destination ${destination.key} has no lazy page import`);
+  }
+}
 
 const NAV_ICON_SIZE = 16;
 const LIST_MODE_ICON_SIZE = 15;
@@ -406,7 +415,11 @@ function useDashboardUiInfo() {
       if (!response.ok) {
         throw new Error(`UI info request failed: ${response.status}`);
       }
-      return (await response.json()) as DashboardUiInfo;
+      const uiInfo = (await response.json()) as DashboardUiInfo;
+      if (uiInfo.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations)) {
+        throw new Error('Dashboard destination registry does not match /api/ui/info');
+      }
+      return uiInfo;
     },
     staleTime: 30_000,
     retry: 1,
@@ -823,7 +836,13 @@ function DashboardNavigation({
           >
             Skills
           </AnimatedRouteNavLink>
-          {uiInfo?.features?.artifacts !== false ? (
+          {uiInfo?.features?.manifests === true ? (
+            <NavLink to="/manifests" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+              <Rows3 size={NAV_ICON_SIZE} className="route-nav-icon" aria-hidden="true" />
+              RAG / Manifests
+            </NavLink>
+          ) : null}
+          {uiInfo?.features?.artifacts === true ? (
             <NavLink
               to="/artifacts"
               className={({ isActive }) => (
@@ -1323,30 +1342,11 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/workflows" replace />} />
-      <Route path="/workflows" element={routedDashboardPage} />
-      <Route path="/workflows/new" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/chat" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/overview" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/execution" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/evidence" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/steps" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/artifacts" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/runs" element={routedDashboardPage} />
-      <Route path="/workflows/:workflowId/debug" element={routedDashboardPage} />
-      <Route path="/omnigent/agents" element={routedDashboardPage} />
-      <Route path="/omnigent/policies" element={routedDashboardPage} />
-      <Route path="/schedules" element={routedDashboardPage} />
-      <Route path="/schedules/:definitionId" element={routedDashboardPage} />
-      <Route path="/skills/*" element={routedDashboardPage} />
-      <Route path="/settings/*" element={routedDashboardPage} />
-      <Route path="/manifests" element={routedDashboardPage} />
-      <Route path="/manifests/:manifestName" element={routedDashboardPage} />
+      {DASHBOARD_REACT_ROUTE_PATHS.map((path) => (
+        <Route key={path} path={path} element={routedDashboardPage} />
+      ))}
       <Route path="/oauth-terminal" element={routedDashboardPage} />
       <Route path="/index-health" element={routedDashboardPage} />
-      <Route path="/remediations" element={routedDashboardPage} />
-      <Route path="/artifacts" element={routedDashboardPage} />
-      <Route path="/observability" element={routedDashboardPage} />
       <Route
         path="*"
         element={
