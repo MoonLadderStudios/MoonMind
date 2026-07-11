@@ -34,7 +34,7 @@ def test_workspace_locator_discriminator(payload, model_type):
     assert "/work/" not in str(serialized)
 
 
-@pytest.mark.parametrize("relative_path", ["../repo", "/repo", "repo/../secret", ""]) 
+@pytest.mark.parametrize("relative_path", ["../repo", "/repo", "repo/../secret", ""])
 def test_workspace_locator_rejects_unsafe_relative_path(relative_path):
     with pytest.raises(ValidationError):
         SandboxWorkspaceLocator(workspaceId="ws-1", relativePath=relative_path)
@@ -95,3 +95,74 @@ def test_managed_locator_requires_current_identity_and_store_record(tmp_path):
             current_runtime_id="codex",
         )
     assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
+def test_managed_locator_rejects_current_runtime_mismatch(tmp_path):
+    workspace = tmp_path / "workspaces" / "run-1" / "repo"
+    workspace.mkdir(parents=True)
+    store = SimpleNamespace(
+        store_root=tmp_path / "managed_runs",
+        load=lambda run_id: SimpleNamespace(
+            run_id=run_id, runtime_id="codex", workspace_path=str(workspace)
+        ),
+    )
+    locator = ManagedWorkspaceLocator(runtimeId="codex", agentRunId="run-1")
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        resolve_managed_workspace_locator(
+            locator,
+            store=store,
+            current_agent_run_id="run-1",
+            current_runtime_id="claude_code",
+        )
+
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
+def test_managed_locator_rejects_store_record_runtime_mismatch(tmp_path):
+    workspace = tmp_path / "workspaces" / "run-1" / "repo"
+    workspace.mkdir(parents=True)
+    store = SimpleNamespace(
+        store_root=tmp_path / "managed_runs",
+        load=lambda run_id: SimpleNamespace(
+            run_id=run_id, runtime_id="claude_code", workspace_path=str(workspace)
+        ),
+    )
+    locator = ManagedWorkspaceLocator(runtimeId="codex", agentRunId="run-1")
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        resolve_managed_workspace_locator(
+            locator,
+            store=store,
+            current_agent_run_id="run-1",
+            current_runtime_id="codex",
+        )
+
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
+def test_managed_locator_rejects_symlink_escape(tmp_path):
+    workspace = tmp_path / "workspaces" / "run-1"
+    workspace.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / "repo").symlink_to(outside, target_is_directory=True)
+    store = SimpleNamespace(
+        store_root=tmp_path / "managed_runs",
+        load=lambda run_id: SimpleNamespace(
+            run_id=run_id, runtime_id="codex", workspace_path=str(workspace)
+        ),
+    )
+    locator = ManagedWorkspaceLocator(
+        runtimeId="codex", agentRunId="run-1", relativePath="repo"
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        resolve_managed_workspace_locator(
+            locator,
+            store=store,
+            current_agent_run_id="run-1",
+            current_runtime_id="codex",
+        )
+
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
