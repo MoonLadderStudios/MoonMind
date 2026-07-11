@@ -123,7 +123,7 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
                 }
             return {"summary": "recovered", "metadata": {}}
         if name == "agent_runtime.load_session_snapshot":
-            return {"sessionEpoch": 1, "containerId": "ctr-1", "threadId": "thr-1"}
+            return {"sessionEpoch": 0, "containerId": "ctr-1", "threadId": "thr-1"}
         if name == "agent_runtime.send_turn":
             return {"status": "completed"}
         if name == "agent_runtime.fetch_result":
@@ -147,6 +147,7 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     ]
     turn = calls[2][1]
     assert turn.request_id == "idem-managed-1:terminal-contract:1"
+    assert turn.session_epoch == 0
 
 
 async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(
@@ -222,6 +223,7 @@ async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(
     assert {(turn.session_id, turn.thread_id) for turn in turns} == {
         ("sess:wf-task-1:codex_cli", "thr-1")
     }
+    assert {turn.session_epoch for turn in turns} == {1}
 
 
 async def test_terminal_contract_provider_failure_retains_contract_context(

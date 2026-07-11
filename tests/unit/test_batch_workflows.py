@@ -690,4 +690,5 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
     assert partial_evidence["created"] == 2
     assert [item["workflowId"] for item in partial_evidence["queued"]] == ["child-1", "child-2"]
     assert len(partial_evidence["errors"]) == 3
+    assert "injected partial failure" in partial_evidence["errors"][0]["error"]
     assert partial_evidence["executionRef"] == "step-matrix"

@@ -1264,6 +1264,9 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
 class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Send a new turn to the remote session container."""
 
+    # Session snapshots may report the valid initial epoch before the first
+    # persisted transition.
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=0)
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
     request_id: NonBlankStr | None = Field(None, alias="requestId")

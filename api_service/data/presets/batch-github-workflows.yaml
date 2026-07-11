@@ -12,7 +12,7 @@ requiredCapabilities:
 - git
 - gh
 annotations:
-  sourceSkill: queue-moonmind-workflows
+  sourceSkill: batch-workflows
   output: child-workflows
   runtimeInheritance: caller
   workflowPublish:
@@ -188,7 +188,7 @@ steps:
     summaryArtifact: artifacts/batch-workflows-result.json
     targetListArtifact: artifacts/batch-workflows-targets.json
   skill:
-    id: queue-moonmind-workflows
+    id: batch-workflows
     requiredCapabilities:
     - git
     - gh

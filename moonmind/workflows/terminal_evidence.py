@@ -18,19 +18,25 @@ class TerminalEvidenceEvaluation:
 
 
 def evaluate_terminal_evidence(
-    contract: Mapping[str, Any], *, workspace_path: str
+    contract: Mapping[str, Any], *, workspace_path: str, artifact_spool_path: str = ""
 ) -> TerminalEvidenceEvaluation:
     contract_id = str(contract.get("contractId") or contract.get("contract_id") or "")
-    if contract_id != "batch_workflows_fanout.v1":
+    if contract_id not in {"batch_workflows_fanout.v1", "pr_resolver_terminal.v1"}:
         return TerminalEvidenceEvaluation(False, "UNSUPPORTED_TERMINAL_CONTRACT")
     relative = str(contract.get("relativePath") or contract.get("relative_path") or "")
-    relative_path = Path(relative)
+    normalized_relative = relative.replace("\\", "/")
+    relative_path = Path(normalized_relative)
     workspace = Path(workspace_path).resolve()
     if not relative or relative_path.is_absolute() or ".." in relative_path.parts:
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE_PATH")
-    evidence_path = (workspace / relative_path).resolve()
+    evidence_root = workspace
+    evidence_relative = relative_path
+    if artifact_spool_path and relative_path.parts[:1] == ("artifacts",):
+        evidence_root = Path(artifact_spool_path).resolve()
+        evidence_relative = Path(*relative_path.parts[1:])
+    evidence_path = (evidence_root / evidence_relative).resolve()
     try:
-        evidence_path.relative_to(workspace)
+        evidence_path.relative_to(evidence_root)
     except ValueError:
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE_PATH")
     if not evidence_path.is_file():
@@ -43,6 +49,33 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "MALFORMED_TERMINAL_EVIDENCE")
     if not isinstance(payload, dict):
         return TerminalEvidenceEvaluation(False, "MALFORMED_TERMINAL_EVIDENCE")
+    if contract_id == "pr_resolver_terminal.v1":
+        disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
+        metadata = {
+            "terminalContractId": contract_id,
+            "terminalContractEvidencePath": normalized_relative,
+            "mergeAutomationDisposition": disposition,
+        }
+        if disposition not in {
+            "merged",
+            "already_merged",
+            "reenter_gate",
+            "manual_review",
+            "failed",
+        }:
+            return TerminalEvidenceEvaluation(
+                False, "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+            )
+        if disposition in {"merged", "already_merged"}:
+            publish_path = (workspace / "artifacts/publish_result.json").resolve()
+            if not publish_path.is_file():
+                return TerminalEvidenceEvaluation(
+                    False,
+                    "INCOMPLETE_TERMINAL_CONTRACT",
+                    ("artifacts/publish_result.json",),
+                    metadata,
+                )
+        return TerminalEvidenceEvaluation(True, metadata=metadata)
     expected_schema = str(
         contract.get("expectedSchemaVersion")
         or contract.get("expected_schema_version")
@@ -55,7 +88,7 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
     if not expected_execution or payload.get("executionRef") != expected_execution:
         return TerminalEvidenceEvaluation(False, "STALE_TERMINAL_EVIDENCE")
-    targets_relative = str(contract.get("targetsRelativePath") or "artifacts/batch-workflows-targets.json")
+    targets_relative = str(contract.get("targetsRelativePath") or "artifacts/batch-workflows-targets.json").replace("\\", "/")
     targets_path = (workspace / targets_relative).resolve()
     try:
         targets_path.relative_to(workspace)

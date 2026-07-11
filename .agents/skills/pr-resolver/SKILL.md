@@ -2,6 +2,12 @@
 name: pr-resolver
 description: Master orchestrator to resolve a PR by diagnosing state and delegating to specialized skills.
 metadata:
+  sideEffect:
+    kind: merge_pull_request
+    owner: agent
+    outcomeArtifact: var/pr_resolver/result.json
+    terminalContractId: pr_resolver_terminal.v1
+    terminalSchemaVersion: moonmind.pr-resolver-result.v1
   publish:
     mode: auto
     owner: agent

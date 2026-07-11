@@ -720,10 +720,10 @@ async def test_start_prepares_turn_instructions_after_cold_session_launch(
 
     async def _prepare_after_launch(payload: dict[str, Any]) -> str:
         assert payload["workspacePath"] == str(workspace_path)
-        if payload.get("skipSkillMaterialization") is True:
+        if payload.get("metadataOnly") is True:
             call_order.append("preflight")
             assert not (workspace_path / ".launch-complete").exists()
-            return "metadata preflight\n\nManaged Codex CLI note:"
+            return {"durableRetrievalMetadata": {}}
         call_order.append("prepare")
         assert (workspace_path / ".launch-complete").is_file()
         return "prepared after launch\n\nManaged Codex CLI note:"
@@ -3603,6 +3603,7 @@ async def test_start_populates_launch_metadata_from_prepared_turn_request(
         prepare_calls.append(bool(payload.get("skipSkillMaterialization")))
         return {
             "instructions": "Injected context instruction\n\nManaged Codex CLI note:",
+            "activeSkillsDir": "/work/runtime/skills_active/snapshot-1",
             "durableRetrievalMetadata": {
                 "latestContextPackRef": "artifacts/context/rag-context-prepared.json",
                 "retrievedContextArtifactPath": "artifacts/context/rag-context-prepared.json",
@@ -3674,8 +3675,12 @@ async def test_start_populates_launch_metadata_from_prepared_turn_request(
     await adapter.start(request)
 
     assert len(launch_calls) == 1
-    assert prepare_calls == [True, False]
+    assert prepare_calls == [False, False]
     launch_request = launch_calls[0]["request"]
+    assert (
+        launch_request["environment"]["MOONMIND_ACTIVE_SKILLS_DIR"]
+        == "/work/runtime/skills_active/snapshot-1"
+    )
     assert (
         launch_request["metadata"]["latestContextPackRef"]
         == "artifacts/context/rag-context-prepared.json"
