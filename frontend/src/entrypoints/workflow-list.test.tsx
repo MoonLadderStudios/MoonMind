@@ -1267,7 +1267,7 @@ describe('Workflows Entrypoint', () => {
       json: async () => ({
         items: [
           {
-            taskId: 'task-running-alias',
+            taskId: 'workflow-running-alias',
             source: 'temporal',
             title: 'Running alias task',
             status: 'running',
