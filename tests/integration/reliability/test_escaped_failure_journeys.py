@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
 )
+from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -60,13 +62,17 @@ async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     expected = load_replay(replay_id, "expected-outcome.json")
     agent_run = MoonMindAgentRun()
 
-    async def execute_activity(name: str, payload: dict, **_kwargs: object) -> dict:
+    async def execute_activity(name: str, payload: dict, **kwargs: object) -> dict:
         assert name == "agent_runtime.evaluate_terminal_evidence"
+        assert kwargs["task_queue"] == "mm.activity.agent_runtime"
         activities = TemporalAgentRuntimeActivities(client_adapter=object())
         evaluated = await activities.agent_runtime_evaluate_terminal_evidence(payload)
         return evaluated.model_dump(mode="json", by_alias=True)
 
-    monkeypatch.setattr(agent_run, "_execute_routed_activity", execute_activity)
+    # Patch only the Temporal SDK handoff. Keep AgentRun's production catalog
+    # lookup and route construction in the replay so catalog drift cannot be
+    # hidden by a test double.
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
     request = AgentExecutionRequest(
         agentKind="managed",
         agentId="codex_cli",
@@ -122,6 +128,52 @@ async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     assert summary["failure"]["terminalContractMissingEvidence"] == expected[
         "missingEvidence"
     ]
+
+
+async def test_completed_batch_no_op_replays_through_production_activity_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replay the endless WorkflowTaskFailed incident at its routing boundary."""
+    manifest = load_replay("agent-run-terminal-evidence-routing", "manifest.json")
+    workspace = tmp_path / "repo"
+    artifacts = workspace / "artifacts"
+    artifacts.mkdir(parents=True)
+    targets_bytes = json.dumps(manifest["resolvedTargets"]).encode("utf-8")
+    (artifacts / "batch-workflows-targets.json").write_bytes(targets_bytes)
+    terminal_evidence = dict(manifest["terminalEvidence"])
+    terminal_evidence["targetsSha256"] = hashlib.sha256(targets_bytes).hexdigest()
+    (artifacts / "batch-workflows-result.json").write_text(
+        json.dumps(terminal_evidence), encoding="utf-8"
+    )
+
+    async def execute_activity(name: str, payload: dict, **kwargs: object) -> dict:
+        assert name == manifest["activityName"]
+        assert kwargs["task_queue"] == manifest["expectedTaskQueue"]
+        activities = TemporalAgentRuntimeActivities(client_adapter=object())
+        evaluated = await activities.agent_runtime_evaluate_terminal_evidence(payload)
+        return evaluated.model_dump(mode="json", by_alias=True)
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:replay",
+        workspaceSpec={"workspacePath": str(workspace)},
+        terminalContract=manifest["terminalContract"],
+    )
+
+    result = await MoonMindAgentRun()._evaluate_terminal_contract(
+        request=request,
+        result=AgentRunResult(
+            summary="No child workflows were queued.",
+            metadata={"workspacePath": str(workspace)},
+        ),
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["terminalContractId"] == "batch_workflows_fanout.v1"
+    assert result.metadata["queuedChildCount"] == 0
 
 
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:

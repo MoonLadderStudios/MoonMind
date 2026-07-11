@@ -22,6 +22,11 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
     manifest_ingest_activity_routes,
 )
+from moonmind.workflows.temporal.activity_runtime import (
+    _ACTIVITY_HANDLER_ATTRS,
+    validate_activity_catalog_runtime_bindings,
+)
+
 
 def _skill_definition(
     *,
@@ -123,6 +128,29 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert fleets[DEPLOYMENT_FLEET].task_queues == (DEPLOYMENT_TASK_QUEUE,)
     assert "deployment_control" in fleets[DEPLOYMENT_FLEET].capabilities
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
+
+
+def test_default_catalog_matches_runtime_binding_inventory() -> None:
+    """Every concrete handler must be routable, and every route executable."""
+    catalog = build_default_activity_catalog()
+    catalog_activity_types = {
+        definition.activity_type for definition in catalog.activities
+    }
+
+    validate_activity_catalog_runtime_bindings(catalog)
+    assert catalog_activity_types - {"integration.resolve_adapter_metadata"} == (
+        set(_ACTIVITY_HANDLER_ATTRS) - {"mm.tool.execute"}
+    )
+
+
+def test_terminal_evidence_evaluation_routes_to_agent_runtime_fleet() -> None:
+    route = build_default_activity_catalog().resolve_activity(
+        "agent_runtime.evaluate_terminal_evidence"
+    )
+
+    assert route.fleet == AGENT_RUNTIME_FLEET
+    assert route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+
 
 def test_plan_generate_timeout_budget_allows_retry_after_attempt_timeout():
     catalog = build_default_activity_catalog()

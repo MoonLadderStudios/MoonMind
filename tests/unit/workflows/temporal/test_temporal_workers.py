@@ -36,7 +36,11 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
+from moonmind.workflows.temporal import activity_runtime
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalActivityRuntimeError,
+    TemporalProposalActivities,
+)
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
 from moonmind.workflows.temporal.publish_auto_evidence import parse_auto_publish_evidence
@@ -53,6 +57,7 @@ from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
     workflow_fleet_workflow_classes,
 )
+
 
 async def _artifact_service(
     tmp_path: Path,
@@ -103,6 +108,23 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
         "temporal-worker-deployment-control"
     )
     assert topologies[DEPLOYMENT_FLEET].activity_types == ("mm.tool.execute",)
+
+
+def test_workflow_worker_startup_rejects_unroutable_activity_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        activity_runtime._ACTIVITY_HANDLER_ATTRS,
+        "agent_runtime.unroutable_test_handler",
+        ("agent_runtime", "unroutable_test_handler"),
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="handlers without catalog routes: agent_runtime.unroutable_test_handler",
+    ):
+        build_worker_topology(fleet=WORKFLOW_FLEET)
+
 
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (

@@ -35,6 +35,7 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityBinding,
     build_activity_bindings,
+    validate_activity_catalog_runtime_bindings,
 )
 from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_workflow_types,
@@ -383,6 +384,7 @@ def build_worker_topology(
     app_cfg = app_settings or settings
     temporal_cfg = temporal_settings or app_cfg.temporal
     resolved_catalog = catalog or build_default_activity_catalog(temporal_cfg)
+    validate_activity_catalog_runtime_bindings(resolved_catalog)
     entry = _fleet_entry(resolved_catalog, fleet=fleet)
     normalized = entry.fleet
     activity_types = entry.activity_types

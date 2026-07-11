@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from moonmind.schemas.temporal_models import (
@@ -17,6 +20,40 @@ from moonmind.workflows.temporal.boundary_inventory import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
+
+def test_literal_workflow_activity_calls_exist_in_default_catalog() -> None:
+    """Derive routed calls from workflow source instead of a hand-kept list."""
+    workflow_root = (
+        Path(__file__).resolve().parents[3]
+        / "moonmind"
+        / "workflows"
+        / "temporal"
+        / "workflows"
+    )
+    routed_calls: dict[str, set[str]] = {}
+    for workflow_path in workflow_root.glob("*.py"):
+        tree = ast.parse(workflow_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
+                continue
+            if node.func.attr != "_execute_routed_activity" or not node.args:
+                continue
+            activity_name = node.args[0]
+            if not isinstance(activity_name, ast.Constant) or not isinstance(
+                activity_name.value, str
+            ):
+                continue
+            routed_calls.setdefault(activity_name.value, set()).add(workflow_path.name)
+
+    assert routed_calls, "no literal routed workflow activity calls were discovered"
+    catalog = build_default_activity_catalog()
+    for activity_name, source_files in sorted(routed_calls.items()):
+        route = catalog.resolve_activity(activity_name)
+        assert route.activity_type == activity_name, sorted(source_files)
+
+
 def test_inventory_activity_names_exist_in_default_activity_catalog() -> None:
     catalog = build_default_activity_catalog()
     activity_names = {
@@ -28,6 +65,7 @@ def test_inventory_activity_names_exist_in_default_activity_catalog() -> None:
     for activity_name in activity_names:
         route = catalog.resolve_activity(activity_name)
         assert route.activity_type == activity_name
+
 
 def test_inventory_workflow_message_names_match_known_constants() -> None:
     signal_names = {

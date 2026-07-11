@@ -48,6 +48,13 @@ activity types, build/deployment identity, registry fingerprint, versioning
 state, and resolver-core identity. `MoonMind.PRResolver` may appear only when
 that exact workflow class was supplied to the SDK worker.
 
+Worker topology construction validates the canonical catalog against the
+concrete runtime-handler inventory before any fleet starts polling. A handler
+without a catalog route, or a catalog route without its owning handler, is a
+startup/readiness failure rather than a runtime workflow-task failure. The
+capability-routed `mm.tool.execute` alias and the separately registered
+workflow-fleet helper are explicit ownership exceptions.
+
 The workflow fleet remains Temporal-only. It receives no repository mutation,
 GitHub credential, sandbox, local-git, or agent-runtime capabilities.
 
@@ -476,12 +483,14 @@ Current implemented activities:
 - `agent_runtime.steer_turn`
 - `agent_runtime.interrupt_turn`
 - `agent_runtime.clear_session`
+- `agent_runtime.ensure_docker_sidecar`
 - `agent_runtime.terminate_session`
 - `agent_runtime.fetch_session_summary`
 - `agent_runtime.publish_session_artifacts`
 - `agent_runtime.reconcile_managed_sessions`
 - `agent_runtime.status`
 - `agent_runtime.fetch_result`
+- `agent_runtime.evaluate_terminal_evidence`
 - `agent_runtime.cancel`
 
 Worker queue: `mm.activity.agent_runtime`
@@ -498,10 +507,12 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.steer_turn(...) -> ManagedSessionTurnResponse`
 - `agent_runtime.interrupt_turn(...) -> ManagedSessionTurnResponse`
 - `agent_runtime.clear_session(...) -> ManagedSessionHandle`
+- `agent_runtime.ensure_docker_sidecar(...) -> ManagedSessionEnsureDockerSidecarResponse`
 - `agent_runtime.terminate_session(...) -> ManagedSessionHandle`
 - `agent_runtime.fetch_session_summary(...) -> ManagedSessionSummary`
 - `agent_runtime.publish_session_artifacts(...) -> ManagedSessionArtifactsPublication`
 - `agent_runtime.reconcile_managed_sessions(...) -> reconciliation summary payload`
+- `agent_runtime.evaluate_terminal_evidence(...) -> AgentRunResult`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
 
