@@ -60,6 +60,19 @@ class AgentSkillProvenance(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
 
+
+class SkillImplementationContract(BaseModel):
+    """Portable semantics and native-host eligibility declared by a Skill."""
+
+    contract: str
+    supported_hosts: list[Literal["cli", "temporal"]] = Field(
+        default_factory=list, alias="supportedHosts"
+    )
+    native_host_eligible: bool = Field(False, alias="nativeHostEligible")
+    native_host_policy: str | None = Field(None, alias="nativeHostPolicy")
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
 class ResolvedSkillEntry(BaseModel):
     """An individual agent skill selected for a run."""
 
@@ -72,6 +85,7 @@ class ResolvedSkillEntry(BaseModel):
     required_capabilities: list[str] = Field(default_factory=list)
     selection_reason: str | None = None
     required_by: list[str] = Field(default_factory=list)
+    implementation: SkillImplementationContract | None = None
     
     model_config = ConfigDict(extra="forbid")
 

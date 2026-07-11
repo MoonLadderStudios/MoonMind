@@ -283,6 +283,12 @@ services:
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE:-mm.workflow.merge_automation}
       - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-false}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_BUILD_SHA=${MOONMIND_BUILD_SHA:-}
+      - MOONMIND_IMAGE_DIGEST=${MOONMIND_IMAGE_DIGEST:-}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-development}
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
@@ -312,7 +318,7 @@ services:
           "python",
           "-c",
           "import urllib.request;
-          urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/readyz')",
         ]
       interval: 30s
       timeout: 10s

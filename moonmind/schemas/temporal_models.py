@@ -1835,6 +1835,13 @@ class PRResolverStartInput(BaseModel):
     owned_by_merge_automation_gate: bool = Field(
         False, alias="ownedByMergeAutomationGate"
     )
+    implementation_identity: dict[str, Any] = Field(
+        default_factory=dict, alias="implementationIdentity"
+    )
+    worker_capability: dict[str, Any] = Field(
+        default_factory=dict, alias="workerCapability"
+    )
+    canary_mode: bool = Field(False, alias="canaryMode")
 
     @field_validator(
         "parent_workflow_id",
@@ -1893,6 +1900,23 @@ class PRResolverTerminalResultModel(BaseModel):
     workflow_id: str = Field(..., alias="workflowId")
     step_id: str = Field(..., alias="stepId")
     correlation_id: str = Field(..., alias="correlationId")
+    implementation_contract: str | None = Field(
+        None, alias="implementationContract"
+    )
+    resolver_core_version: str | None = Field(None, alias="resolverCoreVersion")
+    resolver_core_digest: str | None = Field(None, alias="resolverCoreDigest")
+    resolved_skill_content_digest: str | None = Field(
+        None, alias="resolvedSkillContentDigest"
+    )
+    resolved_skill_source: str | None = Field(None, alias="resolvedSkillSource")
+    worker_build_sha: str | None = Field(None, alias="workerBuildSha")
+    worker_image_digest: str | None = Field(None, alias="workerImageDigest")
+    worker_deployment_id: str | None = Field(None, alias="workerDeploymentId")
+    workflow_registry_fingerprint: str | None = Field(
+        None, alias="workflowRegistryFingerprint"
+    )
+    task_queue: str | None = Field(None, alias="taskQueue")
+    workflow_type: str | None = Field(None, alias="workflowType")
 
 class DependencyResolvedSignalPayload(BaseModel):
     """Signal payload emitted when a prerequisite execution reaches a terminal state."""

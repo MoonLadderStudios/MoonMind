@@ -9,7 +9,7 @@ description = "MoonMind RAG application and supporting tools."
 readme = "README.md"
 license = "Apache-2.0"
 authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
-packages = [{ include = "moonmind" }]
+packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"

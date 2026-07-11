@@ -1,7 +1,7 @@
 # Activity Catalog and Worker Topology
 
 Status: Implemented in core runtime (catalog live; some target-state families still pending)
-Last updated: 2026-06-13
+Last updated: 2026-07-11
 Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
 
 ## Related docs
@@ -31,6 +31,25 @@ This document standardizes:
 - the current implemented catalog and the target-state additions that are still pending
 
 This document covers the **Temporal-managed worker model** only.
+
+### Executable worker specification and readiness
+
+Every fleet is constructed from one immutable `WorkerSpec`. For the workflow
+fleet, the same class and activity tuples drive the Temporal SDK `Worker`,
+startup logs, `/readyz`, diagnostics, tests, and the registry fingerprint.
+Operator-facing workflow type lists are derived from those executable classes;
+an independent advertised string catalog is forbidden.
+
+`/healthz` proves only that the process event loop is responsive. `/readyz`
+remains unavailable until configuration and the executable specification are
+built, the Temporal client is connected, workers are constructed, and pollers
+have started. Its bounded response includes task queues, registered workflow and
+activity types, build/deployment identity, registry fingerprint, versioning
+state, and resolver-core identity. `MoonMind.PRResolver` may appear only when
+that exact workflow class was supplied to the SDK worker.
+
+The workflow fleet remains Temporal-only. It receives no repository mutation,
+GitHub credential, sandbox, local-git, or agent-runtime capabilities.
 
 ---
 

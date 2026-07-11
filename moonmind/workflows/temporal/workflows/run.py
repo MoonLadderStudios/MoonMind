@@ -61,7 +61,6 @@ with workflow.unsafe.imports_passed_through():
         build_execution_context_bundle,
         build_prepared_input_manifest,
         build_recovery_prepared_artifact_refs,
-        merge_prepared_input_refs,
         merge_prepared_raw_input_refs,
         select_step_prepared_context,
     )
@@ -85,6 +84,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.pr_resolver import (
         build_pr_resolver_start_input,
         pr_resolver_identity_selector,
+    )
+    from moonmind.workflows.temporal.native_skill_bindings import (
+        evaluate_pr_resolver_native_binding,
     )
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
@@ -609,6 +611,15 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
+RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = (
+    "run-pr-resolver-capability-preflight-v1"
+)
+RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH = (
+    "run-pr-resolver-publish-evidence-ref-v1"
+)
+RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH = (
+    "run-trusted-pr-resolver-native-binding-v1"
+)
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
     "run-pr-resolver-selector-resolution-v1"
 )
@@ -781,11 +792,14 @@ class MoonMindRunWorkflow:
             "SlotAcquisitionTimeout",
             "RATE_LIMITED",
         }
+        system_error_types = {"WORKER_CAPABILITY_UNAVAILABLE"}
         for app_type in reversed(application_types):
             if app_type in user_error_types:
                 return "user_error"
             if app_type in integration_error_types:
                 return "integration_error"
+            if app_type in system_error_types:
+                return "system_error"
 
         # Heuristic fallback based on the deepest root-cause type.
         root_type_name = root.__class__.__name__
@@ -913,6 +927,36 @@ class MoonMindRunWorkflow:
             ),
             "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
         }
+        current: BaseException | None = exc
+        for _ in range(20):
+            if current is None:
+                break
+            if (
+                isinstance(current, exceptions.ApplicationError)
+                and getattr(current, "type", None)
+                == "WORKER_CAPABILITY_UNAVAILABLE"
+            ):
+                diagnostic.update(
+                    {
+                        "reasonCode": "worker_capability_unavailable",
+                        "agentExecutionLaunched": False,
+                    }
+                )
+                details = getattr(current, "details", ()) or ()
+                detail = details[0] if details and isinstance(details[0], Mapping) else {}
+                for source_key, target_key in (
+                    ("workflowType", "workflowType"),
+                    ("taskQueue", "taskQueue"),
+                    ("registryFingerprint", "registryFingerprint"),
+                    ("observedWorkerBuilds", "observedWorkerBuilds"),
+                ):
+                    if detail.get(source_key) is not None:
+                        diagnostic[target_key] = detail[source_key]
+                break
+            next_exc = getattr(current, "cause", None)
+            if not isinstance(next_exc, BaseException):
+                next_exc = current.__cause__
+            current = next_exc
         # Drop empty optional keys to keep the structure compact.
         return {key: value for key, value in diagnostic.items() if value is not None}
 
@@ -1091,6 +1135,7 @@ class MoonMindRunWorkflow:
         self._dependency_last_failed_at: dict[str, str] = {}
         self._remediation_context: dict[str, Any] = {}
         self._remediation_policy: dict[str, Any] = {}
+        self._native_skill_binding_by_step: dict[str, dict[str, Any]] = {}
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -8423,12 +8468,47 @@ class MoonMindRunWorkflow:
                                     f"{child_workflow_id}:retry{system_retries}"
                                 )
                             temporal_pr_resolver = (
-                                str(selected_skill_for_repair or "").strip().lower()
-                                == "pr-resolver"
+                                bool(
+                                    self._native_skill_binding_by_step.get(
+                                        node_id, {}
+                                    ).get("eligible")
+                                )
                                 and workflow.patched(
                                     RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH
                                 )
                             )
+                            if (
+                                str(selected_skill_for_repair or "").strip().lower()
+                                == "pr-resolver"
+                            ):
+                                binding = self._native_skill_binding_by_step.get(
+                                    node_id,
+                                    {
+                                        "eligible": False,
+                                        "host": "cli",
+                                        "reasonCode": "resolved_skill_evidence_unavailable",
+                                        "identity": {},
+                                    },
+                                )
+                                self._publish_context["prResolverNativeBinding"] = dict(
+                                    binding
+                                )
+                                if not temporal_pr_resolver:
+                                    portable_note = (
+                                        "\n\nNative host decision: use the portable CLI host "
+                                        f"because {binding.get('reasonCode')}. Run the "
+                                        "portable pr-resolver loop and publish its terminal "
+                                        "evidence; do not substitute MoonMind's built-in "
+                                        "native implementation."
+                                    )
+                                    request = request.model_copy(
+                                        update={
+                                            "instruction_ref": (
+                                                str(request.instruction_ref or "")
+                                                + portable_note
+                                            )
+                                        }
+                                    )
                             if temporal_pr_resolver:
                                 child_workflow_id = f"{child_workflow_id}:pr-resolver"
                             self._active_agent_child_workflow_id = child_workflow_id
@@ -8446,6 +8526,33 @@ class MoonMindRunWorkflow:
                             )
                             try:
                                 if temporal_pr_resolver:
+                                    worker_capability: dict[str, Any] = {}
+                                    if workflow.patched(
+                                        RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH
+                                    ):
+                                        capability_result = await workflow.execute_activity(
+                                            "worker.verify_workflow_capability",
+                                            {
+                                                "workflowType": "MoonMind.PRResolver",
+                                                "taskQueue": self._workflow_child_task_queue(),
+                                            },
+                                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                                            start_to_close_timeout=timedelta(seconds=15),
+                                            retry_policy=RetryPolicy(maximum_attempts=1),
+                                        )
+                                        worker_capability = (
+                                            dict(capability_result)
+                                            if isinstance(capability_result, Mapping)
+                                            else {}
+                                        )
+                                        if not worker_capability.get("available"):
+                                            raise exceptions.ApplicationError(
+                                                "MoonMind.PRResolver worker capability is unavailable; "
+                                                "no resolver or remediation agent was launched.",
+                                                type="WORKER_CAPABILITY_UNAVAILABLE",
+                                                non_retryable=True,
+                                                details=[worker_capability],
+                                            )
                                     resolved_pull_request = None
                                     merge_gate = parameters.get("mergeGate")
                                     merge_gate = (
@@ -8506,6 +8613,13 @@ class MoonMindRunWorkflow:
                                         principal=self._principal(),
                                         step_id=node_id,
                                         resolved_pull_request=resolved_pull_request,
+                                        implementation_identity=(
+                                            self._native_skill_binding_by_step.get(
+                                                node_id, {}
+                                            ).get("identity")
+                                            or {}
+                                        ),
+                                        worker_capability=worker_capability,
                                     )
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.PRResolver",
@@ -9784,6 +9898,11 @@ class MoonMindRunWorkflow:
 
     def _auto_publish_evidence_sources(self, result: Any) -> list[Mapping[str, Any]]:
         sources: list[Mapping[str, Any]] = []
+        if (
+            isinstance(result, Mapping)
+            and workflow.patched(RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH)
+        ):
+            sources.append(result)
         outputs = self._effective_result_outputs(result)
         metadata = (
             self._effective_result_metadata(result)
@@ -9791,9 +9910,26 @@ class MoonMindRunWorkflow:
             else None
         )
         for source in (outputs, metadata):
-            if isinstance(source, Mapping):
+            if isinstance(source, Mapping) and source not in sources:
                 sources.append(source)
         return sources
+
+    @staticmethod
+    def _inline_auto_publish_evidence(value: Any) -> Any:
+        if isinstance(value, Mapping) or isinstance(value, bytes):
+            return value
+        if isinstance(value, str) and value.lstrip().startswith("{"):
+            return value
+        return None
+
+    @staticmethod
+    def _auto_publish_artifact_ref(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        candidate = value.strip()
+        if candidate.startswith("art_") or candidate.startswith("artifact:"):
+            return candidate
+        return None
 
     def _activity_result_status(self, result: Any) -> str | None:
         raw_status = self._get_from_result(result, "status")
@@ -11793,9 +11929,13 @@ class MoonMindRunWorkflow:
         )
 
     async def _resolve_auto_publish_evidence_ref(self, execution_result: Any) -> None:
+        resolver_ref_contract = workflow.patched(
+            RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
+        )
         sources = self._auto_publish_evidence_sources(execution_result)
         if not sources:
             return
+        ref: Any = None
         for source in sources:
             for key in (
                 "publishResult",
@@ -11806,9 +11946,12 @@ class MoonMindRunWorkflow:
                 "auto_publish_evidence",
             ):
                 if key in source:
-                    return
-
-        ref: Any = None
+                    if not resolver_ref_contract:
+                        return
+                    value = source.get(key)
+                    if self._inline_auto_publish_evidence(value) is not None:
+                        return
+                    ref = self._auto_publish_artifact_ref(value) or ref
         for source in sources:
             output_refs = source.get("outputRefs") or source.get("output_refs")
             if not isinstance(output_refs, Mapping):
@@ -11818,6 +11961,10 @@ class MoonMindRunWorkflow:
                 or output_refs.get("publishResult")
                 or output_refs.get("publish_result")
             )
+            if resolver_ref_contract and not ref:
+                ref = output_refs.get("publishEvidence") or output_refs.get(
+                    "publish_evidence"
+                )
             if isinstance(ref, str) and ref.strip():
                 break
         if not isinstance(ref, str) or not ref.strip():
@@ -11842,6 +11989,9 @@ class MoonMindRunWorkflow:
         self._publish_context["autoPublishEvidence"] = evidence_payload
 
     def _record_auto_publish_result(self, execution_result: Any) -> None:
+        resolver_ref_contract = workflow.patched(
+            RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
+        )
         evidence_payload: Any = None
         for source in self._auto_publish_evidence_sources(execution_result):
             for key in (
@@ -11853,8 +12003,17 @@ class MoonMindRunWorkflow:
                 "auto_publish_evidence",
             ):
                 if key in source:
-                    evidence_payload = source.get(key)
-                    break
+                    value = source.get(key)
+                    if not resolver_ref_contract:
+                        evidence_payload = value
+                        break
+                    inline = self._inline_auto_publish_evidence(value)
+                    if inline is not None:
+                        evidence_payload = inline
+                        break
+                    ref = self._auto_publish_artifact_ref(value)
+                    if ref:
+                        self._publish_context["evidenceRef"] = ref
             if evidence_payload is None:
                 output_refs = source.get("outputRefs") or source.get("output_refs")
                 if isinstance(output_refs, Mapping):
@@ -11863,6 +12022,10 @@ class MoonMindRunWorkflow:
                         or output_refs.get("publishResult")
                         or output_refs.get("publish_result")
                     )
+                    if resolver_ref_contract and not ref:
+                        ref = output_refs.get("publishEvidence") or output_refs.get(
+                            "publish_evidence"
+                        )
                     if isinstance(ref, str) and ref.strip():
                         self._publish_context["evidenceRef"] = ref.strip()
                         break
@@ -13985,6 +14148,30 @@ class MoonMindRunWorkflow:
                     f"selected skill '{selected_skill}' was not resolved into the "
                     "agent skill snapshot"
                 )
+            if normalized_skill == "pr-resolver":
+                selected_entry = self._resolved_skillset_entry(
+                    resolved,
+                    normalized_skill,
+                )
+                if workflow.patched(RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH):
+                    decision = evaluate_pr_resolver_native_binding(selected_entry)
+                    self._native_skill_binding_by_step[node_id] = {
+                        "eligible": decision.eligible,
+                        "host": decision.host,
+                        "reasonCode": decision.reason_code,
+                        "identity": dict(decision.identity),
+                    }
+                else:
+                    # Replay path for histories created before native routing was
+                    # bound to immutable resolved-skill evidence. Those histories
+                    # selected the native host by canonical name, so preserve that
+                    # child-workflow command only for their replay.
+                    self._native_skill_binding_by_step[node_id] = {
+                        "eligible": True,
+                        "host": "temporal",
+                        "reasonCode": "legacy_name_binding_replay",
+                        "identity": {},
+                    }
         manifest_ref = self._resolved_skillset_field(
             resolved,
             "manifest_ref",
@@ -14028,6 +14215,30 @@ class MoonMindRunWorkflow:
             if name:
                 names.add(name)
         return names
+
+    @staticmethod
+    def _resolved_skillset_entry(resolved: Any, skill_name: str) -> Any:
+        skills = (
+            resolved.get("skills")
+            if isinstance(resolved, WorkflowMapping)
+            else getattr(resolved, "skills", None)
+        )
+        if not isinstance(skills, Iterable) or isinstance(skills, (str, bytes)):
+            return None
+        normalized = str(skill_name or "").strip().lower()
+        for entry in skills:
+            raw_name = (
+                entry.get("skill_name")
+                or entry.get("skillName")
+                or entry.get("name")
+                if isinstance(entry, WorkflowMapping)
+                else getattr(entry, "skill_name", None)
+                or getattr(entry, "skillName", None)
+                or getattr(entry, "name", None)
+            )
+            if str(raw_name or "").strip().lower() == normalized:
+                return entry
+        return None
 
     @staticmethod
     def _resolved_skillset_field(resolved: Any, *keys: str) -> Any:

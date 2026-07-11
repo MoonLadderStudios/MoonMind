@@ -57,7 +57,11 @@ def test_canonical_docs_are_declarative_not_migration_tracking_surfaces() -> Non
         text = _read(path)
         assert "Implementation tracking:" not in text, path
         assert "migration checklists in canonical `docs/`" not in text, path
-        assert "Last updated: 2026-06-13" in text or "Last Updated: 2026-06-13" in text, path
+        assert re.search(
+            r"^Last [Uu]pdated: 20\d{2}-\d{2}-\d{2}$",
+            text,
+            flags=re.MULTILINE,
+        ), path
 
     assert "**Status:** Draft" not in _read(RUN_HISTORY_DOC)
     assert "Status: Normative" in _read(LEDGER_DOC)

@@ -61,10 +61,37 @@ class GroupHealthState:
     child_health_urls: Sequence[str] = ()
     shutting_down: bool = False
 
-    def is_healthy(self) -> bool:
+    def is_live(self) -> bool:
         return not self.shutting_down and all(
             child.poll() is None for child in self.children
-        ) and all(_probe_child_health(url) for url in self.child_health_urls)
+        )
+
+    def is_ready(self) -> bool:
+        if not self.is_live():
+            return False
+        children = [
+            payload
+            for url in self.child_health_urls
+            if (payload := _read_child_readiness(url)) is not None
+        ]
+        if len(children) != len(self.child_health_urls):
+            return False
+        fingerprints = {
+            str(child.get("registryFingerprint"))
+            for child in children
+            if child.get("registryFingerprint")
+        }
+        build_ids = {
+            str(child.get("buildId"))
+            for child in children
+            if child.get("buildId")
+        }
+        return len(fingerprints) <= 1 and len(build_ids) <= 1
+
+    def is_healthy(self) -> bool:
+        """Backward-compatible internal name; Compose now probes readiness."""
+
+        return self.is_ready()
 
 
 def _env_default(env: Mapping[str, str], name: str, default: str) -> str:
@@ -138,7 +165,7 @@ def _child_prometheus_bind_address(
 
 
 def _child_health_url(role: WorkerRole) -> str:
-    return f"http://127.0.0.1:{_child_healthcheck_port(role)}/healthz"
+    return f"http://127.0.0.1:{_child_healthcheck_port(role)}/readyz"
 
 
 def start_child_process(role: WorkerRole) -> WorkerProcess:
@@ -182,26 +209,70 @@ def _format_child_log_line(role_name: str, line: str) -> str:
     return json.dumps(payload, separators=(",", ":")) + trailing_newline
 
 
-def _probe_child_health(url: str, *, timeout_seconds: float = 0.5) -> bool:
+def _read_child_readiness(
+    url: str, *, timeout_seconds: float = 0.5
+) -> dict[str, object] | None:
     try:
         with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
-            return 200 <= response.status < 300
-    except (OSError, urllib.error.URLError, TimeoutError):
-        return False
+            payload = json.loads(response.read())
+        return payload if isinstance(payload, dict) else None
+    except (OSError, ValueError, urllib.error.URLError, TimeoutError):
+        return None
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         state: GroupHealthState = self.server.state  # type: ignore[attr-defined]
-        healthy = state.is_healthy()
+        readiness = self.path == "/readyz"
+        healthy = state.is_ready() if readiness else state.is_live()
         status = 200 if healthy else 503
-        payload = json.dumps(
-            {
-                "status": "ok" if healthy else "unhealthy",
-                "workers": len(state.children),
-                "shutting_down": state.shutting_down,
-            }
-        ).encode("utf-8")
+        body: dict[str, object] = {
+            "status": (
+                "ready" if readiness and healthy else "ok" if healthy else "unhealthy"
+            ),
+            "live": state.is_live(),
+            "ready": state.is_ready(),
+            "workers": len(state.children),
+            "shutting_down": state.shutting_down,
+        }
+        if readiness:
+            children = [
+                payload
+                for url in state.child_health_urls
+                if (payload := _read_child_readiness(url)) is not None
+            ]
+            body["children"] = children
+            workflow_types = sorted(
+                {
+                    str(item)
+                    for child in children
+                    for item in child.get("workflowTypes", [])
+                }
+            )
+            task_queues = sorted(
+                {
+                    str(item)
+                    for child in children
+                    for item in child.get("taskQueues", [])
+                }
+            )
+            body["workflowTypes"] = workflow_types
+            body["taskQueues"] = task_queues
+            body["registryFingerprints"] = sorted(
+                {
+                    str(child.get("registryFingerprint"))
+                    for child in children
+                    if child.get("registryFingerprint")
+                }
+            )
+            body["buildIds"] = sorted(
+                {
+                    str(child.get("buildId"))
+                    for child in children
+                    if child.get("buildId")
+                }
+            )
+        payload = json.dumps(body).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Connection", "close")

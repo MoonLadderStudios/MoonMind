@@ -96,6 +96,20 @@ async def test_built_in_loader_discovers_packaged_agent_skills():
     assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
     assert discovered["moonspec-breakdown"].provenance.source_path
 
+
+async def test_built_in_pr_resolver_declares_portable_native_contract():
+    results = await BuiltInSkillLoader().load_skills(
+        SkillSelector(include=[{"name": "pr-resolver"}]),
+        SkillResolutionContext(snapshot_id="snap-pr-resolver"),
+    )
+
+    entry = next(item for item in results if item.skill_name == "pr-resolver")
+    assert entry.implementation is not None
+    assert entry.implementation.contract == "pr-resolver-core/v1"
+    assert entry.implementation.supported_hosts == ["cli", "temporal"]
+    assert entry.implementation.native_host_eligible is True
+    assert entry.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+
 async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
     """FR-012: batch-dependabot-resolver MUST be resolvable by name through the
     built-in fallback list so a recurring queue_task schedule can target it.

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
+from temporalio import activity
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -3887,12 +3888,12 @@ async def test_main_async_workflow_fleet(
         MoonMindMergeAutomationWorkflow,
         MoonMindPRResolverWorkflow,
     )
-    assert kwargs["activities"] == [
+    assert kwargs["activities"] == (
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
         external_adapter_execution_style,
-    ]
+    )
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
@@ -3933,8 +3934,12 @@ async def test_main_async_activity_fleet(
     mock_worker_cls.return_value = mock_worker
     mock_worker.run = AsyncMock()
 
+    @activity.defn(name="test.handler")
+    async def test_handler() -> None:
+        return None
+
     mock_resources = AsyncMock()
-    mock_runtime_activities.return_value = (mock_resources, ["test_handler"])
+    mock_runtime_activities.return_value = (mock_resources, [test_handler])
 
     # Run
     await main_async()
@@ -3943,8 +3948,8 @@ async def test_main_async_activity_fleet(
     mock_worker_cls.assert_called_once()
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.activity.artifacts"
-    assert kwargs["workflows"] == []
-    assert kwargs["activities"] == ["test_handler"]
+    assert kwargs["workflows"] == ()
+    assert kwargs["activities"] == (test_handler,)
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs

@@ -218,6 +218,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
+COPY pr_resolver_core /app/pr_resolver_core/
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/

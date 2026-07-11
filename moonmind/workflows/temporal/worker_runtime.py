@@ -30,9 +30,15 @@ import temporalio.workflow
 from opentelemetry import trace as otel_trace
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import Client
+from temporalio.common import VersioningBehavior
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import (
+    UnsandboxedWorkflowRunner,
+    Worker,
+    WorkerDeploymentConfig,
+    WorkerDeploymentVersion,
+)
 from structlog.stdlib import ProcessorFormatter
 
 from api_service.db.base import get_async_session_context
@@ -83,6 +89,7 @@ from moonmind.workflows.temporal.workers import (
     SANDBOX_FLEET,
     WORKFLOW_FLEET,
     build_worker_activity_bindings,
+    build_worker_spec,
     describe_configured_worker,
     list_registered_workflow_types,
 )
@@ -93,19 +100,23 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
 )
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
-    MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
+    MoonMindManifestIngestWorkflow as MoonMindManifestIngest,  # noqa: F401
 )
 from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
+from moonmind.workflows.temporal.worker_healthcheck import (
+    WorkerHealthState,
+    start_healthcheck_server,
+)
 from moonmind.workflows.temporal.workflows.agent_run import (
-    MoonMindAgentRun,
+    MoonMindAgentRun,  # noqa: F401
     resolve_adapter_metadata,
     get_activity_route,
     resolve_external_adapter,
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_activity_handlers,
     workflow_fleet_workflow_classes,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -2638,9 +2649,10 @@ async def main_async() -> None:
         f"concurrency={topology.concurrency_limit}"
     )
 
-    # Start healthcheck server before connecting to Temporal so probes
-    # can confirm the process is alive even during initial connection.
-    healthcheck_server = await start_healthcheck_server()
+    # Liveness starts immediately. Readiness remains false until the Temporal
+    # connection, executable spec, SDK workers, and polling tasks all exist.
+    health_state = WorkerHealthState()
+    healthcheck_server = await start_healthcheck_server(health_state)
 
     import os
     interceptors = []
@@ -2686,7 +2698,12 @@ async def main_async() -> None:
     if runtime:
         client_kwargs["runtime"] = runtime
 
-    client = await Client.connect(settings.temporal.address, **client_kwargs)
+    try:
+        client = await Client.connect(settings.temporal.address, **client_kwargs)
+        health_state.temporal_connected = True
+    except Exception as exc:
+        health_state.startup_error = exc.__class__.__name__
+        raise
 
     workflows = []
     activities = []
@@ -2694,12 +2711,7 @@ async def main_async() -> None:
 
     if topology.fleet == WORKFLOW_FLEET:
         workflows = workflow_fleet_workflow_classes()
-        activities = [
-            resolve_adapter_metadata,
-            get_activity_route,
-            resolve_external_adapter,
-            external_adapter_execution_style,
-        ]
+        activities = workflow_fleet_activity_handlers()
         logger.info(
             "Temporal workflow fleet registrations: %s",
             ", ".join(list_registered_workflow_types()),
@@ -2708,12 +2720,26 @@ async def main_async() -> None:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
     try:
+        spec = build_worker_spec(
+            topology=topology,
+            workflows=workflows,
+            activities=activities,
+        )
         worker_kwargs = {
-            "workflows": workflows,
-            "activities": activities,
+            "workflows": spec.workflows,
+            "activities": spec.activities,
             "workflow_runner": UnsandboxedWorkflowRunner(),
             **_worker_concurrency_kwargs(topology),
         }
+        if spec.versioning_enabled:
+            worker_kwargs["deployment_config"] = WorkerDeploymentConfig(
+                version=WorkerDeploymentVersion(
+                    deployment_name=spec.deployment_id,
+                    build_id=spec.build_id,
+                ),
+                use_worker_versioning=True,
+                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+            )
         workers = [
             Worker(
                 client,
@@ -2722,14 +2748,25 @@ async def main_async() -> None:
             )
             for task_queue in topology.task_queues
         ]
+        health_state.workers_constructed = True
+        health_state.readiness_metadata = spec.readiness_payload()
 
         logger.info(
-            "Worker started, polling task queues: %s",
-            ", ".join(topology.task_queues),
+            "Temporal executable worker specification: %s",
+            json.dumps(spec.readiness_payload(), sort_keys=True),
         )
         async with asyncio.TaskGroup() as tg:
             for worker in workers:
                 tg.create_task(worker.run())
+            await asyncio.sleep(0)
+            health_state.pollers_started = True
+            logger.info(
+                "Worker ready, polling task queues: %s",
+                ", ".join(topology.task_queues),
+            )
+    except Exception as exc:
+        health_state.startup_error = exc.__class__.__name__
+        raise
     finally:
         if runtime_resources is not None:
             await runtime_resources.aclose()

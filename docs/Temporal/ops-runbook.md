@@ -18,6 +18,36 @@ Keys for model providers (e.g. Google and OpenAI) are injected from this user's 
 - **Credential validation**: Failed workflows often stem from missing provider or GitHub credentials. The first Activity attempt records the failure reason in Temporal's execution history. Once you resolve secrets, you can retry the workflow or rely on Temporal's native Activity retry policies.
 - **Artifact locations**: Patches, JSONL logs, and GitHub API responses are stored under `var/artifacts/workflows/<workflow_id>/`.
 
+### Workflow worker deployment and resolver registration
+
+Use `/healthz` only for liveness and `/readyz` for traffic readiness. Resolver
+traffic is ready only when the response is ready and lists the expected task
+queue, `MoonMind.PRResolver`, immutable build identity, and registry fingerprint.
+Production mode fails startup unless `MOONMIND_BUILD_SHA` or
+`MOONMIND_IMAGE_DIGEST` is set and Temporal worker deployment versioning is
+enabled. Deploy immutable images, promote a controlled worker version, drain old
+workers from the queue, and run:
+
+```bash
+python tools/run_pr_resolver_deployment_canary.py
+```
+
+The canary starts the real workflow type on the deployed queue and follows a
+non-mutating dry-run path. Do not recover affected executions until it reports
+the expected build and registry identity.
+
+Python workers do not hot-reload mounted workflow source. After workflow code or
+registration changes in local Compose, recreate the complete workflow worker
+service; a generic healthy container or a changed bind mount is not evidence of
+new registration.
+
+If a parent reports `worker_capability_unavailable`, no resolver or remediation
+agent was launched and resolver budgets were not consumed. Compare the reported
+workflow type and task queue with `/readyz`, inspect worker build/fingerprint
+distribution, recreate or drain stale workers, rerun the canary, then explicitly
+retry or recover the parent. Repeated unregistered-workflow task failures and
+mixed incompatible builds on one queue require an operator alert.
+
 ### Execution Observability
 
 - **Metrics detail**: Temporal workflows increment standard Prometheus series automatically:

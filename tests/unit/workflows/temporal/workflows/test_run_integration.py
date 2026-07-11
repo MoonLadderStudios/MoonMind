@@ -2,6 +2,7 @@ import asyncio
 import inspect
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -18,6 +19,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
+    RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
@@ -2164,6 +2166,88 @@ async def test_auto_publish_evidence_ref_is_loaded_before_recording(
     assert mock_run_workflow._publish_context["evidenceRef"] == (
         "artifact://publish-result"
     )
+
+
+@pytest.mark.asyncio
+async def test_pr_resolver_top_level_publish_evidence_ref_prevents_false_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for merged resolver runs summarized as Finalizing execution."""
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
+    )
+
+    evidence = _auto_publish_evidence(
+        skillId="pr-resolver",
+        action="merge",
+        pushed=False,
+        merged=True,
+        remoteVerified=False,
+        remoteBranchHead=None,
+        prUrl="https://github.com/MoonLadderStudios/MoonMind/pull/3199",
+    )
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> bytes:
+        assert activity_type == "artifact.read"
+        assert getattr(payload, "artifact_ref", None) == "artifact://resolver-publish"
+        import json
+
+        return json.dumps(evidence).encode()
+
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters={"publishMode": "auto"},
+        execution_result={
+            "publishEvidence": "artifact://resolver-publish",
+            "outputRefs": {
+                "prResolverResult": "artifact://resolver-result",
+                "publishEvidence": "artifact://resolver-publish",
+            },
+            "metadata": {"mergeAutomationDisposition": "merged"},
+        },
+    )
+
+    assert mock_run_workflow._publish_status == "published"
+    assert mock_run_workflow._publish_reason == "auto publish verified merge"
+    assert mock_run_workflow._publish_context["evidenceRef"] == (
+        "artifact://resolver-publish"
+    )
+    assert mock_run_workflow._publish_context["merged"] is True
+
+
+@pytest.mark.asyncio
+async def test_pr_resolver_publish_ref_preserves_unpatched_replay(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execute_activity = AsyncMock()
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        execute_activity,
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters={"publishMode": "auto"},
+        execution_result={"publishEvidence": "artifact://resolver-publish"},
+    )
+
+    execute_activity.assert_not_awaited()
+    assert mock_run_workflow._publish_status == "failed"
+    assert mock_run_workflow._publish_reason == "auto_publish_evidence_missing"
 
 
 def test_auto_publish_record_keeps_loaded_evidence_ref_when_later_metadata_ref_exists(

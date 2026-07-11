@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -41,10 +44,13 @@ from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsA
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
     build_worker_activity_bindings,
+    build_worker_spec,
+    build_worker_topology,
     describe_configured_worker,
     list_registered_workflow_types,
 )
 from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_activity_handlers,
     workflow_fleet_workflow_classes,
 )
 
@@ -124,6 +130,61 @@ def test_advertised_workflow_types_match_production_worker_classes():
 
 def test_production_worker_classes_are_cached():
     assert workflow_fleet_workflow_classes() is workflow_fleet_workflow_classes()
+
+
+def test_executable_worker_spec_drives_registration_and_stable_identity() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    kwargs = {
+        "topology": topology,
+        "workflows": workflow_fleet_workflow_classes(),
+        "activities": workflow_fleet_activity_handlers(),
+        "environ": {
+            "MOONMIND_BUILD_SHA": "abc123",
+            "MOONMIND_IMAGE_DIGEST": "sha256:image",
+            "TEMPORAL_WORKER_DEPLOYMENT_NAME": "moonmind-test",
+            "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
+        },
+    }
+    first = build_worker_spec(**kwargs)
+    second = build_worker_spec(**kwargs)
+    assert first.registry_fingerprint == second.registry_fingerprint
+    assert first.workflow_types == list_registered_workflow_types()
+    assert "MoonMind.PRResolver" in first.readiness_payload()["workflowTypes"]
+    assert first.versioning_enabled is True
+    assert first.build_id == "abc123"
+
+    alternate_lane = build_worker_spec(
+        topology=replace(topology, task_queues=("mm.workflow.merge_automation",)),
+        workflows=workflow_fleet_workflow_classes(),
+        activities=workflow_fleet_activity_handlers(),
+        environ=kwargs["environ"],
+    )
+    assert alternate_lane.registry_fingerprint == first.registry_fingerprint
+
+
+def test_production_worker_spec_requires_immutable_release_identity() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    with pytest.raises(ValueError, match="MOONMIND_BUILD_SHA"):
+        build_worker_spec(
+            topology=topology,
+            workflows=workflow_fleet_workflow_classes(),
+            activities=workflow_fleet_activity_handlers(),
+            environ={"MOONMIND_DEPLOYMENT_MODE": "production"},
+        )
+
+
+def test_production_worker_spec_requires_temporal_worker_versioning() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    with pytest.raises(ValueError, match="TEMPORAL_WORKER_VERSIONING_ENABLED"):
+        build_worker_spec(
+            topology=topology,
+            workflows=workflow_fleet_workflow_classes(),
+            activities=workflow_fleet_activity_handlers(),
+            environ={
+                "MOONMIND_DEPLOYMENT_MODE": "production",
+                "MOONMIND_BUILD_SHA": "abc123",
+            },
+        )
 
 
 def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):

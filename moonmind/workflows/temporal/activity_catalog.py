@@ -974,6 +974,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=5, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="worker.verify_workflow_capability",
+            family="worker_readiness",
+            capability_class="integration:internal_readiness",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(15, 30),
+            retries=_activity_retries(max_attempts=1, max_interval_seconds=1),
+        ),
+        TemporalActivityDefinition(
             activity_type="pr_resolver.write_terminal_result",
             family="pr_resolver",
             capability_class="artifacts",
