@@ -59,4 +59,31 @@ describe('ArtifactsPage', () => {
     expect(screen.getByRole('alert').textContent).toContain('not enabled');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it('keeps observability deep links on the observability collection', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input), window.location.origin);
+      return {
+        ok: true,
+        json: async () => ({
+          category: url.searchParams.get('category'),
+          items: [],
+          total: 0,
+          offset: 0,
+          limit: 25,
+          refreshed_at: '2026-07-10T12:01:00Z',
+        }),
+      } as Response;
+    });
+
+    renderWithClient(
+      <MemoryRouter initialEntries={['/observability/runs/today']}>
+        <ArtifactsPage payload={{ page: 'artifacts', apiBase: '/api', features: { artifacts: true } }} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('No authorized observability are available.');
+    expect(fetchSpy.mock.calls.map(([input]) => new URL(String(input), window.location.origin).searchParams.get('category')))
+      .toContain('observability');
+  });
 });
