@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -138,6 +139,24 @@ def _build_result(
             for entry in history
         ],
     }
+    if payload["mergeAutomationDisposition"] == "reenter_gate":
+        wait_seconds = next(
+            (
+                int(item["sleep_seconds"])
+                for item in reversed(history)
+                if item.get("stage") == "wait" and item.get("sleep_seconds")
+            ),
+            60,
+        )
+        payload["gatedContinuation"] = {
+            "schemaVersion": "gated-continuation/v1",
+            "gateType": "merge_automation",
+            "action": "reenter_gate",
+            "reason": final_reason or "resolver_wait",
+            "notBefore": (
+                datetime.now(timezone.utc) + timedelta(seconds=wait_seconds)
+            ).isoformat().replace("+00:00", "Z"),
+        }
     return payload
 
 def run_orchestration(

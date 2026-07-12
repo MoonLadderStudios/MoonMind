@@ -10428,11 +10428,31 @@ class TemporalAgentRuntimeActivities:
         metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
         metadata["terminalContractId"] = str(contract.get("contractId") or "")
         metadata["terminalContractAuthority"] = "MoonMind.AgentRun"
+        metadata["terminalContractOutcome"] = evaluation.outcome
         if evaluation.failure_code:
             metadata["failureCode"] = evaluation.failure_code
         if evaluation.satisfied:
             metadata["terminalContractSatisfied"] = True
             return result.model_copy(update={"metadata": metadata})
+
+        if evaluation.outcome == "continuation_requested":
+            metadata.update(
+                {
+                    "terminalContractSatisfied": False,
+                    "terminalContractMissingEvidence": [],
+                    "terminalContractRecoveryOutcome": "durable_parent_required",
+                }
+            )
+            if result.failure_class is not None:
+                return result.model_copy(update={"metadata": metadata})
+            return result.model_copy(
+                update={
+                    "summary": "Agent completed an authoritative durable continuation handoff.",
+                    "failure_class": "execution_error",
+                    "provider_error_code": "PR_RESOLVER_REENTER_GATE",
+                    "metadata": metadata,
+                }
+            )
 
         metadata.update(
             {

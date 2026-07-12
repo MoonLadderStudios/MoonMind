@@ -330,6 +330,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
     }
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
+RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -7533,6 +7534,8 @@ class MoonMindRunWorkflow:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
             output["gatedContinuation"] = dict(self._gated_continuation_request)
+            if workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH):
+                output["completionDisposition"] = "gated_continuation"
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -13114,6 +13117,21 @@ class MoonMindRunWorkflow:
                 raw_request.get("budget"),
                 max_value_chars=120,
             )
+            not_before = self._coerce_text(
+                raw_request.get("notBefore") or raw_request.get("not_before"),
+                max_chars=80,
+            )
+            retry_after_seconds = raw_request.get("retryAfterSeconds")
+            if retry_after_seconds is None:
+                retry_after_seconds = raw_request.get("retry_after_seconds")
+            execution_ref = self._coerce_text(
+                raw_request.get("executionRef") or raw_request.get("execution_ref"),
+                max_chars=240,
+            )
+            head_sha = self._coerce_text(
+                raw_request.get("headSha") or raw_request.get("head_sha"),
+                max_chars=64,
+            )
         else:
             legacy_disposition = self._coerce_text(
                 outputs.get("mergeAutomationDisposition")
@@ -13135,6 +13153,10 @@ class MoonMindRunWorkflow:
             evidence_refs = {}
             side_effects = {"externalPullRequest": True}
             budget = {}
+            not_before = None
+            retry_after_seconds = None
+            execution_ref = None
+            head_sha = self._coerce_text(outputs.get("headSha"), max_chars=64)
 
         gate_type = self._normalize_gate_type(raw_gate_type)
         action = self._normalize_gate_type(raw_action)
@@ -13155,6 +13177,14 @@ class MoonMindRunWorkflow:
             continuation["sideEffects"] = side_effects
         if budget:
             continuation["budget"] = budget
+        if not_before:
+            continuation["notBefore"] = not_before
+        if retry_after_seconds is not None:
+            continuation["retryAfterSeconds"] = retry_after_seconds
+        if execution_ref:
+            continuation["executionRef"] = execution_ref
+        if head_sha:
+            continuation["headSha"] = head_sha
 
         allowed_actions = GATED_CONTINUATION_GATE_REGISTRY.get(gate_type)
         if allowed_actions is None:
@@ -15295,6 +15325,25 @@ class MoonMindRunWorkflow:
                     "executionRef": step_execution_payload["stepExecutionId"],
                 }
 
+        terminal_continuation_authority = None
+        if (
+            selected_skill == "pr-resolver"
+            and terminal_contract_payload is not None
+            and terminal_contract_payload.get("contractId")
+            == "pr_resolver_terminal.v1"
+            and self._is_merge_automation_gated(parameters)
+            and workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH)
+        ):
+            parent_info = workflow.info().parent
+            terminal_continuation_authority = {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": parent_info.workflow_id,
+                "ownerRunId": getattr(parent_info, "run_id", None),
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            }
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -15306,6 +15355,7 @@ class MoonMindRunWorkflow:
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
             terminal_contract=terminal_contract_payload,
+            terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
             skill=compact_skill_payload,

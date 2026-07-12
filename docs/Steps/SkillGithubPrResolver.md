@@ -129,6 +129,13 @@ Result should include:
 * `mergeAutomationDisposition` for merge automation consumers:
   `merged`, `already_merged`, `reenter_gate`, `manual_review`, or `failed`
 
+`reenter_gate` is terminal for the current resolver process but nonterminal for
+its enclosing merge automation. The Skill authors a `gated-continuation/v1`
+reason and retry deadline; the workflow transports and durably waits on that
+request without reimplementing review or CI semantics. Standalone and
+parent-mismatched handoffs fail closed, and detached polling after agent exit is
+unsupported.
+
 The canonical workflow terminal dispositions are `merged`, `already_merged`,
 `manual_review`, and `failed`. Intermediate waits and remediation dispatches stay
 inside workflow state and are not terminal agent dispositions.

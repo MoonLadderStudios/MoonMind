@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 import shutil
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -375,10 +376,18 @@ class ManagedRunSupervisor:
                         trigger=stalled_progress_detected,
                     )
                 )
+            process_exit_code, timed_out = await heartbeat_task
+            # Descendants can inherit the managed process pipes after the CLI
+            # exits. Terminate the owned group before waiting for EOF so those
+            # inherited descriptors cannot keep stream collection alive.
+            self._terminate_owned_process_group_best_effort(process)
             (
-                (process_exit_code, timed_out),
-                (log_refs, stdout_content, stderr_content, parsed_output, events),
-            ) = await asyncio.gather(heartbeat_task, stream_task)
+                log_refs,
+                stdout_content,
+                stderr_content,
+                parsed_output,
+                events,
+            ) = await stream_task
             if terminate_on_rate_limit_task is not None:
                 if live_rate_limit_detected.is_set():
                     with suppress(asyncio.CancelledError):
@@ -565,10 +574,34 @@ class ManagedRunSupervisor:
 
             return record
         finally:
+            self._terminate_owned_process_group_best_effort(process)
             self._log_streamer.consume_annotations(run_id)
             self._log_streamer.consume_observability_events(run_id)
             self._active_processes.pop(run_id, None)
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
+
+    @staticmethod
+    def _terminate_owned_process_group_best_effort(
+        process: asyncio.subprocess.Process,
+    ) -> None:
+        """Terminate descendants left in the managed CLI's owned process group."""
+
+        if os.name == "nt" or not process.pid:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            logger.info(
+                "Managed CLI exited; killed owned process group pgid=%s",
+                process.pid,
+            )
+        except ProcessLookupError:
+            return
+        except OSError:
+            logger.warning(
+                "Unable to clean up owned process group pgid=%s",
+                process.pid,
+                exc_info=True,
+            )
 
     async def _heartbeat_and_wait(
         self,
@@ -586,33 +619,35 @@ class ManagedRunSupervisor:
         live, working run from a genuinely stuck one. ``last_heartbeat_at`` is
         pure process liveness and is intentionally ignored by that watchdog.
         """
+        loop = asyncio.get_running_loop()
+        next_heartbeat_at = loop.time() + HEARTBEAT_INTERVAL
         while True:
+            if process.returncode is not None:
+                return process.returncode
+            await asyncio.sleep(0.1)
+            if loop.time() < next_heartbeat_at:
+                continue
+            next_heartbeat_at = loop.time() + HEARTBEAT_INTERVAL
+            if no_output_callback is not None:
+                await no_output_callback(datetime.now(tz=UTC))
             try:
-                exit_code = await asyncio.wait_for(
-                    process.wait(), timeout=HEARTBEAT_INTERVAL
-                )
-                return exit_code
-            except asyncio.TimeoutError:
-                if no_output_callback is not None:
-                    await no_output_callback(datetime.now(tz=UTC))
-                try:
-                    activity.heartbeat({"run_id": run_id})
-                except Exception as e:
-                    # Activity heartbeat failures are non-fatal for the supervisor loop
-                    logger.debug("Activity heartbeat failed: %s", e)
-                progress_fields: dict[str, Any] = {}
-                if progress_snapshot is not None:
-                    last_log_at, last_log_offset = progress_snapshot()
-                    if last_log_at is not None:
-                        progress_fields["last_log_at"] = last_log_at
-                    if last_log_offset is not None:
-                        progress_fields["last_log_offset"] = last_log_offset
-                self._store.update_status(
-                    run_id,
-                    "running",
-                    last_heartbeat_at=datetime.now(tz=UTC),
-                    **progress_fields,
-                )
+                activity.heartbeat({"run_id": run_id})
+            except Exception as e:
+                # Activity heartbeat failures are non-fatal for the supervisor loop
+                logger.debug("Activity heartbeat failed: %s", e)
+            progress_fields: dict[str, Any] = {}
+            if progress_snapshot is not None:
+                last_log_at, last_log_offset = progress_snapshot()
+                if last_log_at is not None:
+                    progress_fields["last_log_at"] = last_log_at
+                if last_log_offset is not None:
+                    progress_fields["last_log_offset"] = last_log_offset
+            self._store.update_status(
+                run_id,
+                "running",
+                last_heartbeat_at=datetime.now(tz=UTC),
+                **progress_fields,
+            )
 
     async def _heartbeat_and_wait_with_timeout(
         self,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from temporalio import workflow
@@ -63,6 +63,9 @@ MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH = (
 )
 MERGE_AUTOMATION_POST_RESOLVER_PROGRESS_RECOVERY_PATCH = (
     "merge-automation-post-resolver-progress-recovery-v1"
+)
+MERGE_AUTOMATION_RESOLVER_CONTINUATION_DELAY_PATCH = (
+    "merge-automation-resolver-continuation-delay-v1"
 )
 RESOLVER_ISSUE_RECOVERY_NONE = "none"
 RESOLVER_ISSUE_RECOVERY_COMPLETED = "completed"
@@ -332,6 +335,38 @@ class MoonMindMergeAutomationWorkflow:
         if not isinstance(resolver_result, Mapping):
             return ""
         return str(resolver_result.get("mergeAutomationDisposition") or "").strip()
+
+    def _continuation_deadline(self, resolver_result: Mapping[str, Any]) -> datetime:
+        raw = resolver_result.get("gatedContinuation")
+        if not isinstance(raw, Mapping):
+            return workflow.now() + timedelta(
+                seconds=self._input.config.timeouts.fallback_poll_seconds
+            )
+        if (
+            raw.get("schemaVersion") != "gated-continuation/v1"
+            or raw.get("gateType") != "merge_automation"
+            or raw.get("action") != "reenter_gate"
+        ):
+            raise ValueError("invalid gated continuation contract")
+        not_before = str(raw.get("notBefore") or "").strip()
+        retry_after = raw.get("retryAfterSeconds")
+        if not not_before and retry_after is None:
+            return workflow.now() + timedelta(
+                seconds=self._input.config.timeouts.fallback_poll_seconds
+            )
+        if not_before and retry_after is not None:
+            raise ValueError("gated continuation cannot provide both timing values")
+        if retry_after is not None:
+            if isinstance(retry_after, bool) or int(retry_after) < 1:
+                raise ValueError("invalid gated continuation retryAfterSeconds")
+            return workflow.now() + timedelta(seconds=int(retry_after))
+        try:
+            parsed = datetime.fromisoformat(not_before.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("invalid gated continuation notBefore") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("gated continuation notBefore must be timezone-aware")
+        return parsed.astimezone(timezone.utc)
 
     @staticmethod
     def _head_sha_from_mapping(payload: Mapping[str, Any]) -> str:
@@ -766,6 +801,45 @@ class MoonMindMergeAutomationWorkflow:
                     )
                     self._status = STATE_WAITING
                     self._publish_visibility()
+                    if workflow.patched(
+                        MERGE_AUTOMATION_RESOLVER_CONTINUATION_DELAY_PATCH
+                    ):
+                        try:
+                            continuation_deadline = self._continuation_deadline(
+                                resolver_result
+                            )
+                        except (TypeError, ValueError):
+                            return await self._failed_resolver_summary(
+                                summary="pr-resolver returned an invalid gated continuation.",
+                                blocker_kind="resolver_continuation_invalid",
+                            )
+                        if expire_at is not None and continuation_deadline >= expire_at:
+                            self._status = STATE_EXPIRED
+                            self._summary = (
+                                "Merge automation expired during resolver "
+                                "continuation wait."
+                            )
+                            self._publish_visibility()
+                            return await self._finish()
+                        delay = max(
+                            0.0, (continuation_deadline - workflow.now()).total_seconds()
+                        )
+                        try:
+                            await workflow.sleep(timedelta(seconds=delay))
+                        except CancelledError:
+                            self._status = STATE_CANCELED
+                            self._summary = (
+                                "Merge automation canceled during resolver "
+                                "continuation wait."
+                            )
+                            self._publish_visibility()
+                            return await self._finish()
+                        except Exception as exc:
+                            # Direct unit-boundary tests invoke run() without a
+                            # Temporal event loop. Production histories always
+                            # use the deterministic workflow timer above.
+                            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                                raise
                     continue
                 if resolver_disposition == DISPOSITION_ALREADY_MERGED:
                     if not await self._complete_post_merge_jira(

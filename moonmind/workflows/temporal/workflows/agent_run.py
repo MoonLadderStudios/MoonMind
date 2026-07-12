@@ -71,6 +71,7 @@ with workflow.unsafe.imports_passed_through():
     )
 
 TERMINAL_CONTRACT_CONTINUATION_PATCH_ID = "agent-run-terminal-contract-continuation-v1"
+PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID = "agent-run-pr-resolver-owned-continuation-v1"
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 
 
@@ -1977,6 +1978,54 @@ class MoonMindAgentRun:
             continuation_enabled = True
         if not continuation_enabled:
             return evaluated
+        try:
+            owned_continuation_enabled = workflow.patched(
+                PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            owned_continuation_enabled = True
+        continuation_authority = request.terminal_continuation_authority
+        if (
+            owned_continuation_enabled
+            and (evaluated.metadata or {}).get("terminalContractOutcome")
+            == "continuation_requested"
+            and continuation_authority is not None
+            and continuation_authority.allows(
+                gate_type="merge_automation", action="reenter_gate"
+            )
+        ):
+            metadata = dict(evaluated.metadata or {})
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": "durable_parent_handoff",
+                    "terminalContractContinuationCount": 0,
+                    "gateType": continuation_authority.gate_type,
+                    "gateAction": "reenter_gate",
+                    "gateOwnerWorkflowId": continuation_authority.owner_workflow_id,
+                }
+            )
+            return evaluated.model_copy(
+                update={
+                    "failure_class": None,
+                    "provider_error_code": None,
+                    "retry_recommendation": None,
+                    "metadata": metadata,
+                }
+            )
+        if (
+            (evaluated.metadata or {}).get("terminalContractOutcome")
+            == "continuation_requested"
+        ):
+            metadata = dict(evaluated.metadata or {})
+            metadata.update(
+                {
+                    "terminalContractRecoveryOutcome": "continuation_rejected_unowned",
+                    "terminalContractContinuationCount": 0,
+                }
+            )
+            return evaluated.model_copy(update={"metadata": metadata})
         if evaluated.failure_class is None:
             return evaluated
 
