@@ -416,8 +416,8 @@ describe('Dashboard shared entry', () => {
     ]);
     expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
 
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
@@ -425,8 +425,8 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('menuitem', { name: 'Recurring' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
     expect(screen.getByText('Workflow resources')).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'RAG / Manifests' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Artifacts / Observability' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
 
@@ -484,16 +484,16 @@ describe('Dashboard shared entry', () => {
   });
 
   it.each([
-    '/manifests',
-    '/artifacts/example',
-    '/observability/example',
-    '/remediations/example',
-    '/settings/providers',
-    '/schedules',
-    '/schedules/nightly-build',
-    '/skills',
-    '/skills/speckit-orchestrate',
-  ])('MM-1200 marks System active for the child route %s', (path) => {
+    ['/manifests', 'Manifests'],
+    ['/artifacts/example', 'Artifacts'],
+    ['/observability/example', 'Artifacts'],
+    ['/remediations/example', 'Remediation'],
+    ['/settings/providers', 'Settings'],
+    ['/schedules', 'Recurring'],
+    ['/schedules/nightly-build', 'Recurring'],
+    ['/skills', 'Skills'],
+    ['/skills/speckit-orchestrate', 'Skills'],
+  ])('MM-1200 marks the System menu active and relabels it for the child route %s', (path, label) => {
     renderWithClient(
       <MemoryRouter initialEntries={[path]}>
         <nav aria-label="Test navigation">
@@ -506,7 +506,11 @@ describe('Dashboard shared entry', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('button', { name: 'System' }).classList.contains('active')).toBe(true);
+    // The trigger takes on the active selection's one-word label in place of
+    // "System" while carrying the active underline treatment.
+    const trigger = screen.getByRole('button', { name: label });
+    expect(trigger.classList.contains('active')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
   });
 
@@ -586,8 +590,8 @@ describe('Dashboard shared entry', () => {
     // Recurring and Skills render as normal inline links, not a nested popover.
     expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
     expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -2115,6 +2119,29 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).not.toContain('dashboard-shell-constrained');
   });
 
+  it('restores horizontal scrolling for the skills catalog table on narrow viewports', async () => {
+    // The skills catalog is a non-responsive DataTable (fixed 20rem skill column
+    // plus four more columns). Wide screens intentionally bleed it edge-to-edge
+    // with `overflow: visible` so the sticky header sticks to the page while the
+    // catalog scrolls; that desktop behavior must be preserved.
+    const desktopSlabBlock = cssRuleBlock(dashboardCss, '.skills-catalog-page .data-table-slab');
+    expect(desktopSlabBlock).toContain('overflow: visible;');
+
+    // But `.dashboard-root` clips horizontal overflow, so on a phone or narrow
+    // desktop that edge-to-edge table would lose its only scroll container and
+    // clip the right-side columns with no way to reach them. A small-breakpoint
+    // override must restore a horizontal scroll container.
+    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
+
+    const narrowSlabBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.skills-catalog-page .data-table-slab' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 900px')
+    ));
+    expect(narrowSlabBlock).toContain('overflow-x: auto;');
+  });
+
   it('keeps workflow collection workspaces fluid', async () => {
     expect(dashboardCss).toMatch(
       /\.panel\.panel--data-wide:has\(\.workflow-list-data-slab\),\s*\.panel\.panel--data-wide:has\(\.workflow-workspace-shell\)\s*\{[^}]*max-width:\s*none/s,
@@ -3414,8 +3441,11 @@ describe('Dashboard shared entry', () => {
       'utf8',
     );
 
+    // Equal-weight side columns keep the middle nav column centered on the
+    // masthead so Workflows / Create / System never shift when the list display
+    // radio buttons appear or disappear in the brand group.
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,

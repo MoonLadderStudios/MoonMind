@@ -244,7 +244,11 @@ samp {
   z-index: 50;
   isolation: isolate;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* Equal-weight side columns keep the primary nav (middle, content-sized)
+   * centered on the masthead regardless of what sits in the brand group — so
+   * Workflows / Create / System do not shift when the list display radio
+   * buttons appear or disappear on desktop. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   column-gap: 0.7rem;
   padding: 0.65rem 1rem var(--masthead-padding-block-end);
@@ -7883,6 +7887,75 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
  * switching display modes reads as the same list collapsing or expanding. */
 .skills-catalog-page .skills-catalog-primary {
   max-width: none;
+  /* Inline bleed used to run the table edge to edge; tracks the primary's own
+   * horizontal padding (px-4 / sm:px-6) so the header spans the full width. */
+  --skills-table-bleed: 1rem;
+}
+
+@media (min-width: 640px) {
+  .skills-catalog-page .skills-catalog-primary {
+    --skills-table-bleed: 1.5rem;
+  }
+}
+
+/* Match the workflows table: the catalog is not a bordered card. Drop the slab
+ * fill, border, rounding, shadow, and height clamp, and bleed it to the page
+ * edges so only the sticky header carries a dark background while the body runs
+ * transparent over the page surface. */
+.skills-catalog-page .data-table-slab {
+  max-width: none;
+  width: auto;
+  max-height: none;
+  margin-inline: calc(var(--skills-table-bleed) * -1);
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The catalog table is not responsive: it keeps a fixed 20rem skill column plus
+ * four more columns. On narrow viewports that grows wider than the page, and
+ * because `.dashboard-root` uses `overflow-x: clip`, the desktop `overflow:
+ * visible` above would leave the right-side columns unreachable — clipped with
+ * no way to scroll to them. Restore a horizontal scroll container at the small
+ * breakpoints. Wide screens keep `overflow: visible`, so the edge-to-edge bleed
+ * and the page-sticky header are unchanged there. */
+@media (max-width: 900px) {
+  .skills-catalog-page .data-table-slab {
+    overflow-x: auto;
+  }
+}
+
+.skills-catalog-page .data-table thead th {
+  background: rgb(var(--mm-panel) / 0.98);
+  border-bottom: 0;
+  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.6);
+}
+
+.skills-catalog-page .data-table tbody tr,
+.skills-catalog-page .data-table tbody tr:nth-child(2n) {
+  background: transparent;
+}
+
+.skills-catalog-page .data-table tbody tr:hover {
+  background: rgb(var(--mm-accent) / 0.08);
+}
+
+.dark .skills-catalog-page .data-table tbody tr:hover {
+  background: rgb(var(--mm-accent) / 0.18);
+}
+
+/* Re-inset the bled edges so header labels and cell text stay aligned with the
+ * rest of the page content. */
+.skills-catalog-page .data-table th:first-child,
+.skills-catalog-page .data-table td:first-child {
+  padding-left: var(--skills-table-bleed);
+}
+
+.skills-catalog-page .data-table th:last-child,
+.skills-catalog-page .data-table td:last-child {
+  padding-right: var(--skills-table-bleed);
 }
 
 /* Skill descriptions are long prose: let catalog cells wrap instead of
@@ -7919,6 +7992,34 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.78rem;
   color: rgb(var(--mm-ink) / 0.65);
   overflow-wrap: anywhere;
+}
+
+/* Compact "+" affordance that opens the create-skill drawer. The accessible
+ * name and native tooltip both read "Create New Skill". */
+.skills-create-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid rgb(var(--mm-accent) / 0.6);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-accent) / 0.14);
+  color: rgb(var(--mm-accent));
+  cursor: pointer;
+}
+
+.skills-create-button:hover,
+.skills-create-button:focus-visible {
+  border-color: rgb(var(--mm-accent-2) / 0.72);
+  background: rgb(var(--mm-accent-2) / 0.16);
+  color: rgb(var(--mm-ink));
+}
+
+.skills-create-button:focus-visible {
+  outline: none;
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .workflow-start-primary,
