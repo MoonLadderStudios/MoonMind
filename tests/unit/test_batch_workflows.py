@@ -184,6 +184,22 @@ def test_bind_child_inputs_jira_implement_preset_auto_binds_issue_object_and_key
     assert "verification_mode" not in inputs
 
 
+def test_bind_child_inputs_jira_orchestrate_auto_binds_issue_object_and_key():
+    module = _load_module()
+    inputs = module["bind_child_inputs"](
+        _JIRA_TARGET, "preset", "jira-orchestrate", "Keep it focused", run_verify=False
+    )
+    assert inputs == {
+        "jira_issue": _JIRA_TARGET["jiraIssue"],
+        "jira_issue_key": "THOR-123",
+        "constraints": "Keep it focused",
+        "run_verify": False,
+    }
+    assert module["child_goal_for_target"](
+        _JIRA_TARGET, "preset", "jira-orchestrate"
+    ) == "Orchestrate Jira issue THOR-123."
+
+
 def test_bind_child_inputs_github_auto_binds_issue_object_and_ref():
     module = _load_module()
     inputs = module["bind_child_inputs"](
@@ -384,6 +400,52 @@ def test_build_child_request_authors_selected_preset_as_global_template():
     assert "version" not in template
     assert "scopeRef" not in template
     assert "batchTargetPreset" not in request["payload"]["task"]
+
+
+def test_build_jira_orchestrate_child_preserves_none_publish_and_runtime():
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(
+            module, target_kind="preset", target_slug="jira-orchestrate"
+        ),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    payload = request["payload"]
+    assert payload["task"]["taskTemplate"] == {
+        "slug": "jira-orchestrate",
+        "scope": "global",
+    }
+    assert payload["task"]["publish"] == {"mode": "none"}
+    assert payload["runtimeInheritance"] == "caller"
+    assert payload["requiredCapabilities"] == ["git", "jira", "gh"]
+
+
+def test_supported_run_refs_cover_provider_preset_options_and_bindings():
+    import yaml
+
+    module = _load_module()
+    repo_root = Path(__file__).resolve().parents[2]
+    for filename, provider in (
+        ("batch-workflows.yaml", "jira"),
+        ("batch-github-workflows.yaml", "github"),
+    ):
+        manifest = yaml.safe_load(
+            (
+                repo_root / "api_service" / "data" / "presets" / filename
+            ).read_text()
+        )
+        options = manifest["annotations"]["inputSchema"]["properties"]["run_ref"]["enum"]
+        legacy_options = next(
+            item for item in manifest["inputs"] if item["name"] == "run_ref"
+        )["options"]
+        assert options == legacy_options
+        assert set(options) == set(manifest["annotations"]["bindings"])
+        for run_ref in options:
+            kind, slug = run_ref.split(":", 1)
+            assert (provider, kind, slug) in module["SUPPORTED_RUN_REFS"]
 
 
 def test_parse_args_accepts_run_ref_without_preset_version(tmp_path):

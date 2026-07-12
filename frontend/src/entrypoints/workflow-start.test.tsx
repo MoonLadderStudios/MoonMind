@@ -16575,7 +16575,9 @@ describe("Task Create schema-driven capability inputs", () => {
               },
             },
           },
-          uiSchema: {},
+          uiSchema: {
+            urgent: { widget: "checkbox" },
+          },
           defaults: {
             summary: "Default summary",
             urgent: false,
@@ -16874,7 +16876,17 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).getByText("Metadata")).toBeTruthy();
     expect((within(step).getByLabelText("Assignee email") as HTMLInputElement).type).toBe("email");
     expect(within(step).getByLabelText("Mode")).toBeTruthy();
-    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+    const urgent = within(step).getByLabelText("Urgent") as HTMLInputElement;
+    expect(urgent.type).toBe("checkbox");
+    expect(urgent.checked).toBe(false);
+    expect(within(urgent.closest("label") as HTMLElement).queryByText(/unavailable/)).toBeNull();
+    fireEvent.click(urgent);
+    expect(urgent.checked).toBe(true);
+    expect(
+      within(step).getByText(
+        "Widget external.lookup is unavailable; using a text field.",
+      ),
+    ).toBeTruthy();
     expect((within(step).getByLabelText("Unsafe default") as HTMLInputElement).value).toBe("");
     expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
   });
@@ -16902,7 +16914,11 @@ describe("Task Create schema-driven capability inputs", () => {
     expect((within(step).getByLabelText("Due") as HTMLInputElement).type).toBe("date");
     expect((within(step).getByLabelText("Starts at") as HTMLInputElement).type).toBe("datetime-local");
     expect(within(step).getByLabelText("Metadata").tagName).toBe("TEXTAREA");
-    expect(within(step).getByText("Unsupported field widget.")).toBeTruthy();
+    expect(
+      within(step).getByText(
+        "Widget external.lookup is unavailable; using a text field.",
+      ),
+    ).toBeTruthy();
   });
 
   it("preserves MM-1056 Skill fallback values under step.skill.inputs for MM-1047 traceability", async () => {

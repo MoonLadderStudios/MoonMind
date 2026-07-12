@@ -3360,11 +3360,24 @@ function capabilityWidgetName(
   schema: Record<string, unknown>,
   uiSchema: Record<string, unknown>,
 ): string {
-  return String(
+  const widget = String(
     uiSchema.widget || schema["x-moonmind-widget"] || schema.format || schema.type || "text",
   )
     .trim()
     .toLowerCase();
+  const aliases: Record<string, string> = {
+    checkbox: "boolean",
+    select: "select",
+    "multi-select": "multi-select",
+    json: "json",
+    editor: "textarea",
+    "github.repository-picker": "repository-picker",
+    repository: "repository-picker",
+    repo: "repository-picker",
+    "repo-picker": "repository-picker",
+    "github.branch-picker": "branch",
+  };
+  return aliases[widget] || widget;
 }
 
 function schemaChoiceOptions(schema: Record<string, unknown>): Array<{
@@ -3451,6 +3464,8 @@ function unsupportedCapabilityWidget(
     "date-time",
     "email",
     "integer",
+    "json",
+    "multi-select",
     "github.issue-picker",
     "jira.issue-picker",
     "markdown",
@@ -4215,7 +4230,15 @@ function SchemaCapabilityFields({
         const error = errors[name];
         const description = String(fieldSchema.description || "").trim();
         const choices = schemaChoiceOptions(fieldSchema);
-        if (unsupportedCapabilityWidget(widget, fieldSchema)) {
+        const hasTypeSafeRenderer =
+          fieldSchema.type === "boolean" ||
+          fieldSchema.type === "number" ||
+          fieldSchema.type === "integer" ||
+          fieldSchema.type === "array" ||
+          fieldSchema.type === "object" ||
+          Array.isArray(fieldSchema.enum) ||
+          choices.length > 0;
+        if (unsupportedCapabilityWidget(widget, fieldSchema) && !hasTypeSafeRenderer) {
           return (
             <label key={name} htmlFor={inputId}>
               {label}
@@ -4228,7 +4251,9 @@ function SchemaCapabilityFields({
                 aria-invalid={Boolean(error)}
                 onChange={(event) => onChange(name, event.target.value)}
               />
-              <span className="notice small">Unsupported field widget.</span>
+              <span className="notice small">
+                Widget {widget} is unavailable; using a text field.
+              </span>
               {error ? <span className="notice small">{error}</span> : null}
             </label>
           );
@@ -4378,7 +4403,7 @@ function SchemaCapabilityFields({
             </label>
           );
         }
-        if (widget === "textarea" || widget === "markdown") {
+        if (widget === "textarea" || widget === "markdown" || widget === "json") {
           return (
             <label key={name} htmlFor={inputId}>
               {label}
