@@ -27,6 +27,9 @@ from api_service.db.models import (
     OAuthSessionStatus,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.provider_profiles.oauth_policy import (
+    effective_oauth_capacity_for_finalization,
+)
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider_bootstrap_command,
     get_provider_default,
@@ -380,6 +383,11 @@ async def oauth_session_register_profile(
             policy_enum = ManagedAgentRateLimitPolicy.BACKOFF
 
         connected_at = datetime.now(timezone.utc)
+        requested_capacity = metadata.get("max_parallel_runs", 1)
+        effective_max_parallel_runs = effective_oauth_capacity_for_finalization(
+            runtime_id=session_obj.runtime_id,
+            requested_capacity=requested_capacity,
+        )
         profile_data = {
             "runtime_id": session_obj.runtime_id,
             "provider_id": metadata.get("provider_id")
@@ -392,7 +400,7 @@ async def oauth_session_register_profile(
             "volume_ref": session_obj.volume_ref,
             "volume_mount_path": session_obj.volume_mount_path,
             "account_label": session_obj.account_label,
-            "max_parallel_runs": metadata.get("max_parallel_runs", 1),
+            "max_parallel_runs": effective_max_parallel_runs,
             "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
             "rate_limit_policy": policy_enum,
             "enabled": True,
@@ -410,6 +418,7 @@ async def oauth_session_register_profile(
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME.value,
             volume_ref=session_obj.volume_ref,
             volume_mount_path=session_obj.volume_mount_path,
+            max_parallel_runs=effective_max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
@@ -429,11 +438,24 @@ async def oauth_session_register_profile(
             )
             db.add(new_profile)
 
+        if requested_capacity != effective_max_parallel_runs:
+            metadata = dict(metadata)
+            metadata["max_parallel_runs"] = effective_max_parallel_runs
+            metadata["capacity_normalized_to_exclusive"] = True
+            session_obj.metadata_json = metadata
+
         await db.commit()
         await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
 
     logger.info("Registered profile %s for session %s", session_obj.profile_id, session_id)
-    return {"session_id": session_id, "profile_id": session_obj.profile_id, "status": "registered"}
+    return {
+        "session_id": session_id,
+        "profile_id": session_obj.profile_id,
+        "status": "registered",
+        "capacity_normalized_to_exclusive": (
+            requested_capacity != effective_max_parallel_runs
+        ),
+    }
 
 @activity.defn(name="oauth_session.mark_failed")
 async def oauth_session_mark_failed(

@@ -41,6 +41,10 @@ from moonmind.provider_profiles.model_tiers import (
     is_single_runtime_default_model_effort_tier,
     legacy_default_model_effort_tier,
 )
+from moonmind.provider_profiles.oauth_policy import (
+    CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+    is_codex_oauth_profile,
+)
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.utils.logging import (
@@ -1804,19 +1808,16 @@ def _oauth_volume_check(
 
 def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
     has_capacity = bool(row.max_parallel_runs and row.max_parallel_runs > 0)
-    requires_exclusive_capacity = (
-        row.runtime_id == "codex_cli"
-        and row.credential_source == ProviderCredentialSource.OAUTH_VOLUME
-        and row.runtime_materialization_mode == RuntimeMaterializationMode.OAUTH_HOME
+    requires_exclusive_capacity = is_codex_oauth_profile(
+        runtime_id=row.runtime_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
     )
     valid_capacity = has_capacity and (
         not requires_exclusive_capacity or row.max_parallel_runs == 1
     )
     if requires_exclusive_capacity and row.max_parallel_runs != 1:
-        message = (
-            "Codex OAuth Provider Profiles require max_parallel_runs=1 because "
-            "the OAuth home contains mutable refresh-token and credential state."
-        )
+        message = CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR
     elif has_capacity:
         message = f"Profile allows {row.max_parallel_runs} parallel run(s)."
     else:

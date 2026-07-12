@@ -39,6 +39,9 @@ from api_service.db.models import (
     ManagedAgentRateLimitPolicy,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.provider_profiles.oauth_policy import (
+    effective_oauth_capacity_for_finalization,
+)
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
@@ -778,11 +781,16 @@ async def finalize_oauth_session(
         )
 
     connected_at = datetime.now(timezone.utc)
-    effective_max_parallel_runs = (
-        1
-        if session_obj.runtime_id == "codex_cli"
-        else int(metadata.get("max_parallel_runs", 1))
-    )
+    try:
+        effective_max_parallel_runs = effective_oauth_capacity_for_finalization(
+            runtime_id=session_obj.runtime_id,
+            requested_capacity=metadata.get("max_parallel_runs", 1),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     profile_data = {
         "runtime_id": session_obj.runtime_id,
         "provider_id": metadata.get("provider_id")
@@ -807,6 +815,10 @@ async def finalize_oauth_session(
         "last_validated_at": connected_at,
         "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
     }
+    if metadata.get("max_parallel_runs", 1) != effective_max_parallel_runs:
+        metadata["max_parallel_runs"] = effective_max_parallel_runs
+        metadata["capacity_normalized_to_exclusive"] = True
+        session_obj.metadata_json = metadata
     try:
         validate_codex_oauth_profile_refs(
             runtime_id=session_obj.runtime_id,

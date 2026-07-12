@@ -25,6 +25,11 @@ from temporalio import exceptions, workflow
 with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
     from moonmind.billing.costs import pricing_from_profile_metadata
+    from moonmind.provider_profiles.oauth_policy import (
+        CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+        is_codex_oauth_profile,
+        validate_codex_oauth_capacity,
+    )
 
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
@@ -55,6 +60,9 @@ QUEUE_ORDER_PENDING_REQUESTS_PATCH = (
 SCHEDULED_PENDING_REQUESTS_PATCH = (
     "provider-profile-manager-scheduled-pending-requests-v1"
 )
+CODEX_OAUTH_LEGACY_RESTORE_PATCH = (
+    "provider-profile-manager-codex-oauth-legacy-restore-v1"
+)
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -67,24 +75,65 @@ _VERIFY_WORKFLOW_STATUS_BATCH_SIZE = 100
 
 logger = logging.getLogger(__name__)
 
-_CODEX_OAUTH_EXCLUSIVE_ERROR = (
-    "Codex OAuth Provider Profiles require max_parallel_runs=1 because the "
-    "OAuth home contains mutable refresh-token and credential state."
-)
-
-
-def _validated_profile_capacity(profile: dict[str, Any]) -> int:
-    capacity = profile.get("max_parallel_runs", 1)
+def _profile_is_codex_oauth(
+    profile: dict[str, Any],
+    *,
+    runtime_id: str | None = None,
+    infer_legacy_source: bool = False,
+) -> bool:
+    resolved_runtime_id = profile.get("runtime_id", runtime_id)
+    credential_source = profile.get("credential_source")
+    materialization_mode = profile.get("runtime_materialization_mode")
     if (
-        profile.get("runtime_id") == "codex_cli"
-        and profile.get("credential_source") == "oauth_volume"
-        and profile.get("runtime_materialization_mode") == "oauth_home"
-        and capacity != 1
+        infer_legacy_source
+        and credential_source is None
+        and str(resolved_runtime_id or "").strip() == "codex_cli"
+        and str(materialization_mode or "").strip() == "oauth_home"
     ):
+        credential_source = "oauth_volume"
+    return is_codex_oauth_profile(
+        runtime_id=resolved_runtime_id,
+        credential_source=credential_source,
+        materialization_mode=materialization_mode,
+    )
+
+
+def _validated_profile_capacity(
+    profile: dict[str, Any],
+    *,
+    runtime_id: str | None = None,
+    existing_capacity: int | None = None,
+    repair_legacy: bool = False,
+) -> int:
+    if "max_parallel_runs" not in profile and existing_capacity is not None:
+        capacity = existing_capacity
+    else:
+        capacity = profile.get("max_parallel_runs", 1)
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
         raise exceptions.ApplicationError(
-            _CODEX_OAUTH_EXCLUSIVE_ERROR,
+            "Provider Profile max_parallel_runs must be a positive integer",
             non_retryable=True,
         )
+    is_codex_oauth = _profile_is_codex_oauth(
+        profile,
+        runtime_id=runtime_id,
+        infer_legacy_source=repair_legacy,
+    )
+    if is_codex_oauth and capacity != 1:
+        if repair_legacy:
+            return 1
+        try:
+            validate_codex_oauth_capacity(
+                runtime_id=profile.get("runtime_id", runtime_id),
+                credential_source=profile.get("credential_source"),
+                materialization_mode=profile.get("runtime_materialization_mode"),
+                max_parallel_runs=capacity,
+            )
+        except ValueError as exc:
+            raise exceptions.ApplicationError(
+                CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+                non_retryable=True,
+            ) from exc
     return capacity
 
 def workflow_id_for_runtime(runtime_id: str) -> str:
@@ -181,6 +230,7 @@ class ProfileSlotState:
     lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
     cooldown_until: Optional[str] = None  # ISO timestamp string or None
     provider_id: Optional[str] = None
+    credential_source: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     priority: int = 100
     runtime_materialization_mode: Optional[str] = None
@@ -189,6 +239,8 @@ class ProfileSlotState:
     pricing_source: Optional[str] = None
     model_tiers: list[dict[str, Any]] = field(default_factory=list)
     default_model_tier: int = 1
+    over_capacity_legacy_snapshot: bool = False
+    authoritative_policy_confirmed: bool = False
 
     @property
     def available_slots(self) -> int:
@@ -214,6 +266,11 @@ class ProfileSlotState:
         if requester_workflow_id in self.current_leases:
             self.current_leases.remove(requester_workflow_id)
             self.lease_granted_at.pop(requester_workflow_id, None)
+            if (
+                self.authoritative_policy_confirmed
+                and len(self.current_leases) <= self.max_parallel_runs
+            ):
+                self.over_capacity_legacy_snapshot = False
             return True
         return False
 
@@ -255,6 +312,7 @@ class ProfileSlotState:
             "lease_granted_at": dict(self.lease_granted_at),
             "cooldown_until": self.cooldown_until,
             "provider_id": self.provider_id,
+            "credential_source": self.credential_source,
             "tags": list(self.tags),
             "priority": self.priority,
             "runtime_materialization_mode": self.runtime_materialization_mode,
@@ -263,6 +321,7 @@ class ProfileSlotState:
             "pricing_source": self.pricing_source,
             "model_tiers": list(self.model_tiers),
             "default_model_tier": self.default_model_tier,
+            "overCapacityLegacySnapshot": self.over_capacity_legacy_snapshot,
         }
 
     @property
@@ -591,7 +650,13 @@ class MoonMindProviderProfileManagerWorkflow:
             )
 
         # Restore state from continue-as-new or initial profile load.
-        self._restore_state(input_payload)
+        repair_legacy_codex_oauth = workflow.patched(
+            CODEX_OAUTH_LEGACY_RESTORE_PATCH
+        )
+        self._restore_state(
+            input_payload,
+            repair_legacy_codex_oauth=repair_legacy_codex_oauth,
+        )
 
         # If no profiles were provided, load them via activity.
         if not self._profiles:
@@ -683,7 +748,12 @@ class MoonMindProviderProfileManagerWorkflow:
 
     # -- Internal helpers ------------------------------------------------------
 
-    def _restore_state(self, input_payload: dict[str, Any]) -> None:
+    def _restore_state(
+        self,
+        input_payload: dict[str, Any],
+        *,
+        repair_legacy_codex_oauth: bool = True,
+    ) -> None:
         """Restore profile and lease state from input (e.g. after continue-as-new)."""
         profiles_data = input_payload.get("profiles", [])
         leases_data = input_payload.get("leases", {})
@@ -730,9 +800,30 @@ class MoonMindProviderProfileManagerWorkflow:
 
         for p in profiles_data:
             pid = p["profile_id"]
+            original_capacity = p.get("max_parallel_runs", 1)
+            restored_credential_source = p.get("credential_source")
+            if (
+                repair_legacy_codex_oauth
+                and restored_credential_source is None
+                and self._runtime_id == "codex_cli"
+                and p.get("runtime_materialization_mode") == "oauth_home"
+            ):
+                restored_credential_source = "oauth_volume"
+            is_legacy_codex_oauth = _profile_is_codex_oauth(
+                {
+                    **p,
+                    "credential_source": restored_credential_source,
+                },
+                runtime_id=self._runtime_id,
+                infer_legacy_source=repair_legacy_codex_oauth,
+            )
             state = ProfileSlotState(
                 profile_id=pid,
-                max_parallel_runs=_validated_profile_capacity(p),
+                max_parallel_runs=_validated_profile_capacity(
+                    p,
+                    runtime_id=self._runtime_id,
+                    repair_legacy=repair_legacy_codex_oauth,
+                ),
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
@@ -745,6 +836,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 lease_granted_at=dict(lease_times_data.get(pid, {})),
                 cooldown_until=cooldowns_data.get(pid),
                 provider_id=p.get("provider_id"),
+                credential_source=restored_credential_source,
                 tags=p.get("tags") or [],
                 priority=p.get("priority", 100),
                 runtime_materialization_mode=p.get("runtime_materialization_mode"),
@@ -753,10 +845,19 @@ class MoonMindProviderProfileManagerWorkflow:
                 pricing_source=p.get("pricing_source"),
                 model_tiers=p.get("model_tiers") or [],
                 default_model_tier=p.get("default_model_tier", 1),
+                over_capacity_legacy_snapshot=(
+                    is_legacy_codex_oauth and original_capacity != 1
+                )
+                or bool(p.get("over_capacity_legacy_snapshot", False)),
             )
             self._profiles[pid] = state
 
-    def _apply_profile_sync(self, profiles_data: list[dict[str, Any]]) -> None:
+    def _apply_profile_sync(
+        self,
+        profiles_data: list[dict[str, Any]],
+        *,
+        authoritative: bool = False,
+    ) -> None:
         """Merge a fresh profile list from the DB into in-memory state."""
         seen: set[str] = set()
         for p in profiles_data:
@@ -764,7 +865,11 @@ class MoonMindProviderProfileManagerWorkflow:
             seen.add(pid)
             existing = self._profiles.get(pid)
             if existing:
-                existing.max_parallel_runs = _validated_profile_capacity(p)
+                existing.max_parallel_runs = _validated_profile_capacity(
+                    p,
+                    runtime_id=self._runtime_id,
+                    existing_capacity=existing.max_parallel_runs,
+                )
                 existing.cooldown_after_429_seconds = p.get(
                     "cooldown_after_429_seconds",
                     existing.cooldown_after_429_seconds,
@@ -782,6 +887,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     "max_lease_duration_seconds", existing.max_lease_duration_seconds
                 )
                 existing.provider_id = p.get("provider_id", existing.provider_id)
+                existing.credential_source = p.get(
+                    "credential_source", existing.credential_source
+                )
                 existing.tags = p.get("tags") or existing.tags
                 existing.priority = p.get("priority", existing.priority)
                 existing.runtime_materialization_mode = p.get(
@@ -792,11 +900,19 @@ class MoonMindProviderProfileManagerWorkflow:
                     "default_model_tier", existing.default_model_tier
                 )
                 self._apply_profile_pricing(existing, p)
+                if authoritative:
+                    existing.authoritative_policy_confirmed = True
+                    existing.over_capacity_legacy_snapshot = (
+                        len(existing.current_leases) > existing.max_parallel_runs
+                    )
             else:
                 pricing = pricing_from_profile_metadata(p)
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
-                    max_parallel_runs=_validated_profile_capacity(p),
+                    max_parallel_runs=_validated_profile_capacity(
+                        p,
+                        runtime_id=self._runtime_id,
+                    ),
                     cooldown_after_429_seconds=p.get(
                         "cooldown_after_429_seconds", 900
                     ),
@@ -808,6 +924,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
                     ),
                     provider_id=p.get("provider_id"),
+                    credential_source=p.get("credential_source"),
                     tags=p.get("tags") or [],
                     priority=p.get("priority", 100),
                     runtime_materialization_mode=p.get("runtime_materialization_mode"),
@@ -820,6 +937,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     pricing_source=pricing.source if pricing else None,
                     model_tiers=p.get("model_tiers") or [],
                     default_model_tier=p.get("default_model_tier", 1),
+                    authoritative_policy_confirmed=authoritative,
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).
@@ -1511,12 +1629,16 @@ class MoonMindProviderProfileManagerWorkflow:
                     "is_default": state.is_default,
                     "max_lease_duration_seconds": state.max_lease_duration_seconds,
                     "provider_id": state.provider_id,
+                    "credential_source": state.credential_source,
                     "tags": list(state.tags),
                     "priority": state.priority,
                     "runtime_materialization_mode": state.runtime_materialization_mode,
                     "input_per_million_usd": state.input_per_million_usd,
                     "output_per_million_usd": state.output_per_million_usd,
                     "pricing_source": state.pricing_source,
+                    "over_capacity_legacy_snapshot": (
+                        state.over_capacity_legacy_snapshot
+                    ),
                 }
             )
             if state.current_leases:
@@ -1573,7 +1695,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 ),
             )
             profiles_data = result.get("profiles", []) if result else []
-            self._apply_profile_sync(profiles_data)
+            self._apply_profile_sync(profiles_data, authoritative=True)
             if prune_removed_profiles:
                 self._prune_disabled_profiles_without_leases()
             self._has_db_profile_snapshot = True

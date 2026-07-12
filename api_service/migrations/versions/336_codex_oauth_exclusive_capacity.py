@@ -17,6 +17,16 @@ down_revision: Union[str, None] = "335_mm1172_provider_tiers"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Required Alembic revision metadata and entrypoints.
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
+
 CODEX_OAUTH_EXCLUSIVE_CAPACITY_CHECK = """
 NOT (
     runtime_id = 'codex_cli'

@@ -91,6 +91,7 @@ from api_service.auth import (
     fastapi_users,
 )
 from moonmind.config.settings import settings
+from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
@@ -1067,18 +1068,14 @@ async def _auto_seed_provider_profiles() -> list[str]:
             # startup as well as validating new API writes; otherwise an old
             # max_parallel_runs value can bypass the invariant indefinitely.
             for profile_id, current in existing_by_id.items():
-                credential_source = getattr(
-                    current.get("credential_source"), "value", current.get("credential_source")
-                )
-                materialization_mode = getattr(
-                    current.get("runtime_materialization_mode"),
-                    "value",
-                    current.get("runtime_materialization_mode"),
-                )
                 if (
-                    current.get("runtime_id") == "codex_cli"
-                    and credential_source == ProviderCredentialSource.OAUTH_VOLUME.value
-                    and materialization_mode == RuntimeMaterializationMode.OAUTH_HOME.value
+                    is_codex_oauth_profile(
+                        runtime_id=current.get("runtime_id"),
+                        credential_source=current.get("credential_source"),
+                        materialization_mode=current.get(
+                            "runtime_materialization_mode"
+                        ),
+                    )
                     and current.get("max_parallel_runs") != 1
                 ):
                     await session.execute(

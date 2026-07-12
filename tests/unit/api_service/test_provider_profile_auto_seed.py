@@ -147,6 +147,30 @@ async def test_auto_seed_persists_legacy_codex_oauth_capacity_repair(
                 auth_state=ProviderProfileAuthState.DISCONNECTED,
             )
         )
+        session.add_all(
+            [
+                ManagedAgentProviderProfile(
+                    profile_id=f"codex-api-control-{enum_values}",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    max_parallel_runs=4,
+                    enabled=False,
+                    auth_state=ProviderProfileAuthState.DISCONNECTED,
+                ),
+                ManagedAgentProviderProfile(
+                    profile_id=f"claude-oauth-control-{enum_values}",
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    max_parallel_runs=3,
+                    enabled=False,
+                    auth_state=ProviderProfileAuthState.DISCONNECTED,
+                ),
+            ]
+        )
         await session.commit()
         await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
 
@@ -158,6 +182,22 @@ async def test_auto_seed_persists_legacy_codex_oauth_capacity_repair(
         )
         assert repaired is not None
         assert repaired.max_parallel_runs == 1
+        codex_api = await session.get(
+            ManagedAgentProviderProfile, f"codex-api-control-{enum_values}"
+        )
+        claude_oauth = await session.get(
+            ManagedAgentProviderProfile, f"claude-oauth-control-{enum_values}"
+        )
+        assert codex_api is not None
+        assert codex_api.max_parallel_runs == 4
+        assert claude_oauth is not None
+        assert claude_oauth.max_parallel_runs == 3
+
+        from api_service.services.provider_profile_service import (
+            _manager_profile_payload,
+        )
+
+        assert _manager_profile_payload(repaired)["max_parallel_runs"] == 1
 
 
 @pytest.mark.asyncio

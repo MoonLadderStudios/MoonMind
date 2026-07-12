@@ -401,10 +401,15 @@ def validate_codex_oauth_profile_refs(
     volume_ref_field_name: str = "volumeRef",
     volume_mount_path_field_name: str = "volumeMountPath",
 ) -> None:
-    if (
-        str(runtime_id or "").strip() != "codex_cli"
-        or str(credential_source or "").strip() != "oauth_volume"
-        or str(runtime_materialization_mode or "").strip() != "oauth_home"
+    from moonmind.provider_profiles.oauth_policy import (
+        is_codex_oauth_profile,
+        validate_codex_oauth_capacity,
+    )
+
+    if not is_codex_oauth_profile(
+        runtime_id=runtime_id,
+        credential_source=credential_source,
+        materialization_mode=runtime_materialization_mode,
     ):
         return
 
@@ -415,10 +420,12 @@ def validate_codex_oauth_profile_refs(
         missing.append(f"{volume_mount_path_field_name} is required")
     if missing:
         raise ValueError("; ".join(missing))
-    if max_parallel_runs is not None and max_parallel_runs != 1:
-        raise ValueError(
-            "Codex OAuth Provider Profiles require max_parallel_runs=1 because "
-            "the OAuth home contains mutable refresh-token and credential state."
+    if max_parallel_runs is not None:
+        validate_codex_oauth_capacity(
+            runtime_id=runtime_id,
+            credential_source=credential_source,
+            materialization_mode=runtime_materialization_mode,
+            max_parallel_runs=max_parallel_runs,
         )
 
 def is_terminal_agent_run_state(status: AgentRunState) -> bool:

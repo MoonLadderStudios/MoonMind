@@ -29,5 +29,3 @@ services:
 
 volumes:
   omnigent-host-codex-state:
-  codex_auth_volume:
-    external: true

@@ -17,6 +17,16 @@ down_revision: Union[str, None] = "336_codex_oauth_capacity"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Required Alembic revision metadata and entrypoints.
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
+
 
 def upgrade() -> None:
     op.add_column(
@@ -41,6 +51,11 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["provider_profile_id"], ["managed_agent_provider_profiles.profile_id"], ondelete="CASCADE"),
         sa.UniqueConstraint("provider_profile_id", name="uq_omnigent_oauth_binding_profile"),
+        sa.UniqueConstraint(
+            "binding_ref",
+            "provider_profile_id",
+            name="uq_omnigent_oauth_binding_ref_profile",
+        ),
     )
     op.create_table(
         "omnigent_oauth_host_leases",
@@ -72,7 +87,15 @@ def upgrade() -> None:
         sa.CheckConstraint("credential_generation >= 1", name="ck_omnigent_oauth_host_lease_generation"),
         sa.CheckConstraint("expires_at > acquired_at", name="ck_omnigent_oauth_host_lease_expiry"),
         sa.CheckConstraint("status IN ('allocating','starting','ready','assigned','draining','stopped','failed')", name="ck_omnigent_oauth_host_lease_status"),
-        sa.ForeignKeyConstraint(["binding_ref"], ["omnigent_oauth_host_bindings.binding_ref"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["binding_ref", "provider_profile_id"],
+            [
+                "omnigent_oauth_host_bindings.binding_ref",
+                "omnigent_oauth_host_bindings.provider_profile_id",
+            ],
+            name="fk_omnigent_oauth_host_lease_binding_profile",
+            ondelete="CASCADE",
+        ),
         sa.ForeignKeyConstraint(["provider_profile_id"], ["managed_agent_provider_profiles.profile_id"], ondelete="CASCADE"),
         sa.UniqueConstraint("provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"),
         sa.UniqueConstraint("idempotency_key", name="uq_omnigent_oauth_host_idempotency"),

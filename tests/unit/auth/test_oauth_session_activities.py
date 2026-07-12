@@ -166,6 +166,7 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
 
     result = await oauth_session_register_profile({"session_id": session_id})
     assert result["status"] == "registered"
+    assert result["capacity_normalized_to_exclusive"] is True
 
     async with _oauth_activity_session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -180,13 +181,136 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
         )
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
-        assert profile.max_parallel_runs == 3
+        assert profile.max_parallel_runs == 1
         assert profile.enabled is True
         assert profile.auth_state == ProviderProfileAuthState.CONNECTED
         assert profile.disabled_reason is None
         assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
         assert profile.first_authenticated_at is not None
         assert profile.last_validated_at is not None
+        oauth_session = await session.get(ManagedAgentOAuthSession, session_id)
+        assert oauth_session is not None
+        assert oauth_session.metadata_json["max_parallel_runs"] == 1
+        assert (
+            oauth_session.metadata_json["capacity_normalized_to_exclusive"] is True
+        )
+        first_authenticated_at = profile.first_authenticated_at
+
+    retry_result = await oauth_session_register_profile({"session_id": session_id})
+    assert retry_result["status"] == "registered"
+    async with _oauth_activity_session_factory() as session:
+        retried_profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert retried_profile is not None
+        assert retried_profile.max_parallel_runs == 1
+        assert retried_profile.first_authenticated_at == first_authenticated_at
+
+
+@pytest.mark.asyncio
+async def test_register_profile_activity_preserves_non_codex_oauth_capacity(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activityregisterclaude"
+    profile_id = "claude-activity-oauth"
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id=profile_id,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="not-a-uuid",
+                account_label="claude account",
+                metadata_json={"provider_id": "anthropic", "max_parallel_runs": 3},
+            )
+        )
+        await session.commit()
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service.sync_provider_profile_manager",
+        _noop_sync,
+    )
+
+    result = await oauth_session_register_profile({"session_id": session_id})
+
+    assert result["capacity_normalized_to_exclusive"] is False
+    async with _oauth_activity_session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.max_parallel_runs == 3
+
+
+@pytest.mark.asyncio
+async def test_register_profile_activity_retries_cleanly_after_commit_failure(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activitycommitretry"
+    profile_id = "codex-activity-commit-retry"
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="not-a-uuid",
+                account_label="codex account",
+                metadata_json={"provider_id": "openai", "max_parallel_runs": 3},
+            )
+        )
+        await session.commit()
+
+    @asynccontextmanager
+    async def _failing_session_context():
+        async with _oauth_activity_session_factory() as session:
+            async def _fail_commit() -> None:
+                raise RuntimeError("injected commit failure")
+
+            session.commit = _fail_commit  # type: ignore[method-assign]
+            yield session
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        _failing_session_context,
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service.sync_provider_profile_manager",
+        _noop_sync,
+    )
+    with pytest.raises(RuntimeError, match="injected commit failure"):
+        await oauth_session_register_profile({"session_id": session_id})
+
+    async with _oauth_activity_session_factory() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+    result = await oauth_session_register_profile({"session_id": session_id})
+    assert result["status"] == "registered"
+    async with _oauth_activity_session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.max_parallel_runs == 1
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_rejects_codex_oauth_profile_without_refs(
