@@ -92,6 +92,15 @@ When writing code that interacts with skills:
 - Executable tools are identified by **tool-name**.
 - Do not introduce internal ID aliases, display-name matching, provider-specific synonyms, or compatibility translation tables for these identities. Rename by updating every caller, test, mock, seed, and doc reference in the same change.
 
+## UI and Visual Changes
+
+- All dashboard styling lives in one stylesheet: `frontend/src/styles/dashboard.css`. Shared design tokens (`--mm-*`) are defined at the top in `:root` (light theme) and `.dark` (dark theme); prefer tokens over hardcoded values.
+- Brand-critical rules are pinned by `frontend/src/styles/dashboardBrand.test.ts`; update its assertions in the same change as the style change.
+- Global element rules (for example the `button` rules) cascade into components, so a control's visible style may not be fully described by its own class rule. Check the full cascade, and remember `<a>`-based and `<button>`-based controls pick up different globals.
+- The masthead/nav renders its desktop layout at `min-width: 1181px`; below that it collapses to the mobile hamburger nav. Verify desktop visuals at a viewport at least that wide.
+- To verify a visual change without deploying, render a small harness page that links the real `dashboard.css` against production markup (correct wrapper classes, plus the `.dark` class for dark theme) and screenshot it with headless Chromium (for example the `mcr.microsoft.com/playwright` Docker image). The deployed UI is baked into the dashboard image — never hot-patch deployed static assets to preview changes; verify with `tools/verify_deployed_ui_assets.py` when the deployed bundle is in question.
+- For selection controls, reuse the canonical segmented-control system (`.segmented-control`, MM-1138) or its sliding-thumb pattern (an `--*-active-index` custom property driving `translateX` on an absolutely positioned `::before` thumb) rather than inventing a new selection affordance.
+
 ## Pull Request Preparation
 
 - Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft, or when the workflow publish policy explicitly allows draft publication for a readiness/publish gate that cannot complete validation in the current environment but can still publish a safe, reviewable handoff with clear missing evidence and next steps.

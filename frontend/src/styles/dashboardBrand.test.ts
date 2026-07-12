@@ -48,7 +48,7 @@ describe('dashboard masthead brand styles', () => {
       'box-shadow: var(--mm-control-focus-ring);',
     );
     expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]')).toContain(
-      'border-color: rgb(var(--mm-accent) / 0.6);',
+      'color: rgb(var(--mm-accent));',
     );
     expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]:hover')).toContain(
       'border-color: rgb(var(--mm-accent-2) / 0.72);',
@@ -96,25 +96,39 @@ describe('dashboard masthead brand styles', () => {
     );
   });
 
-  it('gives the list display control the liquid-glass treatment and the nav buttons the highlight-edge look', () => {
-    // Radio group: liquid-glass border/fill with the inset top-edge highlight,
-    // and tightened enough (option < 2rem, padding < 0.18rem) that it no longer
-    // out-sizes the nav buttons.
+  it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
+    // The shared treatment: a bright top-edge inset plus a soft accent
+    // under-glow, with no flat 1px perimeter ring.
+    const highlightShadow =
+      /box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.2\),\s*0 12px 24px -16px rgb\(var\(--mm-accent\) \/ 0\.82\);/;
+
+    // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
+    // padding < 0.18rem) that it does not out-size the nav buttons, plus a
+    // segmented-control-style sliding thumb driven by the checked option.
     const control = cssRuleBlock('.workflow-list-display-control');
-    expect(control).toContain('border: 1px solid var(--mm-glass-border);');
-    expect(control).toContain('background: var(--mm-glass-fill);');
-    expect(control).toContain('box-shadow: inset 0 1px 0 var(--mm-glass-edge);');
+    expect(control).toContain('border: 0;');
+    expect(control).toContain('background: transparent;');
+    expect(control).toMatch(highlightShadow);
     expect(control).toContain('padding: 0.12rem;');
+    const thumb = cssRuleBlock('.workflow-list-display-control::before');
+    expect(thumb).toContain(
+      'transform: translateX(calc(var(--list-display-active-index) * 1.8rem));',
+    );
+    expect(thumb).toContain('box-shadow: inset 0 0 0 1px rgb(var(--mm-accent) / 0.6);');
+    expect(thumb).toMatch(/transition: transform \d+ms/);
+    expect(dashboardCss).toMatch(
+      /\.workflow-list-display-control:has\(\.workflow-list-display-option:nth-child\(2\)\[aria-checked="true"\]\)\s*\{[^}]*--list-display-active-index: 1;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.workflow-list-display-control::before\s*\{[^}]*transition:\s*none;/s,
+    );
     expect(cssRuleBlock('.workflow-list-display-option')).toContain('width: 1.6rem;');
     // Icons keep their size regardless of the tighter borders.
     expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
 
-    // Workflows/Create and the System trigger share the trigger's original
-    // highlight-edge look: a bright top-edge inset plus a soft accent
-    // under-glow, with no flat 1px perimeter ring. Both shadows are
-    // non-layout-affecting so the active underline geometry is unchanged.
-    const highlightShadow =
-      /box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.2\),\s*0 12px 24px -16px rgb\(var\(--mm-accent\) \/ 0\.82\);/;
+    // Workflows/Create and the System trigger share the same highlight-edge
+    // look. Both shadows are non-layout-affecting so the active underline
+    // geometry is unchanged.
     const primary = cssRuleBlock('.route-nav-primary a');
     expect(primary).not.toContain('var(--mm-glass-fill)');
     expect(primary).toMatch(highlightShadow);
