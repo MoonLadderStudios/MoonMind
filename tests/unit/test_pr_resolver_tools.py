@@ -969,17 +969,28 @@ def test_orchestrate_no_progress_after_ci_wait_uses_min_attempt_floor(
     full_calls: list[tuple[int, int, str]] = []
     sleeps: list[int] = []
 
-    def finalize_runner(attempt: int) -> dict[str, str]:
+    def finalize_runner(attempt: int) -> dict[str, Any]:
+        continuation = {
+            "schemaVersion": "gated-continuation/v1",
+            "gateType": "merge_automation",
+            "action": "reenter_gate",
+            "reason": "resolver_wait",
+            "retryAfterSeconds": 60,
+            "executionRef": "step:1",
+            "headSha": "abcdef1234567890",
+        }
         if attempt == 1:
             return {
                 "status": "blocked",
                 "merge_outcome": "blocked",
                 "reason": "ci_running",
+                "gatedContinuation": continuation,
             }
         return {
             "status": "blocked",
             "merge_outcome": "blocked",
             "reason": "actionable_comments",
+            "gatedContinuation": continuation,
         }
 
     result, exit_code = run_orchestration(
@@ -1447,6 +1458,54 @@ def test_contract_finalize_retry_next_step_returns_reenter_gate(
     )
 
     assert disposition == "reenter_gate"
+
+
+def test_gated_continuation_rejects_null_retry_delay(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    build = pr_resolve_contract_module["build_gated_continuation"]
+
+    with pytest.raises(ValueError, match="retry delay must be positive"):
+        build(
+            {
+                "pr": {"headRefOid": "abcdef1234567890"},
+                "commentsSummary": {
+                    "codexReviewGrace": {"pollSeconds": None}
+                },
+            },
+            reason="ci_running",
+            execution_ref="step:1",
+        )
+
+
+def test_full_result_emits_typed_reenter_gate_contract(
+    pr_resolve_full_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "full-result.json"
+    pr_resolve_full_module["_write_result"](
+        result_path,
+        snapshot={
+            "pr": {
+                "number": 1209,
+                "url": "https://example.invalid/pull/1209",
+                "headRefOid": "abcdef1234567890",
+            }
+        },
+        status="needs_remediation",
+        merge_outcome="blocked",
+        decision="remediation required",
+        reason="actionable_comments",
+        next_step="run_fix_comments_skill",
+        max_iterations=5,
+        merge_method="squash",
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["mergeAutomationDisposition"] == "reenter_gate"
+    assert payload["gatedContinuation"]["executionRef"]
+    assert payload["gatedContinuation"]["headSha"] == "abcdef1234567890"
+    assert payload["gatedContinuation"]["retryAfterSeconds"] == 60
 
 
 def test_direct_finalizer_preserves_original_codex_review_deadline(

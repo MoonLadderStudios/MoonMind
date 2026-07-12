@@ -213,6 +213,7 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
             "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
             "metadata": {
                 "terminalContractOutcome": "continuation_requested",
+                "terminalContractExecutionRef": "exec-1",
                 "mergeAutomationDisposition": "reenter_gate",
                 "gatedContinuation": {
                     "reason": "codex_review_grace_wait",

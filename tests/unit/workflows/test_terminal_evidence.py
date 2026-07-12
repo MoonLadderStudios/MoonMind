@@ -211,6 +211,7 @@ def test_pr_resolver_terminal_classifies_reenter_gate_as_continuation(tmp_path: 
     assert result.satisfied is False
     assert result.failure_code is None
     assert result.metadata["gatedContinuation"]["action"] == "reenter_gate"
+    assert result.metadata["terminalContractExecutionRef"] == "step-1"
 
 
 def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:

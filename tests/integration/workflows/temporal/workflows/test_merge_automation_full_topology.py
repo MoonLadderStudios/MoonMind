@@ -136,6 +136,7 @@ async def _terminal_evidence(payload: dict[str, Any]) -> dict[str, Any]:
             "metadata": {
                 "terminalContractOutcome": "continuation_requested",
                 "terminalContractEvidencePath": "var/pr_resolver/result.json",
+                "terminalContractExecutionRef": contract["executionRef"],
                 "mergeAutomationDisposition": "reenter_gate",
                 "gatedContinuation": {
                     "schemaVersion": "gated-continuation/v1",
@@ -286,7 +287,10 @@ async def test_real_three_workflow_topology_waits_then_merges() -> None:
                         return
                     except Exception:
                         await asyncio.sleep(0.05)
-                parent_result = await asyncio.wait_for(handle.result(), timeout=2)
+                try:
+                    parent_result = await asyncio.wait_for(handle.result(), timeout=2)
+                except asyncio.TimeoutError:
+                    parent_result = "Timeout (still running)"
                 resolver_id = f"{resolver_base}:{cycle}"
                 try:
                     resolver_result = await env.client.get_workflow_handle(

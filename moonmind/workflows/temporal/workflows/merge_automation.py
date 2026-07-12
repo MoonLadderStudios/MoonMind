@@ -402,41 +402,43 @@ class MoonMindMergeAutomationWorkflow:
             or raw.get("action") != "reenter_gate"
         ):
             raise ValueError("invalid gated continuation contract")
-        required_text = (
-            "reason",
-            "executionRef",
-            "headSha",
-            "ownerWorkflowId",
-            "ownerRunId",
-            "ownerWorkflowType",
-            "childWorkflowId",
-            "childRunId",
-        )
-        if any(not str(raw.get(key) or "").strip() for key in required_text):
-            raise ValueError("incomplete gated continuation contract")
-        info = workflow.info()
-        if (
-            raw.get("ownerWorkflowId") != info.workflow_id
-            or raw.get("ownerRunId") != info.run_id
-            or raw.get("ownerWorkflowType") != WORKFLOW_NAME
-            or raw.get("childWorkflowId") != resolver_workflow_id
-        ):
-            raise ValueError("gated continuation ownership mismatch")
-        if workflow.patched(
+        strict_identity = workflow.patched(
             MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH
-        ) and (
-            raw.get("childRunId") != resolver_result.get("childRunId")
-            or raw.get("executionRef") != resolver_result.get("executionRef")
-        ):
-            raise ValueError("gated continuation execution identity mismatch")
-        head_sha = str(raw.get("headSha") or "").strip().lower()
-        expected_head = str(resolver_result.get("headSha") or "").strip().lower()
-        if not (7 <= len(head_sha) <= 64) or any(
-            c not in "0123456789abcdef" for c in head_sha
-        ):
-            raise ValueError("invalid gated continuation headSha")
-        if expected_head != head_sha:
-            raise ValueError("gated continuation headSha mismatch")
+        )
+        if strict_identity:
+            required_text = (
+                "reason",
+                "executionRef",
+                "headSha",
+                "ownerWorkflowId",
+                "ownerRunId",
+                "ownerWorkflowType",
+                "childWorkflowId",
+                "childRunId",
+            )
+            if any(not str(raw.get(key) or "").strip() for key in required_text):
+                raise ValueError("incomplete gated continuation contract")
+            info = workflow.info()
+            if (
+                raw.get("ownerWorkflowId") != info.workflow_id
+                or raw.get("ownerRunId") != info.run_id
+                or raw.get("ownerWorkflowType") != WORKFLOW_NAME
+                or raw.get("childWorkflowId") != resolver_workflow_id
+            ):
+                raise ValueError("gated continuation ownership mismatch")
+            if (
+                raw.get("childRunId") != resolver_result.get("childRunId")
+                or raw.get("executionRef") != resolver_result.get("executionRef")
+            ):
+                raise ValueError("gated continuation execution identity mismatch")
+            head_sha = str(raw.get("headSha") or "").strip().lower()
+            expected_head = str(resolver_result.get("headSha") or "").strip().lower()
+            if not (7 <= len(head_sha) <= 64) or any(
+                c not in "0123456789abcdef" for c in head_sha
+            ):
+                raise ValueError("invalid gated continuation headSha")
+            if expected_head != head_sha:
+                raise ValueError("gated continuation headSha mismatch")
         not_before = str(raw.get("notBefore") or "").strip()
         retry_after = raw.get("retryAfterSeconds")
         if not not_before and retry_after is None:

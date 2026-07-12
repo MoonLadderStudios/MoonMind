@@ -100,9 +100,17 @@ def build_gated_continuation(
         )
     else:
         poll_seconds = grace.get("pollSeconds", 60)
-        if isinstance(poll_seconds, bool) or int(poll_seconds) < 1:
-            raise ValueError("gated continuation retry delay must be positive")
-        payload["retryAfterSeconds"] = int(poll_seconds)
+        try:
+            if isinstance(poll_seconds, bool):
+                raise ValueError
+            poll_value = int(poll_seconds)
+            if poll_value < 1:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "gated continuation retry delay must be positive"
+            ) from exc
+        payload["retryAfterSeconds"] = poll_value
     return payload
 
 def parse_reason(result_payload: dict[str, Any]) -> str:

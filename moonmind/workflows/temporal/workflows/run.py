@@ -1136,6 +1136,7 @@ class MoonMindRunWorkflow:
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
         self._gated_continuation_request: Optional[dict[str, Any]] = None
+        self._gated_continuation_execution_ref: Optional[str] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -7573,7 +7574,7 @@ class MoonMindRunWorkflow:
                 output["completionDisposition"] = "gated_continuation"
             output["gatedContinuation"] = gated_continuation
             if workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH):
-                output["executionRef"] = gated_continuation.get("executionRef")
+                output["executionRef"] = self._gated_continuation_execution_ref
                 output["childRunId"] = gated_continuation.get("childRunId")
                 output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
@@ -12492,6 +12493,10 @@ class MoonMindRunWorkflow:
             node_id=node_id,
         )
         self._gated_continuation_request = gated_continuation
+        self._gated_continuation_execution_ref = self._coerce_text(
+            outputs.get("terminalContractExecutionRef"),
+            max_chars=240,
+        )
         if gated_continuation:
             self._publish_context["gatedContinuation"] = gated_continuation
         else:

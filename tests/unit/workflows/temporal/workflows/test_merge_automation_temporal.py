@@ -279,20 +279,12 @@ def test_pre_identity_patch_history_keeps_legacy_continuation_shape(
     deadline = workflow._continuation_deadline(
         {
             "completionDisposition": "gated_continuation",
-            "headSha": "abcdef1",
             "gatedContinuation": {
                 "schemaVersion": "gated-continuation/v1",
                 "gateType": "merge_automation",
                 "action": "reenter_gate",
                 "reason": "legacy recorded result",
                 "retryAfterSeconds": 60,
-                "executionRef": "step:1",
-                "headSha": "abcdef1",
-                "ownerWorkflowId": "merge-owner",
-                "ownerRunId": "owner-run",
-                "ownerWorkflowType": "MoonMind.MergeAutomation",
-                "childWorkflowId": "resolver-child",
-                "childRunId": "child-run",
             },
         },
         resolver_workflow_id="resolver-child",
