@@ -7,7 +7,7 @@ activity/service boundary client; workflow code uses deterministic handles.
 
 from __future__ import annotations
 
-import hashlib
+import hmac
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
@@ -53,7 +53,15 @@ def deterministic_lease_owner_id(
             idempotency_key,
         )
     )
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    # Use a domain-separated MAC rather than a plain hash. Some identity inputs
+    # originate at credential-sensitive boundaries; the resulting owner token
+    # must be stable for activity retries without exposing a reusable raw hash
+    # of those identifiers.
+    digest = hmac.digest(
+        b"moonmind-provider-profile-lease-owner-v1",
+        identity.encode("utf-8"),
+        "sha256",
+    ).hex()[:32]
     return f"profile-lease:{normalized_purpose}:{digest}"
 
 

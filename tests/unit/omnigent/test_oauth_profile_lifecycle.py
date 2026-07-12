@@ -112,9 +112,10 @@ def test_deterministic_owner_reuses_activity_retry_identity() -> None:
         "step_execution_id": "step-1",
         "idempotency_key": "idem-1",
     }
-    assert deterministic_lease_owner_id(**kwargs) == deterministic_lease_owner_id(
-        **kwargs
-    )
+    owner_id = deterministic_lease_owner_id(**kwargs)
+    assert owner_id == deterministic_lease_owner_id(**kwargs)
+    assert owner_id.startswith("profile-lease:execution_omnigent:")
+    assert all(value not in owner_id for value in ("codex", "wf-1", "idem-1"))
     assert CredentialLeasePurpose.OAUTH_RECONNECT.is_maintenance is True
     assert CredentialLeasePurpose.EXECUTION_DIRECT.is_maintenance is False
 
