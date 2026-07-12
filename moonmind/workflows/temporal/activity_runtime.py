@@ -10438,11 +10438,25 @@ class TemporalAgentRuntimeActivities:
                     and raw_commit_message.strip()
                 ):
                     push_kwargs["commit_message"] = raw_commit_message.strip()
-                push_info = await self._push_workspace_branch(
-                    run_id,
-                    github_token=workspace_github_token,
-                    **push_kwargs,
-                )
+                try:
+                    push_info = await self._push_workspace_branch(
+                        run_id,
+                        github_token=workspace_github_token,
+                        **push_kwargs,
+                    )
+                except Exception as exc:
+                    if not controlled_failure:
+                        raise
+                    logger.warning(
+                        "Terminal checkpoint publication failed for managed run %s: %s",
+                        run_id,
+                        exc,
+                    )
+                    push_info = {
+                        "push_status": "failed",
+                        "push_error": str(exc),
+                        "remote_verified": False,
+                    }
                 if (
                     controlled_failure
                     and push_info.get("push_status") == "pushed"
@@ -10452,15 +10466,24 @@ class TemporalAgentRuntimeActivities:
                 ):
                     expected_sha = str(push_info.get("push_head_sha") or "").strip()
                     published_branch = str(push_info.get("push_branch") or "").strip()
-                    remote_sha = await self._resolve_workspace_remote_branch_sha(
-                        workspace=record.workspace_path,
-                        branch=published_branch,
-                        run_id=run_id,
-                        env=self._workspace_command_env(
-                            record.workspace_path,
-                            github_token=workspace_github_token,
-                        ),
-                    )
+                    try:
+                        remote_sha = await self._resolve_workspace_remote_branch_sha(
+                            workspace=record.workspace_path,
+                            branch=published_branch,
+                            run_id=run_id,
+                            env=self._workspace_command_env(
+                                record.workspace_path,
+                                github_token=workspace_github_token,
+                            ),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Terminal checkpoint verification failed for managed run %s: %s",
+                            run_id,
+                            exc,
+                        )
+                        remote_sha = None
+                        push_info["push_error"] = str(exc)
                     push_info["remote_verified"] = bool(
                         expected_sha and remote_sha == expected_sha
                     )

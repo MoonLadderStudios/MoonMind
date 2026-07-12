@@ -2329,6 +2329,44 @@ class TestFetchResultPushIntegration:
         assert "terminalPublication" not in result.metadata
 
     @pytest.mark.asyncio
+    async def test_terminal_publication_exception_preserves_primary_failure(self):
+        store = _make_mock_store(failure_class="execution_error")
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("credential helper unavailable"),
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            MockAdapter.return_value.fetch_result = AsyncMock(
+                return_value=AgentRunResult(
+                    summary="original controlled failure",
+                    failure_class="execution_error",
+                )
+            )
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        assert result.failure_class == "execution_error"
+        assert result.summary == "original controlled failure"
+        publication = result.metadata["terminalPublication"]
+        assert publication["status"] == "failed"
+        assert publication["remoteVerified"] is False
+
+    @pytest.mark.asyncio
     async def test_fetch_result_reports_push_failure_in_metadata(self):
         """Push failure details propagated to result metadata."""
         store = _make_mock_store()

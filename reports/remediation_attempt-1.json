@@ -1,50 +1,82 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueRef": "MM-1205",
-  "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
+  "issueRef": "MoonLadderStudios/MoonMind#3229",
+  "sourceVerificationArtifact": "artifacts/github-issue-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "blocked_on_verification_environment",
-  "summary": "The latest MM-1205 verification report found no implementation gap and verified every repository-visible requirement. Remediation attempt 1 made no product or test changes because the only remaining work is execution evidence for existing Python and integration tests, and both required environments remain unavailable in this runtime.",
-  "changedFiles": [],
-  "artifactFilesUpdated": [
+  "status": "additional_work_remaining",
+  "summary": "Remediation attempt 1 fixed the concrete primary-failure masking defect at the terminal publication boundary and added regression coverage. Controlled-failure push and remote-verification exceptions are now converted to secondary failed publication evidence while the original AgentRun failure remains canonical. The verifier's broader orchestration, adoption, persistence, replay, frontend, and hermetic journey gaps remain open.",
+  "changedFiles": [
+    "moonmind/workflows/temporal/activity_runtime.py",
+    "tests/unit/services/temporal/test_fetch_result_push.py",
     "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Focused preset and helper unit tests",
-      "gapType": "verification",
-      "status": "blocked_in_current_runtime",
-      "implementationStatus": "verified_by_inspection",
-      "evidence": "The verifier identified direct coverage in tests/unit/api/test_batch_workflows_preset.py and tests/unit/test_batch_workflows.py. A fresh environment check confirms /usr/local/bin/python has no pytest module.",
-      "remaining": "Run the focused Python unit suite in a MoonMind managed image that includes pytest and confirm it passes.",
-      "recoverableInCurrentRuntime": false
+      "requirement": "Authoritative source resolution and parent-level gate/review failure recovery",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "Current implementation still publishes only from agent_runtime_fetch_result with a live managed workspace.",
+      "remaining": "Add checkpoint fallback and a parent finalization boundary that awaits publication before cleanup."
     },
     {
-      "requirement": "Startup-seeding and integration boundary regression evidence",
+      "requirement": "Adopt already-published equivalent branch or PR evidence",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "Provider-native runtimes remain excluded from terminal publication and no verified adoption path was added.",
+      "remaining": "Verify expected remote SHA and adopt equivalent provider-native branch/PR evidence without republishing."
+    },
+    {
+      "requirement": "Idempotent retries and durable evidence consistency",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "Branch and idempotency-key generation are deterministic, but no durable publication record/binding or retry reuse test exists.",
+      "remaining": "Persist and deduplicate terminal publication evidence and project the same binding everywhere."
+    },
+    {
+      "requirement": "Eligibility, authority, security, and primary-failure invariants",
       "gapType": "verification",
-      "status": "blocked_in_current_runtime",
-      "implementationStatus": "verified_by_inspection",
-      "evidence": "The verifier identified direct startup-seeding coverage in tests/integration/test_startup_preset_seeding.py and recorded that the isolated moonmind-test Compose build stops before test execution because the Docker daemon lacks required BuildKit support.",
-      "remaining": "Run the integration_ci suite, or at minimum the startup preset seeding test, with a BuildKit-capable Docker daemon and confirm it passes.",
-      "recoverableInCurrentRuntime": false
+      "status": "partially_remediated",
+      "evidence": "activity_runtime.py now catches controlled-failure push and remote-verification exceptions; test_terminal_publication_exception_preserves_primary_failure proves the original execution_error and summary survive with failed secondary publication evidence.",
+      "remaining": "Add the verifier's full classification/policy/security matrix, including no_changes, noRemoteWrites, scan/protected-ref/lease failures, inaccessible workspaces, and verification mismatch."
+    },
+    {
+      "requirement": "Temporal replay/in-flight safety",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "No new patch marker or replay fixture was added in this attempt.",
+      "remaining": "Guard command-shaping changes with a Temporal patch/cutover and add prior-history replay coverage."
+    },
+    {
+      "requirement": "Saved Work Branch frontend behavior",
+      "gapType": "verification",
+      "status": "remaining",
+      "evidence": "The existing UI suite passes, but no issue-specific rendering/order/absence test was added.",
+      "remaining": "Add schema/render tests for verified Saved Work Branch placement before PR Link and absence for unverified evidence."
+    },
+    {
+      "requirement": "Hermetic end-to-end controlled-failure preservation journey",
+      "gapType": "verification",
+      "status": "remaining",
+      "evidence": "Focused unit and UI suites pass, but no new compose-backed end-to-end journey was added or run.",
+      "remaining": "Add the verifier-specified workflow/activity/API integration journey and run the selected integration_ci suite."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "python -m pytest --version",
-      "result": "BLOCKED",
-      "details": "/usr/local/bin/python: No module named pytest"
+      "command": "python -m compileall -q moonmind/workflows/temporal/activity_runtime.py",
+      "result": "PASS",
+      "details": "Updated activity runtime compiles successfully."
     },
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_batch_workflows_preset.py tests/unit/api/test_batch_github_workflows_preset.py tests/unit/test_batch_workflows.py",
-      "result": "NOT_RERUN",
-      "details": "The immediately preceding authoritative verifier ran this command and it stopped before collection because pytest is absent; the fresh pytest availability check reproduces that prerequisite failure."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/test_fetch_result_push.py tests/unit/api/routers/test_executions.py",
+      "result": "PASS",
+      "details": "443 Python tests passed; the runner's UI phase also passed 1080 tests with 238 skipped. pytest and pytest-asyncio were installed into the ephemeral user environment because the managed image initially omitted them."
     },
     {
-      "command": "MOONMIND_TEST_COMPOSE_PROJECT_NAME=moonmind-test ./tools/test_integration.sh",
-      "result": "NOT_RERUN",
-      "details": "The immediately preceding authoritative verifier attempted this command and the isolated Compose build stopped before tests because the daemon does not support the Dockerfile's required BuildKit --mount syntax."
+      "command": "git diff --check",
+      "result": "PASS",
+      "details": "No whitespace errors."
     }
   ]
 }
