@@ -85,7 +85,7 @@ describe('status pill shimmer computed styles', () => {
 
       // The layers must carry the operator-approved MM-1036 palette: a
       // translucent accent halo (14%) under a translucent accent-2 core (34%)
-      // on the approved -18deg path. This is the assertion that was missing
+      // on the approved -28deg path. This is the assertion that was missing
       // when the shimmer was "restored" with MM-1048's never-rendered brighter
       // treatment (30% halo, fully opaque whitened core): a gradient rendered
       // and moved, so the old guardrail passed while the look had changed
@@ -94,7 +94,7 @@ describe('status pill shimmer computed styles', () => {
       const expectedHalo = 'rgba(130, 72, 246, 0.14)';
       const expectedCore = theme === 'dark' ? 'rgba(125, 249, 255, 0.34)' : 'rgba(34, 211, 238, 0.34)';
       for (const layer of [before, after, letterAfter!]) {
-        expect(layer.backgroundImage).toContain('-18deg');
+        expect(layer.backgroundImage).toContain('-28deg');
         expect(layer.backgroundImage).toContain(expectedHalo);
         expect(layer.backgroundImage).toContain(expectedCore);
         // The sweep is a subtle translucent light field. An opaque (or

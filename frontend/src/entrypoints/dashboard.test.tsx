@@ -3018,9 +3018,11 @@ describe('Dashboard shared entry', () => {
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
     expect(dashboardCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
     // Approved shimmer geometry (MM-1036 as shipped and operator-reviewed).
-    // MM-1048's -20deg / +/-120% re-angle never rendered (its own commit broke
-    // gradient resolution), so it is not the approved look.
-    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-18deg/);
+    // The sweep angle was steepened from -18deg to -28deg per operator review
+    // so the shimmer line sits ~10deg further from horizontal (closer to
+    // vertical). MM-1048's -20deg / +/-120% re-angle never rendered (its own
+    // commit broke gradient resolution), so it is not the approved look.
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-angle:\s*-28deg/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
     expect(dashboardCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
