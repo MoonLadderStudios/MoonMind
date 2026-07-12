@@ -531,6 +531,23 @@ class AgentTerminalContract(BaseModel):
             raise ValueError("terminal evidence path must be relative and traversal-free")
         return normalized
 
+class AgentTerminalContinuationAuthority(BaseModel):
+    """Internal proof that a durable Temporal parent owns continuation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["terminal-continuation-authority/v1"] = Field(
+        "terminal-continuation-authority/v1", alias="schemaVersion"
+    )
+    gate_type: Literal["merge_automation"] = Field(alias="gateType")
+    owner_workflow_id: str = Field(alias="ownerWorkflowId", min_length=1)
+    owner_run_id: str | None = Field(None, alias="ownerRunId", min_length=1)
+    allowed_actions: list[Literal["reenter_gate"]] = Field(alias="allowedActions")
+    source: Literal["validated_temporal_parent"]
+
+    def allows(self, *, gate_type: str, action: str) -> bool:
+        return self.gate_type == gate_type and action in self.allowed_actions
+
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""
 
@@ -551,6 +568,9 @@ class AgentExecutionRequest(BaseModel):
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
     terminal_contract: AgentTerminalContract | None = Field(
         None, alias="terminalContract"
+    )
+    terminal_continuation_authority: AgentTerminalContinuationAuthority | None = Field(
+        None, alias="terminalContinuationAuthority"
     )
     managed_session: CodexManagedSessionBinding | None = Field(
         None, alias="managedSession"

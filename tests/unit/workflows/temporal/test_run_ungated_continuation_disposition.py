@@ -179,6 +179,7 @@ def test_legacy_reenter_gate_maps_to_typed_gated_continuation() -> None:
             "workflow-owned merge gate to continue."
         ),
         "sideEffects": {"externalPullRequest": True},
+        "headSha": "abc123",
     }
     assert (
         workflow._publish_context["gatedContinuation"]

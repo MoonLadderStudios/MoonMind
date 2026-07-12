@@ -5,12 +5,21 @@ import pytest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
+import signal
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.runtime.strategies.base import ManagedRuntimeExitResult
+
+
+def test_terminal_cli_cleanup_targets_owned_process_group() -> None:
+    process = SimpleNamespace(pid=4321)
+    with patch("os.killpg") as killpg:
+        ManagedRunSupervisor._terminate_owned_process_group_best_effort(process)
+
+    killpg.assert_called_once_with(4321, signal.SIGTERM)
 
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""

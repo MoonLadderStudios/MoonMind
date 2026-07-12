@@ -549,6 +549,14 @@ Allowed values:
 - `merged`
 - `already_merged`
 - `reenter_gate`
+
+For `reenter_gate`, a successful resolver child result means the child satisfied
+its durable handoff contract; it does not mean the pull request merged. The
+result carries `completionDisposition=gated_continuation` and a normalized
+`gatedContinuation`. Merge automation waits until the Skill-authored
+`notBefore`; legacy handoffs without timing use `fallbackPollSeconds` rather than
+relaunching immediately. Runtime same-session continuation capability is not
+consulted for this parent-owned continuation.
 - `manual_review`
 - `failed`
 

@@ -184,6 +184,51 @@ async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(
     assert calls == ["agent_runtime.evaluate_terminal_evidence"]
 
 
+async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+            "terminalContinuationAuthority": {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": "merge-automation:1",
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            },
+        }
+    )
+
+    async def fake_activity(_name: str, _payload: Any, **_kwargs: Any) -> Any:
+        return {
+            "summary": "durable handoff",
+            "failureClass": "execution_error",
+            "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
+            "metadata": {
+                "terminalContractOutcome": "continuation_requested",
+                "mergeAutomationDisposition": "reenter_gate",
+            },
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "durable_parent_handoff"
+    )
+    assert result.metadata["terminalContractContinuationCount"] == 0
+
+
 async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -26,6 +26,28 @@
       "enum": ["merged", "already_merged", "reenter_gate", "manual_review", "failed"],
       "description": "Terminal disposition consumed by MoonMind.MergeAutomation."
     },
+    "gatedContinuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "const": "gated-continuation/v1" },
+        "gateType": { "const": "merge_automation" },
+        "action": { "const": "reenter_gate" },
+        "reason": { "type": "string", "minLength": 1 },
+        "notBefore": { "type": "string", "format": "date-time" },
+        "retryAfterSeconds": { "type": "integer", "minimum": 1 },
+        "executionRef": { "type": "string", "minLength": 1 },
+        "headSha": { "type": "string", "pattern": "^[0-9a-fA-F]{7,64}$" },
+        "evidenceRefs": { "type": "object", "additionalProperties": { "type": "string" } },
+        "budget": { "type": "object" }
+      },
+      "required": ["schemaVersion", "gateType", "action", "reason"],
+      "oneOf": [
+        { "required": ["notBefore"], "not": { "required": ["retryAfterSeconds"] } },
+        { "required": ["retryAfterSeconds"], "not": { "required": ["notBefore"] } },
+        { "not": { "anyOf": [{ "required": ["notBefore"] }, { "required": ["retryAfterSeconds"] }] } }
+      ]
+    },
     "reason": {
       "type": ["string", "null"],
       "description": "Blocking or failure reason when applicable."
@@ -67,5 +89,11 @@
       }
     }
   },
-  "required": ["decision", "merge_outcome", "mergeAutomationDisposition"]
+  "required": ["decision", "merge_outcome", "mergeAutomationDisposition"],
+  "allOf": [
+    {
+      "if": { "required": ["gatedContinuation"] },
+      "then": { "properties": { "mergeAutomationDisposition": { "const": "reenter_gate" } } }
+    }
+  ]
 }

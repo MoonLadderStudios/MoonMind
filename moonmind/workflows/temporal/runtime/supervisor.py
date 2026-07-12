@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 import shutil
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -565,10 +566,34 @@ class ManagedRunSupervisor:
 
             return record
         finally:
+            self._terminate_owned_process_group_best_effort(process)
             self._log_streamer.consume_annotations(run_id)
             self._log_streamer.consume_observability_events(run_id)
             self._active_processes.pop(run_id, None)
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
+
+    @staticmethod
+    def _terminate_owned_process_group_best_effort(
+        process: asyncio.subprocess.Process,
+    ) -> None:
+        """Terminate descendants left in the managed CLI's owned process group."""
+
+        if os.name == "nt" or not process.pid:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            logger.info(
+                "Managed CLI exited; requested cleanup of owned process group pgid=%s",
+                process.pid,
+            )
+        except ProcessLookupError:
+            return
+        except OSError:
+            logger.warning(
+                "Unable to clean up owned process group pgid=%s",
+                process.pid,
+                exc_info=True,
+            )
 
     async def _heartbeat_and_wait(
         self,

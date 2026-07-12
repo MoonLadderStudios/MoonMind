@@ -151,7 +151,6 @@ def test_pr_resolver_terminal_accepts_publish_evidence_from_spool(tmp_path: Path
 @pytest.mark.parametrize(
     ("disposition", "failure_code"),
     [
-        ("reenter_gate", "PR_RESOLVER_REENTER_GATE"),
         ("manual_review", "PR_RESOLVER_MANUAL_REVIEW"),
         ("failed", "PR_RESOLVER_FAILED"),
     ],
@@ -178,6 +177,40 @@ def test_pr_resolver_terminal_rejects_unsuccessful_dispositions(
 
     assert result.satisfied is False
     assert result.failure_code == failure_code
+
+
+def test_pr_resolver_terminal_classifies_reenter_gate_as_continuation(tmp_path: Path) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "reenter_gate",
+                "executionRef": "step-1",
+                "gatedContinuation": {
+                    "schemaVersion": "gated-continuation/v1",
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "codex_review_grace_wait",
+                    "notBefore": "2026-07-12T05:05:49Z",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.outcome == "continuation_requested"
+    assert result.satisfied is False
+    assert result.failure_code is None
+    assert result.metadata["gatedContinuation"]["action"] == "reenter_gate"
 
 
 def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:

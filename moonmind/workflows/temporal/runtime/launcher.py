@@ -1702,6 +1702,7 @@ class ManagedRuntimeLauncher:
                     stderr=asyncio.subprocess.PIPE,
                     env=env_overrides,
                     cwd=resolved_workspace_path,
+                    start_new_session=True,
                 )
             else:
                 process = await asyncio.create_subprocess_exec(
@@ -1711,6 +1712,7 @@ class ManagedRuntimeLauncher:
                     stderr=asyncio.subprocess.PIPE,
                     env=env_overrides,
                     cwd=resolved_workspace_path,
+                    start_new_session=True,
                 )
         except Exception:
             if self._log_streamer is not None:

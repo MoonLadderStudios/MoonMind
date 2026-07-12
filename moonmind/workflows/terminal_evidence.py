@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
+
+TerminalEvidenceOutcome = Literal[
+    "terminal_success", "continuation_requested", "terminal_failure"
+]
 
 
 @dataclass(frozen=True)
@@ -15,6 +20,23 @@ class TerminalEvidenceEvaluation:
     failure_code: str | None = None
     missing_evidence: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    outcome: TerminalEvidenceOutcome = "terminal_failure"
+
+
+def _failure(
+    failure_code: str,
+    missing_evidence: tuple[str, ...] = (),
+    metadata: dict[str, Any] | None = None,
+) -> TerminalEvidenceEvaluation:
+    return TerminalEvidenceEvaluation(
+        False, failure_code, missing_evidence, metadata or {}
+    )
+
+
+def _success(metadata: dict[str, Any] | None = None) -> TerminalEvidenceEvaluation:
+    return TerminalEvidenceEvaluation(
+        True, metadata=metadata or {}, outcome="terminal_success"
+    )
 
 
 def evaluate_terminal_evidence(
@@ -22,13 +44,13 @@ def evaluate_terminal_evidence(
 ) -> TerminalEvidenceEvaluation:
     contract_id = str(contract.get("contractId") or contract.get("contract_id") or "")
     if contract_id not in {"batch_workflows_fanout.v1", "pr_resolver_terminal.v1"}:
-        return TerminalEvidenceEvaluation(False, "UNSUPPORTED_TERMINAL_CONTRACT")
+        return _failure("UNSUPPORTED_TERMINAL_CONTRACT")
     relative = str(contract.get("relativePath") or contract.get("relative_path") or "")
     normalized_relative = relative.replace("\\", "/")
     relative_path = Path(normalized_relative)
     workspace = Path(workspace_path).resolve()
     if not relative or relative_path.is_absolute() or ".." in relative_path.parts:
-        return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE_PATH")
+        return _failure("INVALID_TERMINAL_EVIDENCE_PATH")
     evidence_root = workspace
     evidence_relative = relative_path
     if artifact_spool_path and relative_path.parts[:1] == ("artifacts",):
@@ -38,17 +60,15 @@ def evaluate_terminal_evidence(
     try:
         evidence_path.relative_to(evidence_root)
     except ValueError:
-        return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE_PATH")
+        return _failure("INVALID_TERMINAL_EVIDENCE_PATH")
     if not evidence_path.is_file():
-        return TerminalEvidenceEvaluation(
-            False, "INCOMPLETE_TERMINAL_CONTRACT", (relative,)
-        )
+        return _failure("INCOMPLETE_TERMINAL_CONTRACT", (relative,))
     try:
         payload = json.loads(evidence_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return TerminalEvidenceEvaluation(False, "MALFORMED_TERMINAL_EVIDENCE")
+        return _failure("MALFORMED_TERMINAL_EVIDENCE")
     if not isinstance(payload, dict):
-        return TerminalEvidenceEvaluation(False, "MALFORMED_TERMINAL_EVIDENCE")
+        return _failure("MALFORMED_TERMINAL_EVIDENCE")
     if contract_id == "pr_resolver_terminal.v1":
         disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
         expected_execution = str(
@@ -61,9 +81,7 @@ def evaluate_terminal_evidence(
             "mergeAutomationDisposition": disposition,
         }
         if not expected_execution or evidence_execution != expected_execution:
-            return TerminalEvidenceEvaluation(
-                False, "STALE_TERMINAL_EVIDENCE", metadata=metadata
-            )
+            return _failure("STALE_TERMINAL_EVIDENCE", metadata=metadata)
         if disposition not in {
             "merged",
             "already_merged",
@@ -71,9 +89,7 @@ def evaluate_terminal_evidence(
             "manual_review",
             "failed",
         }:
-            return TerminalEvidenceEvaluation(
-                False, "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
-            )
+            return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
         if disposition in {"merged", "already_merged"}:
             publish_path = (workspace / "artifacts/publish_result.json").resolve()
             if artifact_spool_path and not publish_path.is_file():
@@ -81,21 +97,52 @@ def evaluate_terminal_evidence(
                     Path(artifact_spool_path) / "publish_result.json"
                 ).resolve()
             if not publish_path.is_file():
-                return TerminalEvidenceEvaluation(
-                    False,
+                return _failure(
                     "INCOMPLETE_TERMINAL_CONTRACT",
                     ("artifacts/publish_result.json",),
                     metadata,
                 )
-            return TerminalEvidenceEvaluation(True, metadata=metadata)
+            return _success(metadata)
+        if disposition == "reenter_gate":
+            continuation = payload.get("gatedContinuation")
+            if isinstance(continuation, Mapping):
+                if (
+                    continuation.get("schemaVersion") != "gated-continuation/v1"
+                    or continuation.get("gateType") != "merge_automation"
+                    or continuation.get("action") != "reenter_gate"
+                ):
+                    return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
+                not_before = str(continuation.get("notBefore") or "").strip()
+                retry_after = continuation.get("retryAfterSeconds")
+                if not_before and retry_after is not None:
+                    return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
+                if not_before:
+                    try:
+                        parsed = datetime.fromisoformat(
+                            not_before.replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        return _failure(
+                            "MALFORMED_TERMINAL_EVIDENCE", metadata=metadata
+                        )
+                    if parsed.tzinfo is None:
+                        return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
+                if retry_after is not None and (
+                    isinstance(retry_after, bool)
+                    or not isinstance(retry_after, int)
+                    or retry_after < 1
+                ):
+                    return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
+                metadata["gatedContinuation"] = dict(continuation)
+            metadata["terminalContractOutcome"] = "continuation_requested"
+            return TerminalEvidenceEvaluation(
+                False, metadata=metadata, outcome="continuation_requested"
+            )
         failure_codes = {
-            "reenter_gate": "PR_RESOLVER_REENTER_GATE",
             "manual_review": "PR_RESOLVER_MANUAL_REVIEW",
             "failed": "PR_RESOLVER_FAILED",
         }
-        return TerminalEvidenceEvaluation(
-            False, failure_codes[disposition], metadata=metadata
-        )
+        return _failure(failure_codes[disposition], metadata=metadata)
     expected_schema = str(
         contract.get("expectedSchemaVersion")
         or contract.get("expected_schema_version")
@@ -147,11 +194,11 @@ def evaluate_terminal_evidence(
     ):
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE", metadata=metadata)
     if status == "no_op" and requested == 0 and created == 0 and queued == []:
-        return TerminalEvidenceEvaluation(True, metadata=metadata)
+        return _success(metadata)
     if (
         status == "queued" and requested > 0
         and created == requested and not errors and not skipped
         and all(isinstance(item, dict) and item.get("executionId") for item in queued)
     ):
-        return TerminalEvidenceEvaluation(True, metadata=metadata)
+        return _success(metadata)
     return TerminalEvidenceEvaluation(False, "INCOMPLETE_TERMINAL_CONTRACT", metadata=metadata)
