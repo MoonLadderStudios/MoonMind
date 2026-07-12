@@ -4546,9 +4546,9 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .step-tl-icon svg {
-  width: 1.05rem;
-  height: 1.05rem;
-  stroke-width: 2.4;
+  width: 1.3rem;
+  height: 1.3rem;
+  stroke-width: 2;
 }
 
 .step-tl-icon.status-completed {
