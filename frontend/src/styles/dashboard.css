@@ -21,10 +21,16 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
+  /* Highlight-edge treatment: bright top-edge inset, a lit bottom-edge inset
+   * (accent lightened toward white), a hairline ring that closes the shape,
+   * and a tight accent glow hugging the bottom edge. The previous wide glow
+   * (0 18px 32px -16px) was too diffuse to register at 1x against the
+   * masthead's glass fill, which left the bottom edge reading as unlit. */
   --mm-shadow-highlight-edge:
     inset 0 1px 0 rgb(255 255 255 / 0.26),
+    inset 0 -1px 0 rgb(167 139 250 / 0.75),
     0 0 0 1px rgb(255 255 255 / 0.34),
-    0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
+    0 3px 9px -2px rgb(var(--mm-accent) / 0.75);
   --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
   --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
   --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
