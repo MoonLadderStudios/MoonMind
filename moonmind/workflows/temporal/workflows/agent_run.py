@@ -72,6 +72,9 @@ with workflow.unsafe.imports_passed_through():
 
 TERMINAL_CONTRACT_CONTINUATION_PATCH_ID = "agent-run-terminal-contract-continuation-v1"
 PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID = "agent-run-pr-resolver-owned-continuation-v1"
+PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
+    "agent-run-pr-resolver-continuation-observability-v1"
+)
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 
 
@@ -2002,6 +2005,19 @@ class MoonMindAgentRun:
             and synthetic_reenter_gate_failure
         ):
             metadata = dict(evaluated.metadata or {})
+            metrics = dict(evaluated.metrics or {})
+            continuation = metadata.get("gatedContinuation")
+            continuation = continuation if isinstance(continuation, Mapping) else {}
+            observability_enabled = workflow.patched(
+                PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID
+            )
+            if observability_enabled:
+                metrics.update(
+                    {
+                        "continuation_requested": 1,
+                        "continuation_accepted": 1,
+                    }
+                )
             metadata.update(
                 {
                     "terminalContractRecoveryOutcome": "durable_parent_handoff",
@@ -2013,12 +2029,32 @@ class MoonMindAgentRun:
                     "gateOwnerWorkflowType": continuation_authority.owner_workflow_type,
                 }
             )
+            if observability_enabled:
+                metadata.update(
+                    {
+                        "continuationReason": continuation.get("reason"),
+                        "continuationNotBefore": continuation.get("notBefore"),
+                        "continuationRetryAfterSeconds": continuation.get(
+                            "retryAfterSeconds"
+                        ),
+                        "continuationTimingSource": (
+                            "skill_not_before"
+                            if continuation.get("notBefore")
+                            else (
+                                "skill_retry_after"
+                                if continuation.get("retryAfterSeconds") is not None
+                                else "legacy_fallback"
+                            )
+                        ),
+                    }
+                )
             return evaluated.model_copy(
                 update={
                     "failure_class": None,
                     "provider_error_code": None,
                     "retry_recommendation": None,
                     "metadata": metadata,
+                    "metrics": metrics,
                 }
             )
         if (
@@ -2026,18 +2062,28 @@ class MoonMindAgentRun:
             == "continuation_requested"
         ):
             metadata = dict(evaluated.metadata or {})
+            metrics = dict(evaluated.metrics or {})
             rejection = (
                 "continuation_rejected_failure_provenance"
                 if continuation_authority is not None
                 else "continuation_rejected_unowned"
             )
+            if workflow.patched(PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID):
+                metrics["continuation_requested"] = 1
+                metrics[
+                    "continuation_rejected_schema"
+                    if continuation_authority is not None
+                    else "continuation_rejected_ownership"
+                ] = 1
             metadata.update(
                 {
                     "terminalContractRecoveryOutcome": rejection,
                     "terminalContractContinuationCount": 0,
                 }
             )
-            return evaluated.model_copy(update={"metadata": metadata})
+            return evaluated.model_copy(
+                update={"metadata": metadata, "metrics": metrics}
+            )
         if evaluated.failure_class is None:
             return evaluated
 

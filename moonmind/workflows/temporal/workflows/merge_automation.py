@@ -67,6 +67,12 @@ MERGE_AUTOMATION_POST_RESOLVER_PROGRESS_RECOVERY_PATCH = (
 MERGE_AUTOMATION_RESOLVER_CONTINUATION_DELAY_PATCH = (
     "merge-automation-resolver-continuation-delay-v1"
 )
+MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH = (
+    "merge-automation-strict-continuation-identity-v1"
+)
+MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH = (
+    "merge-automation-continuation-observability-v1"
+)
 RESOLVER_ISSUE_RECOVERY_NONE = "none"
 RESOLVER_ISSUE_RECOVERY_COMPLETED = "completed"
 RESOLVER_ISSUE_RECOVERY_REENTER_GATE = "reenter_gate"
@@ -99,6 +105,17 @@ class MoonMindMergeAutomationWorkflow:
         self._post_merge_jira_result: dict[str, Any] | None = None
         self._post_merge_github_result: dict[str, Any] | None = None
         self._external_event_count = 0
+        self._continuation_observability_enabled = False
+        self._continuation_counters: dict[str, int] = {
+            "continuation_requested": 0,
+            "continuation_accepted": 0,
+            "continuation_rejected_ownership": 0,
+            "continuation_rejected_schema": 0,
+            "continuation_wait_started": 0,
+            "continuation_wait_completed": 0,
+            "continuation_cycle_completed": 0,
+            "legacy_continuation_fallback_used": 0,
+        }
         self._refresh_tracked_head_sha_on_next_evaluation = False
         self._summary: str | None = None
 
@@ -134,6 +151,8 @@ class MoonMindMergeAutomationWorkflow:
             ],
             "artifactRefs": artifact_refs,
         }
+        if self._continuation_observability_enabled:
+            payload["continuationCounters"] = dict(self._continuation_counters)
         if self._summary:
             payload["summary"] = self._summary
         if self._post_merge_jira_result is not None:
@@ -293,6 +312,37 @@ class MoonMindMergeAutomationWorkflow:
                 "mergeAutomationDisposition": result.get("mergeAutomationDisposition"),
                 "headSha": result.get("headSha"),
             }
+            continuation = result.get("gatedContinuation")
+            if isinstance(continuation, Mapping):
+                normalized = {
+                    key: continuation.get(key)
+                    for key in (
+                        "schemaVersion",
+                        "gateType",
+                        "action",
+                        "reason",
+                        "notBefore",
+                        "retryAfterSeconds",
+                        "executionRef",
+                        "headSha",
+                        "ownerWorkflowId",
+                        "ownerRunId",
+                        "ownerWorkflowType",
+                        "childWorkflowId",
+                        "childRunId",
+                    )
+                    if continuation.get(key) is not None
+                }
+                payload["continuation"] = normalized
+                payload["continuationTimingSource"] = (
+                    "skill_not_before"
+                    if normalized.get("notBefore")
+                    else (
+                        "skill_retry_after"
+                        if normalized.get("retryAfterSeconds") is not None
+                        else "legacy_fallback"
+                    )
+                )
         attempt_name = (
             "artifacts/merge_automation/resolver_attempts/"
             f"{len(self._resolver_child_workflow_ids)}.json"
@@ -372,6 +422,13 @@ class MoonMindMergeAutomationWorkflow:
             or raw.get("childWorkflowId") != resolver_workflow_id
         ):
             raise ValueError("gated continuation ownership mismatch")
+        if workflow.patched(
+            MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH
+        ) and (
+            raw.get("childRunId") != resolver_result.get("childRunId")
+            or raw.get("executionRef") != resolver_result.get("executionRef")
+        ):
+            raise ValueError("gated continuation execution identity mismatch")
         head_sha = str(raw.get("headSha") or "").strip().lower()
         expected_head = str(resolver_result.get("headSha") or "").strip().lower()
         if not (7 <= len(head_sha) <= 64) or any(
@@ -383,6 +440,8 @@ class MoonMindMergeAutomationWorkflow:
         not_before = str(raw.get("notBefore") or "").strip()
         retry_after = raw.get("retryAfterSeconds")
         if not not_before and retry_after is None:
+            if self._continuation_observability_enabled:
+                self._continuation_counters["legacy_continuation_fallback_used"] += 1
             return workflow.now() + timedelta(
                 seconds=self._input.config.timeouts.fallback_poll_seconds
             )
@@ -732,6 +791,9 @@ class MoonMindMergeAutomationWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeAutomationStartInput.model_validate(payload)
+        self._continuation_observability_enabled = workflow.patched(
+            MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH
+        )
         self._status = STATE_WAITING
         expire_at = _effective_expire_at(self._input, started_at=workflow.now())
         self._publish_visibility()
@@ -894,6 +956,8 @@ class MoonMindMergeAutomationWorkflow:
                 if (
                     resolver_disposition == DISPOSITION_REENTER_GATE
                 ):
+                    if self._continuation_observability_enabled:
+                        self._continuation_counters["continuation_requested"] += 1
                     self._refresh_tracked_head_sha_on_next_evaluation = (
                         not self._refresh_tracked_head_sha(resolver_result)
                     )
@@ -908,6 +972,19 @@ class MoonMindMergeAutomationWorkflow:
                                 resolver_workflow_id=resolver_workflow_id,
                             )
                         except (TypeError, ValueError):
+                            raw_continuation = (
+                                resolver_result.get("gatedContinuation")
+                                if isinstance(resolver_result, Mapping)
+                                else None
+                            )
+                            rejection_counter = (
+                                "continuation_rejected_ownership"
+                                if isinstance(raw_continuation, Mapping)
+                                and raw_continuation.get("ownerWorkflowId")
+                                else "continuation_rejected_schema"
+                            )
+                            if self._continuation_observability_enabled:
+                                self._continuation_counters[rejection_counter] += 1
                             return await self._failed_resolver_summary(
                                 summary="pr-resolver returned an invalid gated continuation.",
                                 blocker_kind="resolver_continuation_invalid",
@@ -923,6 +1000,9 @@ class MoonMindMergeAutomationWorkflow:
                         delay = max(
                             0.0, (continuation_deadline - workflow.now()).total_seconds()
                         )
+                        if self._continuation_observability_enabled:
+                            self._continuation_counters["continuation_accepted"] += 1
+                            self._continuation_counters["continuation_wait_started"] += 1
                         try:
                             await workflow.sleep(timedelta(seconds=delay))
                         except CancelledError:
@@ -939,6 +1019,9 @@ class MoonMindMergeAutomationWorkflow:
                             # use the deterministic workflow timer above.
                             if type(exc).__name__ != "_NotInWorkflowEventLoopError":
                                 raise
+                        if self._continuation_observability_enabled:
+                            self._continuation_counters["continuation_wait_completed"] += 1
+                            self._continuation_counters["continuation_cycle_completed"] += 1
                     continue
                 if resolver_disposition == DISPOSITION_ALREADY_MERGED:
                     if not await self._complete_post_merge_integrations(

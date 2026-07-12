@@ -590,6 +590,13 @@ recompute or extend it. Authorization may clear only the synthetic
 rate-limit, infrastructure, timeout, cancellation, stale-evidence, and
 malformed-evidence failures remain failures even when continuation metadata is
 present.
+
+The parent validates `childRunId` and `executionRef` against the corresponding
+authoritative fields returned by the resolver child, in addition to owner ID,
+owner run, owner workflow type, child workflow ID, reason, timing, and head SHA.
+The summary and resolver-attempt evidence expose normalized continuation data,
+timing source, and counters for requests, acceptance, ownership/schema
+rejections, wait start/completion, completed cycles, and legacy fallback use.
 - `manual_review`
 - `failed`
 

@@ -1744,6 +1744,7 @@ def test_finalize_merge_request_waits_for_authoritative_merged_state(
         "pr": {
             "number": 3210,
             "state": "OPEN",
+            "headRefOid": "abcdef1234567890",
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "CLEAN",
         },

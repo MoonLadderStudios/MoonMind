@@ -11,6 +11,7 @@ from temporalio.workflow import ChildWorkflowCancellationType
 from moonmind.workflows.temporal.workflows import merge_automation as merge_automation_module
 from moonmind.workflows.temporal.workflows.merge_automation import (
     MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH,
+    MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH,
     MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     MoonMindMergeAutomationWorkflow,
 )
@@ -168,6 +169,7 @@ def test_legacy_gated_continuation_uses_fallback_poll_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindMergeAutomationWorkflow()
+    workflow._continuation_observability_enabled = True
     workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
         _payload()
     )
@@ -178,11 +180,12 @@ def test_legacy_gated_continuation_uses_fallback_poll_deadline(
         "info",
         lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
     )
-
     deadline = workflow._continuation_deadline(
         {
             "completionDisposition": "gated_continuation",
             "headSha": "abcdef1",
+            "executionRef": "step:1",
+            "childRunId": "child-run",
             "gatedContinuation": {
                 "schemaVersion": "gated-continuation/v1",
                 "gateType": "merge_automation",
@@ -201,6 +204,141 @@ def test_legacy_gated_continuation_uses_fallback_poll_deadline(
     )
 
     assert deadline.timestamp() - now.timestamp() == 300
+    assert workflow._continuation_counters["legacy_continuation_fallback_used"] == 1
+
+
+@pytest.mark.parametrize(
+    "top_level_field",
+    ["childRunId", "executionRef"],
+)
+def test_gated_continuation_rejects_execution_identity_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    top_level_field: str,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        _payload()
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+    )
+    continuation = {
+        "schemaVersion": "gated-continuation/v1",
+        "gateType": "merge_automation",
+        "action": "reenter_gate",
+        "reason": "codex_review_grace_wait",
+        "retryAfterSeconds": 60,
+        "executionRef": "step:1",
+        "headSha": "abcdef1",
+        "ownerWorkflowId": "merge-owner",
+        "ownerRunId": "owner-run",
+        "ownerWorkflowType": "MoonMind.MergeAutomation",
+        "childWorkflowId": "resolver-child",
+        "childRunId": "child-run",
+    }
+    result = {
+        "completionDisposition": "gated_continuation",
+        "headSha": "abcdef1",
+        "executionRef": "step:1",
+        "childRunId": "child-run",
+        "gatedContinuation": continuation,
+    }
+    result[top_level_field] = "mismatch"
+
+    with pytest.raises(ValueError, match="execution identity mismatch"):
+        workflow._continuation_deadline(
+            result,
+            resolver_workflow_id="resolver-child",
+        )
+
+
+def test_pre_identity_patch_history_keeps_legacy_continuation_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        _payload()
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda patch_id: patch_id != MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 12, tzinfo=timezone.utc),
+    )
+    deadline = workflow._continuation_deadline(
+        {
+            "completionDisposition": "gated_continuation",
+            "headSha": "abcdef1",
+            "gatedContinuation": {
+                "schemaVersion": "gated-continuation/v1",
+                "gateType": "merge_automation",
+                "action": "reenter_gate",
+                "reason": "legacy recorded result",
+                "retryAfterSeconds": 60,
+                "executionRef": "step:1",
+                "headSha": "abcdef1",
+                "ownerWorkflowId": "merge-owner",
+                "ownerRunId": "owner-run",
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "childWorkflowId": "resolver-child",
+                "childRunId": "child-run",
+            },
+        },
+        resolver_workflow_id="resolver-child",
+    )
+
+    assert deadline == datetime(2026, 7, 12, 0, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_resolver_attempt_records_normalized_continuation_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    captured: dict[str, Any] = {}
+
+    async def fake_write_json_artifact(*, name: str, payload: dict[str, Any]) -> str:
+        captured.update(payload)
+        return "art-attempt"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    await workflow._write_resolver_attempt(
+        workflow_id="resolver-child",
+        result={
+            "status": "success",
+            "mergeAutomationDisposition": "reenter_gate",
+            "headSha": "abcdef1",
+            "gatedContinuation": {
+                "schemaVersion": "gated-continuation/v1",
+                "gateType": "merge_automation",
+                "action": "reenter_gate",
+                "reason": "codex_review_grace_wait",
+                "notBefore": "2026-07-12T05:05:49Z",
+                "executionRef": "step:1",
+                "headSha": "abcdef1",
+                "ownerWorkflowId": "merge-owner",
+                "ownerRunId": "owner-run",
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "childWorkflowId": "resolver-child",
+                "childRunId": "child-run",
+            },
+        },
+    )
+
+    assert captured["continuationTimingSource"] == "skill_not_before"
+    assert captured["continuation"]["ownerRunId"] == "owner-run"
+    assert captured["continuation"]["executionRef"] == "step:1"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_at", ["create", "write_complete"])
@@ -251,11 +389,6 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     child_results = [
         {
             "status": "success",
-            "mergeAutomationDisposition": "reenter_gate",
-            "headSha": "def456",
-        },
-        {
-            "status": "success",
             "mergeAutomationDisposition": "merged",
         },
     ]
@@ -270,7 +403,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         nonlocal readiness_calls
         assert activity_type == "merge_automation.evaluate_readiness"
         readiness_calls += 1
-        head_sha = "abc123" if readiness_calls == 1 else "def456"
+        head_sha = "abc123" if readiness_calls == 1 else "def4567"
         return {
             "headSha": head_sha,
             "ready": True,
@@ -291,7 +424,31 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     ) -> dict[str, Any]:
         assert workflow_type == "MoonMind.UserWorkflow"
         child_payloads.append(payload)
-        child_workflow_ids.append(str(kwargs["id"]))
+        child_workflow_id = str(kwargs["id"])
+        child_workflow_ids.append(child_workflow_id)
+        if len(child_workflow_ids) == 1:
+            return {
+                "status": "success",
+                "completionDisposition": "gated_continuation",
+                "mergeAutomationDisposition": "reenter_gate",
+                "headSha": "def4567",
+                "executionRef": "step:1",
+                "childRunId": "child-run",
+                "gatedContinuation": {
+                    "schemaVersion": "gated-continuation/v1",
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "codex_review_grace_wait",
+                    "retryAfterSeconds": 1,
+                    "executionRef": "step:1",
+                    "headSha": "def4567",
+                    "ownerWorkflowId": "merge-owner",
+                    "ownerRunId": "owner-run",
+                    "ownerWorkflowType": "MoonMind.MergeAutomation",
+                    "childWorkflowId": child_workflow_id,
+                    "childRunId": "child-run",
+                },
+            }
         return child_results.pop(0)
 
     monkeypatch.setattr(
@@ -319,6 +476,11 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "upsert_search_attributes",
         lambda _attrs: None,
     )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+    )
 
     result = await workflow.run(_payload())
 
@@ -335,7 +497,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         parent_workflow_id="wf-parent",
         repo="MoonLadderStudios/MoonMind",
         pr_number=350,
-        head_sha="def456",
+        head_sha="def4567",
     )
     assert child_workflow_ids == [
         f"{first_resolver_id}:1",

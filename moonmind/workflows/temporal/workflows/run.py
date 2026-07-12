@@ -331,6 +331,9 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
+RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = (
+    "run-pr-resolver-continuation-identity-v1"
+)
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -7444,6 +7447,27 @@ class MoonMindRunWorkflow:
             output_status, output_message, publish_failure = (
                 self._determine_publish_completion(parameters=parameters)
             )
+            if (
+                publish_failure
+                and workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH)
+                and self._is_merge_automation_gated(parameters)
+                and (
+                    (
+                        self._gated_continuation_request
+                        and self._gated_continuation_failure_message(parameters) is None
+                    )
+                    or self._merge_automation_disposition
+                    in {"merged", "already_merged"}
+                )
+            ):
+                output_status = "success"
+                output_message = (
+                    "Workflow completed an authoritative durable continuation "
+                    "handoff to merge automation."
+                    if self._gated_continuation_request
+                    else "Workflow completed authoritative PR resolver terminal evidence."
+                )
+                publish_failure = False
             if publish_failure:
                 finalizing_status = "failed"
                 finalizing_error = output_message
@@ -7548,6 +7572,10 @@ class MoonMindRunWorkflow:
                     )
                 output["completionDisposition"] = "gated_continuation"
             output["gatedContinuation"] = gated_continuation
+            if workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH):
+                output["executionRef"] = gated_continuation.get("executionRef")
+                output["childRunId"] = gated_continuation.get("childRunId")
+                output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -14701,6 +14729,16 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if (
+            workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH)
+            and isinstance(workflow_parameters, Mapping)
+        ):
+            merge_gate = workflow_parameters.get("mergeGate")
+            if isinstance(merge_gate, Mapping):
+                parameters["mergeGate"] = self._json_mapping(
+                    merge_gate,
+                    path="workflow.mergeGate",
+                )
         raw_omnigent_parameters = runtime_block.get("omnigent")
         if raw_omnigent_parameters is None:
             raw_omnigent_parameters = node_inputs.get("omnigent")

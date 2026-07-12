@@ -214,6 +214,10 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
             "metadata": {
                 "terminalContractOutcome": "continuation_requested",
                 "mergeAutomationDisposition": "reenter_gate",
+                "gatedContinuation": {
+                    "reason": "codex_review_grace_wait",
+                    "notBefore": "2026-07-12T05:05:49Z",
+                },
             },
         }
 
@@ -229,6 +233,13 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
         == "durable_parent_handoff"
     )
     assert result.metadata["terminalContractContinuationCount"] == 0
+    assert result.metrics["continuation_requested"] == 1
+    assert result.metrics["continuation_accepted"] == 1
+    assert "continuation_rejected_schema" not in result.metrics
+    assert "continuation_rejected_ownership" not in result.metrics
+    assert result.metadata["continuationReason"] == "codex_review_grace_wait"
+    assert result.metadata["continuationNotBefore"] == "2026-07-12T05:05:49Z"
+    assert result.metadata["continuationTimingSource"] == "skill_not_before"
 
 
 @pytest.mark.parametrize(
@@ -283,6 +294,9 @@ async def test_continuation_metadata_does_not_suppress_runtime_failure(
         result.metadata["terminalContractRecoveryOutcome"]
         == "continuation_rejected_failure_provenance"
     )
+    assert result.metrics["continuation_requested"] == 1
+    assert result.metrics["continuation_rejected_schema"] == 1
+    assert "continuation_accepted" not in result.metrics
 
 
 async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(
