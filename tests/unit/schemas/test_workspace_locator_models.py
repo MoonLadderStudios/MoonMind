@@ -11,6 +11,7 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocatorResolutionError,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointCaptureInput
+from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     resolve_managed_workspace_locator,
 )
@@ -43,6 +44,34 @@ def test_workspace_locator_rejects_unsafe_relative_path(relative_path):
 def test_workspace_locator_rejects_unknown_discriminator():
     with pytest.raises(ValidationError):
         WORKSPACE_LOCATOR_ADAPTER.validate_python({"kind": "host", "path": "/tmp"})
+
+
+def test_sandbox_locator_resolves_default_repo_subpath(tmp_path):
+    repo = tmp_path / "temporal_sandbox" / "ws-1" / "repo"
+    repo.mkdir(parents=True)
+    activities = TemporalSandboxActivities(workspace_root=tmp_path)
+
+    resolved = activities._resolve_sandbox_locator(
+        SandboxWorkspaceLocator(workspaceId="ws-1"), must_exist=True
+    )
+
+    assert resolved == repo.resolve()
+
+
+def test_sandbox_locator_rejects_symlink_escape(tmp_path):
+    workspace = tmp_path / "temporal_sandbox" / "ws-1"
+    outside = tmp_path / "outside"
+    workspace.mkdir(parents=True)
+    outside.mkdir()
+    (workspace / "repo").symlink_to(outside, target_is_directory=True)
+    activities = TemporalSandboxActivities(workspace_root=tmp_path)
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        activities._resolve_sandbox_locator(
+            SandboxWorkspaceLocator(workspaceId="ws-1"), must_exist=True
+        )
+
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
 
 
 def test_external_locator_satisfies_external_checkpoint_input():

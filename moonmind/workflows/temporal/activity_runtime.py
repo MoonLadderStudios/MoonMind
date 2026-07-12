@@ -3974,11 +3974,7 @@ class TemporalSandboxActivities:
             raise WorkspaceLocatorResolutionError(
                 WORKSPACE_AUTHORITY_MISMATCH, "sandbox workspace identity escapes its authority"
             )
-        workspace = (
-            workspace_root
-            if locator.relative_path == "repo" and workspace_root.is_dir()
-            else (workspace_root / locator.relative_path).resolve()
-        )
+        workspace = (workspace_root / locator.relative_path).resolve()
         if not workspace.is_relative_to(workspace_root):
             raise WorkspaceLocatorResolutionError(
                 WORKSPACE_AUTHORITY_MISMATCH, "sandbox relative path escapes its workspace"
