@@ -1,77 +1,50 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueRef": "MM-1201",
+  "issueRef": "MM-1205",
   "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "partial",
-  "summary": "Moved terminal evidence enforcement to the runtime-neutral AgentRun activity boundary, made terminal-contract compilation metadata-driven, added an isolated five-target external-workspace subprocess journey, and repaired the required reliability file. Provider-adapter-local bounded continuation and full UI/projection coherence coverage remain open.",
-  "changedFiles": [
-    ".agents/skills/batch-workflows/SKILL.md",
-    "moonmind/workflows/temporal/activity_runtime.py",
-    "moonmind/workflows/temporal/workflows/agent_run.py",
-    "moonmind/workflows/temporal/workflows/run.py",
-    "tests/integration/reliability/test_escaped_failure_journeys.py",
-    "tests/unit/test_batch_workflows.py",
-    "tests/unit/workflows/temporal/test_agent_runtime_activities.py"
+  "status": "blocked_on_verification_environment",
+  "summary": "The latest MM-1205 verification report found no implementation gap and verified every repository-visible requirement. Remediation attempt 1 made no product or test changes because the only remaining work is execution evidence for existing Python and integration tests, and both required environments remain unavailable in this runtime.",
+  "changedFiles": [],
+  "artifactFilesUpdated": [
+    "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Runtime-neutral terminal evidence authority",
-      "status": "partial",
-      "evidence": "AgentRun now invokes agent_runtime.evaluate_terminal_evidence for every typed terminal contract; contract compilation no longer checks the batch contract ID.",
-      "remaining": "Bounded same-session continuation is still performed inside CodexSessionAdapter and must move above provider adapters with replay-safe workflow versioning."
+      "requirement": "Focused preset and helper unit tests",
+      "gapType": "verification",
+      "status": "blocked_in_current_runtime",
+      "implementationStatus": "verified_by_inspection",
+      "evidence": "The verifier identified direct coverage in tests/unit/api/test_batch_workflows_preset.py and tests/unit/test_batch_workflows.py. A fresh environment check confirms /usr/local/bin/python has no pytest module.",
+      "remaining": "Run the focused Python unit suite in a MoonMind managed image that includes pytest and confirm it passes.",
+      "recoverableInCurrentRuntime": false
     },
     {
-      "requirement": "External repository isolation and five-target fan-out",
-      "status": "resolved",
-      "evidence": "A subprocess test runs the materialized snapshot from an external repository with a conflicting repo-owned helper and moonmind/api_service import traps; THOR-705 through THOR-709 produce five POSTs, five unique idempotency keys, and identity-bound evidence."
-    },
-    {
-      "requirement": "Helper failure and outcome matrix",
-      "status": "partial",
-      "evidence": "Existing helper/evaluator tests cover stale, malformed, missing, partial, failed, zero-target, runtime normalization, idempotency construction, and publish-mode behavior; the new subprocess journey covers successful HTTP fan-out.",
-      "remaining": "Dedicated subprocess cases for endpoint unavailable, failure after two POSTs, missing runtime identity, and rerun artifact replacement remain to be consolidated into one outcome-matrix test."
-    },
-    {
-      "requirement": "Parent failure and coherent projections",
-      "status": "partial",
-      "evidence": "AgentRun converts completed prose without terminal evidence into AgentRunResult failureClass=execution_error before returning to the root workflow; existing root workflow integration tests covering structured result failure pass.",
-      "remaining": "No new end-to-end assertion jointly proves finishOutcome, mm_state, closeStatus, step ledger, dashboard projection, diagnostics, queued-child count, and partial child IDs."
-    },
-    {
-      "requirement": "Runtime orchestration coverage",
-      "status": "partial",
-      "evidence": "Runtime-neutral activity coverage proves completed prose cannot satisfy a contract, and existing Codex adapter tests cover bounded recovery/exhaustion.",
-      "remaining": "Successful recovery, exhaustion, and a runtime without continuation support are not yet tested through the same runtime-neutral AgentRun orchestration boundary."
-    },
-    {
-      "requirement": "Required reliability replay passes and exercises the real journey",
-      "status": "partial",
-      "evidence": "The required reliability_journey file now passes 3/3 and its stale workspace fixture uses the current sandbox authority contract.",
-      "remaining": "The MM-1201 replay still directly evaluates the fixture rather than executing root finalization and persisted projection."
+      "requirement": "Startup-seeding and integration boundary regression evidence",
+      "gapType": "verification",
+      "status": "blocked_in_current_runtime",
+      "implementationStatus": "verified_by_inspection",
+      "evidence": "The verifier identified direct startup-seeding coverage in tests/integration/test_startup_preset_seeding.py and recorded that the isolated moonmind-test Compose build stops before test execution because the Docker daemon lacks required BuildKit support.",
+      "remaining": "Run the integration_ci suite, or at minimum the startup preset seeding test, with a BuildKit-capable Docker daemon and confirm it passes.",
+      "recoverableInCurrentRuntime": false
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/test_batch_workflows.py tests/unit/workflows/test_terminal_evidence.py tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/api/test_batch_workflows_preset.py",
-      "result": "PYTHON_PASS_WRAPPER_UI_FAIL",
-      "details": "242 Python tests passed. The automatically appended full UI suite had 1000 passed, 238 skipped, and 2 unrelated failures in dashboard schedule routing and workflow-list focus timeout; this reproduces verifier-recorded wrapper noise and does not touch MM-1201 files."
+      "command": "python -m pytest --version",
+      "result": "BLOCKED",
+      "details": "/usr/local/bin/python: No module named pytest"
     },
     {
-      "command": "pytest tests/integration/reliability/test_escaped_failure_journeys.py -q --tb=short",
-      "result": "PASS",
-      "details": "3 passed."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_batch_workflows_preset.py tests/unit/api/test_batch_github_workflows_preset.py tests/unit/test_batch_workflows.py",
+      "result": "NOT_RERUN",
+      "details": "The immediately preceding authoritative verifier ran this command and it stopped before collection because pytest is absent; the fresh pytest availability check reproduces that prerequisite failure."
     },
     {
-      "command": "pytest tests/unit/workflows/temporal/workflows/test_run_integration.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py -q --tb=short",
-      "result": "PASS",
-      "details": "150 passed."
-    },
-    {
-      "command": "python -m py_compile moonmind/workflows/temporal/workflows/agent_run.py moonmind/workflows/temporal/activity_runtime.py && git diff --check",
-      "result": "PASS",
-      "details": "Compilation and whitespace validation passed."
+      "command": "MOONMIND_TEST_COMPOSE_PROJECT_NAME=moonmind-test ./tools/test_integration.sh",
+      "result": "NOT_RERUN",
+      "details": "The immediately preceding authoritative verifier attempted this command and the isolated Compose build stopped before tests because the daemon does not support the Dockerfile's required BuildKit --mount syntax."
     }
   ]
 }
