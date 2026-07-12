@@ -1416,16 +1416,14 @@ async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     try:
-        schedule_id = (
-            await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
-                enabled=True
-            )
+        await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
+            enabled=True
         )
     except Exception:
         # This boundary can surface credential-derived provider errors. Keep
         # startup best-effort without sending the exception through a log sink.
         return
-    logger.info("Ensured Omnigent OAuth host janitor schedule: %s", schedule_id)
+    logger.info("Ensured Omnigent OAuth host janitor schedule")
 
 async def ensure_recurring_workflow_schedules_reconciled() -> None:
     """Best-effort repair for persisted recurring workflow Temporal schedules."""
