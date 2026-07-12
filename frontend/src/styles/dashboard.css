@@ -7914,6 +7914,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow: none;
 }
 
+/* The catalog table is not responsive: it keeps a fixed 20rem skill column plus
+ * four more columns. On narrow viewports that grows wider than the page, and
+ * because `.dashboard-root` uses `overflow-x: clip`, the desktop `overflow:
+ * visible` above would leave the right-side columns unreachable — clipped with
+ * no way to scroll to them. Restore a horizontal scroll container at the small
+ * breakpoints. Wide screens keep `overflow: visible`, so the edge-to-edge bleed
+ * and the page-sticky header are unchanged there. */
+@media (max-width: 900px) {
+  .skills-catalog-page .data-table-slab {
+    overflow-x: auto;
+  }
+}
+
 .skills-catalog-page .data-table thead th {
   background: rgb(var(--mm-panel) / 0.98);
   border-bottom: 0;

@@ -2119,6 +2119,29 @@ describe('Dashboard shared entry', () => {
     expect(dashboardCss).not.toContain('dashboard-shell-constrained');
   });
 
+  it('restores horizontal scrolling for the skills catalog table on narrow viewports', async () => {
+    // The skills catalog is a non-responsive DataTable (fixed 20rem skill column
+    // plus four more columns). Wide screens intentionally bleed it edge-to-edge
+    // with `overflow: visible` so the sticky header sticks to the page while the
+    // catalog scrolls; that desktop behavior must be preserved.
+    const desktopSlabBlock = cssRuleBlock(dashboardCss, '.skills-catalog-page .data-table-slab');
+    expect(desktopSlabBlock).toContain('overflow: visible;');
+
+    // But `.dashboard-root` clips horizontal overflow, so on a phone or narrow
+    // desktop that edge-to-edge table would lose its only scroll container and
+    // clip the right-side columns with no way to reach them. A small-breakpoint
+    // override must restore a horizontal scroll container.
+    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
+
+    const narrowSlabBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.skills-catalog-page .data-table-slab' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 900px')
+    ));
+    expect(narrowSlabBlock).toContain('overflow-x: auto;');
+  });
+
   it('keeps workflow collection workspaces fluid', async () => {
     expect(dashboardCss).toMatch(
       /\.panel\.panel--data-wide:has\(\.workflow-list-data-slab\),\s*\.panel\.panel--data-wide:has\(\.workflow-workspace-shell\)\s*\{[^}]*max-width:\s*none/s,
