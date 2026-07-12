@@ -1422,9 +1422,8 @@ async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
             )
         )
     except Exception:
-        logger.warning(
-            "Failed to ensure Omnigent OAuth host janitor schedule during API startup"
-        )
+        # This boundary can surface credential-derived provider errors. Keep
+        # startup best-effort without sending the exception through a log sink.
         return
     logger.info("Ensured Omnigent OAuth host janitor schedule: %s", schedule_id)
 
