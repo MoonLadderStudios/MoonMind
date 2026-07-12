@@ -1978,9 +1978,17 @@ class MoonMindAgentRun:
             continuation_enabled = True
         if not continuation_enabled:
             return evaluated
+        try:
+            owned_continuation_enabled = workflow.patched(
+                PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            owned_continuation_enabled = True
         continuation_authority = request.terminal_continuation_authority
         if (
-            workflow.patched(PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID)
+            owned_continuation_enabled
             and (evaluated.metadata or {}).get("terminalContractOutcome")
             == "continuation_requested"
             and continuation_authority is not None

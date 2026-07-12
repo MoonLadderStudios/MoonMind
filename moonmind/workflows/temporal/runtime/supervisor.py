@@ -589,9 +589,9 @@ class ManagedRunSupervisor:
         if os.name == "nt" or not process.pid:
             return
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            os.killpg(process.pid, signal.SIGKILL)
             logger.info(
-                "Managed CLI exited; requested cleanup of owned process group pgid=%s",
+                "Managed CLI exited; killed owned process group pgid=%s",
                 process.pid,
             )
         except ProcessLookupError:

@@ -19,7 +19,7 @@ def test_terminal_cli_cleanup_targets_owned_process_group() -> None:
     with patch("os.killpg") as killpg:
         ManagedRunSupervisor._terminate_owned_process_group_best_effort(process)
 
-    killpg.assert_called_once_with(4321, signal.SIGTERM)
+    killpg.assert_called_once_with(4321, signal.SIGKILL)
 
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""
