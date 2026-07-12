@@ -271,6 +271,14 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
             "pr_resolver_merge_gate_owned",
         ),
     )
+    terminal_checkpoint_publication_enabled: bool = Field(
+        default=False,
+        alias="terminalCheckpointPublicationEnabled",
+        validation_alias=AliasChoices(
+            "terminalCheckpointPublicationEnabled",
+            "terminal_checkpoint_publication_enabled",
+        ),
+    )
 
     @model_validator(mode="after")
     def _normalize_fetch(self) -> "AgentRuntimeFetchResultInput":

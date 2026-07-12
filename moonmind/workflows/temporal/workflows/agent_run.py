@@ -303,6 +303,9 @@ MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-bindin
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
 )
+TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID = (
+    "agent-run-terminal-checkpoint-publication-v1"
+)
 STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-story-breakdown-artifact-handoff-v1"
 )
@@ -1849,6 +1852,9 @@ class MoonMindAgentRun:
                 activity_input["prResolverMergeGateOwned"] = (
                     _request_pr_resolver_merge_gate_owned(request)
                 )
+        activity_input["terminalCheckpointPublicationEnabled"] = workflow.patched(
+            TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID
+        )
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(

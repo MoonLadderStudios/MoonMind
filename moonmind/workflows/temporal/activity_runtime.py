@@ -10545,6 +10545,8 @@ class TemporalAgentRuntimeActivities:
             }
             if (
                 controlled_failure
+                and isinstance(request, AgentRuntimeFetchResultInput)
+                and request.terminal_checkpoint_publication_enabled
                 and publish_mode != "none"
                 and _normalize_provider_native_pr_agent_id(publish_agent_id)
                 not in _PROVIDER_NATIVE_PR_AGENT_IDS

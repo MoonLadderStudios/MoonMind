@@ -2286,7 +2286,12 @@ class TestFetchResultPushIntegration:
             adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
 
             result = await activities.agent_runtime_fetch_result(
-                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+                {
+                    "run_id": "run-1",
+                    "agent_id": "claude",
+                    "publish_mode": "pr",
+                    "terminal_checkpoint_publication_enabled": True,
+                },
             )
 
         mock_push.assert_called_once()
@@ -2419,7 +2424,12 @@ class TestFetchResultPushIntegration:
                 )
             )
             result = await activities.agent_runtime_fetch_result(
-                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+                {
+                    "run_id": "run-1",
+                    "agent_id": "claude",
+                    "publish_mode": "pr",
+                    "terminal_checkpoint_publication_enabled": True,
+                },
             )
 
         assert result.failure_class == "execution_error"
