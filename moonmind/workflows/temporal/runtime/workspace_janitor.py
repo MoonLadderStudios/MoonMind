@@ -86,15 +86,15 @@ class ManagedRuntimeCleanupResult:
 
 @dataclass(frozen=True)
 class ManagedRuntimeJanitorConfig:
-    enabled: bool = False
-    dry_run: bool = True
+    enabled: bool = True
+    dry_run: bool = False
     runtime_root: Path = Path(_DEFAULT_RUNTIME_ROOT)
     artifact_root: Path = Path(_DEFAULT_RUNTIME_ROOT) / "artifacts"
     workspace_retention: timedelta = timedelta(days=30)
     artifact_retention: timedelta = timedelta(days=90)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(seconds=3600)
-    max_delete_paths: int = 25
+    max_delete_paths: int = 100
     max_delete_bytes: int | None = None
     lock_path: Path = Path(_DEFAULT_RUNTIME_ROOT) / ".janitor.lock"
 
@@ -107,8 +107,8 @@ class ManagedRuntimeJanitorConfig:
             "MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS"
         )
         return cls(
-            enabled=_env_bool("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", False),
-            dry_run=_env_bool("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", True),
+            enabled=_env_bool("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", True),
+            dry_run=_env_bool("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", False),
             runtime_root=runtime_root,
             artifact_root=managed_runtime_artifact_root(),
             workspace_retention=timedelta(
@@ -132,7 +132,7 @@ class ManagedRuntimeJanitorConfig:
                 )
             ),
             max_delete_paths=_positive_int_env(
-                "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 25
+                "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 100
             ),
             max_delete_bytes=_optional_positive_int_env(
                 "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES"

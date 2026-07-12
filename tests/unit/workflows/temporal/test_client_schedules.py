@@ -271,7 +271,7 @@ class TestManagedSessionReconcileSchedule:
 
 class TestManagedRuntimeWorkspaceCleanupSchedule:
     @pytest.mark.asyncio
-    async def test_mm948_creates_disabled_cleanup_schedule_by_default(self) -> None:
+    async def test_creates_enabled_cleanup_schedule_by_default(self) -> None:
         mock_created_handle = MagicMock()
         mock_created_handle.id = MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
         mock_existing_handle = _mock_schedule_handle(
@@ -294,8 +294,26 @@ class TestManagedRuntimeWorkspaceCleanupSchedule:
         )
         assert schedule.action.task_queue == "mm.workflow"
         assert schedule.action.static_summary == "Managed runtime workspace cleanup"
-        assert schedule.spec.cron_expressions == ["0 3 * * *"]
+        assert schedule.spec.cron_expressions == ["0 * * * *"]
         assert schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+        assert schedule.policy.catchup_window == timedelta(minutes=15)
+        assert schedule.state.paused is False
+        assert "dry-run" not in schedule.action.static_details
+
+    @pytest.mark.asyncio
+    async def test_explicit_disable_creates_paused_cleanup_schedule(self) -> None:
+        mock_created_handle = MagicMock()
+        mock_created_handle.id = MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        mock_existing_handle = _mock_schedule_handle()
+        mock_existing_handle.update = AsyncMock(side_effect=Exception("not found"))
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock(return_value=mock_created_handle)
+
+        adapter = _make_adapter(mock_client)
+        await adapter.ensure_managed_runtime_workspace_cleanup_schedule(enabled=False)
+
+        schedule = mock_client.create_schedule.call_args[0][1]
         assert schedule.state.paused is True
 
     @pytest.mark.asyncio
@@ -320,33 +338,42 @@ class TestManagedRuntimeWorkspaceCleanupSchedule:
         assert update.schedule.state.paused is False
 
     @pytest.mark.asyncio
-    async def test_mm948_preserves_existing_cleanup_schedule_enabled_state(
+    async def test_restart_reconciles_previously_paused_schedule_to_enabled(
         self,
     ) -> None:
         mock_existing_handle = _mock_schedule_handle()
         mock_client = MagicMock()
         mock_client.get_schedule_handle.return_value = mock_existing_handle
         mock_client.create_schedule = AsyncMock()
-        existing_schedule = MagicMock()
-        existing_schedule.state.paused = False
-
         adapter = _make_adapter(mock_client)
-        result = await adapter.ensure_managed_runtime_workspace_cleanup_schedule(
-            enabled=None
-        )
+        result = await adapter.ensure_managed_runtime_workspace_cleanup_schedule()
 
         assert result == MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
         mock_existing_handle.update.assert_awaited_once()
         mock_client.create_schedule.assert_not_awaited()
         updater = mock_existing_handle.update.call_args[0][0]
+        existing_schedule = MagicMock()
+        existing_schedule.state.paused = True
         update = await updater(
-            SimpleNamespace(
-                description=SimpleNamespace(schedule=existing_schedule),
-            )
+            SimpleNamespace(description=SimpleNamespace(schedule=existing_schedule))
         )
         assert isinstance(update, ScheduleUpdate)
         assert update.schedule.action.workflow == "MoonMind.ManagedRuntimeWorkspaceCleanup"
         assert update.schedule.state.paused is False
+
+    @pytest.mark.asyncio
+    async def test_explicit_disable_reconciles_existing_schedule_to_paused(self) -> None:
+        mock_existing_handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock()
+
+        adapter = _make_adapter(mock_client)
+        await adapter.ensure_managed_runtime_workspace_cleanup_schedule(enabled=False)
+
+        updater = mock_existing_handle.update.call_args[0][0]
+        update = await updater(MagicMock())
+        assert update.schedule.state.paused is True
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:

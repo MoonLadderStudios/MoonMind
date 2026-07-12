@@ -4,6 +4,8 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.cleanup import (
@@ -423,3 +425,46 @@ def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:
     assert config.max_delete_paths == 3
     assert config.max_delete_bytes == 19
     assert config.lock_path == root / "lock"
+
+
+def test_managed_runtime_cleanup_config_has_operational_defaults() -> None:
+    direct = ManagedRuntimeCleanupConfig()
+    from_empty_env = ManagedRuntimeCleanupConfig.from_env({})
+
+    for config in (direct, from_empty_env):
+        assert config.enabled is True
+        assert config.dry_run is False
+        assert config.workspace_retention == timedelta(days=30)
+        assert config.artifact_retention == timedelta(days=90)
+        assert config.record_retention is None
+        assert config.grace == timedelta(hours=1)
+        assert config.max_delete_paths == 100
+        assert config.max_delete_bytes is None
+        assert config.runtime_store_root == Path("/work/agent_jobs")
+        assert config.artifact_root == Path("/work/agent_jobs/artifacts")
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "FALSE", "no", "off"])
+def test_managed_runtime_cleanup_false_boolean_overrides(value: str) -> None:
+    enabled = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": value}
+    )
+    dry_run = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": value}
+    )
+
+    assert enabled.enabled is False
+    assert dry_run.dry_run is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+def test_managed_runtime_cleanup_true_boolean_overrides(value: str) -> None:
+    enabled = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": value}
+    )
+    dry_run = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": value}
+    )
+
+    assert enabled.enabled is True
+    assert dry_run.dry_run is True

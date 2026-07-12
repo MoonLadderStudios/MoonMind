@@ -60,8 +60,8 @@ class ManagedRuntimeCleanupConfig:
             os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
         ).resolve()
         return cls(
-            enabled=_bool_env("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", False),
-            dry_run=_bool_env("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", True),
+            enabled=_bool_env("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", True),
+            dry_run=_bool_env("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", False),
             workspace_retention=timedelta(
                 days=_int_env("MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 30)
             ),
@@ -82,7 +82,7 @@ class ManagedRuntimeCleanupConfig:
                 seconds=_int_env("MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS", 3600)
             ),
             max_delete_paths=_int_env(
-                "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 25
+                "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 100
             ),
             store_root=store_root,
             artifact_root=managed_runtime_artifact_root().resolve(),

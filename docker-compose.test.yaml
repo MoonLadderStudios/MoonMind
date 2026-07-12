@@ -30,6 +30,9 @@ services:
       - PYTHONPATH=/app
       - TEST_TYPE=unit
       - MOONMIND_FORCE_LOCAL_TESTS=1
+      # Test processes use isolated temp roots; never let an inherited host
+      # setting turn the generic pytest service into a destructive janitor.
+      - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-test-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://moonmind-test-temporal-artifacts-s3:9000}

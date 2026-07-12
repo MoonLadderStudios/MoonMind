@@ -49,13 +49,13 @@ _FALSEY = frozenset({"", "0", "false", "no", "off"})
 
 @dataclass(frozen=True)
 class ManagedRuntimeCleanupConfig:
-    enabled: bool = False
-    dry_run: bool = True
+    enabled: bool = True
+    dry_run: bool = False
     workspace_retention: timedelta = timedelta(days=30)
     artifact_retention: timedelta = timedelta(days=90)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(hours=1)
-    max_delete_paths: int = 25
+    max_delete_paths: int = 100
     max_delete_bytes: int | None = None
     lock_path: Path = Path("/work/agent_jobs/.janitor.lock")
     runtime_store_root: Path = Path("/work/agent_jobs")
@@ -65,12 +65,16 @@ class ManagedRuntimeCleanupConfig:
     def from_env(
         cls, env: Mapping[str, str] | None = None
     ) -> "ManagedRuntimeCleanupConfig":
-        source = env or os.environ
+        source = os.environ if env is None else env
         runtime_store_root = Path(
             source.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
             or "/work/agent_jobs"
         )
-        artifact_root = managed_runtime_artifact_root()
+        artifact_root = (
+            managed_runtime_artifact_root()
+            if env is None
+            else runtime_store_root / "artifacts"
+        )
         if env is not None:
             raw_artifact_root = source.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS")
             if raw_artifact_root is not None:
@@ -79,10 +83,10 @@ class ManagedRuntimeCleanupConfig:
                     artifact_root = artifact_root / "artifacts"
         return cls(
             enabled=_env_bool(
-                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", False
+                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", True
             ),
             dry_run=_env_bool(
-                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", True
+                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", False
             ),
             workspace_retention=timedelta(
                 days=_env_int(
@@ -105,7 +109,7 @@ class ManagedRuntimeCleanupConfig:
             max_delete_paths=max(
                 0,
                 _env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 25
+                    source, "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 100
                 ),
             ),
             max_delete_bytes=_env_optional_int(
