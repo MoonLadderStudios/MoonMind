@@ -4990,6 +4990,18 @@ class MoonMindRunWorkflow:
         row = self._step_ledger_row_for(logical_step_id)
         if not isinstance(row, dict):
             return
+        previous_outcome = row.get("finalizationOutcome")
+        if (
+            isinstance(previous_outcome, Mapping)
+            and previous_outcome.get("status") == "succeeded"
+            and self._coerce_text(previous_outcome.get("checkpointRef"), max_chars=500)
+        ):
+            return
+        retry_count = (
+            int(previous_outcome.get("retryCount") or 0)
+            if isinstance(previous_outcome, Mapping)
+            else 0
+        )
         criticality = self._checkpoint_criticality(logical_step_id)
         if criticality == "unsupported":
             row["finalizationOutcome"] = {
@@ -5016,7 +5028,7 @@ class MoonMindRunWorkflow:
                 "criticality": criticality,
                 "failureCode": FINALIZATION_CHECKPOINT_FAILED,
                 "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
-                "retryCount": 1,
+                "retryCount": retry_count + 1,
                 "message": self._coerce_text(exc, max_chars=500),
                 "updatedAt": workflow.now().isoformat(),
             }
@@ -5058,11 +5070,15 @@ class MoonMindRunWorkflow:
             "phase": "after_execution_checkpoint",
             "criticality": criticality,
             "failureCode": None,
-            "retryCount": 0,
+            "retryCount": retry_count,
             "checkpointRef": checkpoint_ref,
             "message": None if checkpoint_ref else "No checkpoint-capable workspace was available.",
             "updatedAt": workflow.now().isoformat(),
         }
+        if checkpoint_ref and retry_count:
+            self._summary = "Execution succeeded; finalization retry completed."
+            self._attention_required = False
+            self._update_memo()
 
     def _record_publication_finalization_failure(
         self,
