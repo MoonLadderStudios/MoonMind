@@ -101,7 +101,7 @@ describe('dashboard masthead brand styles', () => {
     // closes the shape so the bottom edge reads as lit, and an accent
     // under-glow.
     const highlightShadow =
-      /box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.26\),\s*0 0 0 1px rgb\(255 255 255 \/ 0\.34\),\s*0 18px 32px -16px rgb\(var\(--mm-accent\) \/ 0\.94\);/;
+      /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
 
     // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
     // padding < 0.18rem) that it does not out-size the nav buttons, plus a
