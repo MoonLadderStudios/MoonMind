@@ -1056,6 +1056,31 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_def["profile_id"]: profile_def
                 for profile_def in _DEFAULT_PROFILES
             }
+
+            # Codex owns and mutates its OAuth home (including refresh-token
+            # state), so every existing OAuth-backed Codex profile must remain
+            # on the single shared capacity lane.  Reconcile legacy rows at
+            # startup as well as validating new API writes; otherwise an old
+            # max_parallel_runs value can bypass the invariant indefinitely.
+            for profile_id, current in existing_by_id.items():
+                if (
+                    current.get("runtime_id") == "codex_cli"
+                    and current.get("credential_source")
+                    == ProviderCredentialSource.OAUTH_VOLUME
+                    and current.get("runtime_materialization_mode")
+                    == RuntimeMaterializationMode.OAUTH_HOME
+                    and current.get("max_parallel_runs") != 1
+                ):
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(
+                            ManagedAgentProviderProfile.profile_id == profile_id
+                        )
+                        .values(max_parallel_runs=1)
+                    )
+                    current["max_parallel_runs"] = 1
+                    needs_commit = True
+
             for profile_id, env_key in first_party_env_api_profiles.items():
                 current = existing_by_id.get(profile_id)
                 if current is None:

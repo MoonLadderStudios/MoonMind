@@ -340,6 +340,38 @@ async def test_auto_seed_preserves_user_default_model_on_oauth_profile(
         assert profile is not None
         assert profile.default_model == "gpt-user-custom"
 
+
+@pytest.mark.asyncio
+async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
+    _module_db, monkeypatch
+):
+    """Startup reconciliation repairs unsafe pre-invariant OAuth rows."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openai_oauth"
+        )
+        assert profile is not None
+        profile.credential_source = ProviderCredentialSource.OAUTH_VOLUME
+        profile.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
+        profile.volume_ref = "codex_auth_volume"
+        profile.volume_mount_path = "/home/app/.codex"
+        profile.max_parallel_runs = 7
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(
+            ManagedAgentProviderProfile, "codex_openai_oauth"
+        )
+        assert profile is not None
+        assert profile.max_parallel_runs == 1
+
 @pytest.mark.asyncio
 async def test_auto_seed_deletes_deprecated_gemini_cli_profiles(
     _module_db, monkeypatch

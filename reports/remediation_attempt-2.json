@@ -1,46 +1,73 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 2,
-  "issueRef": "MM-1201",
+  "issueRef": "MM-1207",
   "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
   "status": "partial",
-  "summary": "Closed the verifier's isolated helper failure-matrix gap. Missing runtime identity, malformed targets, endpoint unavailability, stale-result replacement, partial HTTP failure after two successful submissions, and preservation of created child IDs are now exercised through the materialized portable helper. Runtime-neutral continuation, full parent/UI projection coherence, and a real AgentRun-to-parent reliability replay remain open.",
+  "summary": "Added startup repair for legacy Codex OAuth Provider Profiles whose mutable OAuth home was configured above the exclusive capacity of one. API create/update validation and OAuth finalization already enforce one. The broader Omnigent lifecycle backlog remains open.",
   "changedFiles": [
-    "tests/unit/test_batch_workflows.py",
+    "api_service/main.py",
+    "tests/unit/api_service/test_provider_profile_auto_seed.py",
     "reports/remediation_attempt-2.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Runtime-neutral capability-aware continuation",
-      "status": "open",
-      "evidence": "CodexSessionAdapter still owns the bounded terminal-contract continuation loop.",
-      "remaining": "Move continuation into replay-safe AgentRun orchestration, branch on the immutable runtime capability snapshot, and cover supported and unsupported runtimes."
+      "requirement": "Complete concurrency-one enforcement across the profile lifecycle",
+      "status": "partial",
+      "resolved": "Startup seeding now repairs every existing codex_cli oauth_volume/oauth_home profile to max_parallel_runs=1; a regression test covers a legacy value of seven. Existing API create/update validation and OAuth finalization also enforce one.",
+      "remaining": "Runtime selection, host allocation, reconnect, and disconnect must use the exclusive lease lifecycle; migration/readiness coverage beyond startup repair remains open."
     },
     {
-      "requirement": "Complete helper failure matrix",
-      "status": "resolved",
-      "evidence": "tests/unit/test_batch_workflows.py::test_materialized_helper_failure_matrix_preserves_authoritative_evidence runs the materialized helper as an isolated subprocess and covers missing identity, malformed targets, unavailable HTTP, failure after two successful POSTs, stale artifact replacement, and retained partial child IDs.",
-      "remaining": null
+      "requirement": "Use one exclusive capacity lane for all consumers and maintenance",
+      "status": "unresolved",
+      "remaining": "Wire direct runs, static/on-demand Omnigent runs, reconnect, disconnect, and credential maintenance to provider-profile-manager:codex_cli with idempotent acquisition and release-last semantics."
     },
     {
-      "requirement": "Coherent parent and UI projections",
-      "status": "open",
-      "evidence": "Existing tests cover individual result and dashboard paths but do not jointly assert finishOutcome, mm_state, closeStatus, ledger, diagnostics, queued count, and partial child IDs.",
-      "remaining": "Add the verifier-requested parent-boundary and dashboard contract coverage."
+      "requirement": "Define secret-free credential, binding, generation, and host-lease contracts",
+      "status": "unresolved",
+      "remaining": "Add runtime-neutral refs, durable persistence, ownership and generation validation, and cross-profile rejection."
     },
     {
-      "requirement": "Real reliability replay",
-      "status": "open",
-      "evidence": "The MM-1201 reliability fixture still calls evaluate_terminal_evidence directly.",
-      "remaining": "Drive AgentRun terminal evaluation and root finalization/projection from the minimized replay fixture."
+      "requirement": "Materialize and preflight the exact destination OAuth home",
+      "status": "unresolved",
+      "remaining": "Mount only the selected OAuth volume, clear competing credentials, repair permissions, and run secret-free destination authentication and generation checks."
+    },
+    {
+      "requirement": "Provide profile-bound static and on-demand hosts and routing",
+      "status": "unresolved",
+      "remaining": "Implement the common binding/readiness contract, stable registration, idempotent launch, executionProfileRef resolution, exact-host routing, and retry-safe first-message behavior."
+    },
+    {
+      "requirement": "Implement generation, drain, cleanup, reconciliation, and recovery",
+      "status": "unresolved",
+      "remaining": "Coordinate drain and generation advancement, reject stale hosts, perform ordered release-last cleanup, reconcile restarts, and persist safe live-reattach/cold-restore refs."
+    },
+    {
+      "requirement": "Expose redacted lifecycle diagnostics and failure attribution",
+      "status": "unresolved",
+      "remaining": "Publish secret-safe profile, lease, binding, preflight, session, cooldown/authentication, terminal, and cleanup evidence."
+    },
+    {
+      "requirement": "Add required boundary and combined-stack verification",
+      "status": "partial",
+      "resolved": "Added focused startup-repair regression coverage and completed syntax and diff checks.",
+      "remaining": "The focused Python suite could not start because pytest is absent. Runtime lifecycle, contention, routing, materialization, retry, cleanup, recovery, isolation, and non-leakage coverage remains missing."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "python -m pytest tests/unit/test_batch_workflows.py -q --tb=short",
-      "result": "PASS",
-      "details": "26 passed in 6.13s."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/test_provider_profile_auto_seed.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/workflows/temporal/test_provider_profile_manager.py",
+      "result": "BLOCKED",
+      "details": "Repository pre-test audits passed, but /usr/local/bin/python has no pytest module, so tests did not start."
+    },
+    {
+      "command": "python -m py_compile api_service/main.py tests/unit/api_service/test_provider_profile_auto_seed.py",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
     }
   ]
 }
