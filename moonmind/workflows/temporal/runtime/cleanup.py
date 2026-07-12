@@ -49,13 +49,13 @@ _FALSEY = frozenset({"", "0", "false", "no", "off"})
 
 @dataclass(frozen=True)
 class ManagedRuntimeCleanupConfig:
-    enabled: bool = False
-    dry_run: bool = True
+    enabled: bool = True
+    dry_run: bool = False
     workspace_retention: timedelta = timedelta(days=30)
     artifact_retention: timedelta = timedelta(days=90)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(hours=1)
-    max_delete_paths: int = 25
+    max_delete_paths: int = 100
     max_delete_bytes: int | None = None
     lock_path: Path = Path("/work/agent_jobs/.janitor.lock")
     runtime_store_root: Path = Path("/work/agent_jobs")
@@ -65,12 +65,16 @@ class ManagedRuntimeCleanupConfig:
     def from_env(
         cls, env: Mapping[str, str] | None = None
     ) -> "ManagedRuntimeCleanupConfig":
-        source = env or os.environ
+        source = os.environ if env is None else env
         runtime_store_root = Path(
             source.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
             or "/work/agent_jobs"
         )
-        artifact_root = managed_runtime_artifact_root()
+        artifact_root = (
+            managed_runtime_artifact_root()
+            if env is None
+            else runtime_store_root / "artifacts"
+        )
         if env is not None:
             raw_artifact_root = source.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS")
             if raw_artifact_root is not None:
@@ -79,10 +83,10 @@ class ManagedRuntimeCleanupConfig:
                     artifact_root = artifact_root / "artifacts"
         return cls(
             enabled=_env_bool(
-                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", False
+                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", True
             ),
             dry_run=_env_bool(
-                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", True
+                source, "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", False
             ),
             workspace_retention=timedelta(
                 days=_env_int(
@@ -105,7 +109,7 @@ class ManagedRuntimeCleanupConfig:
             max_delete_paths=max(
                 0,
                 _env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 25
+                    source, "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS", 100
                 ),
             ),
             max_delete_bytes=_env_optional_int(
@@ -301,7 +305,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 delete_budget_exhausted=0,
                 errors=errors,
             )
-        with _JanitorLock(config.lock_path):
+        with _JanitorLock(config.lock_path, stale_after=config.grace):
             return self._run_enabled_pass()
 
     def _run_enabled_pass(self) -> ManagedRuntimeCleanupResult:
@@ -725,7 +729,9 @@ class ManagedRuntimeWorkspaceJanitor:
         if ids.intersection(docker_state.active_container_refs):
             return True
         return any(
-            mount == path or mount.startswith(f"{path.rstrip('/')}/")
+            mount == path
+            or mount.startswith(f"{path.rstrip('/')}/")
+            or path.startswith(f"{mount.rstrip('/')}/")
             for mount in docker_state.active_mount_paths
             for path in paths
         )
@@ -804,9 +810,16 @@ class ManagedRuntimeWorkspaceJanitor:
             return True
         for fresh in current:
             if fresh.kind == candidate.kind and fresh.path == candidate.path:
-                return self._has_active_owner(fresh) or self._has_live_docker_reference(
+                if self._has_active_owner(fresh) or self._has_live_docker_reference(
                     fresh, docker_state
-                )
+                ):
+                    return True
+                newest = self._newest_activity(fresh)
+                retention = self._retention_for(fresh.kind)
+                if newest is None or retention is None:
+                    return True
+                age = self._now() - newest
+                return age < retention or age < self._config.grace
         return self._has_live_docker_reference(candidate, docker_state)
 
     def _delete_candidate(self, candidate: ManagedRuntimeCleanupCandidate) -> None:
@@ -949,13 +962,23 @@ class ManagedRuntimeWorkspaceJanitor:
 
 
 class _JanitorLock:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, stale_after: timedelta) -> None:
         self._path = path
+        self._stale_after = stale_after
         self._fd: int | None = None
 
     def __enter__(self) -> "_JanitorLock":
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            age = datetime.now(tz=UTC) - datetime.fromtimestamp(
+                self._path.stat().st_mtime, tz=UTC
+            )
+            if age < self._stale_after:
+                raise
+            self._path.unlink()
+            self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(self._fd, str(os.getpid()).encode("ascii"))
         return self
 

@@ -4,6 +4,8 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.cleanup import (
@@ -272,6 +274,25 @@ def test_mm_949_live_docker_reference_prevents_deletion(tmp_path: Path) -> None:
     assert workspace_decision.reason == "live Docker reference"
 
 
+def test_mm_949_parent_docker_mount_prevents_child_deletion(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    result = _janitor(
+        root,
+        run_store,
+        session_store,
+        docker_state=DockerReferenceState(active_mount_paths=frozenset({str(root)})),
+    ).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "live Docker reference"
+
+
 def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
@@ -299,6 +320,44 @@ def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> N
     assert workspace_decision.classification == "protected_active"
     assert workspace_decision.reason == "failed rescan before delete"
     assert run_root.exists()
+
+
+def test_mm_949_final_rescan_rechecks_filesystem_recency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup
+
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    def touch_during_size_walk(path: Path, **_kwargs: object) -> int:
+        os.utime(path, (RECENT.timestamp(), RECENT.timestamp()))
+        return 0
+
+    monkeypatch.setattr(cleanup, "_path_size", touch_during_size_walk)
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "failed rescan before delete"
+    assert run_root.exists()
+
+
+def test_mm_949_stale_janitor_lock_is_recovered(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    lock_path = root / ".janitor.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("stale-owner", encoding="utf-8")
+    os.utime(lock_path, (OLD.timestamp(), OLD.timestamp()))
+    run_store, session_store = _stores(root)
+
+    result = _janitor(root, run_store, session_store).run()
+
+    assert result.errors == ()
+    assert not lock_path.exists()
 
 
 def test_mm_949_cleanup_emits_progress_during_filesystem_walk(
@@ -423,3 +482,46 @@ def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:
     assert config.max_delete_paths == 3
     assert config.max_delete_bytes == 19
     assert config.lock_path == root / "lock"
+
+
+def test_managed_runtime_cleanup_config_has_operational_defaults() -> None:
+    direct = ManagedRuntimeCleanupConfig()
+    from_empty_env = ManagedRuntimeCleanupConfig.from_env({})
+
+    for config in (direct, from_empty_env):
+        assert config.enabled is True
+        assert config.dry_run is False
+        assert config.workspace_retention == timedelta(days=30)
+        assert config.artifact_retention == timedelta(days=90)
+        assert config.record_retention is None
+        assert config.grace == timedelta(hours=1)
+        assert config.max_delete_paths == 100
+        assert config.max_delete_bytes is None
+        assert config.runtime_store_root == Path("/work/agent_jobs")
+        assert config.artifact_root == Path("/work/agent_jobs/artifacts")
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "FALSE", "no", "off"])
+def test_managed_runtime_cleanup_false_boolean_overrides(value: str) -> None:
+    enabled = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": value}
+    )
+    dry_run = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": value}
+    )
+
+    assert enabled.enabled is False
+    assert dry_run.dry_run is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+def test_managed_runtime_cleanup_true_boolean_overrides(value: str) -> None:
+    enabled = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": value}
+    )
+    dry_run = ManagedRuntimeCleanupConfig.from_env(
+        {"MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": value}
+    )
+
+    assert enabled.enabled is True
+    assert dry_run.dry_run is True

@@ -632,8 +632,7 @@ class TemporalClientAdapter:
         )
         try:
             handle = client.get_schedule_handle(MANAGED_SESSION_RECONCILE_SCHEDULE_ID)
-            async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
-                del input
+            async def _replace_schedule(_: Any) -> ScheduleUpdate:
                 return ScheduleUpdate(schedule=schedule)
 
             await handle.update(_replace_schedule)
@@ -661,15 +660,11 @@ class TemporalClientAdapter:
     async def ensure_managed_runtime_workspace_cleanup_schedule(
         self,
         *,
-        cron_expression: str = "0 3 * * *",
+        cron_expression: str = "0 * * * *",
         timezone: str = "UTC",
-        enabled: bool | None = False,
+        enabled: bool = True,
     ) -> str:
-        """Create or replace the retained managed-runtime cleanup Schedule.
-
-        Pass ``enabled=None`` to preserve an existing schedule's paused state
-        while still creating a missing schedule as disabled.
-        """
+        """Create or replace the retained managed-runtime cleanup Schedule."""
 
         from temporalio.client import (
             Schedule,
@@ -700,7 +695,7 @@ class TemporalClientAdapter:
                     ),
                     static_summary="Managed runtime workspace cleanup",
                     static_details=(
-                        "Recurring dry-run retained-state janitor for managed runtime files"
+                        "Recurring bounded retained-state cleanup for managed runtime files"
                     ),
                 ),
                 spec=build_schedule_spec(
@@ -718,26 +713,16 @@ class TemporalClientAdapter:
                 ),
             )
 
-        schedule = _build_schedule(
-            schedule_enabled=False if enabled is None else enabled
-        )
+        schedule = _build_schedule(schedule_enabled=enabled)
         try:
             handle = client.get_schedule_handle(
                 MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
             )
 
             async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
-                schedule_enabled = enabled
-                if schedule_enabled is None:
-                    existing_schedule = input.description.schedule
-                    existing_paused = (
-                        existing_schedule.state.paused
-                        if existing_schedule.state
-                        else True
-                    )
-                    schedule_enabled = not existing_paused
+                del input
                 return ScheduleUpdate(
-                    schedule=_build_schedule(schedule_enabled=schedule_enabled)
+                    schedule=_build_schedule(schedule_enabled=enabled)
                 )
 
             await handle.update(_replace_schedule)

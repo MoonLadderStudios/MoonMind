@@ -1339,22 +1339,42 @@ async def ensure_managed_session_reconcile_schedule_started() -> None:
 async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
     """Best-effort startup install for the retained-state janitor schedule."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.runtime.cleanup import ManagedRuntimeCleanupConfig
+
+    config = ManagedRuntimeCleanupConfig.from_env()
 
     try:
         schedule_id = (
             await TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
-                enabled=None
+                enabled=config.enabled
             )
         )
     except Exception:
         logger.warning(
-            "Failed to ensure managed runtime workspace cleanup schedule during API startup",
+            "Failed to ensure managed runtime workspace cleanup schedule during API "
+            "startup: janitor_enabled=%s schedule_enabled=%s dry_run=%s",
+            config.enabled,
+            config.enabled,
+            config.dry_run,
             exc_info=True,
         )
         return
     logger.info(
-        "Ensured managed runtime workspace cleanup schedule during API startup: %s",
+        "Managed runtime cleanup startup reconciliation: schedule_id=%s "
+        "janitor_enabled=%s schedule_enabled=%s dry_run=%s "
+        "workspace_retention_days=%s artifact_retention_days=%s "
+        "record_retention_days=%s grace_seconds=%s max_delete_paths=%s "
+        "max_delete_bytes=%s",
         schedule_id,
+        config.enabled,
+        config.enabled,
+        config.dry_run,
+        config.workspace_retention.days,
+        config.artifact_retention.days,
+        config.record_retention.days if config.record_retention else None,
+        int(config.grace.total_seconds()),
+        config.max_delete_paths,
+        config.max_delete_bytes,
     )
 
 async def ensure_recurring_workflow_schedules_reconciled() -> None:

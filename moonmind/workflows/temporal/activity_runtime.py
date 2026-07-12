@@ -10071,7 +10071,37 @@ class TemporalAgentRuntimeActivities:
                 else None
             ),
         )
-        return result.to_dict()
+        result_payload = result.to_dict()
+        logger.info(
+            "Managed runtime cleanup pass completed: enabled=%s dry_run=%s "
+            "scanned_run_records=%s scanned_session_records=%s "
+            "scanned_workspace_roots=%s scanned_artifact_dirs=%s "
+            "protected_roots=%s eligible_roots=%s deleted_roots=%s "
+            "deleted_artifact_dirs=%s deleted_record_files=%s "
+            "estimated_deleted_bytes=%s skipped_active=%s skipped_recent=%s "
+            "skipped_unsafe_path=%s skipped_ambiguous_owner=%s "
+            "delete_budget_exhausted=%s errors=%s candidate_samples=%s",
+            not result_payload.get("disabled", False),
+            result_payload.get("dryRun"),
+            result_payload.get("scannedRunRecords", 0),
+            result_payload.get("scannedSessionRecords", 0),
+            result_payload.get("scannedWorkspaceRoots", 0),
+            result_payload.get("scannedArtifactDirs", 0),
+            result_payload.get("protectedRoots", 0),
+            result_payload.get("eligibleRoots", 0),
+            result_payload.get("deletedRoots", 0),
+            result_payload.get("deletedArtifactDirs", 0),
+            result_payload.get("deletedRecordFiles", 0),
+            result_payload.get("estimatedDeletedBytes", 0),
+            result_payload.get("skippedActive", 0),
+            result_payload.get("skippedRecent", 0),
+            result_payload.get("skippedUnsafePath", 0),
+            result_payload.get("skippedAmbiguousOwner", 0),
+            result_payload.get("deleteBudgetExhausted", 0),
+            len(result_payload.get("errors", [])),
+            result_payload.get("candidateSamples", []),
+        )
+        return result_payload
 
     @staticmethod
     def _agent_runtime_request_identifiers(

@@ -58,16 +58,16 @@ async def test_mm870_api_startup_schedule_failure_is_best_effort(
 
 
 @pytest.mark.asyncio
-async def test_mm948_api_startup_preserves_workspace_cleanup_schedule_state(
+async def test_api_startup_enables_workspace_cleanup_schedule_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[bool | None] = []
+    calls: list[bool] = []
 
     class _Adapter:
         async def ensure_managed_runtime_workspace_cleanup_schedule(
             self,
             *,
-            enabled: bool | None,
+            enabled: bool,
         ) -> str:
             calls.append(enabled)
             return "mm-operational:managed-runtime-workspace-cleanup"
@@ -79,7 +79,62 @@ async def test_mm948_api_startup_preserves_workspace_cleanup_schedule_state(
 
     await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
 
-    assert calls == [None]
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_api_startup_persistently_disables_workspace_cleanup_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+
+    class _Adapter:
+        async def ensure_managed_runtime_workspace_cleanup_schedule(
+            self,
+            *,
+            enabled: bool,
+        ) -> str:
+            calls.append(enabled)
+            return "mm-operational:managed-runtime-workspace-cleanup"
+
+    monkeypatch.setenv("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", "false")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _Adapter,
+    )
+
+    await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
+
+    assert calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_api_startup_dry_run_keeps_workspace_cleanup_schedule_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[bool] = []
+
+    class _Adapter:
+        async def ensure_managed_runtime_workspace_cleanup_schedule(
+            self,
+            *,
+            enabled: bool,
+        ) -> str:
+            calls.append(enabled)
+            return "mm-operational:managed-runtime-workspace-cleanup"
+
+    monkeypatch.setenv("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", "true")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _Adapter,
+    )
+
+    with caplog.at_level(logging.INFO):
+        await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
+
+    assert calls == [True]
+    assert "schedule_enabled=True dry_run=True" in caplog.text
 
 
 @pytest.mark.asyncio

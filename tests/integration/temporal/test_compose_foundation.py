@@ -195,6 +195,29 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         for line in env_template.splitlines()
     )
 
+def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
+    compose = _load_compose()
+    api_env = _env_map(compose["services"]["api"]["environment"])
+    worker_env = _env_map(
+        compose["services"]["temporal-worker-agent-runtime"]["environment"]
+    )
+    expected = {
+        "MOONMIND_AGENT_RUNTIME_STORE": "${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}",
+        "MOONMIND_AGENT_RUNTIME_ARTIFACTS": "${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": "${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": "${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}",
+        "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-30}",
+        "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}",
+        "MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS": "${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS": "${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS:-100}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES": "${MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES:-}",
+        "MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH": "${MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH:-/work/agent_jobs/.janitor.lock}",
+    }
+
+    assert {key: api_env[key] for key in expected} == expected
+    assert {key: worker_env[key] for key in expected} == expected
+
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     _require_docker_compose()
 
