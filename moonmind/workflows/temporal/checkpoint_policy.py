@@ -8,7 +8,6 @@ from typing import Any
 
 from moonmind.schemas.temporal_models import WorkspacePolicy
 from moonmind.workflows.executions.runtime_capabilities import (
-    RuntimeCapabilityError,
     RuntimeExecutionCapabilities,
     WorkspaceAuthority,
     resolve_runtime_execution_capabilities,
