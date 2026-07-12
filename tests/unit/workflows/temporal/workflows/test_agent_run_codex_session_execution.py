@@ -208,7 +208,7 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
         return {
             "summary": "durable handoff",
             "failureClass": "execution_error",
-            "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
+            "providerErrorCode": "CLI_NONZERO_EXIT",
             "metadata": {
                 "terminalContractOutcome": "continuation_requested",
                 "mergeAutomationDisposition": "reenter_gate",

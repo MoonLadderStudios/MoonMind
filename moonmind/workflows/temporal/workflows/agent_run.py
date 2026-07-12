@@ -1983,7 +1983,6 @@ class MoonMindAgentRun:
             workflow.patched(PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID)
             and (evaluated.metadata or {}).get("terminalContractOutcome")
             == "continuation_requested"
-            and evaluated.provider_error_code == "PR_RESOLVER_REENTER_GATE"
             and continuation_authority is not None
             and continuation_authority.allows(
                 gate_type="merge_automation", action="reenter_gate"

@@ -96,6 +96,33 @@ async def test_success_exit_classification(supervisor_env):
     assert record.failure_class is None
     assert record.diagnostics_ref is not None
 
+
+@pytest.mark.asyncio
+async def test_supervise_terminates_descendant_before_waiting_for_stream_eof(
+    supervisor_env,
+):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-descendant", "launching")
+
+    process = await asyncio.create_subprocess_exec(
+        "sh",
+        "-c",
+        "sleep 60 & exit 0",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    record = await asyncio.wait_for(
+        supervisor.supervise(
+            run_id="run-descendant", process=process, timeout_seconds=30
+        ),
+        timeout=5,
+    )
+
+    assert record.status == "completed"
+
 @pytest.mark.asyncio
 async def test_failure_exit_classification(supervisor_env):
     store, _, _, supervisor = supervisor_env

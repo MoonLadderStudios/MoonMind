@@ -376,10 +376,18 @@ class ManagedRunSupervisor:
                         trigger=stalled_progress_detected,
                     )
                 )
+            process_exit_code, timed_out = await heartbeat_task
+            # Descendants can inherit the managed process pipes after the CLI
+            # exits. Terminate the owned group before waiting for EOF so those
+            # inherited descriptors cannot keep stream collection alive.
+            self._terminate_owned_process_group_best_effort(process)
             (
-                (process_exit_code, timed_out),
-                (log_refs, stdout_content, stderr_content, parsed_output, events),
-            ) = await asyncio.gather(heartbeat_task, stream_task)
+                log_refs,
+                stdout_content,
+                stderr_content,
+                parsed_output,
+                events,
+            ) = await stream_task
             if terminate_on_rate_limit_task is not None:
                 if live_rate_limit_detected.is_set():
                     with suppress(asyncio.CancelledError):
