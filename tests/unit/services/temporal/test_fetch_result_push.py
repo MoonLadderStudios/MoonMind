@@ -2245,8 +2245,8 @@ class TestFetchResultPushIntegration:
         mock_normalize.assert_called_once_with("/work/agent_jobs/run-1/repo")
 
     @pytest.mark.asyncio
-    async def test_fetch_result_skips_push_on_failure(self):
-        """No push when agent failed (failure_class set)."""
+    async def test_fetch_result_publishes_controlled_failure_to_recovery_branch(self):
+        """Controlled failure preserves work without replacing the failure."""
         store = _make_mock_store(failure_class="execution_error")
         activities = TemporalAgentRuntimeActivities(run_store=store)
 
@@ -2257,7 +2257,16 @@ class TestFetchResultPushIntegration:
 
         with (
             patch.object(
-                activities, "_push_workspace_branch",
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={
+                    "push_status": "pushed",
+                    "push_branch": "mm/run-1/workflow/cp-123/terminal-recovered-work",
+                    "push_head_sha": "abc123",
+                    "push_base_branch": "main",
+                    "remote_verified": True,
+                },
             ) as mock_push,
             patch.object(
                 activities, "_detect_pr_url_from_workspace",
@@ -2266,15 +2275,58 @@ class TestFetchResultPushIntegration:
             patch(
                 "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
             ) as MockAdapter,
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
         ):
             adapter_instance = MockAdapter.return_value
             adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
 
-            await activities.agent_runtime_fetch_result(
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        mock_push.assert_called_once()
+        push_kwargs = mock_push.call_args.kwargs
+        assert push_kwargs["head_branch"].startswith("mm/run-1/workflow/cp-")
+        assert push_kwargs["allow_target_branch_push"] is False
+        assert "MoonLadderStudios/MoonMind#3229" in push_kwargs["commit_message"]
+        assert result.failure_class == "execution_error"
+        assert result.metadata["terminalPublication"]["remoteVerified"] is True
+        assert result.metadata["terminalPublication"]["headSha"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_does_not_publish_system_error(self):
+        store = _make_mock_store(failure_class="system_error")
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        with (
+            patch.object(activities, "_push_workspace_branch") as mock_push,
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            MockAdapter.return_value.fetch_result = AsyncMock(
+                return_value=AgentRunResult(
+                    summary="infrastructure lost",
+                    failure_class="system_error",
+                )
+            )
+            result = await activities.agent_runtime_fetch_result(
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
             )
 
         mock_push.assert_not_called()
+        assert result.failure_class == "system_error"
+        assert "terminalPublication" not in result.metadata
 
     @pytest.mark.asyncio
     async def test_fetch_result_reports_push_failure_in_metadata(self):

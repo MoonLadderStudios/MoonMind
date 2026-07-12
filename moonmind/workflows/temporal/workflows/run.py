@@ -11916,6 +11916,23 @@ class MoonMindRunWorkflow:
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
+        terminal_publication = outputs.get("terminalPublication")
+        if isinstance(terminal_publication, Mapping):
+            compact_terminal = {
+                key: terminal_publication.get(key)
+                for key in (
+                    "intent", "status", "reasonCode", "source", "attempted",
+                    "commitCreated", "branchPushed", "branchName", "branchUrl",
+                    "headSha", "baseBranch", "remoteVerified", "evidenceRef",
+                    "idempotencyKey",
+                )
+                if terminal_publication.get(key) is not None
+            }
+            self._publish_context["terminalPublication"] = compact_terminal
+            if compact_terminal.get("remoteVerified") is True:
+                self._publish_context["branch"] = compact_terminal.get("branchName")
+                self._publish_context["headSha"] = compact_terminal.get("headSha")
+                self._publish_context["baseRef"] = compact_terminal.get("baseBranch")
         self._record_no_commit_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)

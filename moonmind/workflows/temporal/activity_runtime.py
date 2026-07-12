@@ -93,6 +93,7 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocatorResolutionError,
 )
 from moonmind.workflows.report_output import report_output_display_name
+from moonmind.workflows.checkpoint_branches import generate_checkpoint_branch_name
 from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.prepared_context import (
     PreparedContextFailure,
@@ -10387,13 +10388,20 @@ class TemporalAgentRuntimeActivities:
                 if final_operator_summary:
                     meta["operator_summary"] = final_operator_summary
 
-            # Push the agent's work branch if publish_mode requires it and the
-            # agent completed without failure.
+            # Push successful results normally. Controlled failures use the
+            # same scan/commit/lease pipeline, but an isolated deterministic
+            # branch and explicitly secondary terminal-publication evidence.
             publish_agent_id = agent_id
             if record is not None:
                 publish_agent_id = record.runtime_id or record.agent_id or agent_id
+            controlled_failure = result.failure_class in {
+                "user_error",
+                "execution_error",
+                "integration_error",
+                "timed_out",
+            }
             if (
-                result.failure_class is None
+                (result.failure_class is None or controlled_failure)
                 and publish_mode != "none"
                 and _normalize_provider_native_pr_agent_id(publish_agent_id)
                 not in _PROVIDER_NATIVE_PR_AGENT_IDS
@@ -10410,6 +10418,21 @@ class TemporalAgentRuntimeActivities:
                     push_kwargs["allow_target_branch_push"] = True
                 if isinstance(head_branch, str) and head_branch.strip():
                     push_kwargs["head_branch"] = head_branch.strip()
+                if controlled_failure:
+                    recovery_branch = generate_checkpoint_branch_name(
+                        workflow_id=run_id,
+                        logical_step_id="workflow",
+                        checkpoint_ref=f"managed-run:{run_id}",
+                        product_branch_id="terminal",
+                        label="recovered-work",
+                        idempotency_key=f"terminal-checkpoint-v1:{run_id}",
+                    )
+                    push_kwargs["head_branch"] = recovery_branch
+                    push_kwargs["allow_target_branch_push"] = False
+                    push_kwargs["commit_message"] = (
+                        f"Preserve failed workflow work for {run_id} "
+                        "(MoonLadderStudios/MoonMind#3229)"
+                    )
                 if (
                     isinstance(raw_commit_message, str)
                     and raw_commit_message.strip()
@@ -10420,7 +10443,53 @@ class TemporalAgentRuntimeActivities:
                     github_token=workspace_github_token,
                     **push_kwargs,
                 )
+                if (
+                    controlled_failure
+                    and push_info.get("push_status") == "pushed"
+                    and push_info.get("remote_verified") is not True
+                    and record is not None
+                    and record.workspace_path
+                ):
+                    expected_sha = str(push_info.get("push_head_sha") or "").strip()
+                    published_branch = str(push_info.get("push_branch") or "").strip()
+                    remote_sha = await self._resolve_workspace_remote_branch_sha(
+                        workspace=record.workspace_path,
+                        branch=published_branch,
+                        run_id=run_id,
+                        env=self._workspace_command_env(
+                            record.workspace_path,
+                            github_token=workspace_github_token,
+                        ),
+                    )
+                    push_info["remote_verified"] = bool(
+                        expected_sha and remote_sha == expected_sha
+                    )
+                    if not push_info["remote_verified"]:
+                        push_info["push_status"] = "verification_failed"
+                        push_info["push_error"] = (
+                            "remote branch head did not match the expected workspace head"
+                        )
                 meta.update(push_info)
+                if controlled_failure:
+                    status_value = str(push_info.get("push_status") or "failed")
+                    meta["terminalPublication"] = {
+                        "intent": "terminal_checkpoint",
+                        "status": status_value,
+                        "reasonCode": (
+                            "graceful_failure_checkpoint_pushed"
+                            if status_value == "pushed"
+                            else f"terminal_checkpoint_{status_value}"
+                        ),
+                        "source": "live_workspace",
+                        "attempted": True,
+                        "commitCreated": bool(push_info.get("push_commit_message")),
+                        "branchPushed": status_value == "pushed",
+                        "branchName": push_info.get("push_branch"),
+                        "headSha": push_info.get("push_head_sha"),
+                        "baseBranch": push_info.get("push_base_branch"),
+                        "remoteVerified": push_info.get("remote_verified") is True,
+                        "idempotencyKey": f"terminal-checkpoint-v1:{run_id}",
+                    }
 
             # Enrich result with pull_request_url detected from workspace git
             # state (CLI stdout may not always surface PR URLs reliably).

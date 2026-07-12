@@ -3912,6 +3912,7 @@ def _serialize_execution(
         priority=priority,
         starting_branch=starting_branch,
         target_branch=target_branch,
+        output_branch=_verified_output_branch(finish_summary),
         repository=repository,
         pr_url=pr_url,
         publish_mode=publish_mode,
@@ -3992,6 +3993,48 @@ def _finish_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
     if isinstance(finish_summary, Mapping):
         return dict(finish_summary)
     return None
+
+
+def _verified_output_branch(
+    finish_summary: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Project only independently verified publication evidence."""
+    if not isinstance(finish_summary, Mapping):
+        return None
+    publish = finish_summary.get("publish")
+    context = finish_summary.get("publishContext")
+    if not isinstance(publish, Mapping):
+        publish = {}
+    if not isinstance(context, Mapping):
+        context = {}
+    terminal = publish.get("terminalPublication")
+    if not isinstance(terminal, Mapping):
+        terminal = context.get("terminalPublication")
+    source = terminal if isinstance(terminal, Mapping) else {**context, **publish}
+    remote_verified = source.get("remoteVerified") is True
+    status_value = str(source.get("status") or publish.get("status") or "").strip()
+    if not remote_verified or status_value not in {"pushed", "already_published", "published"}:
+        return None
+    name = str(
+        source.get("branchName")
+        or source.get("branch")
+        or context.get("branch")
+        or ""
+    ).strip()
+    if not name:
+        return None
+    result: dict[str, Any] = {
+        "name": name,
+        "headSha": source.get("headSha") or context.get("headSha"),
+        "baseBranch": source.get("baseBranch") or context.get("baseRef"),
+        "intent": str(source.get("intent") or "normal"),
+        "status": status_value,
+        "evidenceRef": source.get("evidenceRef"),
+    }
+    url = source.get("branchUrl")
+    if isinstance(url, str) and url.startswith("https://github.com/"):
+        result["url"] = url
+    return {key: value for key, value in result.items() if value not in (None, "")}
 
 
 def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:

@@ -3503,6 +3503,20 @@ class ExecutionTargetDiagnosticsModel(BaseModel):
     )
     degraded_reason: str | None = Field(None, alias="degradedReason")
 
+class ExecutionOutputBranchModel(BaseModel):
+    """Verified repository output evidence, distinct from authored inputs."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str
+    url: str | None = None
+    head_sha: str | None = Field(None, alias="headSha")
+    base_branch: str | None = Field(None, alias="baseBranch")
+    intent: Literal["normal", "terminal_checkpoint"] = "normal"
+    status: str
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -3578,6 +3592,11 @@ class ExecutionModel(BaseModel):
     priority: Optional[int] = Field(None, alias="priority")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
+    output_branch: Optional["ExecutionOutputBranchModel"] = Field(
+        None,
+        alias="outputBranch",
+        description="Remotely verified branch produced by publication.",
+    )
     repository: Optional[str] = Field(None, alias="repository")
     pr_url: Optional[str] = Field(
         None,
