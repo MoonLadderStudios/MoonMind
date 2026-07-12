@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -117,6 +117,47 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.volume_ref is None
     assert claude_profile.volume_mount_path is None
     assert claude_profile.clear_env_keys is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enum_values", [False, True])
+async def test_auto_seed_persists_legacy_codex_oauth_capacity_repair(
+    _module_db, enum_values
+):
+    """Startup repairs both enum-shaped and string-shaped legacy ORM rows."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    credential_source = (
+        ProviderCredentialSource.OAUTH_VOLUME if enum_values else "oauth_volume"
+    )
+    materialization_mode = (
+        RuntimeMaterializationMode.OAUTH_HOME if enum_values else "oauth_home"
+    )
+    async with db_base.async_session_maker() as session:
+        await session.execute(text("PRAGMA ignore_check_constraints = ON"))
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=f"legacy-codex-{enum_values}",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=credential_source,
+                runtime_materialization_mode=materialization_mode,
+                max_parallel_runs=3,
+                enabled=False,
+                auth_state=ProviderProfileAuthState.DISCONNECTED,
+            )
+        )
+        await session.commit()
+        await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        repaired = await session.get(
+            ManagedAgentProviderProfile, f"legacy-codex-{enum_values}"
+        )
+        assert repaired is not None
+        assert repaired.max_parallel_runs == 1
 
 
 @pytest.mark.asyncio
@@ -351,6 +392,7 @@ async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
     await _auto_seed_provider_profiles()
 
     async with db_base.async_session_maker() as session:
+        await session.execute(text("PRAGMA ignore_check_constraints = ON"))
         profile = await session.get(
             ManagedAgentProviderProfile, "codex_openai_oauth"
         )
@@ -361,6 +403,7 @@ async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
         profile.volume_mount_path = "/home/app/.codex"
         profile.max_parallel_runs = 7
         await session.commit()
+        await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
 
     seeded = await _auto_seed_provider_profiles()
     assert seeded == []

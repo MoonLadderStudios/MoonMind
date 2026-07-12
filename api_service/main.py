@@ -985,6 +985,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             existing_result = await session.execute(
                 select(
                     ManagedAgentProviderProfile.profile_id,
+                    ManagedAgentProviderProfile.runtime_id,
                     ManagedAgentProviderProfile.provider_id,
                     ManagedAgentProviderProfile.provider_label,
                     ManagedAgentProviderProfile.default_model,
@@ -999,11 +1000,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.disabled_reason,
                     ManagedAgentProviderProfile.command_behavior,
                     ManagedAgentProviderProfile.last_auth_method,
+                    ManagedAgentProviderProfile.max_parallel_runs,
                 )
             )
             existing_rows = existing_result.all()
             existing_by_id = {
                 row.profile_id: {
+                    "runtime_id": row.runtime_id,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
                     "default_model": row.default_model,
@@ -1018,6 +1021,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "disabled_reason": row.disabled_reason,
                     "command_behavior": row.command_behavior,
                     "last_auth_method": row.last_auth_method,
+                    "max_parallel_runs": row.max_parallel_runs,
                 }
                 for row in existing_rows
             }
@@ -1063,12 +1067,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
             # startup as well as validating new API writes; otherwise an old
             # max_parallel_runs value can bypass the invariant indefinitely.
             for profile_id, current in existing_by_id.items():
+                credential_source = getattr(
+                    current.get("credential_source"), "value", current.get("credential_source")
+                )
+                materialization_mode = getattr(
+                    current.get("runtime_materialization_mode"),
+                    "value",
+                    current.get("runtime_materialization_mode"),
+                )
                 if (
                     current.get("runtime_id") == "codex_cli"
-                    and current.get("credential_source")
-                    == ProviderCredentialSource.OAUTH_VOLUME
-                    and current.get("runtime_materialization_mode")
-                    == RuntimeMaterializationMode.OAUTH_HOME
+                    and credential_source == ProviderCredentialSource.OAUTH_VOLUME.value
+                    and materialization_mode == RuntimeMaterializationMode.OAUTH_HOME.value
                     and current.get("max_parallel_runs") != 1
                 ):
                     await session.execute(

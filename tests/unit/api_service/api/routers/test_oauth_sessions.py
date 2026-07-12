@@ -1421,7 +1421,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
                 metadata_json={
                     "provider_id": "anthropic",
                     "provider_label": "Anthropic",
-                    "max_parallel_runs": 1,
+                    "max_parallel_runs": 3,
                     "cooldown_after_429_seconds": 900,
                     "rate_limit_policy": "backoff",
                 },
@@ -1496,6 +1496,7 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         )
         assert profile.volume_ref == "claude_auth_volume"
         assert profile.volume_mount_path == "/home/app/.claude"
+        assert profile.max_parallel_runs == 3
         assert "credentials" not in repr(profile.__dict__)
         assert "token" not in repr(profile.__dict__).lower()
     assert synced_runtimes == ["claude_code"]

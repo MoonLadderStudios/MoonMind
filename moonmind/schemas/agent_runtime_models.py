@@ -937,7 +937,6 @@ class CredentialMountRef(BaseModel):
     access_mode: Literal["read_write"] = Field("read_write", alias="accessMode")
     runtime_uid: int = Field(1000, alias="runtimeUid", ge=1)
     runtime_gid: int = Field(1000, alias="runtimeGid", ge=1)
-    host_lease_ref: str = Field(..., alias="hostLeaseRef", min_length=1)
 
     @field_validator("target_path")
     @classmethod
@@ -946,6 +945,15 @@ class CredentialMountRef(BaseModel):
         if not normalized.startswith("/"):
             raise ValueError("targetPath must be absolute")
         return normalized
+
+    @model_validator(mode="after")
+    def _require_first_party_codex_topology(self) -> "CredentialMountRef":
+        if self.auth_volume_ref.runtime_id == "codex_cli":
+            if self.target_path != "/home/app/.codex":
+                raise ValueError("Codex OAuth homes must mount at /home/app/.codex")
+            if self.runtime_uid != 1000 or self.runtime_gid != 1000:
+                raise ValueError("Codex OAuth hosts must run with UID/GID 1000")
+        return self
 
 
 class OmnigentOAuthHostBinding(BaseModel):

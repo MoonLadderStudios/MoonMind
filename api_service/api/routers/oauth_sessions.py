@@ -778,6 +778,11 @@ async def finalize_oauth_session(
         )
 
     connected_at = datetime.now(timezone.utc)
+    effective_max_parallel_runs = (
+        1
+        if session_obj.runtime_id == "codex_cli"
+        else int(metadata.get("max_parallel_runs", 1))
+    )
     profile_data = {
         "runtime_id": session_obj.runtime_id,
         "provider_id": metadata.get("provider_id")
@@ -790,7 +795,7 @@ async def finalize_oauth_session(
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,
-        "max_parallel_runs": 1,
+        "max_parallel_runs": effective_max_parallel_runs,
         "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
         "rate_limit_policy": policy_enum,
         "enabled": True,
@@ -809,7 +814,7 @@ async def finalize_oauth_session(
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME.value,
             volume_ref=session_obj.volume_ref,
             volume_mount_path=session_obj.volume_mount_path,
-            max_parallel_runs=1,
+            max_parallel_runs=effective_max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )

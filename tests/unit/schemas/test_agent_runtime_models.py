@@ -42,7 +42,6 @@ def _oauth_mount_ref() -> CredentialMountRef:
             ownerUserId="user-1",
         ),
         targetPath="/home/app/.codex",
-        hostLeaseRef="host-lease-1",
     )
 
 
@@ -89,6 +88,11 @@ def test_codex_oauth_mount_and_host_lease_fail_closed_on_unsafe_state() -> None:
     mount = _oauth_mount_ref().model_dump(by_alias=True)
     mount["targetPath"] = "relative/.codex"
     with pytest.raises(ValidationError, match="targetPath must be absolute"):
+        CredentialMountRef.model_validate(mount)
+
+    mount = _oauth_mount_ref().model_dump(by_alias=True)
+    mount["runtimeUid"] = 2000
+    with pytest.raises(ValidationError, match="UID/GID 1000"):
         CredentialMountRef.model_validate(mount)
 
     acquired_at = datetime(2026, 7, 12, tzinfo=UTC)
@@ -473,7 +477,7 @@ def test_codex_oauth_provider_profile_preserves_secret_free_refs_and_policy() ->
         runtimeMaterializationMode="oauth_home",
         volumeRef="codex_auth_volume",
         volumeMountPath="/home/app/.codex",
-        maxParallelRuns=3,
+        maxParallelRuns=1,
         cooldownAfter429Seconds=120,
         maxLeaseDurationSeconds=900,
         rateLimitPolicy={"strategy": "queue"},
@@ -482,7 +486,7 @@ def test_codex_oauth_provider_profile_preserves_secret_free_refs_and_policy() ->
     assert profile.provider_id == "openai"
     assert profile.volume_ref == "codex_auth_volume"
     assert profile.volume_mount_path == "/home/app/.codex"
-    assert profile.max_parallel_runs == 3
+    assert profile.max_parallel_runs == 1
     assert profile.cooldown_after_429_seconds == 120
     assert profile.max_lease_duration_seconds == 900
     assert profile.rate_limit_policy == {"strategy": "queue"}

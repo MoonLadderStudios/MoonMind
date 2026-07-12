@@ -2425,6 +2425,15 @@ class ManagedAgentProviderProfile(Base):
             "default_model_tier >= 1",
             name="ck_provider_profiles_default_model_tier_positive",
         ),
+        CheckConstraint(
+            "NOT (runtime_id = 'codex_cli' AND credential_source = 'oauth_volume' "
+            "AND runtime_materialization_mode = 'oauth_home') OR max_parallel_runs = 1",
+            name="ck_provider_profiles_codex_oauth_exclusive_capacity",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_provider_profiles_credential_generation_positive",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2435,6 +2444,9 @@ class ManagedAgentProviderProfile(Base):
     )
 
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    credential_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_id: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown", server_default=text("'unknown'"))
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -2699,7 +2711,7 @@ class OmnigentOAuthHostBindingRecord(Base):
     )
     endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     harness: Mapped[str] = mapped_column(String(64), nullable=False)
-    credential_mount_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    credential_mount_template_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     static_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     host_launch_profile_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -2713,8 +2725,29 @@ class OmnigentOAuthHostLeaseRecord(Base):
 
     __tablename__ = "omnigent_oauth_host_leases"
     __table_args__ = (
-        UniqueConstraint("provider_profile_id", name="uq_omnigent_oauth_host_lease_profile"),
         UniqueConstraint("provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"),
+        UniqueConstraint("idempotency_key", name="uq_omnigent_oauth_host_idempotency"),
+        CheckConstraint(
+            "status IN ('allocating','starting','ready','assigned','draining','stopped','failed')",
+            name="ck_omnigent_oauth_host_lease_status",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_omnigent_oauth_host_lease_generation",
+        ),
+        CheckConstraint(
+            "expires_at > acquired_at",
+            name="ck_omnigent_oauth_host_lease_expiry",
+        ),
+        Index(
+            "ux_omnigent_oauth_host_lease_active_profile",
+            "provider_profile_id",
+            unique=True,
+            sqlite_where=text("status IN ('allocating','starting','ready','assigned','draining')"),
+            postgresql_where=text("status IN ('allocating','starting','ready','assigned','draining')"),
+        ),
+        Index("ix_omnigent_oauth_host_lease_profile", "provider_profile_id"),
+        Index("ix_omnigent_oauth_host_lease_workflow", "holder_workflow_id"),
         Index("ix_omnigent_oauth_host_lease_expiry", "expires_at"),
     )
 
@@ -2727,6 +2760,10 @@ class OmnigentOAuthHostLeaseRecord(Base):
         String(255), ForeignKey("omnigent_oauth_host_bindings.binding_ref", ondelete="CASCADE"), nullable=False
     )
     credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    holder_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    lease_purpose: Mapped[str] = mapped_column(String(64), nullable=False)
     container_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -2736,6 +2773,13 @@ class OmnigentOAuthHostLeaseRecord(Base):
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ready_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    draining_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cleanup_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(96), nullable=True)
+    error_summary: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
