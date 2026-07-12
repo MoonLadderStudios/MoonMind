@@ -1,6 +1,6 @@
 ---
 name: batch-workflows
-description: Resolve Jira issues by project/status and enqueue one child MoonMind workflow per target using a selected run capability, inherited runtime, and a shared advanced publish policy.
+description: Provide the shared fan-out engine used by provider-specific Jira and GitHub batch presets to enqueue child workflows with inherited runtime and stable evidence.
 metadata:
   sideEffect:
     kind: enqueue_children
@@ -14,13 +14,14 @@ metadata:
     - gh
 ---
 
-# Batch Workflows Skill
+# Batch Workflows Fan-out Skill
 
 ## Purpose
 
-Resolve a Jira status cohort, then queue one child MoonMind workflow per target
-running a selected child capability such as `skill:jira-verify` or
-`preset:jira-implement`. Every child inherits the parent runtime
+Provide the internal fan-out engine used by the product-facing Batch Jira
+Workflows and Batch GitHub Workflows presets. Each provider-specific preset owns
+its fixed source model and curated destination list; this shared skill handles
+queueing, runtime inheritance, publishing, idempotency, and evidence. Every child inherits the parent runtime
 (`runtimeInheritance="caller"`) and a single shared publish policy. The parent
 records a summary artifact that links every queued child workflow.
 
@@ -36,9 +37,10 @@ Progress" with a single batch run.
 - `jira_project_key` (string, required): Jira project key, for example `MM`.
 - `jira_status` (string, required): Jira status name, for example `In Progress`.
 - `run_ref` (string, required): child capability to run per target. Default
-  `skill:jira-verify`. Supported values are `skill:jira-verify`,
-  `preset:jira-implement`, and the helper also supports
-  `preset:github-issue-implement` for non-default GitHub target files.
+  `skill:jira-verify`. The Jira preset supports `skill:jira-verify`,
+  `preset:jira-implement`, and `preset:jira-orchestrate`. The separate GitHub
+  preset supports `preset:github-issue-implement` and
+  `preset:github-issue-orchestrate` through the same helper.
 - `max_workflows` (number, optional): hard cap on queued children. Default `25`.
 - `constraints` (string, optional): shared input copied to every child.
 - `run_verify` (boolean, optional): shared verification toggle copied to child
@@ -80,7 +82,7 @@ Progress" with a single batch run.
    ```bash
    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
      --targets artifacts/batch-workflows-targets.json \
-     --run-ref <skill:jira-verify|preset:jira-implement> \
+     --run-ref <curated provider-specific run ref> \
      --publish-mode <none|branch|pr|pr_with_merge_automation> \
      --constraints-file <optional path to shared constraints> \
      --run-verify | --no-run-verify \
@@ -94,8 +96,9 @@ Progress" with a single batch run.
      `constraints`).
    - Auto-binds Jira issues into `preset:jira-implement` inputs
      (`jira_issue`, `jira_issue_key`, `constraints`, and `run_verify`).
-   - Auto-binds GitHub issue targets into `preset:github-issue-implement` inputs
-     when a non-default GitHub target file is provided, including `run_verify`.
+   - Auto-binds the same Jira inputs into `preset:jira-orchestrate`.
+   - Auto-binds GitHub issue targets into the Implement and Orchestrate presets,
+     including `run_verify`.
    - Stamps `runtimeInheritance="caller"` plus a fallback copy of the parent's
      effective runtime (mode/model/effort/provider profile) so children reuse the
      caller runtime even on deployments that do not honour the inheritance

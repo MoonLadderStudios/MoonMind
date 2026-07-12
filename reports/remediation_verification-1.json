@@ -3,18 +3,14 @@
   "attempt": 1,
   "remediationAttempt": 1,
   "verifiesRemediationAttempt": 1,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-1.json",
-  "verificationTarget": "MM-1201",
-  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
-  "verdict": "ADDITIONAL_WORK_NEEDED",
-  "recommendedNextAction": "reattempt_current_step",
+  "issueRef": "MM-1205",
+  "verificationTarget": "issue_brief",
+  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
+  "authoritativeVerificationArtifact": "artifacts/jira-implement-verify.json",
+  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
+  "verdict": "FULLY_IMPLEMENTED",
+  "recommendedNextAction": "advance",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [
-    {"requirement": "Runtime-neutral capability-aware continuation", "gapType": "implementation", "remainingWork": "Move bounded continuation out of CodexSessionAdapter into replay-safe AgentRun orchestration and cover runtimes with and without same-session continuation.", "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; AgentRun workflow tests", "recoverableInCurrentRuntime": true},
-    {"requirement": "Complete helper failure matrix", "gapType": "verification", "remainingWork": "Add isolated subprocess cases for preflight/HTTP/partial/rerun/stale-artifact paths and prove created children remain preserved.", "suggestedEvidence": "tests/unit/test_batch_workflows.py", "recoverableInCurrentRuntime": true},
-    {"requirement": "Coherent parent and UI projections", "gapType": "verification", "remainingWork": "Prove finishOutcome, mm_state, closeStatus, ledger, dashboard, diagnostics, queued count, and partial child IDs agree through the parent boundary.", "suggestedEvidence": "tests/unit/workflows/temporal/workflows/test_run_integration.py; frontend dashboard tests", "recoverableInCurrentRuntime": true},
-    {"requirement": "Real reliability replay", "gapType": "verification", "remainingWork": "Drive AgentRun evaluation and parent finalization/projection rather than directly invoking the evaluator.", "suggestedEvidence": "tests/integration/reliability/test_escaped_failure_journeys.py", "recoverableInCurrentRuntime": true}
-  ],
-  "testSummary": {"unit": "PASS (175)", "workflowBoundary": "PASS (150)", "reliability": "PASS (3)"},
-  "environmentNotes": ["The issue brief is complete; no recovery was needed.", "Unrelated MM-1199 remediation artifacts were excluded."]
+  "remainingWork": [],
+  "summary": "Remediation attempt 1 is verified against the whole MM-1205 target state. All repository-verifiable requirements and controlling checks pass; external staging and deployed-asset checks are disclosed scope exclusions."
 }

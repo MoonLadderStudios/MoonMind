@@ -46,6 +46,15 @@ logger = logging.getLogger(__name__)
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = _CLIENT.IDEMPOTENCY_KEY_MAX_LENGTH
 PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation"
+SUPPORTED_RUN_REFS = frozenset(
+    {
+        ("jira", "skill", "jira-verify"),
+        ("jira", "preset", "jira-implement"),
+        ("jira", "preset", "jira-orchestrate"),
+        ("github", "preset", "github-issue-implement"),
+        ("github", "preset", "github-issue-orchestrate"),
+    }
+)
 
 
 @dataclass
@@ -163,7 +172,7 @@ def child_goal_for_target(
         return None
     if (
         target_kind == "preset"
-        and target_slug == "jira-implement"
+        and target_slug in {"jira-implement", "jira-orchestrate"}
         and provider == "jira"
     ):
         issue = (
@@ -171,7 +180,8 @@ def child_goal_for_target(
         )
         key = _text(issue.get("key")) or _text(target.get("ref"))
         if key:
-            return f"Implement Jira issue {key}."
+            action = "Orchestrate" if target_slug == "jira-orchestrate" else "Implement"
+            return f"{action} Jira issue {key}."
         return None
     if (
         target_kind == "preset"
@@ -249,7 +259,7 @@ def bind_child_inputs(
         return inputs
     if (
         target_kind == "preset"
-        and target_slug == "jira-implement"
+        and target_slug in {"jira-implement", "jira-orchestrate"}
         and provider == "jira"
     ):
         issue = (
