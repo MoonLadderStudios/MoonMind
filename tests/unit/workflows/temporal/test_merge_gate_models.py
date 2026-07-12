@@ -94,6 +94,11 @@ def test_post_merge_jira_config_rejects_unsupported_strategy() -> None:
     with pytest.raises(ValidationError):
         MergeAutomationPostMergeJiraModel(strategy="first_transition")
 
+
+def test_post_merge_github_requires_issue_identity_when_enabled() -> None:
+    with pytest.raises(ValidationError):
+        MergeAutomationConfigModel(postMergeGithub={"enabled": True})
+
 def test_merge_automation_start_accepts_missing_post_merge_jira_for_compatibility() -> None:
     payload = MergeAutomationStartInput(
         workflowType="MoonMind.MergeAutomation",
@@ -104,5 +109,7 @@ def test_merge_automation_start_accepts_missing_post_merge_jira_for_compatibilit
     )
 
     assert payload.config.post_merge_jira.enabled is False
+    assert payload.config.post_merge_github.enabled is False
     dumped = payload.model_dump(by_alias=True)
     assert "postMergeJira" in dumped["mergeAutomationConfig"]
+    assert "postMergeGithub" in dumped["mergeAutomationConfig"]

@@ -13505,6 +13505,22 @@ class MoonMindRunWorkflow:
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
             post_merge_jira.setdefault("strategy", "done_category")
+            raw_post_merge_github = candidate.get(
+                "postMergeGithub"
+            ) or candidate.get("post_merge_github")
+            post_merge_github = (
+                dict(raw_post_merge_github)
+                if isinstance(raw_post_merge_github, Mapping)
+                else {}
+            )
+            github_issue = self._canonical_github_issue_from_parameters(parameters)
+            if github_issue:
+                post_merge_github.setdefault("enabled", True)
+                post_merge_github.setdefault("required", True)
+                post_merge_github.setdefault("repository", github_issue["repository"])
+                post_merge_github.setdefault(
+                    "issueNumber", github_issue["issueNumber"]
+                )
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -13527,6 +13543,7 @@ class MoonMindRunWorkflow:
                 or "squash",
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
+                "postMergeGithub": post_merge_github,
                 "fallbackPollSeconds": (
                     candidate.get("fallbackPollSeconds")
                     or candidate.get("fallback_poll_seconds")
@@ -13541,6 +13558,48 @@ class MoonMindRunWorkflow:
                     or timeout_config.get("expire_after_seconds")
                 ),
             }
+        return None
+
+    def _canonical_github_issue_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        mappings: list[Mapping[str, Any]] = [parameters, task_payload]
+        for source in (parameters, task_payload):
+            for key in ("inputs", "input"):
+                nested = source.get(key)
+                if isinstance(nested, Mapping):
+                    mappings.append(nested)
+        templates = task_payload.get("appliedStepTemplates")
+        if isinstance(templates, Sequence) and not isinstance(
+            templates, (str, bytes)
+        ):
+            for template in templates:
+                if not isinstance(template, Mapping):
+                    continue
+                mappings.append(template)
+                nested = template.get("inputs")
+                if isinstance(nested, Mapping):
+                    mappings.append(nested)
+        for mapping in mappings:
+            issue = mapping.get("github_issue") or mapping.get("githubIssue")
+            if not isinstance(issue, Mapping):
+                continue
+            repository = self._coerce_text(
+                issue.get("repository") or issue.get("repo"), max_chars=240
+            )
+            try:
+                issue_number = int(issue.get("number") or issue.get("issueNumber"))
+            except (TypeError, ValueError):
+                issue_number = 0
+            if repository and issue_number > 0:
+                return {
+                    "repository": repository,
+                    "issueNumber": issue_number,
+                }
         return None
 
     def _canonical_jira_issue_key_from_parameters(
@@ -13808,6 +13867,7 @@ class MoonMindRunWorkflow:
                 },
                 "timeouts": timeouts,
                 "postMergeJira": request.get("postMergeJira") or {},
+                "postMergeGithub": request.get("postMergeGithub") or {},
             },
             "resolverTemplate": resolver_template,
             "idempotencyKey": (
@@ -13884,6 +13944,9 @@ class MoonMindRunWorkflow:
         post_merge_jira = result_map.get("postMergeJira")
         if isinstance(post_merge_jira, Mapping):
             summary["postMergeJira"] = dict(post_merge_jira)
+        post_merge_github = result_map.get("postMergeGithub")
+        if isinstance(post_merge_github, Mapping):
+            summary["postMergeGithub"] = dict(post_merge_github)
         return summary
 
     async def _complete_already_implemented_jira_if_needed(

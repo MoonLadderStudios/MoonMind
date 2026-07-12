@@ -134,6 +134,15 @@ async def expand_preset_for_child_run(
     if isinstance(repository, str) and repository.strip():
         template_context["repository"] = repository.strip()
         template_context["repo"] = repository.strip()
+    git_payload = _coerce_mapping(task_payload.get("git"))
+    branch = (
+        git_payload.get("branch")
+        or git_payload.get("startingBranch")
+        or task_payload.get("branch")
+        or task_payload.get("startingBranch")
+    )
+    if isinstance(branch, str) and branch.strip():
+        template_context["branch"] = branch.strip()
     runtime_payload = _coerce_mapping(task_payload.get("runtime"))
     target_runtime = (
         parameters.get("targetRuntime")
@@ -200,7 +209,9 @@ async def expand_preset_for_child_run(
         if isinstance(expanded, Mapping)
         else None
     )
-    if isinstance(expanded_checkpoint_branching, Mapping):
+    if isinstance(expanded_checkpoint_branching, Mapping) and not isinstance(
+        task_payload.get("checkpointBranching"), Mapping
+    ):
         task_payload["checkpointBranching"] = dict(expanded_checkpoint_branching)
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {

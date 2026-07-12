@@ -839,8 +839,9 @@ steps:
     submitted with PR merge automation enabled, the parent workflow must use the pull
     request URL produced by this step as the published PR and then run merge automation
     against that PR; {% if inputs.issue_provider == "github" %}the required closing
-    keyword in the pull request body makes the successful merge the authoritative
-    Done transition for issue {{ inputs.issue_ref }}{% else %}on a successful merge
+    keyword closes issue {{ inputs.issue_ref }} when the pull request merges, and
+    parent-owned post-merge completion applies the configured Done labels and confirms
+    the closed state{% else %}on a successful merge
     the parent workflow will transition {{ inputs.issue_provider }} issue {{
     inputs.issue_ref }} to Done automatically{% endif %}. If
     the runtime instructions, workflow parameters, authentication, remote configuration,

@@ -748,7 +748,7 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
                     "targetRuntime": "codex_cli",
                 },
                 session=session,
-                user_id=uuid4(),
+                user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
     finally:
         await engine.dispose()
@@ -799,7 +799,7 @@ async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -
                     "targetRuntime": "codex_cli",
                 },
                 session=session,
-                user_id=uuid4(),
+                user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
     finally:
         await engine.dispose()
@@ -817,6 +817,117 @@ async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -
     assert "Closes MoonLadderStudios/MoonMind#3143" in task_payload["steps"][-2][
         "instructions"
     ]
+
+
+@pytest.mark.asyncio
+async def test_explicit_template_rejects_another_users_personal_scope() -> None:
+    owner_id = uuid4()
+    caller_id = uuid4()
+    task_payload = {
+        "taskTemplate": {
+            "slug": "private-preset",
+            "scope": "personal",
+            "scopeRef": str(owner_id),
+        }
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _expand_goal_preset_for_workflow_submission(
+            task_payload=task_payload,
+            request_payload={},
+            session=object(),
+            user=SimpleNamespace(id=caller_id, is_superuser=False),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "template_scope_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_explicit_template_maps_missing_preset_to_not_found(tmp_path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/missing_explicit_preset.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            with pytest.raises(HTTPException) as exc_info:
+                await _expand_goal_preset_for_workflow_submission(
+                    task_payload={
+                        "taskTemplate": {
+                            "slug": "missing-explicit-preset",
+                            "scope": "global",
+                        }
+                    },
+                    request_payload={},
+                    session=session,
+                    user=SimpleNamespace(id=uuid4(), is_superuser=False),
+                )
+            with pytest.raises(HTTPException) as validation_exc_info:
+                await _expand_goal_preset_for_workflow_submission(
+                    task_payload={
+                        "taskTemplate": {
+                            "slug": "github-issue-implement",
+                            "scope": "global",
+                        },
+                        "inputs": {},
+                    },
+                    request_payload={},
+                    session=session,
+                    user=SimpleNamespace(id=uuid4(), is_superuser=False),
+                )
+    finally:
+        await engine.dispose()
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail["code"] == "template_not_found"
+    assert validation_exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_explicit_template_preserves_branch_and_checkpoint_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakePresetCatalogService:
+        def __init__(self, session: Any) -> None:
+            self.session = session
+
+        async def expand_template(self, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {
+                "steps": [{"id": "step-1", "title": "Run", "instructions": "Run"}],
+                "appliedTemplate": {
+                    "slug": kwargs["slug"],
+                    "inputs": kwargs["inputs"],
+                    "stepIds": ["step-1"],
+                    "appliedAt": "2026-07-12T00:00:00+00:00",
+                },
+                "checkpointBranching": {"enabled": True},
+            }
+
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        FakePresetCatalogService,
+    )
+    task_payload = {
+        "taskTemplate": {"slug": "branch-aware", "scope": "global"},
+        "git": {"branch": "release/next"},
+        "checkpointBranching": {"enabled": False},
+    }
+
+    await _expand_goal_preset_for_workflow_submission(
+        task_payload=task_payload,
+        request_payload={"repository": "MoonLadderStudios/MoonMind"},
+        session=object(),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
+    )
+
+    assert captured["context"]["branch"] == "release/next"
+    assert task_payload["checkpointBranching"] == {"enabled": False}
 
 
 @pytest.mark.asyncio
@@ -841,7 +952,7 @@ async def test_goal_preset_submission_uses_default_runtime_for_composite_context
                 task_payload=task_payload,
                 request_payload={"repository": "MoonLadderStudios/MoonMind"},
                 session=session,
-                user_id=uuid4(),
+                user=SimpleNamespace(id=uuid4(), is_superuser=False),
             )
     finally:
         await engine.dispose()
@@ -915,7 +1026,7 @@ async def test_goal_preset_submission_carries_expanded_checkpoint_branching(
         task_payload=task_payload,
         request_payload={"repository": "MoonLadderStudios/MoonMind"},
         session=object(),
-        user_id=uuid4(),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
     )
 
     assert task_payload["checkpointBranching"]["enabled"] is True
