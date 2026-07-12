@@ -1812,6 +1812,58 @@ class TestProviderProfileManagerHelpers:
         assert wf._pending_requests == []
 
     @pytest.mark.asyncio
+    async def test_maintenance_lease_uses_same_ledger_on_disabled_profile(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["codex_oauth"] = ProfileSlotState(
+            profile_id="codex_oauth",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=False,
+            launch_ready=False,
+        )
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 7, 12, tzinfo=timezone.utc)
+            mock_wf.patched.return_value = False
+            acquired = await wf.acquire_credential_maintenance_lease(
+                {
+                    "requester_workflow_id": "oauth-session:oas-1",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "codex_oauth",
+                    "purpose": "oauth_reconnect",
+                    "metadata": {
+                        "workflowId": "oauth-session:oas-1",
+                        "oauthSessionId": "oas-1",
+                    },
+                }
+            )
+
+        assert acquired["profile_id"] == "codex_oauth"
+        profile = wf._profiles["codex_oauth"]
+        assert profile.current_leases == ["oauth-session:oas-1"]
+        assert profile.available_slots == 0
+        assert profile.lease_metadata["oauth-session:oas-1"]["purpose"] == "oauth_reconnect"
+        assert profile.is_available() is False
+
+    @pytest.mark.asyncio
+    async def test_maintenance_lease_requires_exact_profile_without_selector(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        with pytest.raises(Exception, match="does not allow profile selectors"):
+            await wf.acquire_credential_maintenance_lease(
+                {
+                    "requester_workflow_id": "oauth-session:oas-1",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "codex_oauth",
+                    "profile_selector": {"providerId": "openai"},
+                    "purpose": "oauth_connect",
+                }
+            )
+
+    @pytest.mark.asyncio
     async def test_release_slot_creates_short_handoff_reservation(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(

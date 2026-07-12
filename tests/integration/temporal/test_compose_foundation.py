@@ -577,6 +577,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "CODEX_CONFIG_HOME": "/home/app/.codex",
         "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
         "CODEX_VOLUME_PATH": "/home/app/.codex",
+        "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
+        "OMNIGENT_SERVER_URL": "http://omnigent:8000",
     }
     entrypoint = host_service["entrypoint"]
     assert entrypoint[:2] == ["/usr/bin/env", "-u"]
@@ -601,12 +603,23 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
             "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
             "/workspaces/MoonMind:ro"
         ),
+        "./services/omnigent/scripts:/opt/moonmind:ro",
     }
     assert compose["volumes"] == {"omnigent-host-codex-state": None}
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
-        "codex-auth-init": {"condition": "service_completed_successfully"},
+        "omnigent-host-codex-init": {
+            "condition": "service_completed_successfully"
+        },
     }
+    init_service = compose["services"]["omnigent-host-codex-init"]
+    assert init_service["user"] == "0:0"
+    assert init_service["depends_on"] == {
+        "codex-auth-init": {"condition": "service_completed_successfully"}
+    }
+    assert init_service["entrypoint"] == [
+        "/opt/moonmind/init-codex-oauth-host.sh"
+    ]
     assert _network_names(host_service) == {"local-network"}
 
 

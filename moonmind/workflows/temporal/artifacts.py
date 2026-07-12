@@ -3609,6 +3609,16 @@ class TemporalArtifactActivities:
                         "granted_at": row.granted_at.isoformat()
                         if row.granted_at
                         else None,
+                        "leaseId": row.lease_id or row.workflow_id,
+                        "ownerId": row.owner_id or row.workflow_id,
+                        "purpose": row.purpose,
+                        "ownerIsWorkflow": row.owner_is_workflow,
+                        "stepExecutionId": row.step_execution_id,
+                        "oauthSessionId": row.oauth_session_id,
+                        "idempotencyKey": row.idempotency_key,
+                        "expiresAt": row.expires_at.isoformat()
+                        if row.expires_at
+                        else None,
                     }
                     for row in rows
                 ]
@@ -3639,11 +3649,26 @@ class TemporalArtifactActivities:
                             granted_at = datetime.now(timezone.utc)
                     else:
                         granted_at = datetime.now(timezone.utc)
+                    expires_at = None
+                    expires_at_str = lease.get("expiresAt")
+                    if expires_at_str:
+                        try:
+                            expires_at = datetime.fromisoformat(expires_at_str)
+                        except (ValueError, TypeError):
+                            expires_at = None
                     new_lease = ProviderProfileSlotLease(
                         runtime_id=runtime_id,
                         workflow_id=workflow_id,
                         profile_id=profile_id,
                         granted_at=granted_at,
+                        lease_id=lease.get("leaseId") or workflow_id,
+                        owner_id=lease.get("ownerId") or workflow_id,
+                        purpose=lease.get("purpose") or "execution_direct",
+                        owner_is_workflow=lease.get("ownerIsWorkflow", True) is not False,
+                        step_execution_id=lease.get("stepExecutionId"),
+                        oauth_session_id=lease.get("oauthSessionId"),
+                        idempotency_key=lease.get("idempotencyKey"),
+                        expires_at=expires_at,
                     )
                     session.add(new_lease)
                     saved_count += 1

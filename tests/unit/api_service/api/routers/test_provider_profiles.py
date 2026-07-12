@@ -81,6 +81,15 @@ def _module_db(tmp_path_factory):
 
 @pytest.fixture
 def client_app(_module_db) -> AsyncClient:
+    async def _maintenance_guard_override():
+        yield object()
+
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+    app.dependency_overrides[
+        provider_profiles_router._credential_disconnect_guard
+    ] = _maintenance_guard_override
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 

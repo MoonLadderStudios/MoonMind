@@ -28,10 +28,14 @@ ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 RUNNER_ACTIVITY_TASK_QUEUE = "mm.activity.agent_runtime"
 
 logger = logging.getLogger(__name__)
+OAUTH_CREDENTIAL_MAINTENANCE_LEASE_PATCH = (
+    "oauth-session-credential-maintenance-lease-v1"
+)
 
 # ---------------------------------------------------------------------------
 # Input / Output types
 # ---------------------------------------------------------------------------
+
 
 class OAuthSessionInput(TypedDict, total=False):
     """Input payload for starting an OAuth session workflow."""
@@ -45,10 +49,12 @@ class OAuthSessionInput(TypedDict, total=False):
     profile_settings: dict[str, Any]
     session_transport: str
 
+
 class OAuthSessionOutput(TypedDict):
     session_id: str
     status: str
     failure_reason: Optional[str]
+
 
 # ---------------------------------------------------------------------------
 # Workflow definition
@@ -56,9 +62,8 @@ class OAuthSessionOutput(TypedDict):
 
 # Default session TTL — sessions auto-expire after this duration.
 _DEFAULT_SESSION_TTL_SECONDS = 1800  # 30 minutes
-_SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)(token|password|secret|api[_-]?key)=\S+"
-)
+_SECRET_ASSIGNMENT_PATTERN = re.compile(r"(?i)(token|password|secret|api[_-]?key)=\S+")
+
 
 def _redact_workflow_failure(prefix: str, error: object) -> str:
     """Return a bounded workflow-safe failure reason."""
@@ -66,6 +71,7 @@ def _redact_workflow_failure(prefix: str, error: object) -> str:
     if _SECRET_ASSIGNMENT_PATTERN.search(message):
         return f"{prefix}: redacted provider output"
     return f"{prefix}: {message}"
+
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindOAuthSessionWorkflow:
@@ -90,6 +96,11 @@ class MoonMindOAuthSessionWorkflow:
         self._failure_reason: str = ""
         self._container_name: str = ""
         self._terminal_connected: bool = False
+        self._maintenance_lease_acquired: bool = False
+        self._maintenance_profile_id: str = ""
+        self._maintenance_runtime_id: str = ""
+        self._maintenance_lease_id: str = ""
+        self._maintenance_purpose: str = "oauth_connect"
 
     # -- Signals ---------------------------------------------------------------
 
@@ -147,7 +158,7 @@ class MoonMindOAuthSessionWorkflow:
     async def run(self, input_payload: dict[str, Any]) -> OAuthSessionOutput:
         self._session_id = input_payload.get("session_id", "")
         runtime_id = input_payload.get("runtime_id", "")
-        _profile_id = input_payload.get("profile_id", "")  # noqa: F841 — used in Phase 2
+        profile_id = input_payload.get("profile_id", "")
         volume_ref = input_payload.get("volume_ref", "")
         volume_mount_path = input_payload.get("volume_mount_path", "")
         raw_session_transport = input_payload.get("session_transport")
@@ -180,6 +191,53 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=failure_reason,
             )
 
+        if profile_id and workflow.patched(OAUTH_CREDENTIAL_MAINTENANCE_LEASE_PATCH):
+            try:
+                await self._acquire_maintenance_lease(
+                    runtime_id=runtime_id,
+                    profile_id=profile_id,
+                    purpose=str(
+                        input_payload.get("maintenance_purpose") or "oauth_connect"
+                    ),
+                )
+            except Exception as exc:
+                failure_reason = _redact_workflow_failure(
+                    "Failed to acquire credential maintenance lease", exc
+                )
+                await self._mark_failed(failure_reason)
+                return OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=failure_reason,
+                )
+            try:
+                await workflow.execute_activity(
+                    "oauth_session.prepare_credential_maintenance",
+                    {
+                        "session_id": self._session_id,
+                        "runtime_id": runtime_id,
+                        "profile_id": profile_id,
+                        "purpose": self._maintenance_purpose,
+                    },
+                    task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=120),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=2), maximum_attempts=3
+                    ),
+                )
+            except Exception as exc:
+                failure_reason = _redact_workflow_failure(
+                    "Failed to drain credential consumers", exc
+                )
+                await self._mark_failed(failure_reason)
+                return await self._finish(
+                    OAuthSessionOutput(
+                        session_id=self._session_id,
+                        status="failed",
+                        failure_reason=failure_reason,
+                    )
+                )
+
         # Step 2: Ensure the Docker volume exists
         try:
             await workflow.execute_activity(
@@ -194,10 +252,12 @@ class MoonMindOAuthSessionWorkflow:
             )
         except Exception as exc:
             await self._mark_failed(f"Failed to ensure volume: {exc}")
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="failed",
-                failure_reason=f"Volume provisioning failed: {exc}",
+            return await self._finish(
+                OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=f"Volume provisioning failed: {exc}",
+                )
             )
 
         # Step 3: Launch auth runner only when an interactive transport is enabled.
@@ -253,10 +313,12 @@ class MoonMindOAuthSessionWorkflow:
                     "Auth runner launch failed", exc
                 )
                 await self._mark_failed(failure_reason)
-                return OAuthSessionOutput(
-                    session_id=self._session_id,
-                    status="failed",
-                    failure_reason=output_reason,
+                return await self._finish(
+                    OAuthSessionOutput(
+                        session_id=self._session_id,
+                        status="failed",
+                        failure_reason=output_reason,
+                    )
                 )
 
         # Step 4: Transition to bridge_ready then awaiting_user
@@ -266,46 +328,53 @@ class MoonMindOAuthSessionWorkflow:
         # Step 5: Wait for finalize, cancel, or session timeout
         try:
             await workflow.wait_condition(
-                lambda: self._finalize_requested
-                or self._api_finalize_succeeded
-                or self._cancel_requested
-                or self._failure_requested,
+                lambda: (
+                    self._finalize_requested
+                    or self._api_finalize_succeeded
+                    or self._cancel_requested
+                    or self._failure_requested
+                ),
                 timeout=timedelta(seconds=session_ttl),
             )
         except TimeoutError:
-            await self._stop_auth_runner()
             await self._update_status("expired")
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="expired",
-                failure_reason="Session timed out before finalization",
+            return await self._finish(
+                OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="expired",
+                    failure_reason="Session timed out before finalization",
+                )
             )
 
         if self._cancel_requested:
-            await self._stop_auth_runner()
             await self._update_status("cancelled")
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="cancelled",
-                failure_reason=None,
+            return await self._finish(
+                OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="cancelled",
+                    failure_reason=None,
+                )
             )
 
         if self._failure_requested:
-            await self._stop_auth_runner()
             await self._mark_failed(self._failure_reason)
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="failed",
-                failure_reason=self._failure_reason,
+            return await self._finish(
+                OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=self._failure_reason,
+                )
             )
 
         if self._api_finalize_succeeded:
-            await self._stop_auth_runner()
             await self._update_status("succeeded")
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="succeeded",
-                failure_reason=None,
+            return await self._finish(
+                OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="succeeded",
+                    failure_reason=None,
+                ),
+                revalidate_bound_host=True,
             )
 
         # Step 6: Finalize — verify and register
@@ -344,33 +413,140 @@ class MoonMindOAuthSessionWorkflow:
                     ),
                 )
 
-                await self._stop_auth_runner()
                 await self._update_status("succeeded")
 
-                return OAuthSessionOutput(
-                    session_id=self._session_id,
-                    status="succeeded",
-                    failure_reason=None,
+                return await self._finish(
+                    OAuthSessionOutput(
+                        session_id=self._session_id,
+                        status="succeeded",
+                        failure_reason=None,
+                    ),
+                    revalidate_bound_host=True,
                 )
             else:
                 reason = verify_result.get("reason", "unknown")
-                await self._stop_auth_runner()
                 await self._mark_failed(f"Volume verification failed: {reason}")
-                return OAuthSessionOutput(
-                    session_id=self._session_id,
-                    status="failed",
-                    failure_reason=f"Volume verification failed: {reason}",
+                return await self._finish(
+                    OAuthSessionOutput(
+                        session_id=self._session_id,
+                        status="failed",
+                        failure_reason=f"Volume verification failed: {reason}",
+                    )
                 )
         except Exception as exc:
-            await self._stop_auth_runner()
             await self._mark_failed(f"Finalize sequence failed: {exc}")
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="failed",
-                failure_reason=f"Finalize sequence failed: {exc}",
+            return await self._finish(
+                OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=f"Finalize sequence failed: {exc}",
+                )
             )
 
     # -- Internal helpers ------------------------------------------------------
+
+    async def _acquire_maintenance_lease(
+        self, *, runtime_id: str, profile_id: str, purpose: str
+    ) -> None:
+        if not profile_id:
+            raise exceptions.ApplicationError(
+                "profile_id is required for OAuth credential maintenance",
+                non_retryable=True,
+            )
+        await workflow.execute_activity(
+            "provider_profile.ensure_manager",
+            {"runtime_id": runtime_id},
+            task_queue=ACTIVITY_TASK_QUEUE,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1), maximum_attempts=3
+            ),
+        )
+        owner_id = f"oauth-session:{self._session_id}"
+        manager = workflow.get_external_workflow_handle(
+            f"provider-profile-manager:{runtime_id}"
+        )
+        result = await manager.execute_update(
+            "AcquireCredentialMaintenanceLease",
+            {
+                "requester_workflow_id": owner_id,
+                "owner_id": owner_id,
+                "runtime_id": runtime_id,
+                "execution_profile_ref": profile_id,
+                "purpose": purpose,
+                "metadata": {
+                    "workflowId": workflow.info().workflow_id,
+                    "oauthSessionId": self._session_id,
+                    "ownerIsWorkflow": True,
+                },
+            },
+        )
+        self._maintenance_lease_acquired = True
+        self._maintenance_profile_id = profile_id
+        self._maintenance_runtime_id = runtime_id
+        self._maintenance_lease_id = str(result.get("lease_id") or owner_id)
+        self._maintenance_purpose = purpose
+
+    async def _release_maintenance_lease(self) -> None:
+        if not self._maintenance_lease_acquired:
+            return
+        owner_id = f"oauth-session:{self._session_id}"
+        manager = workflow.get_external_workflow_handle(
+            f"provider-profile-manager:{self._maintenance_runtime_id}"
+        )
+        await manager.signal(
+            "release_slot",
+            {
+                "requester_workflow_id": owner_id,
+                "owner_id": owner_id,
+                "runtime_id": self._maintenance_runtime_id,
+                "profile_id": self._maintenance_profile_id,
+                "lease_id": self._maintenance_lease_id,
+                "purpose": self._maintenance_purpose,
+            },
+        )
+        self._maintenance_lease_acquired = False
+
+    async def _finish(
+        self,
+        output: OAuthSessionOutput,
+        *,
+        revalidate_bound_host: bool = False,
+    ) -> OAuthSessionOutput:
+        """Stop the credential writer before releasing shared capacity."""
+
+        await self._stop_auth_runner()
+        safe_to_release = True
+        if revalidate_bound_host and self._maintenance_lease_acquired:
+            try:
+                await workflow.execute_activity(
+                    "oauth_session.revalidate_bound_host",
+                    {
+                        "session_id": self._session_id,
+                        "runtime_id": self._maintenance_runtime_id,
+                        "profile_id": self._maintenance_profile_id,
+                        "provider_lease_id": self._maintenance_lease_id,
+                    },
+                    task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=180),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=3), maximum_attempts=3
+                    ),
+                )
+            except Exception as exc:
+                safe_to_release = False
+                failure_reason = _redact_workflow_failure(
+                    "Bound host credential preflight failed", exc
+                )
+                await self._mark_failed(failure_reason)
+                output = OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=failure_reason,
+                )
+        if safe_to_release:
+            await self._release_maintenance_lease()
+        return output
 
     async def _update_status(self, status: str) -> None:
         """Update the session status in the database via activity."""
@@ -395,8 +571,6 @@ class MoonMindOAuthSessionWorkflow:
 
     async def _stop_auth_runner(self) -> None:
         """Stop the auth runner container (best-effort)."""
-        if not self._container_name:
-            return
         try:
             await workflow.execute_activity(
                 "oauth_session.stop_auth_runner",

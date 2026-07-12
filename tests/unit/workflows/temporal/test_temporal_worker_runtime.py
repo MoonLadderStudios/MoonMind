@@ -3876,6 +3876,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup import (
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor import (
+        MoonMindOmnigentOAuthHostJanitorWorkflow,
+    )
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
         MoonMindManifestIngest,
@@ -3885,6 +3888,7 @@ async def test_main_async_workflow_fleet(
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
         MoonMindAgentRun,
         MoonMindOAuthSession,
+        MoonMindOmnigentOAuthHostJanitorWorkflow,
         MoonMindMergeAutomationWorkflow,
         MoonMindPRResolverWorkflow,
     )

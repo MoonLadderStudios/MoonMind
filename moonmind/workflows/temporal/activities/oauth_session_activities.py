@@ -37,6 +37,175 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 
 logger = logging.getLogger(__name__)
 
+
+@activity.defn(name="oauth_session.prepare_credential_maintenance")
+async def oauth_session_prepare_credential_maintenance(
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Drain stale profile-bound sessions/hosts before mutating OAuth state."""
+
+    import httpx
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.settings import (
+        resolved_api_token,
+        resolved_proxy_forward_headers,
+        resolved_server_url,
+    )
+    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+
+    profile_id = str(request.get("profile_id") or "").strip()
+    if not profile_id:
+        raise ValueError("profile_id is required")
+    repository = OmnigentOAuthHostRepository(async_session_maker)
+    binding = await repository.get_binding_for_profile(profile_id)
+    if binding is None:
+        return {"profile_id": profile_id, "drained": 0}
+    leases = await repository.list_active_host_leases_for_profile(profile_id)
+    async with httpx.AsyncClient() as http_client:
+        client = OmnigentHttpClient(
+            base_url=resolved_server_url(),
+            api_token=resolved_api_token(),
+            client=http_client,
+            upstream_header_allowlist=resolved_proxy_forward_headers(),
+        )
+        runtime = OmnigentOAuthHostRuntime(client=client)
+        drained = 0
+        if not binding.host_launch_profile_ref:
+            # The static host can remain intentionally idle after its prior
+            # lease is released. Stop it before the OAuth runner mounts the
+            # same mutable home even when there is no active host lease row.
+            await runtime.stop_static_host()
+        for host_lease in leases:
+            if host_lease.omnigent_session_id:
+                try:
+                    await client.interrupt(host_lease.omnigent_session_id)
+                    await client.stop_session(host_lease.omnigent_session_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to stop stale Omnigent session before credential maintenance",
+                        exc_info=True,
+                    )
+            if binding.host_launch_profile_ref:
+                await runtime.stop_host(binding=binding, host_lease=host_lease)
+            await repository.mark_host_lease_stopped(host_lease.lease_id)
+            drained += 1
+    return {"profile_id": profile_id, "drained": drained}
+
+
+@activity.defn(name="oauth_session.revalidate_bound_host")
+async def oauth_session_revalidate_bound_host(
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require matching-generation destination preflight after reconnect."""
+
+    import httpx
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.settings import (
+        resolved_api_token,
+        resolved_proxy_forward_headers,
+        resolved_server_url,
+    )
+    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+
+    profile_id = str(request.get("profile_id") or "").strip()
+    provider_lease_id = str(request.get("provider_lease_id") or "").strip()
+    session_id = str(request.get("session_id") or "").strip()
+    if not profile_id or not provider_lease_id or not session_id:
+        raise ValueError("profile_id, provider_lease_id, and session_id are required")
+    repository = OmnigentOAuthHostRepository(async_session_maker)
+    binding = await repository.refresh_binding_generation(profile_id)
+    if binding is None:
+        return {"profile_id": profile_id, "status": "no_binding"}
+    lease = await repository.create_or_get_host_lease(
+        binding=binding,
+        provider_lease_id=provider_lease_id,
+        holder_workflow_id=f"oauth-session:{session_id}",
+        agent_run_id=None,
+        idempotency_key=f"oauth-revalidate:{session_id}",
+        lease_purpose="credential_validation",
+        ttl_seconds=600,
+    )
+    if lease.status in {"stopped", "failed"}:
+        lease = await repository.restart_host_lease(lease.lease_id, ttl_seconds=600)
+    if lease.status == "allocating":
+        lease = await repository.transition_host_lease(
+            lease.lease_id,
+            expected_status="allocating",
+            new_status="starting",
+        )
+    try:
+        async with httpx.AsyncClient() as http_client:
+            client = OmnigentHttpClient(
+                base_url=resolved_server_url(),
+                api_token=resolved_api_token(),
+                client=http_client,
+                upstream_header_allowlist=resolved_proxy_forward_headers(),
+            )
+            runtime = OmnigentOAuthHostRuntime(client=client)
+            preflight = await runtime.prepare_host(
+                binding=binding,
+                host_lease=lease,
+                workspace_key=f"oauth-revalidate:{session_id}",
+            )
+            if lease.status == "starting":
+                lease = await repository.transition_host_lease(
+                    lease.lease_id,
+                    expected_status="starting",
+                    new_status="ready",
+                    fields={"omnigent_host_id": preflight["hostId"]},
+                )
+            if binding.host_launch_profile_ref:
+                await runtime.stop_host(binding=binding, host_lease=lease)
+            await repository.mark_host_lease_stopped(lease.lease_id)
+    except Exception:
+        async with get_async_session_context() as db:
+            from sqlalchemy.future import select
+            from api_service.db.models import (
+                ManagedAgentProviderProfile,
+                ProviderProfileAuthState,
+                ProviderProfileDisabledReason,
+            )
+
+            profile = (
+                await db.execute(
+                    select(ManagedAgentProviderProfile).where(
+                        ManagedAgentProviderProfile.profile_id == profile_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if profile is not None:
+                profile.enabled = False
+                profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+                profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+                behavior = dict(profile.command_behavior or {})
+                behavior["auth_readiness"] = {
+                    "launch_ready": False,
+                    "failure_reason": "bound_host_preflight_failed",
+                }
+                profile.command_behavior = behavior
+                await db.commit()
+                from api_service.services.provider_profile_service import (
+                    sync_provider_profile_manager,
+                )
+
+                await sync_provider_profile_manager(
+                    session=db, runtime_id=profile.runtime_id
+                )
+        raise
+    return {
+        "profile_id": profile_id,
+        "status": "ready",
+        "credential_generation": lease.credential_generation,
+        "host_id": preflight["hostId"],
+    }
+
+
 @activity.defn(name="oauth_session.ensure_volume")
 async def oauth_session_ensure_volume(
     request: Mapping[str, Any],
@@ -55,7 +224,10 @@ async def oauth_session_ensure_volume(
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", "volume", "create", volume_ref,
+            "docker",
+            "volume",
+            "create",
+            volume_ref,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -64,9 +236,15 @@ async def oauth_session_ensure_volume(
             err = stderr.decode("utf-8", errors="replace").strip()
             logger.warning(
                 "docker volume create failed for %s (rc=%d): %s",
-                volume_ref, proc.returncode, err[:200],
+                volume_ref,
+                proc.returncode,
+                err[:200],
             )
-            return {"session_id": session_id, "volume_ref": volume_ref, "status": "create_failed"}
+            return {
+                "session_id": session_id,
+                "volume_ref": volume_ref,
+                "status": "create_failed",
+            }
         logger.info("Ensured volume %s for session %s", volume_ref, session_id)
         return {"session_id": session_id, "volume_ref": volume_ref, "status": "ok"}
     except FileNotFoundError:
@@ -74,10 +252,15 @@ async def oauth_session_ensure_volume(
             "Docker CLI not available — skipping volume create for session %s",
             session_id,
         )
-        return {"session_id": session_id, "volume_ref": volume_ref, "status": "docker_unavailable"}
+        return {
+            "session_id": session_id,
+            "volume_ref": volume_ref,
+            "status": "docker_unavailable",
+        }
     except asyncio.TimeoutError:
         logger.warning("docker volume create timed out for session %s", session_id)
         return {"session_id": session_id, "volume_ref": volume_ref, "status": "timeout"}
+
 
 @activity.defn(name="oauth_session.start_auth_runner")
 async def oauth_session_start_auth_runner(
@@ -88,7 +271,9 @@ async def oauth_session_start_auth_runner(
     runtime_id = request.get("runtime_id", "")
     volume_ref = request.get("volume_ref", "")
     volume_mount_path = request.get("volume_mount_path", "")
-    session_transport = str(request.get("session_transport") or "moonmind_pty_ws").strip()
+    session_transport = str(
+        request.get("session_transport") or "moonmind_pty_ws"
+    ).strip()
     session_ttl = int(request.get("session_ttl", 1800))
 
     if not session_id:
@@ -101,7 +286,9 @@ async def oauth_session_start_auth_runner(
     bootstrap_command = get_provider_bootstrap_command(runtime_id)
 
     if session_transport == "tmate":
-        from moonmind.workflows.temporal.runtime.terminal_bridge import start_tmate_auth_runner_container
+        from moonmind.workflows.temporal.runtime.terminal_bridge import (
+            start_tmate_auth_runner_container,
+        )
 
         bridge_info = await start_tmate_auth_runner_container(
             session_id=session_id,
@@ -121,8 +308,10 @@ async def oauth_session_start_auth_runner(
     if session_transport != "moonmind_pty_ws":
         raise ValueError(f"Unsupported OAuth session transport: {session_transport}")
 
-    from moonmind.workflows.temporal.runtime.terminal_bridge import start_terminal_bridge_container
-    
+    from moonmind.workflows.temporal.runtime.terminal_bridge import (
+        start_terminal_bridge_container,
+    )
+
     bridge_info = await start_terminal_bridge_container(
         session_id=session_id,
         runtime_id=runtime_id,
@@ -136,8 +325,9 @@ async def oauth_session_start_auth_runner(
         (datetime.now(timezone.utc) + timedelta(seconds=session_ttl)).isoformat(),
     )
     bridge_info.setdefault("session_transport", "moonmind_pty_ws")
-    
+
     return bridge_info
+
 
 @activity.defn(name="oauth_session.update_terminal_session")
 async def oauth_session_update_terminal_session(
@@ -193,6 +383,7 @@ async def oauth_session_update_terminal_session(
         "session_transport": session_transport,
     }
 
+
 @activity.defn(name="oauth_session.stop_auth_runner")
 async def oauth_session_stop_auth_runner(
     request: Mapping[str, Any],
@@ -228,6 +419,7 @@ async def oauth_session_stop_auth_runner(
         container_name=container_name,
     )
 
+
 @activity.defn(name="oauth_session.verify_volume")
 async def oauth_session_verify_volume(
     request: Mapping[str, Any],
@@ -241,7 +433,9 @@ async def oauth_session_verify_volume(
     if not session_id or not runtime_id or not volume_ref:
         raise ValueError("session_id, runtime_id, and volume_ref are required")
 
-    from moonmind.workflows.temporal.runtime.providers.volume_verifiers import verify_volume_credentials
+    from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
+        verify_volume_credentials,
+    )
 
     verification = await verify_volume_credentials(
         runtime_id=runtime_id,
@@ -252,6 +446,7 @@ async def oauth_session_verify_volume(
     verification["session_id"] = session_id
 
     return verification
+
 
 @activity.defn(name="oauth_session.verify_cli_fingerprint")
 async def oauth_session_verify_cli_fingerprint(
@@ -268,7 +463,9 @@ async def oauth_session_verify_cli_fingerprint(
 
     # In Phase 5 MVP, we fallback to just verifying the files exist, similar to verify_volume
     # A true fingerprint validation would cat the files and parse JSON to check email/token format.
-    from moonmind.workflows.temporal.runtime.providers.volume_verifiers import verify_volume_credentials
+    from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
+        verify_volume_credentials,
+    )
 
     verification = await verify_volume_credentials(
         runtime_id=runtime_id,
@@ -280,6 +477,7 @@ async def oauth_session_verify_cli_fingerprint(
     verification["fingerprint_verified"] = verification.get("verified", False)
 
     return verification
+
 
 @activity.defn(name="oauth_session.update_status")
 async def oauth_session_update_status(
@@ -323,10 +521,9 @@ async def oauth_session_update_status(
 
         await db.commit()
 
-    logger.info(
-        "Updated session %s status to %s", session_id, new_status_str
-    )
+    logger.info("Updated session %s status to %s", session_id, new_status_str)
     return {"session_id": session_id, "status": new_status_str}
+
 
 @activity.defn(name="oauth_session.register_profile")
 async def oauth_session_register_profile(
@@ -349,7 +546,9 @@ async def oauth_session_register_profile(
             ProviderProfileAuthState,
             RuntimeMaterializationMode,
         )
-        from api_service.services.provider_profile_service import sync_provider_profile_manager
+        from api_service.services.provider_profile_service import (
+            sync_provider_profile_manager,
+        )
 
         result = await db.execute(
             select(ManagedAgentOAuthSession).where(
@@ -375,8 +574,18 @@ async def oauth_session_register_profile(
         )
         existing_profile = profile_result.scalars().first()
 
-        metadata = session_obj.metadata_json or {}
-        policy_str = metadata.get("rate_limit_policy", ManagedAgentRateLimitPolicy.BACKOFF.value)
+        metadata = dict(session_obj.metadata_json or {})
+        registered_generation_raw = metadata.get("registered_credential_generation")
+        registered_generation = (
+            int(registered_generation_raw)
+            if isinstance(registered_generation_raw, int)
+            and not isinstance(registered_generation_raw, bool)
+            and registered_generation_raw >= 1
+            else None
+        )
+        policy_str = metadata.get(
+            "rate_limit_policy", ManagedAgentRateLimitPolicy.BACKOFF.value
+        )
         try:
             policy_enum = ManagedAgentRateLimitPolicy(policy_str)
         except ValueError:
@@ -401,7 +610,9 @@ async def oauth_session_register_profile(
             "volume_mount_path": session_obj.volume_mount_path,
             "account_label": session_obj.account_label,
             "max_parallel_runs": effective_max_parallel_runs,
-            "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
+            "cooldown_after_429_seconds": metadata.get(
+                "cooldown_after_429_seconds", 900
+            ),
             "rate_limit_policy": policy_enum,
             "enabled": True,
             "auth_state": ProviderProfileAuthState.CONNECTED,
@@ -423,31 +634,70 @@ async def oauth_session_register_profile(
             volume_mount_path_field_name="volume_mount_path",
         )
 
+        reconnecting = False
         if existing_profile:
+            reconnecting = bool(
+                registered_generation is None
+                and existing_profile.first_authenticated_at
+                and existing_profile.last_auth_method
+                == ProviderProfileAuthMethod.OAUTH_VOLUME
+            )
             for key, value in profile_data.items():
                 setattr(existing_profile, key, value)
+            if registered_generation is not None:
+                existing_profile.credential_generation = registered_generation
+            elif reconnecting:
+                existing_profile.credential_generation = (
+                    existing_profile.credential_generation + 1
+                )
+            effective_generation = existing_profile.credential_generation
         else:
             try:
-                owner_id = UUID(session_obj.requested_by_user_id) if session_obj.requested_by_user_id else None
+                owner_id = (
+                    UUID(session_obj.requested_by_user_id)
+                    if session_obj.requested_by_user_id
+                    else None
+                )
             except ValueError:
                 owner_id = None
             new_profile = ManagedAgentProviderProfile(
                 profile_id=session_obj.profile_id,
                 owner_user_id=owner_id,
-                **profile_data
+                **profile_data,
             )
             db.add(new_profile)
+            effective_generation = 1
 
         if requested_capacity != effective_max_parallel_runs:
-            metadata = dict(metadata)
             metadata["max_parallel_runs"] = effective_max_parallel_runs
             metadata["capacity_normalized_to_exclusive"] = True
-            session_obj.metadata_json = metadata
+        metadata["registered_credential_generation"] = effective_generation
+        if reconnecting:
+            metadata["credential_generation_changed"] = True
+        session_obj.metadata_json = metadata
 
         await db.commit()
-        await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
+        from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
-    logger.info("Registered profile %s for session %s", session_obj.profile_id, session_id)
+        host_repository = OmnigentOAuthHostRepository(get_async_session_context)
+        await host_repository.refresh_binding_generation(session_obj.profile_id)
+        generation_changed = metadata.get("credential_generation_changed") is True
+        generation_reconciled = metadata.get("credential_generation_reconciled") is True
+        if existing_profile and generation_changed and not generation_reconciled:
+            await host_repository.mark_generation_stale(
+                profile_id=session_obj.profile_id,
+                credential_generation=effective_generation,
+            )
+            metadata["credential_generation_reconciled"] = True
+            session_obj.metadata_json = metadata
+            await db.commit()
+        await sync_provider_profile_manager(
+            session=db, runtime_id=session_obj.runtime_id
+        )
+
+    logger.info(
+        "Registered profile %s for session %s", session_obj.profile_id, session_id
+    )
     return {
         "session_id": session_id,
         "profile_id": session_obj.profile_id,
@@ -455,7 +705,9 @@ async def oauth_session_register_profile(
         "capacity_normalized_to_exclusive": (
             requested_capacity != effective_max_parallel_runs
         ),
+        "credential_generation": effective_generation,
     }
+
 
 @activity.defn(name="oauth_session.mark_failed")
 async def oauth_session_mark_failed(
@@ -485,7 +737,5 @@ async def oauth_session_mark_failed(
         session_obj.completed_at = datetime.now(timezone.utc)
         await db.commit()
 
-    logger.info(
-        "Marked session %s as failed: %s", session_id, reason
-    )
+    logger.info("Marked session %s as failed: %s", session_id, reason)
     return {"session_id": session_id, "status": "failed", "reason": reason}

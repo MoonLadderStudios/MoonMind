@@ -30,8 +30,69 @@ __all__ = [
 
 def upgrade() -> None:
     op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column("lease_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column("owner_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column(
+            "purpose",
+            sa.String(length=64),
+            server_default="execution_direct",
+            nullable=False,
+        ),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column(
+            "owner_is_workflow", sa.Boolean(), server_default=sa.true(), nullable=False
+        ),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column("step_execution_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column("oauth_session_id", sa.String(length=128), nullable=True),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column("idempotency_key", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "provider_profile_slot_leases",
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
+        "omnigent_bridge_sessions",
+        sa.Column("provider_profile_id", sa.String(length=128), nullable=True),
+    )
+    op.add_column(
+        "omnigent_bridge_sessions",
+        sa.Column("provider_lease_id", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "omnigent_bridge_sessions",
+        sa.Column("credential_generation", sa.Integer(), nullable=True),
+    )
+    op.add_column(
+        "omnigent_bridge_sessions",
+        sa.Column("host_binding_ref", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "omnigent_bridge_sessions",
+        sa.Column("host_lease_ref", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
         "managed_agent_provider_profiles",
-        sa.Column("credential_generation", sa.Integer(), server_default="1", nullable=False),
+        sa.Column(
+            "credential_generation", sa.Integer(), server_default="1", nullable=False
+        ),
     )
     op.create_check_constraint(
         "ck_provider_profiles_credential_generation_positive",
@@ -47,10 +108,26 @@ def upgrade() -> None:
         sa.Column("credential_mount_template_json", sa.JSON(), nullable=False),
         sa.Column("static_host_id", sa.String(length=255), nullable=True),
         sa.Column("host_launch_profile_ref", sa.String(length=255), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(["provider_profile_id"], ["managed_agent_provider_profiles.profile_id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("provider_profile_id", name="uq_omnigent_oauth_binding_profile"),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["provider_profile_id"],
+            ["managed_agent_provider_profiles.profile_id"],
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint(
+            "provider_profile_id", name="uq_omnigent_oauth_binding_profile"
+        ),
         sa.UniqueConstraint(
             "binding_ref",
             "provider_profile_id",
@@ -84,9 +161,16 @@ def upgrade() -> None:
         sa.Column("cleanup_completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("error_code", sa.String(length=96), nullable=True),
         sa.Column("error_summary", sa.String(length=512), nullable=True),
-        sa.CheckConstraint("credential_generation >= 1", name="ck_omnigent_oauth_host_lease_generation"),
-        sa.CheckConstraint("expires_at > acquired_at", name="ck_omnigent_oauth_host_lease_expiry"),
-        sa.CheckConstraint("status IN ('allocating','starting','ready','assigned','draining','stopped','failed')", name="ck_omnigent_oauth_host_lease_status"),
+        sa.CheckConstraint(
+            "credential_generation >= 1", name="ck_omnigent_oauth_host_lease_generation"
+        ),
+        sa.CheckConstraint(
+            "expires_at > acquired_at", name="ck_omnigent_oauth_host_lease_expiry"
+        ),
+        sa.CheckConstraint(
+            "status IN ('allocating','starting','ready','assigned','draining','stopped','failed')",
+            name="ck_omnigent_oauth_host_lease_status",
+        ),
         sa.ForeignKeyConstraint(
             ["binding_ref", "provider_profile_id"],
             [
@@ -96,28 +180,61 @@ def upgrade() -> None:
             name="fk_omnigent_oauth_host_lease_binding_profile",
             ondelete="CASCADE",
         ),
-        sa.ForeignKeyConstraint(["provider_profile_id"], ["managed_agent_provider_profiles.profile_id"], ondelete="CASCADE"),
-        sa.UniqueConstraint("provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"),
-        sa.UniqueConstraint("idempotency_key", name="uq_omnigent_oauth_host_idempotency"),
+        sa.ForeignKeyConstraint(
+            ["provider_profile_id"],
+            ["managed_agent_provider_profiles.profile_id"],
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint(
+            "provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"
+        ),
+        sa.UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_oauth_host_idempotency"
+        ),
     )
-    op.create_index("ix_omnigent_oauth_host_lease_expiry", "omnigent_oauth_host_leases", ["expires_at"])
-    op.create_index("ix_omnigent_oauth_host_lease_profile", "omnigent_oauth_host_leases", ["provider_profile_id"])
-    op.create_index("ix_omnigent_oauth_host_lease_workflow", "omnigent_oauth_host_leases", ["holder_workflow_id"])
+    op.create_index(
+        "ix_omnigent_oauth_host_lease_expiry",
+        "omnigent_oauth_host_leases",
+        ["expires_at"],
+    )
+    op.create_index(
+        "ix_omnigent_oauth_host_lease_profile",
+        "omnigent_oauth_host_leases",
+        ["provider_profile_id"],
+    )
+    op.create_index(
+        "ix_omnigent_oauth_host_lease_workflow",
+        "omnigent_oauth_host_leases",
+        ["holder_workflow_id"],
+    )
     op.create_index(
         "ux_omnigent_oauth_host_lease_active_profile",
         "omnigent_oauth_host_leases",
         ["provider_profile_id"],
         unique=True,
-        postgresql_where=sa.text("status IN ('allocating','starting','ready','assigned','draining')"),
-        sqlite_where=sa.text("status IN ('allocating','starting','ready','assigned','draining')"),
+        postgresql_where=sa.text(
+            "status IN ('allocating','starting','ready','assigned','draining')"
+        ),
+        sqlite_where=sa.text(
+            "status IN ('allocating','starting','ready','assigned','draining')"
+        ),
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ux_omnigent_oauth_host_lease_active_profile", table_name="omnigent_oauth_host_leases")
-    op.drop_index("ix_omnigent_oauth_host_lease_workflow", table_name="omnigent_oauth_host_leases")
-    op.drop_index("ix_omnigent_oauth_host_lease_profile", table_name="omnigent_oauth_host_leases")
-    op.drop_index("ix_omnigent_oauth_host_lease_expiry", table_name="omnigent_oauth_host_leases")
+    op.drop_index(
+        "ux_omnigent_oauth_host_lease_active_profile",
+        table_name="omnigent_oauth_host_leases",
+    )
+    op.drop_index(
+        "ix_omnigent_oauth_host_lease_workflow", table_name="omnigent_oauth_host_leases"
+    )
+    op.drop_index(
+        "ix_omnigent_oauth_host_lease_profile", table_name="omnigent_oauth_host_leases"
+    )
+    op.drop_index(
+        "ix_omnigent_oauth_host_lease_expiry", table_name="omnigent_oauth_host_leases"
+    )
     op.drop_table("omnigent_oauth_host_leases")
     op.drop_table("omnigent_oauth_host_bindings")
     op.drop_constraint(
@@ -126,3 +243,16 @@ def downgrade() -> None:
         type_="check",
     )
     op.drop_column("managed_agent_provider_profiles", "credential_generation")
+    op.drop_column("provider_profile_slot_leases", "expires_at")
+    op.drop_column("provider_profile_slot_leases", "idempotency_key")
+    op.drop_column("provider_profile_slot_leases", "oauth_session_id")
+    op.drop_column("provider_profile_slot_leases", "step_execution_id")
+    op.drop_column("provider_profile_slot_leases", "purpose")
+    op.drop_column("provider_profile_slot_leases", "owner_is_workflow")
+    op.drop_column("provider_profile_slot_leases", "owner_id")
+    op.drop_column("provider_profile_slot_leases", "lease_id")
+    op.drop_column("omnigent_bridge_sessions", "host_lease_ref")
+    op.drop_column("omnigent_bridge_sessions", "host_binding_ref")
+    op.drop_column("omnigent_bridge_sessions", "credential_generation")
+    op.drop_column("omnigent_bridge_sessions", "provider_lease_id")
+    op.drop_column("omnigent_bridge_sessions", "provider_profile_id")

@@ -1334,6 +1334,13 @@ async def _build_capture_bundle(
                 "omnigentAgentId": agent_id,
             },
             "omnigentSessionId": session_id,
+            "providerProfileId": external_state.get("providerProfileId"),
+            "credentialGeneration": external_state.get("credentialGeneration"),
+            "providerLeaseRef": external_state.get("providerLeaseRef"),
+            "hostBindingRef": external_state.get("hostBindingRef"),
+            "hostLeaseRef": external_state.get("hostLeaseRef"),
+            "omnigentHostId": external_state.get("omnigentHostId"),
+            "bridgeSessionId": external_state.get("bridgeSessionId"),
             "omnigentAgentId": agent_id,
             "terminalStatus": terminal_status,
             "firstMessage": first_message_state,
@@ -1376,6 +1383,11 @@ async def _build_capture_bundle(
                 )
                 if key in refs
             },
+        }
+        external_state_payload = {
+            key: value
+            for key, value in external_state_payload.items()
+            if value is not None
         }
         external_state_ref = await _capture_artifact_json(
             artifact_gateway,

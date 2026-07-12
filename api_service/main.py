@@ -1409,6 +1409,26 @@ async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
         config.max_delete_bytes,
     )
 
+
+async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
+    """Best-effort startup install for profile-bound OAuth host cleanup."""
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    try:
+        schedule_id = (
+            await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
+                enabled=True
+            )
+        )
+    except Exception:
+        logger.warning(
+            "Failed to ensure Omnigent OAuth host janitor schedule during API startup",
+            exc_info=True,
+        )
+        return
+    logger.info("Ensured Omnigent OAuth host janitor schedule: %s", schedule_id)
+
 async def ensure_recurring_workflow_schedules_reconciled() -> None:
     """Best-effort repair for persisted recurring workflow Temporal schedules."""
     from api_service.db.base import get_async_session_context
@@ -1601,6 +1621,7 @@ async def startup_event():
     await ensure_provider_profile_managers_started()
     await ensure_managed_session_reconcile_schedule_started()
     await ensure_managed_runtime_workspace_cleanup_schedule_started()
+    await ensure_omnigent_oauth_host_janitor_schedule_started()
     await ensure_recurring_workflow_schedules_reconciled()
     logger.info("Application startup events completed.")
 

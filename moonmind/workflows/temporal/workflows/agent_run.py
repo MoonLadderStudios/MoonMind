@@ -297,6 +297,9 @@ DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
 _CALLBACK_KEY_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
+OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
+    "agent-run-omnigent-profile-bound-execution-v1"
+)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
@@ -2344,6 +2347,11 @@ class MoonMindAgentRun:
         signal_payload = {
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
+            "purpose": "execution_direct",
+            "metadata": {
+                "workflowId": workflow.info().workflow_id,
+                "ownerIsWorkflow": True,
+            },
         }
         if request_priority is not None:
             signal_payload["priority"] = request_priority
@@ -3631,6 +3639,11 @@ class MoonMindAgentRun:
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
                             "priority": self._request_priority(request),
+                            "purpose": "execution_direct",
+                            "metadata": {
+                                "workflowId": wf_id,
+                                "ownerIsWorkflow": True,
+                            },
                         }
                         payload.update(self._request_queue_metadata(request))
                         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
@@ -3934,6 +3947,14 @@ class MoonMindAgentRun:
                             86400,
                         )
                         act_name = f"integration.{validated_id}.execute"
+                        if (
+                            validated_id == "omnigent"
+                            and request.execution_profile_ref
+                            and workflow.patched(
+                                OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID
+                            )
+                        ):
+                            act_name = "integration.omnigent.profile_bound_execute"
                         result_payload = await self._execute_routed_activity(
                             act_name,
                             request,

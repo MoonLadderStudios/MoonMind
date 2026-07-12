@@ -1224,6 +1224,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_pending_request_order",
     ),
+    "oauth_session.prepare_credential_maintenance": ("agent_runtime", "oauth_session_prepare_credential_maintenance"),
+    "oauth_session.revalidate_bound_host": ("agent_runtime", "oauth_session_revalidate_bound_host"),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
     "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
     "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
@@ -1301,6 +1303,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
     "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
+    "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
+    "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -6843,6 +6847,66 @@ class TemporalAgentRuntimeActivities:
         if errors:
             result["errors"] = errors
         return result
+
+    async def integration_omnigent_profile_bound_execute(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_profile_bound_execute_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.profile_bound_execute",
+            kwargs=kwargs,
+        )
+        req = AgentExecutionRequest.model_validate(payload)
+        return await omnigent_profile_bound_execute_activity(req)
+
+    async def integration_omnigent_oauth_host_janitor(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, object]:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_oauth_host_janitor_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.oauth_host_janitor",
+            kwargs=kwargs,
+        )
+        return await omnigent_oauth_host_janitor_activity(payload)
+
+    async def oauth_session_prepare_credential_maintenance(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_prepare_credential_maintenance as _prepare,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.prepare_credential_maintenance",
+            kwargs=kwargs,
+        )
+        return await _prepare(payload)
+
+    async def oauth_session_revalidate_bound_host(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_revalidate_bound_host as _revalidate,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.revalidate_bound_host",
+            kwargs=kwargs,
+        )
+        return await _revalidate(payload)
 
     async def oauth_session_ensure_volume(
         self,

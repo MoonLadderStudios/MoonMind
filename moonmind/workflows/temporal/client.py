@@ -58,6 +58,8 @@ MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID = (
 MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
     "mm-operational:managed-runtime-workspace-cleanup"
 )
+OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID = "omnigent-oauth-host-janitor"
+OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE = "omnigent-oauth-host-janitor-run"
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
@@ -745,6 +747,73 @@ class TemporalClientAdapter:
             raise ScheduleOperationError(
                 "Failed to create managed runtime workspace cleanup schedule: "
                 f"{create_exc}"
+            ) from create_exc
+
+    async def ensure_omnigent_oauth_host_janitor_schedule(
+        self,
+        *,
+        cron_expression: str = "*/5 * * * *",
+        timezone: str = "UTC",
+        enabled: bool = True,
+    ) -> str:
+        """Create or replace the profile-bound OAuth host janitor schedule."""
+
+        from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleUpdate
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+        )
+
+        client = await self.get_client()
+
+        def _schedule() -> Schedule:
+            return Schedule(
+                action=ScheduleActionStartWorkflow(
+                    "MoonMind.OmnigentOAuthHostJanitor",
+                    {},
+                    id=OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE,
+                    task_queue=self._get_task_queue(),
+                    typed_search_attributes=_build_typed_search_attributes(
+                        {"mm_entry": ["operational"], "mm_state": ["scheduled"]}
+                    ),
+                    static_summary="Omnigent OAuth host janitor",
+                    static_details="Reconcile profile-bound OAuth host leases",
+                ),
+                spec=build_schedule_spec(
+                    cron=cron_expression, timezone=timezone, jitter_seconds=0
+                ),
+                policy=build_schedule_policy(overlap_mode="skip", catchup_mode="last"),
+                state=build_schedule_state(
+                    enabled=enabled, note="Omnigent OAuth host cleanup"
+                ),
+            )
+
+        try:
+            handle = client.get_schedule_handle(OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID)
+
+            async def _replace(input: Any) -> ScheduleUpdate:  # noqa: A002
+                del input
+                return ScheduleUpdate(schedule=_schedule())
+
+            await handle.update(_replace)
+            return OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID
+        except Exception as update_exc:
+            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
+                update_exc
+            ).lower():
+                raise ScheduleOperationError(
+                    f"Failed to update Omnigent OAuth host janitor schedule: {update_exc}"
+                ) from update_exc
+        try:
+            handle = await client.create_schedule(
+                OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID, _schedule()
+            )
+            return handle.id
+        except Exception as create_exc:
+            raise ScheduleOperationError(
+                f"Failed to create Omnigent OAuth host janitor schedule: {create_exc}"
             ) from create_exc
 
     async def create_schedule(

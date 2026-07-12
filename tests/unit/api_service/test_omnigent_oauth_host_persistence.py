@@ -184,6 +184,7 @@ async def test_host_lease_composite_fk_and_active_index_reject_bypasses(
                 await session.commit()
     finally:
         await engine.dispose()
+    table = OmnigentOAuthHostLeaseRecord.__table__
     assert any(
         index.name == "ux_omnigent_oauth_host_lease_active_profile"
         and index.unique

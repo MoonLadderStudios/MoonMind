@@ -967,6 +967,16 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     idempotency_key: str | None = Field(None, alias="idempotencyKey")
     omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
     provider_session_ref: str | None = Field(None, alias="providerSessionRef")
+    provider_profile_id: str | None = Field(None, alias="providerProfileId")
+    credential_generation: int | None = Field(None, alias="credentialGeneration", ge=1)
+    provider_lease_ref: str | None = Field(None, alias="providerLeaseRef")
+    host_binding_ref: str | None = Field(None, alias="hostBindingRef")
+    host_lease_ref: str | None = Field(None, alias="hostLeaseRef")
+    endpoint_ref: str | None = Field(None, alias="endpointRef")
+    omnigent_host_id: str | None = Field(None, alias="omnigentHostId")
+    bridge_session_id: str | None = Field(None, alias="bridgeSessionId")
+    terminal_ref: str | None = Field(None, alias="terminalRef")
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
     manifest_ref: str | None = Field(None, alias="manifestRef")
     branch: str | None = Field(None, alias="branch")
     includes_untracked: bool = Field(False, alias="includesUntracked")
@@ -985,6 +995,15 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "idempotency_key",
         "omnigent_session_id",
         "provider_session_ref",
+        "provider_profile_id",
+        "provider_lease_ref",
+        "host_binding_ref",
+        "host_lease_ref",
+        "endpoint_ref",
+        "omnigent_host_id",
+        "bridge_session_id",
+        "terminal_ref",
+        "diagnostics_ref",
         "manifest_ref",
         "branch",
         mode="before",
@@ -1023,10 +1042,41 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
             )
         if self.kind == "external_state_ref" and not self.external_state_ref:
             raise ValueError("external_state_ref checkpoint requires externalStateRef")
+        omnigent_identity = (
+            self.provider_profile_id,
+            self.credential_generation,
+            self.provider_lease_ref,
+            self.host_binding_ref,
+            self.host_lease_ref,
+            self.endpoint_ref,
+            self.omnigent_host_id,
+            self.omnigent_session_id,
+            self.bridge_session_id,
+        )
+        if any(value is not None for value in omnigent_identity):
+            if self.kind != "external_state_ref":
+                raise ValueError(
+                    "Omnigent checkpoint identity requires external_state_ref evidence"
+                )
+            required = {
+                "providerProfileId": self.provider_profile_id,
+                "credentialGeneration": self.credential_generation,
+                "hostBindingRef": self.host_binding_ref,
+                "endpointRef": self.endpoint_ref,
+                "bridgeSessionId": self.bridge_session_id,
+                "idempotencyKey": self.idempotency_key,
+            }
+            missing = [key for key, value in required.items() if value is None]
+            if missing:
+                raise ValueError(
+                    "Omnigent checkpoint identity is missing: " + ", ".join(missing)
+                )
+        dumped = self.model_dump(by_alias=True, mode="json")
         _reject_inline_checkpoint_evidence(
-            self.model_dump(by_alias=True, mode="json"),
+            dumped,
             "workspace",
         )
+        _reject_raw_secret_text(dumped, "workspace")
         return self
 
 

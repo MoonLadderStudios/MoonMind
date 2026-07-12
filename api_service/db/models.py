@@ -407,6 +407,12 @@ class OmnigentBridgeSession(Base):
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
 
+    provider_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    provider_lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
     omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -2696,6 +2702,18 @@ class ProviderProfileSlotLease(Base):
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    purpose: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="execution_direct", server_default=text("'execution_direct'")
+    )
+    owner_is_workflow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    oauth_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
