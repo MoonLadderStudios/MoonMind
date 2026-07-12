@@ -13122,6 +13122,8 @@ class MoonMindRunWorkflow:
                 max_chars=80,
             )
             retry_after_seconds = raw_request.get("retryAfterSeconds")
+            if retry_after_seconds is None:
+                retry_after_seconds = raw_request.get("retry_after_seconds")
             execution_ref = self._coerce_text(
                 raw_request.get("executionRef") or raw_request.get("execution_ref"),
                 max_chars=240,

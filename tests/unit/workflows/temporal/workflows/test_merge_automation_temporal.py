@@ -151,6 +151,29 @@ def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> No
     assert len(workflow._gate_snapshot_artifact_refs) == max_refs + 5
     assert len(workflow._resolver_attempt_artifact_refs) == max_refs + 3
 
+
+def test_legacy_gated_continuation_uses_fallback_poll_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        _payload()
+    )
+    now = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: now)
+
+    deadline = workflow._continuation_deadline(
+        {
+            "gatedContinuation": {
+                "schemaVersion": "gated-continuation/v1",
+                "gateType": "merge_automation",
+                "action": "reenter_gate",
+            }
+        }
+    )
+
+    assert deadline.timestamp() - now.timestamp() == 300
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_at", ["create", "write_complete"])
 async def test_write_json_artifact_preserves_cancellation(

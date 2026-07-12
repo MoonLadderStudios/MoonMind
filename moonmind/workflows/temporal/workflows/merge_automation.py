@@ -350,8 +350,12 @@ class MoonMindMergeAutomationWorkflow:
             raise ValueError("invalid gated continuation contract")
         not_before = str(raw.get("notBefore") or "").strip()
         retry_after = raw.get("retryAfterSeconds")
-        if bool(not_before) == (retry_after is not None):
-            raise ValueError("gated continuation must provide exactly one timing value")
+        if not not_before and retry_after is None:
+            return workflow.now() + timedelta(
+                seconds=self._input.config.timeouts.fallback_poll_seconds
+            )
+        if not_before and retry_after is not None:
+            raise ValueError("gated continuation cannot provide both timing values")
         if retry_after is not None:
             if isinstance(retry_after, bool) or int(retry_after) < 1:
                 raise ValueError("invalid gated continuation retryAfterSeconds")
