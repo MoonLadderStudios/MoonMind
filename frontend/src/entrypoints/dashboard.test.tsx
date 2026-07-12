@@ -2427,16 +2427,16 @@ describe('Dashboard shared entry', () => {
     expect(svgBlock).toContain('height: 0.8125rem');
   });
 
-  it('keeps workflow detail step timeline icons large inside their status circles', async () => {
+  it('MM-1132 makes workflow detail step timeline icons mostly fill their status circles', async () => {
     const iconBlock = cssRuleBlock(dashboardCss, '.step-tl-icon');
     expect(iconBlock).toContain('width: 1.35rem');
     expect(iconBlock).toContain('height: 1.35rem');
     expect(iconBlock).toContain('border-radius: 50%');
 
     const svgBlock = cssRuleBlock(dashboardCss, '.step-tl-icon svg');
-    expect(svgBlock).toContain('width: 1.05rem');
-    expect(svgBlock).toContain('height: 1.05rem');
-    expect(svgBlock).toContain('stroke-width: 2.4');
+    expect(svgBlock).toContain('width: 1.3rem');
+    expect(svgBlock).toContain('height: 1.3rem');
+    expect(svgBlock).toContain('stroke-width: 2');
   });
 
   it('keeps checkbox label hit areas bounded to visible control text', async () => {
