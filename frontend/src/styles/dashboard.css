@@ -54,12 +54,14 @@
   --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.88);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-cycle-duration: 2600ms;
-  /* Approved shimmer geometry (MM-1036 as shipped and operator-reviewed).
-     MM-1048 later re-angled the path to -20deg / +/-120%, but that commit also
-     broke gradient resolution, so its geometry never rendered; the approved
-     on-screen look is this one. Change only with an operator-reviewed visual
-     baseline update. */
-  --mm-executing-sweep-angle: -18deg;
+  /* Approved shimmer geometry (MM-1036 palette/geometry as shipped and
+     operator-reviewed). The sweep angle was steepened from the original -18deg
+     to -28deg per operator review so the shimmer line sits ~10deg further from
+     horizontal (closer to vertical). MM-1048's abandoned -20deg / +/-120%
+     re-angle broke gradient resolution and never rendered, so it is not a
+     baseline. Change the angle only with an operator-reviewed visual baseline
+     update. */
+  --mm-executing-sweep-angle: -28deg;
   --mm-executing-sweep-band-width: 24%;
   --mm-executing-sweep-band-height: 180%;
   --mm-executing-sweep-halo-width-multiplier: 10;

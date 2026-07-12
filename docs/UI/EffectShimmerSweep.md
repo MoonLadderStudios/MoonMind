@@ -293,7 +293,7 @@ motion:
     note: fallback glyph brightening is not the primary path and exists only for browsers without text clipping support
 ```
 
-The motion profile is settled: `-18deg` with `±160%` vertical travel is the approved on-screen path. Any future motion refinement must ship with an operator-reviewed visual baseline update and matching computed-style test changes in the same PR.
+The motion profile is settled: `-28deg` with `±160%` vertical travel is the approved on-screen path. (The angle was steepened from `-18deg` to `-28deg` per operator review so the shimmer line sits ~10deg further from horizontal — closer to vertical.) Any future motion refinement must ship with an operator-reviewed visual baseline update and matching computed-style test changes in the same PR.
 
 ---
 
@@ -561,7 +561,7 @@ tone:
 ```yaml
 effect_tokens:
   --mm-executing-sweep-cycle-duration: 2600ms
-  --mm-executing-sweep-angle: -18deg
+  --mm-executing-sweep-angle: -28deg
   --mm-executing-sweep-band-width: 24%
   --mm-executing-sweep-band-height: 180%
   --mm-executing-sweep-halo-width-multiplier: 10
@@ -603,7 +603,7 @@ acceptance_criteria:
   - the sweep renders the fixed approved palette (translucent accent halo, translucent accent-2 core) with no opaque stop
   - only the glyph-fallback letter treatment derives from the pill hue
   - fill, border, and text masks use the same moving light-field token and keyframe animation
-  - the sweep travels the approved -18deg / +/-160% path
+  - the sweep travels the approved -28deg / +/-160% path
   - the active pill remains readable throughout the sweep
   - the shimmer never escapes the rounded visual bounds of the pill
   - the effect produces no measurable layout shift
