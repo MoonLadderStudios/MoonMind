@@ -30,6 +30,7 @@ from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
 from temporalio.client import Client
 from temporalio.service import RPCError
 
+from api_service.api.dependencies import resolve_template_scope_for_user
 from api_service.auth_providers import get_current_user
 from api_service.core import sync as execution_sync
 from api_service.db.base import get_async_session
@@ -62,11 +63,15 @@ from moonmind.statuses.compat import (
 )
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
+from moonmind.workflows.executions.preset_expansion import (
+    expand_preset_for_child_run,
+    has_unexpanded_task_template,
+)
+from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.title_derivation import (
     is_generic_title,
     synthesize_workflow_title,
 )
-from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
@@ -7972,8 +7977,62 @@ async def _expand_goal_preset_for_workflow_submission(
     task_payload: dict[str, Any],
     request_payload: Mapping[str, Any],
     session: Any,
-    user_id: Any,
+    user: Any,
 ) -> None:
+    if has_unexpanded_task_template({"workflow": task_payload}):
+        from api_service.services.presets.catalog import (
+            PresetNotFoundError,
+            PresetValidationError,
+        )
+
+        template_payload = dict(task_payload.get("taskTemplate") or {})
+        template_scope, template_scope_ref = resolve_template_scope_for_user(
+            user=user,
+            scope=str(template_payload.get("scope") or "global"),
+            scope_ref=(
+                template_payload.get("scopeRef")
+                or template_payload.get("scope_ref")
+            ),
+            write=False,
+        )
+        template_payload["scope"] = template_scope
+        if template_scope_ref is None:
+            template_payload.pop("scopeRef", None)
+            template_payload.pop("scope_ref", None)
+        else:
+            template_payload["scopeRef"] = template_scope_ref
+            template_payload.pop("scope_ref", None)
+        task_payload["taskTemplate"] = template_payload
+        try:
+            expanded_parameters = await expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "workflow": task_payload,
+                    "repository": request_payload.get("repository"),
+                    "targetRuntime": request_payload.get("targetRuntime"),
+                },
+                allow_goal_schedule=False,
+                user_id=getattr(user, "id", None),
+            )
+        except PresetNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "template_not_found",
+                    "message": str(exc),
+                },
+            ) from exc
+        except (PresetValidationError, RuntimeError) as exc:
+            raise _invalid_workflow_request(str(exc)) from exc
+        expanded_task = expanded_parameters.get("workflow")
+        if not isinstance(expanded_task, Mapping):
+            raise _invalid_workflow_request(
+                "Explicit preset expansion did not produce a workflow payload."
+            )
+        task_payload.clear()
+        task_payload.update(expanded_task)
+        return
+
     if workflow_is_already_authored(task_payload):
         return
 
@@ -8017,7 +8076,7 @@ async def _expand_goal_preset_for_workflow_submission(
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),
-        "user_id": user_id,
+        "user_id": getattr(user, "id", None),
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
@@ -9691,7 +9750,7 @@ async def _create_execution_from_workflow_request(
             task_payload=task_payload,
             request_payload=payload,
             session=session,
-            user_id=user.id,
+            user=user,
         )
         _reject_submit_version_identity(task_payload)
 

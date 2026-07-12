@@ -72,8 +72,9 @@ When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.UserWorkflow` p
 7. The resolver child run attempts to remediate and merge.
 8. If resolver pushes a new commit and external review/check signal must be re-established, control returns to the gate.
 9. If the run is Jira-backed and post-merge Jira completion is enabled, `MoonMind.MergeAutomation` completes the selected Jira issue through the trusted Jira activity path after `merged` or `already_merged`.
-10. The parent workflow reaches terminal success only when merge automation returns `merged` or `already_merged` after any required post-merge Jira completion succeeds or no-ops.
-11. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent workflow; terminal `canceled` cancels the parent workflow so operator-initiated cancellation is not reported as failure.
+10. If the run is GitHub-issue-backed and post-merge GitHub completion is enabled, `MoonMind.MergeAutomation` applies the configured Done issue update and confirms the issue is closed after `merged` or `already_merged`.
+11. The parent workflow reaches terminal success only when merge automation returns `merged` or `already_merged` after every required post-merge issue completion succeeds or no-ops.
+12. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent workflow; terminal `canceled` cancels the parent workflow so operator-initiated cancellation is not reported as failure.
 
 ---
 
@@ -260,6 +261,11 @@ The post-merge step is intentionally owned by `MoonMind.MergeAutomation`, not by
 `pr-resolver`. The resolver reports the merge disposition; the workflow performs
 Jira mutation only after that disposition is `merged` or `already_merged`.
 
+GitHub-issue-backed merge automation carries the same ownership rule through a
+compact `postMergeGithub` block containing the canonical repository and issue
+number. `MoonMind.UserWorkflow` derives that identity from structured preset
+inputs and enables required completion by default.
+
 ### 10.2 Post-merge Jira completion
 
 Post-merge Jira completion uses the trusted Jira integration activity boundary.
@@ -291,7 +297,21 @@ If required completion returns `blocked` or `failed`, merge automation does not
 return terminal success. The failure is surfaced as a Jira-sourced blocker with
 operator-visible reason text.
 
-### 10.2.1 Already-implemented no-change completion
+### 10.2.1 Post-merge GitHub completion
+
+Post-merge GitHub completion uses the trusted GitHub issue update activity only
+after merge success. It applies the configured Done actions, including closing
+the issue, adding `status: done`, removing `status: code-review`, and confirming
+the resulting closed state. Pull-request closing keywords remain useful native
+GitHub linkage, but they are not accepted as evidence that configured Done labels
+were applied.
+
+The activity is idempotent across retry and replay: repeating the same Done
+update against an already closed issue preserves the terminal state. Required
+failure produces a GitHub-sourced merge-automation blocker instead of allowing
+the parent workflow to report success.
+
+### 10.2.2 Already-implemented no-change completion
 
 For Jira-oriented PR-publishing runs where PR output is optional, the run may
 finish with no repository changes because the Jira issue is already implemented.
@@ -309,7 +329,7 @@ must state that no confirmation was available.
 
 ### 10.3 Output
 
-Merge automation summaries include compact `postMergeJira` evidence:
+Merge automation summaries include compact post-merge issue evidence:
 
 ```json
 {
@@ -322,6 +342,13 @@ Merge automation summaries include compact `postMergeJira` evidence:
     "transitionName": "Done",
     "alreadyDone": false,
     "transitioned": true
+  },
+  "postMergeGithub": {
+    "status": "succeeded",
+    "repository": "MoonLadderStudios/MoonMind",
+    "issueNumber": 3143,
+    "confirmedState": "closed",
+    "confirmedLabels": ["status: done"]
   },
   "artifactRefs": {
     "postMergeJiraResolution": "artifact-id-resolution",

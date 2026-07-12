@@ -94,6 +94,52 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+
+
+@pytest.mark.asyncio
+async def test_post_merge_github_completion_applies_done_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal import story_output_tools
+
+    captured: dict[str, Any] = {}
+
+    async def fake_update_github_issue_status(inputs, _context=None):
+        captured.update(inputs)
+        return SimpleNamespace(
+            status="COMPLETED",
+            outputs={
+                "confirmedState": "closed",
+                "confirmedLabels": ["status: done"],
+                "appliedActions": ["patch_issue"],
+            },
+        )
+
+    monkeypatch.setattr(
+        story_output_tools,
+        "update_github_issue_status",
+        fake_update_github_issue_status,
+    )
+
+    result = await TemporalIntegrationActivities.merge_automation_complete_post_merge_github(
+        object(),
+        {
+            "postMergeGithub": {
+                "enabled": True,
+                "required": True,
+                "repository": "MoonLadderStudios/MoonMind",
+                "issueNumber": 3143,
+            }
+        },
+    )
+
+    assert captured == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": 3143,
+        "mode": "done",
+    }
+    assert result["status"] == "succeeded"
+    assert result["confirmedLabels"] == ["status: done"]
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workloads.registry import RunnerProfileRegistry

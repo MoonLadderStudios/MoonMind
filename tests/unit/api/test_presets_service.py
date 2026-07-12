@@ -3418,6 +3418,9 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
         expanded["steps"][18]["instructions"]
     )
+    assert "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][18][
+        "instructions"
+    ]
     assert (
         "recover that field's full content through the trusted MoonMind tool surface"
         in expanded["steps"][1]["instructions"]
