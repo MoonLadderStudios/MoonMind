@@ -2684,6 +2684,59 @@ class ProviderProfileSlotLease(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+
+class OmnigentOAuthHostBindingRecord(Base):
+    """Durable, secret-free configuration for one profile-bound OAuth host."""
+
+    __tablename__ = "omnigent_oauth_host_bindings"
+    __table_args__ = (
+        UniqueConstraint("provider_profile_id", name="uq_omnigent_oauth_binding_profile"),
+    )
+
+    binding_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"), nullable=False
+    )
+    endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    harness: Mapped[str] = mapped_column(String(64), nullable=False)
+    credential_mount_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    static_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_launch_profile_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class OmnigentOAuthHostLeaseRecord(Base):
+    """Durable lifecycle state for the single host consuming an OAuth profile."""
+
+    __tablename__ = "omnigent_oauth_host_leases"
+    __table_args__ = (
+        UniqueConstraint("provider_profile_id", name="uq_omnigent_oauth_host_lease_profile"),
+        UniqueConstraint("provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"),
+        Index("ix_omnigent_oauth_host_lease_expiry", "expires_at"),
+    )
+
+    lease_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"), nullable=False
+    )
+    provider_lease_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    binding_ref: Mapped[str] = mapped_column(
+        String(255), ForeignKey("omnigent_oauth_host_bindings.binding_ref", ondelete="CASCADE"), nullable=False
+    )
+    credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    container_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bridge_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
 
