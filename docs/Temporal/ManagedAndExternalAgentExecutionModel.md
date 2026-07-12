@@ -94,6 +94,14 @@ The root user workflow owns the Workflow Execution envelope: planning, execution
 
 `MoonMind.AgentRun` owns exactly one true agent execution lifecycle.
 
+A terminal contract may request a typed durable continuation owned by the
+actual Temporal parent. Such a handoff completes the current AgentRun without
+claiming final task success and bypasses runtime same-session continuation.
+Authority is injected internally only after the UserWorkflow validates its
+actual parent topology; user parameters are never sufficient proof. Once the
+managed CLI exits, detached descendants are not ongoing managed work and must
+not be used as completion evidence.
+
 ### 2.1 Unified lifecycle
 
 Both managed and external agents follow the same lifecycle shape:

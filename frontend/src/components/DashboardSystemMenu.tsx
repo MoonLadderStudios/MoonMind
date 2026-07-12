@@ -75,6 +75,10 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
   const destinations = visibleSystemDestinations(uiInfo);
   const activeDestination = destinationForPath(location.pathname);
   const active = Boolean(activeDestination && activeDestination.navigationGroup !== 'primary');
+  // When a System destination is active, the trigger takes on that selection's
+  // one-word label and icon (e.g. "Skills") instead of the generic "System".
+  const triggerLabel = active && activeDestination ? activeDestination.label : 'System';
+  const TriggerIcon = active && activeDestination ? (ICONS[activeDestination.iconKey] ?? Settings) : Settings;
 
   useEffect(() => setOpen(false), [location.pathname, location.search]);
 
@@ -137,8 +141,8 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
           onClick={() => setOpen((value) => !value)}
           onKeyDown={handleTriggerKeyDown}
         >
-          <Settings size={16} className="route-nav-icon" aria-hidden="true" />
-          System
+          <TriggerIcon size={16} className="route-nav-icon" aria-hidden="true" />
+          {triggerLabel}
           <ChevronDown size={14} aria-hidden="true" />
         </button>
         {open ? (

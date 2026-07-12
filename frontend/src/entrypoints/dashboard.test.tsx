@@ -23,6 +23,7 @@ import {
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
 import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
+import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -416,8 +417,8 @@ describe('Dashboard shared entry', () => {
     ]);
     expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
 
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
@@ -425,8 +426,8 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('menuitem', { name: 'Recurring' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
     expect(screen.getByText('Workflow resources')).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'RAG / Manifests' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Artifacts / Observability' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
 
@@ -484,16 +485,16 @@ describe('Dashboard shared entry', () => {
   });
 
   it.each([
-    '/manifests',
-    '/artifacts/example',
-    '/observability/example',
-    '/remediations/example',
-    '/settings/providers',
-    '/schedules',
-    '/schedules/nightly-build',
-    '/skills',
-    '/skills/speckit-orchestrate',
-  ])('MM-1200 marks System active for the child route %s', (path) => {
+    ['/manifests', 'Manifests'],
+    ['/artifacts/example', 'Artifacts'],
+    ['/observability/example', 'Artifacts'],
+    ['/remediations/example', 'Remediation'],
+    ['/settings/providers', 'Settings'],
+    ['/schedules', 'Recurring'],
+    ['/schedules/nightly-build', 'Recurring'],
+    ['/skills', 'Skills'],
+    ['/skills/speckit-orchestrate', 'Skills'],
+  ])('MM-1200 marks the System menu active and relabels it for the child route %s', (path, label) => {
     renderWithClient(
       <MemoryRouter initialEntries={[path]}>
         <nav aria-label="Test navigation">
@@ -506,7 +507,11 @@ describe('Dashboard shared entry', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('button', { name: 'System' }).classList.contains('active')).toBe(true);
+    // The trigger takes on the active selection's one-word label in place of
+    // "System" while carrying the active underline treatment.
+    const trigger = screen.getByRole('button', { name: label });
+    expect(trigger.classList.contains('active')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
   });
 
@@ -586,8 +591,8 @@ describe('Dashboard shared entry', () => {
     // Recurring and Skills render as normal inline links, not a nested popover.
     expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
     expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -950,11 +955,11 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
   });
 
-  function mockSkillsCatalogFetch(skillIds: string[]) {
+  function mockSkillsCatalogFetch(skillIds: string[], uiInfoOverrides: Record<string, unknown> = {}) {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
-        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+        return Promise.resolve({ ok: true, json: async () => uiInfo(uiInfoOverrides) } as Response);
       }
       if (url === '/api/workflows/skills') {
         return Promise.resolve({
@@ -1001,6 +1006,56 @@ describe('Dashboard shared entry', () => {
     // Skills mode changes never touch the Workflow or Recurring preferences.
     expect(prefs.workflowListDisplayMode).toBe('sidebar');
     expect(prefs.recurringListDisplayMode).toBe('table');
+  });
+
+  it('mounts the green Create New Skill button in the masthead to the right of System on skill routes', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+
+    const createButton = screen.getByRole('button', { name: 'Create New Skill' });
+    expect(createButton.classList.contains('skills-create-nav-button')).toBe(true);
+
+    // It lives in the masthead route-nav, immediately after the System dropdown.
+    const systemMenu = document.querySelector<HTMLElement>('.dashboard-system-menu')!;
+    expect(systemMenu).toBeTruthy();
+    expect(createButton.closest('.route-nav')).toBe(systemMenu.closest('.route-nav'));
+    expect(
+      systemMenu.compareDocumentPosition(createButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Clicking it asks the Skills page to open its create drawer via the window
+    // event (the drawer is owned by the Skills page, not the masthead).
+    const handler = vi.fn();
+    window.addEventListener(SKILLS_CREATE_REQUEST_EVENT, handler);
+    fireEvent.click(createButton);
+    window.removeEventListener(SKILLS_CREATE_REQUEST_EVENT, handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mount the Create New Skill button off skill routes', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
+  });
+
+  it('does not mount the Create New Skill button when the skills feature is disabled', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver'], {
+      features: { ...uiInfo().features, skills: false },
+    });
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    // The skills page still renders for the route, but the masthead create
+    // affordance must stay hidden while the skills feature flag is off.
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
   });
 
   it('opens a remembered skill from /skills and clears a stale remembered skill before fallback', async () => {
@@ -2113,6 +2168,29 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain('max-width: none;');
     expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
     expect(dashboardCss).not.toContain('dashboard-shell-constrained');
+  });
+
+  it('restores horizontal scrolling for the skills catalog table on narrow viewports', async () => {
+    // The skills catalog is a non-responsive DataTable (fixed 20rem skill column
+    // plus four more columns). Wide screens intentionally bleed it edge-to-edge
+    // with `overflow: visible` so the sticky header sticks to the page while the
+    // catalog scrolls; that desktop behavior must be preserved.
+    const desktopSlabBlock = cssRuleBlock(dashboardCss, '.skills-catalog-page .data-table-slab');
+    expect(desktopSlabBlock).toContain('overflow: visible;');
+
+    // But `.dashboard-root` clips horizontal overflow, so on a phone or narrow
+    // desktop that edge-to-edge table would lose its only scroll container and
+    // clip the right-side columns with no way to reach them. A small-breakpoint
+    // override must restore a horizontal scroll container.
+    expect(cssRuleBlock(dashboardCss, '.dashboard-root')).toContain('overflow-x: clip;');
+
+    const narrowSlabBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.skills-catalog-page .data-table-slab' &&
+      rule.parent?.type === 'atrule' &&
+      rule.parent.name === 'media' &&
+      rule.parent.params.includes('max-width: 900px')
+    ));
+    expect(narrowSlabBlock).toContain('overflow-x: auto;');
   });
 
   it('keeps workflow collection workspaces fluid', async () => {
@@ -3414,8 +3492,11 @@ describe('Dashboard shared entry', () => {
       'utf8',
     );
 
+    // Equal-weight side columns keep the middle nav column centered on the
+    // masthead so Workflows / Create / System never shift when the list display
+    // radio buttons appear or disappear in the brand group.
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,

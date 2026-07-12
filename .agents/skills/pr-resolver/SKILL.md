@@ -129,7 +129,10 @@ Allowed successful terminal states:
 Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDisposition`:
 - `merged`: the resolver merged the PR.
 - `already_merged`: the PR was independently confirmed as already merged.
-- `reenter_gate`: the resolver pushed changes and merge automation must wait for readiness on the new head.
+- `reenter_gate`: the current resolver child completed a typed handoff to its
+  validated `MoonMind.MergeAutomation` parent. Include `gatedContinuation` with
+  the reason and an absolute UTC `notBefore` deadline when the next cycle must
+  wait. Standalone resolvers cannot use this disposition successfully.
 - `manual_review`: the resolver stopped on a blocker, exhausted attempts, or needs human follow-up.
 - `failed`: the resolver hit a hard execution failure.
 
@@ -142,6 +145,13 @@ Everything else is blocked, failed, or still in-progress. In particular, never f
 - review comments remain actionable,
 - CI is running, degraded, or failing,
 - mergeability is unknown, dirty, or blocked.
+
+Long waits have exactly two supported ownership patterns: keep the resolver
+command in the foreground with periodic progress, or write the authoritative
+typed continuation and return control to a validated merge-automation parent.
+Never start detached polling, emit the final agent response, and claim the poll
+will continue after the managed CLI exits. Background task identifiers in output
+have no lifecycle authority.
 
 After any local commit-producing remediation, verify the exact current `HEAD` is visible on the remote PR branch before continuing. If `git push`, `gh`, or any GitHub connector path cannot publish the commit, stop as blocked with reason `publish_unavailable`; do not proceed to finalize and do not report success.
 

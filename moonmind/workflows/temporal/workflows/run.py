@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import re
@@ -329,6 +330,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
     }
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
+RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -578,6 +580,9 @@ RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
     "run-moonspec-title-remediation-detection-v1"
 )
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
+RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
+    "run-bounded-story-loop-progress-budget-v1"
+)
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
     "run-moonspec-gate-contract-repair-fresh-source-v1"
 )
@@ -5619,11 +5624,31 @@ class MoonMindRunWorkflow:
         gate_result: StepGateResult,
         gate_result_ref: str | None,
         logical_step_id: str,
+        progress_budget_enabled: bool,
     ) -> TypedGateResult:
         terminal = self._step_terminal_dispositions.get(logical_step_id)
         terminal_disposition = (
             "accepted" if terminal == "accepted" else "failed_with_remaining_work"
         )
+        progress_payload = {
+            "verdict": gate_result.verdict,
+            "issues": [dict(issue) for issue in gate_result.issues],
+            "remainingWorkRef": gate_result.remaining_work_ref,
+            "blockingEvidenceRefs": list(gate_result.blocking_evidence_refs),
+            "recommendedNextAction": gate_result.recommended_next_action,
+            "workspacePolicyRecommendation": (
+                gate_result.workspace_policy_recommendation
+            ),
+            "recoverableInCurrentRuntime": gate_result.recoverable_in_current_runtime,
+        }
+        progress_signature = hashlib.sha256(
+            json.dumps(
+                progress_payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         return TypedGateResult.model_validate(
             {
                 "verdict": gate_result.verdict,
@@ -5636,6 +5661,9 @@ class MoonMindRunWorkflow:
                 ),
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
+                ),
+                "progressSignature": (
+                    progress_signature if progress_budget_enabled else None
                 ),
                 "degraded": gate_result.degraded,
             }
@@ -5702,24 +5730,50 @@ class MoonMindRunWorkflow:
             ordered_nodes=ordered_nodes,
             current_index=current_index,
         )
+        progress_budget_enabled = self._patched_or_false_outside_workflow(
+            RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH
+        )
         gate = self._bounded_story_loop_gate_from_step_gate(
             gate_result=gate_result,
             gate_result_ref=gate_result_ref,
             logical_step_id=logical_step_id,
+            progress_budget_enabled=progress_budget_enabled,
         )
         attempt = self._bounded_story_loop_attempt_for_gate(
             logical_step_id=logical_step_id,
             remediation_gate=remediation_gate,
         )
+        loop_context = self._publish_context.get("boundedStoryLoop")
+        prior_progress_signature = None
+        if isinstance(loop_context, Mapping):
+            prior_decision = loop_context.get("continuationDecision")
+            if isinstance(prior_decision, Mapping):
+                prior_gate = prior_decision.get("gate")
+                if isinstance(prior_gate, Mapping):
+                    prior_progress_signature = str(
+                        prior_gate.get("progressSignature") or ""
+                    ).strip() or None
+        repeated_progress = bool(
+            progress_budget_enabled
+            and gate.progress_signature
+            and prior_progress_signature == gate.progress_signature
+        )
+        max_no_progress_attempts = 1
+        if progress_budget_enabled and isinstance(loop_context, Mapping):
+            loop_budgets = loop_context.get("budgets")
+            if isinstance(loop_budgets, Mapping):
+                max_no_progress_attempts = int(
+                    loop_budgets.get("maxConsecutiveNoProgressAttempts") or 1
+                )
         budget = LoopBudget.model_validate(
             {
                 "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": max_no_progress_attempts,
                 "maxRepeatedFailedCommands": 1,
                 "maxUnsafeOrPolicyDeniedAttempts": 1,
                 "consumed": {
                     "attempts": 0 if has_remaining_remediation_step else 1,
-                    "consecutive_no_progress_attempts": 0,
+                    "consecutiveNoProgressAttempts": 1 if repeated_progress else 0,
                     "repeated_failed_commands": 0,
                     "unsafe_or_policy_denied_attempts": 0,
                 },
@@ -5739,6 +5793,7 @@ class MoonMindRunWorkflow:
             "gateResultRef": gate.gate_result_ref,
             "remainingWorkRef": gate.remaining_work_ref,
             "diagnosticsRef": gate.diagnostics_ref,
+            "progressSignature": gate.progress_signature,
         }
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
@@ -7479,6 +7534,8 @@ class MoonMindRunWorkflow:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
             output["gatedContinuation"] = dict(self._gated_continuation_request)
+            if workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH):
+                output["completionDisposition"] = "gated_continuation"
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -7661,6 +7718,7 @@ class MoonMindRunWorkflow:
             "nodeKinds": [node.kind for node in compiled.nodes],
             "publishMode": loop_input.publish_mode,
             "mergeAutomationEnabled": loop_input.merge_automation_enabled,
+            "budgets": loop_input.budgets.model_dump(by_alias=True, mode="json"),
             "scopeGuard": scope,
         }
 
@@ -13059,6 +13117,21 @@ class MoonMindRunWorkflow:
                 raw_request.get("budget"),
                 max_value_chars=120,
             )
+            not_before = self._coerce_text(
+                raw_request.get("notBefore") or raw_request.get("not_before"),
+                max_chars=80,
+            )
+            retry_after_seconds = raw_request.get("retryAfterSeconds")
+            if retry_after_seconds is None:
+                retry_after_seconds = raw_request.get("retry_after_seconds")
+            execution_ref = self._coerce_text(
+                raw_request.get("executionRef") or raw_request.get("execution_ref"),
+                max_chars=240,
+            )
+            head_sha = self._coerce_text(
+                raw_request.get("headSha") or raw_request.get("head_sha"),
+                max_chars=64,
+            )
         else:
             legacy_disposition = self._coerce_text(
                 outputs.get("mergeAutomationDisposition")
@@ -13080,6 +13153,10 @@ class MoonMindRunWorkflow:
             evidence_refs = {}
             side_effects = {"externalPullRequest": True}
             budget = {}
+            not_before = None
+            retry_after_seconds = None
+            execution_ref = None
+            head_sha = self._coerce_text(outputs.get("headSha"), max_chars=64)
 
         gate_type = self._normalize_gate_type(raw_gate_type)
         action = self._normalize_gate_type(raw_action)
@@ -13100,6 +13177,14 @@ class MoonMindRunWorkflow:
             continuation["sideEffects"] = side_effects
         if budget:
             continuation["budget"] = budget
+        if not_before:
+            continuation["notBefore"] = not_before
+        if retry_after_seconds is not None:
+            continuation["retryAfterSeconds"] = retry_after_seconds
+        if execution_ref:
+            continuation["executionRef"] = execution_ref
+        if head_sha:
+            continuation["headSha"] = head_sha
 
         allowed_actions = GATED_CONTINUATION_GATE_REGISTRY.get(gate_type)
         if allowed_actions is None:
@@ -13450,6 +13535,22 @@ class MoonMindRunWorkflow:
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
             post_merge_jira.setdefault("strategy", "done_category")
+            raw_post_merge_github = candidate.get(
+                "postMergeGithub"
+            ) or candidate.get("post_merge_github")
+            post_merge_github = (
+                dict(raw_post_merge_github)
+                if isinstance(raw_post_merge_github, Mapping)
+                else {}
+            )
+            github_issue = self._canonical_github_issue_from_parameters(parameters)
+            if github_issue:
+                post_merge_github.setdefault("enabled", True)
+                post_merge_github.setdefault("required", True)
+                post_merge_github.setdefault("repository", github_issue["repository"])
+                post_merge_github.setdefault(
+                    "issueNumber", github_issue["issueNumber"]
+                )
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -13472,6 +13573,7 @@ class MoonMindRunWorkflow:
                 or "squash",
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
+                "postMergeGithub": post_merge_github,
                 "fallbackPollSeconds": (
                     candidate.get("fallbackPollSeconds")
                     or candidate.get("fallback_poll_seconds")
@@ -13486,6 +13588,48 @@ class MoonMindRunWorkflow:
                     or timeout_config.get("expire_after_seconds")
                 ),
             }
+        return None
+
+    def _canonical_github_issue_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        mappings: list[Mapping[str, Any]] = [parameters, task_payload]
+        for source in (parameters, task_payload):
+            for key in ("inputs", "input"):
+                nested = source.get(key)
+                if isinstance(nested, Mapping):
+                    mappings.append(nested)
+        templates = task_payload.get("appliedStepTemplates")
+        if isinstance(templates, Sequence) and not isinstance(
+            templates, (str, bytes)
+        ):
+            for template in templates:
+                if not isinstance(template, Mapping):
+                    continue
+                mappings.append(template)
+                nested = template.get("inputs")
+                if isinstance(nested, Mapping):
+                    mappings.append(nested)
+        for mapping in mappings:
+            issue = mapping.get("github_issue") or mapping.get("githubIssue")
+            if not isinstance(issue, Mapping):
+                continue
+            repository = self._coerce_text(
+                issue.get("repository") or issue.get("repo"), max_chars=240
+            )
+            try:
+                issue_number = int(issue.get("number") or issue.get("issueNumber"))
+            except (TypeError, ValueError):
+                issue_number = 0
+            if repository and issue_number > 0:
+                return {
+                    "repository": repository,
+                    "issueNumber": issue_number,
+                }
         return None
 
     def _canonical_jira_issue_key_from_parameters(
@@ -13753,6 +13897,7 @@ class MoonMindRunWorkflow:
                 },
                 "timeouts": timeouts,
                 "postMergeJira": request.get("postMergeJira") or {},
+                "postMergeGithub": request.get("postMergeGithub") or {},
             },
             "resolverTemplate": resolver_template,
             "idempotencyKey": (
@@ -13829,6 +13974,9 @@ class MoonMindRunWorkflow:
         post_merge_jira = result_map.get("postMergeJira")
         if isinstance(post_merge_jira, Mapping):
             summary["postMergeJira"] = dict(post_merge_jira)
+        post_merge_github = result_map.get("postMergeGithub")
+        if isinstance(post_merge_github, Mapping):
+            summary["postMergeGithub"] = dict(post_merge_github)
         return summary
 
     async def _complete_already_implemented_jira_if_needed(
@@ -15240,6 +15388,25 @@ class MoonMindRunWorkflow:
                     "executionRef": step_execution_payload["stepExecutionId"],
                 }
 
+        terminal_continuation_authority = None
+        if (
+            selected_skill == "pr-resolver"
+            and terminal_contract_payload is not None
+            and terminal_contract_payload.get("contractId")
+            == "pr_resolver_terminal.v1"
+            and self._is_merge_automation_gated(parameters)
+            and workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH)
+        ):
+            parent_info = workflow.info().parent
+            terminal_continuation_authority = {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": parent_info.workflow_id,
+                "ownerRunId": getattr(parent_info, "run_id", None),
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            }
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -15251,6 +15418,7 @@ class MoonMindRunWorkflow:
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
             terminal_contract=terminal_contract_payload,
+            terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
             workspace_spec=workspace_spec,
             skill=compact_skill_payload,

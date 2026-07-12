@@ -73,7 +73,8 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             template = await _load_preset(session)
             annotations = template.annotations or {}
 
-            assert template.title == "Batch Workflows"
+            assert template.title == "Batch Jira Workflows"
+            assert template.slug == "batch-workflows"
             assert template.scope_type is PresetScopeType.GLOBAL
 
             schema = annotations["inputSchema"]
@@ -109,6 +110,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             assert schema["properties"]["run_ref"]["enum"] == [
                 "skill:jira-verify",
                 "preset:jira-implement",
+                "preset:jira-orchestrate",
             ]
 
             assert schema["properties"]["publish_mode"]["enum"] == [
@@ -122,7 +124,13 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             ui_schema = annotations["uiSchema"]
             assert ui_schema["run_ref"]["widget"] == "select"
             assert ui_schema["constraints"] == {"widget": "textarea", "advanced": True}
-            assert ui_schema["run_verify"] == {"widget": "checkbox"}
+            assert ui_schema["run_verify"] == {
+                "widget": "checkbox",
+                "visibleWhen": {
+                    "field": "run_ref",
+                    "oneOf": ["preset:jira-implement", "preset:jira-orchestrate"],
+                },
+            }
             assert ui_schema["update_status"] == {
                 "widget": "checkbox",
                 "visibleWhen": {
@@ -167,18 +175,13 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 bindings["preset:jira-implement"]["run_verify"]
                 == "{{ shared.run_verify }}"
             )
-            assert (
-                bindings["preset:github-issue-implement"]["run_verify"]
-                == "{{ shared.run_verify }}"
-            )
-            assert (
-                bindings["preset:github-issue-implement"]["github_issue"]
-                == "{{ target.githubIssue }}"
-            )
-            assert (
-                bindings["preset:github-issue-implement"]["github_issue_ref"]
-                == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
-            )
+            assert bindings["preset:jira-orchestrate"] == {
+                "jira_issue": "{{ target.jiraIssue }}",
+                "jira_issue_key": "{{ target.jiraIssue.key }}",
+                "constraints": "{{ shared.constraints }}",
+                "run_verify": "{{ shared.run_verify }}",
+            }
+            assert all("github" not in run_ref for run_ref in bindings)
 
             # Workflow-level directives.
             assert annotations["runtimeInheritance"] == "caller"

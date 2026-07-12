@@ -1256,6 +1256,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_complete_post_merge_jira",
     ),
+    "merge_automation.complete_post_merge_github": (
+        "integrations",
+        "merge_automation_complete_post_merge_github",
+    ),
     "pr_resolver.resolve_selector": (
         "integrations",
         "pr_resolver_resolve_selector",
@@ -4942,6 +4946,42 @@ class TemporalIntegrationActivities:
             transition_issue=transition_issue,
         )
         return decision.model_dump(by_alias=True, mode="json")
+
+    async def merge_automation_complete_post_merge_github(self, payload, /, **kwargs):
+        config = payload.get("postMergeGithub") if isinstance(payload, Mapping) else None
+        if not isinstance(config, Mapping):
+            return {
+                "status": "blocked",
+                "required": True,
+                "reason": "Post-merge GitHub completion payload is invalid.",
+            }
+
+        from moonmind.workflows.temporal.story_output_tools import (
+            update_github_issue_status,
+        )
+
+        required = bool(config.get("required", True))
+        repository = str(config.get("repository") or "").strip()
+        issue_number = config.get("issueNumber") or config.get("issue_number")
+        result = await update_github_issue_status(
+            {
+                "repository": repository,
+                "issueNumber": issue_number,
+                "mode": "done",
+            }
+        )
+        outputs = dict(result.outputs)
+        succeeded = (
+            result.status == "COMPLETED"
+            and outputs.get("confirmedState") == "closed"
+        )
+        return {
+            "status": "succeeded" if succeeded else "failed",
+            "required": required,
+            "repository": repository,
+            "issueNumber": issue_number,
+            **outputs,
+        }
 
     async def pr_resolver_resolve_selector(self, payload, /, **kwargs):
         """Resolve a PR number, URL, or branch to one canonical PR identity."""
@@ -10428,11 +10468,31 @@ class TemporalAgentRuntimeActivities:
         metadata = {**dict(result.metadata or {}), **dict(evaluation.metadata)}
         metadata["terminalContractId"] = str(contract.get("contractId") or "")
         metadata["terminalContractAuthority"] = "MoonMind.AgentRun"
+        metadata["terminalContractOutcome"] = evaluation.outcome
         if evaluation.failure_code:
             metadata["failureCode"] = evaluation.failure_code
         if evaluation.satisfied:
             metadata["terminalContractSatisfied"] = True
             return result.model_copy(update={"metadata": metadata})
+
+        if evaluation.outcome == "continuation_requested":
+            metadata.update(
+                {
+                    "terminalContractSatisfied": False,
+                    "terminalContractMissingEvidence": [],
+                    "terminalContractRecoveryOutcome": "durable_parent_required",
+                }
+            )
+            if result.failure_class is not None:
+                return result.model_copy(update={"metadata": metadata})
+            return result.model_copy(
+                update={
+                    "summary": "Agent completed an authoritative durable continuation handoff.",
+                    "failure_class": "execution_error",
+                    "provider_error_code": "PR_RESOLVER_REENTER_GATE",
+                    "metadata": metadata,
+                }
+            )
 
         metadata.update(
             {

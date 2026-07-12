@@ -799,6 +799,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         batch_template = result.scalar_one_or_none()
         assert batch_template is not None
+        assert batch_template.title == "Batch Jira Workflows"
         batch_annotations = batch_template.annotations or {}
         assert batch_annotations["runtimeInheritance"] == "caller"
         assert batch_annotations["workflowPublish"] == {"mode": "none"}
@@ -811,6 +812,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_schema["properties"]["run_ref"]["enum"] == [
             "skill:jira-verify",
             "preset:jira-implement",
+            "preset:jira-orchestrate",
         ]
         assert batch_schema["properties"]["run_verify"]["default"] is True
         assert "source_kind" not in batch_schema["properties"]
@@ -828,12 +830,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_annotations["bindings"]["preset:jira-implement"][
             "run_verify"
         ] == "{{ shared.run_verify }}"
-        assert batch_annotations["bindings"]["preset:github-issue-implement"][
-            "github_issue_ref"
-        ] == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
-        assert batch_annotations["bindings"]["preset:github-issue-implement"][
+        assert batch_annotations["bindings"]["preset:jira-orchestrate"][
+            "jira_issue_key"
+        ] == "{{ target.jiraIssue.key }}"
+        assert batch_annotations["bindings"]["preset:jira-orchestrate"][
             "run_verify"
         ] == "{{ shared.run_verify }}"
+        assert all("github" not in key for key in batch_annotations["bindings"])
         batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"

@@ -59,6 +59,7 @@ async def expand_preset_for_child_run(
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
     allow_goal_schedule: bool = True,
+    user_id: Any | None = None,
 ) -> dict[str, Any]:
     """Expand stored preset provenance into executable workflow steps."""
 
@@ -133,6 +134,15 @@ async def expand_preset_for_child_run(
     if isinstance(repository, str) and repository.strip():
         template_context["repository"] = repository.strip()
         template_context["repo"] = repository.strip()
+    git_payload = _coerce_mapping(task_payload.get("git"))
+    branch = (
+        git_payload.get("branch")
+        or git_payload.get("startingBranch")
+        or task_payload.get("branch")
+        or task_payload.get("startingBranch")
+    )
+    if isinstance(branch, str) and branch.strip():
+        template_context["branch"] = branch.strip()
     runtime_payload = _coerce_mapping(task_payload.get("runtime"))
     target_runtime = (
         parameters.get("targetRuntime")
@@ -150,6 +160,8 @@ async def expand_preset_for_child_run(
         "context": template_context,
         "options": ExpandOptions(should_enforce_step_limit=True),
     }
+    if user_id is not None:
+        expand_kwargs["user_id"] = user_id
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
     except PresetNotFoundError:
@@ -185,6 +197,22 @@ async def expand_preset_for_child_run(
             for item in authored_presets
         ]
     task_payload["steps"] = list(expanded_steps)
+    expanded_publish = (
+        expanded.get("publish") if isinstance(expanded, Mapping) else None
+    )
+    if isinstance(expanded_publish, Mapping) and not isinstance(
+        task_payload.get("publish"), Mapping
+    ):
+        task_payload["publish"] = dict(expanded_publish)
+    expanded_checkpoint_branching = (
+        expanded.get("checkpointBranching")
+        if isinstance(expanded, Mapping)
+        else None
+    )
+    if isinstance(expanded_checkpoint_branching, Mapping) and not isinstance(
+        task_payload.get("checkpointBranching"), Mapping
+    ):
+        task_payload["checkpointBranching"] = dict(expanded_checkpoint_branching)
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
         **template_payload,

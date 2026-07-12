@@ -29,6 +29,7 @@ import {
   type CollectionListDisplayMode,
 } from '../lib/collectionListDisplayMode';
 import { updateDashboardPreferences } from '../utils/dashboardPreferences';
+import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
 
 /**
  * Normalized Skills catalog item shared by the full table, the sidebar, and
@@ -493,7 +494,7 @@ function SkillDetail({
         <div className="space-y-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-              Skill Preview
+              Skill Details
             </p>
             <h3 ref={detailHeadingRef} tabIndex={-1} className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
               {selectedSkill.label ?? selectedSkill.id}
@@ -619,7 +620,6 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
   const [message, setMessage] = useState<string | null>(null);
 
   const drawerRef = useRef<HTMLDivElement | null>(null);
-  const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
 
   // Selection is route-derived: `/skills/:skillId` selects a skill, `/skills`
@@ -681,7 +681,11 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
   const closeDrawer = useCallback(() => {
     setIsDrawerOpen(false);
     setMessage(null);
-    drawerTriggerRef.current?.focus();
+    // The trigger now lives in the masthead nav (to the right of System), so
+    // return focus there rather than to a page-local button.
+    if (typeof document !== 'undefined') {
+      document.querySelector<HTMLElement>('[data-skills-create-trigger]')?.focus();
+    }
   }, []);
 
   const openDrawer = useCallback(() => {
@@ -689,6 +693,14 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
     setShowCreatePreview(false);
     setIsDrawerOpen(true);
   }, []);
+
+  // The masthead "+" button opens this drawer via a window event because the
+  // button and the drawer render in separate component subtrees.
+  useEffect(() => {
+    const handleCreateRequest = () => openDrawer();
+    window.addEventListener(SKILLS_CREATE_REQUEST_EVENT, handleCreateRequest);
+    return () => window.removeEventListener(SKILLS_CREATE_REQUEST_EVENT, handleCreateRequest);
+  }, [openDrawer]);
 
   // Focus the first field when the drawer opens so keyboard users land inside
   // the dialog rather than the inert background.
@@ -830,23 +842,6 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
     createMutation.mutate();
   };
 
-  const pageHeader = (
-    <header className="flex items-start justify-between gap-4 px-1 sm:px-0">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-          Agent Skills
-        </p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl dark:text-white">
-          Skills
-        </h2>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-          Inspect runtime-visible skills and create local additions without the legacy dashboard renderer.
-        </p>
-      </div>
-      <button ref={drawerTriggerRef} type="button" className="queue-submit-primary shrink-0" onClick={openDrawer}>Create New Skill</button>
-    </header>
-  );
-
   const createDrawer = isDrawerOpen ? (
     <div
       className="fixed inset-0 z-[120] flex justify-end bg-[rgb(var(--mm-ink)/0.45)]"
@@ -984,19 +979,16 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         mode={isDrawerOpen ? 'create' : 'table'}
         className="skills-page skills-catalog-page"
         primaryAs="div"
-        primaryClassName="skills-catalog-primary px-4 py-4 sm:px-6 sm:py-6"
+        primaryClassName="skills-catalog-primary px-4 pb-4 sm:px-6 sm:pb-6"
         primaryLabel="Skills catalog"
         data-skills-list-display-mode="table"
       >
-        <div className="space-y-5 sm:space-y-6">
-          {pageHeader}
-          <SkillsCatalogTable
-            skills={filteredSkills}
-            filterText={filterText}
-            setFilterText={setFilterText}
-            skillsQuery={skillsQuery}
-          />
-        </div>
+        <SkillsCatalogTable
+          skills={filteredSkills}
+          filterText={filterText}
+          setFilterText={setFilterText}
+          skillsQuery={skillsQuery}
+        />
         {createDrawer}
       </CollectionWorkspace>
     );
@@ -1022,17 +1014,14 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         />
       ) : null}
     >
-      <div className="space-y-5 sm:space-y-6">
-        {pageHeader}
-        <SkillDetail
-          routeSkillId={routeSkillId}
-          selectedSkill={selectedSkill}
-          skillsQuery={skillsQuery}
-          previewTab={previewTab}
-          setPreviewTab={setPreviewTab}
-          detailHeadingRef={detailHeadingRef}
-        />
-      </div>
+      <SkillDetail
+        routeSkillId={routeSkillId}
+        selectedSkill={selectedSkill}
+        skillsQuery={skillsQuery}
+        previewTab={previewTab}
+        setPreviewTab={setPreviewTab}
+        detailHeadingRef={detailHeadingRef}
+      />
       {createDrawer}
     </CollectionWorkspace>
   );

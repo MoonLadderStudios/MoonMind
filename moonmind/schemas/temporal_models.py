@@ -1646,6 +1646,45 @@ class MergeAutomationPostMergeJiraModel(BaseModel):
     def _validate_fields(cls, value: Any) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="postMergeJira.fields")
 
+
+class MergeAutomationPostMergeGithubModel(BaseModel):
+    """Runtime policy for GitHub issue completion after verified merge success."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(False, alias="enabled")
+    repository: str | None = Field(None, alias="repository")
+    issue_number: int | None = Field(None, alias="issueNumber")
+    required: bool = Field(True, alias="required")
+
+    @field_validator("repository", mode="before")
+    @classmethod
+    def _normalize_repository(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("issue_number", mode="before")
+    @classmethod
+    def _normalize_issue_number(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return None
+        return candidate if candidate > 0 else None
+
+    @model_validator(mode="after")
+    def _require_identity_when_enabled(self) -> "MergeAutomationPostMergeGithubModel":
+        if self.enabled and (not self.repository or self.issue_number is None):
+            raise ValueError(
+                "Enabled postMergeGithub requires repository and issueNumber."
+            )
+        return self
+
+
 class MergeAutomationConfigModel(BaseModel):
     """Full merge automation configuration carried by workflow input."""
 
@@ -1666,6 +1705,10 @@ class MergeAutomationConfigModel(BaseModel):
     post_merge_jira: MergeAutomationPostMergeJiraModel = Field(
         default_factory=MergeAutomationPostMergeJiraModel,
         alias="postMergeJira",
+    )
+    post_merge_github: MergeAutomationPostMergeGithubModel = Field(
+        default_factory=MergeAutomationPostMergeGithubModel,
+        alias="postMergeGithub",
     )
 
 ReadinessBlockerKind = Literal[

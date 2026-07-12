@@ -194,7 +194,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="manifests",
-        label="RAG / Manifests",
+        label="Manifests",
         icon_key="manifest",
         canonical_path="/manifests",
         path_patterns=("/manifests", "/manifests/:manifestName"),
@@ -206,7 +206,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="omnigent-agents",
-        label="Omnigent Agents",
+        label="Agents",
         icon_key="bot",
         canonical_path="/omnigent/agents",
         path_patterns=("/omnigent/agents/*",),
@@ -218,7 +218,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="omnigent-policies",
-        label="Omnigent Policies",
+        label="Policies",
         icon_key="shield-check",
         canonical_path="/omnigent/policies",
         path_patterns=("/omnigent/policies/*",),
@@ -242,7 +242,7 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
     ),
     DashboardDestination(
         key="artifacts",
-        label="Artifacts / Observability",
+        label="Artifacts",
         icon_key="archive",
         canonical_path="/artifacts",
         path_patterns=("/artifacts/*", "/observability/*"),

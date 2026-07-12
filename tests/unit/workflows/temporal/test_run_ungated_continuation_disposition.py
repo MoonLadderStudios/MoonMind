@@ -179,6 +179,7 @@ def test_legacy_reenter_gate_maps_to_typed_gated_continuation() -> None:
             "workflow-owned merge gate to continue."
         ),
         "sideEffects": {"externalPullRequest": True},
+        "headSha": "abc123",
     }
     assert (
         workflow._publish_context["gatedContinuation"]
@@ -221,6 +222,25 @@ def test_typed_gated_continuation_records_bounded_evidence() -> None:
         "sideEffects": {"externalPullRequest": True},
         "budget": {"maxAttempts": 3, "remaining": 2},
     }
+
+
+def test_typed_gated_continuation_accepts_snake_case_retry_seconds() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gated_continuation": {
+                    "gate_type": "merge_automation",
+                    "action": "reenter_gate",
+                    "retry_after_seconds": 90,
+                }
+            }
+        },
+    )
+
+    assert workflow._gated_continuation_request["retryAfterSeconds"] == 90
 
 
 def test_typed_merge_automation_continuation_exposes_parent_disposition() -> None:

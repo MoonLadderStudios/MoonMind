@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from temporalio import workflow
@@ -64,6 +64,9 @@ MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH = (
 MERGE_AUTOMATION_POST_RESOLVER_PROGRESS_RECOVERY_PATCH = (
     "merge-automation-post-resolver-progress-recovery-v1"
 )
+MERGE_AUTOMATION_RESOLVER_CONTINUATION_DELAY_PATCH = (
+    "merge-automation-resolver-continuation-delay-v1"
+)
 RESOLVER_ISSUE_RECOVERY_NONE = "none"
 RESOLVER_ISSUE_RECOVERY_COMPLETED = "completed"
 RESOLVER_ISSUE_RECOVERY_REENTER_GATE = "reenter_gate"
@@ -94,6 +97,7 @@ class MoonMindMergeAutomationWorkflow:
         self._post_merge_jira_resolution_artifact_ref: str | None = None
         self._post_merge_jira_transition_artifact_ref: str | None = None
         self._post_merge_jira_result: dict[str, Any] | None = None
+        self._post_merge_github_result: dict[str, Any] | None = None
         self._external_event_count = 0
         self._refresh_tracked_head_sha_on_next_evaluation = False
         self._summary: str | None = None
@@ -134,6 +138,8 @@ class MoonMindMergeAutomationWorkflow:
             payload["summary"] = self._summary
         if self._post_merge_jira_result is not None:
             payload["postMergeJira"] = dict(self._post_merge_jira_result)
+        if self._post_merge_github_result is not None:
+            payload["postMergeGithub"] = dict(self._post_merge_github_result)
         return payload
 
     @staticmethod
@@ -333,6 +339,38 @@ class MoonMindMergeAutomationWorkflow:
             return ""
         return str(resolver_result.get("mergeAutomationDisposition") or "").strip()
 
+    def _continuation_deadline(self, resolver_result: Mapping[str, Any]) -> datetime:
+        raw = resolver_result.get("gatedContinuation")
+        if not isinstance(raw, Mapping):
+            return workflow.now() + timedelta(
+                seconds=self._input.config.timeouts.fallback_poll_seconds
+            )
+        if (
+            raw.get("schemaVersion") != "gated-continuation/v1"
+            or raw.get("gateType") != "merge_automation"
+            or raw.get("action") != "reenter_gate"
+        ):
+            raise ValueError("invalid gated continuation contract")
+        not_before = str(raw.get("notBefore") or "").strip()
+        retry_after = raw.get("retryAfterSeconds")
+        if not not_before and retry_after is None:
+            return workflow.now() + timedelta(
+                seconds=self._input.config.timeouts.fallback_poll_seconds
+            )
+        if not_before and retry_after is not None:
+            raise ValueError("gated continuation cannot provide both timing values")
+        if retry_after is not None:
+            if isinstance(retry_after, bool) or int(retry_after) < 1:
+                raise ValueError("invalid gated continuation retryAfterSeconds")
+            return workflow.now() + timedelta(seconds=int(retry_after))
+        try:
+            parsed = datetime.fromisoformat(not_before.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("invalid gated continuation notBefore") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("gated continuation notBefore must be timezone-aware")
+        return parsed.astimezone(timezone.utc)
+
     @staticmethod
     def _head_sha_from_mapping(payload: Mapping[str, Any]) -> str:
         for key in ("headSha", "head_sha", "latestHeadSha", "latest_head_sha"):
@@ -524,6 +562,72 @@ class MoonMindMergeAutomationWorkflow:
             return False
         return True
 
+    async def _complete_post_merge_github(
+        self,
+        *,
+        resolver_disposition: str,
+    ) -> bool:
+        if self._input is None:
+            return True
+        if not self._input.config.post_merge_github.enabled:
+            return True
+        decision = await workflow.execute_activity(
+            "merge_automation.complete_post_merge_github",
+            {
+                "parentWorkflowId": self._input.parent_workflow_id,
+                "parentRunId": self._input.parent_run_id,
+                "resolverDisposition": resolver_disposition,
+                "pullRequest": self._input.pull_request.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "postMergeGithub": self._input.config.post_merge_github.model_dump(
+                    by_alias=True, mode="json"
+                ),
+            },
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        decision_map = dict(decision) if isinstance(decision, Mapping) else {}
+        self._post_merge_github_result = decision_map
+        status = str(decision_map.get("status") or "").strip()
+        required = bool(decision_map.get("required", True))
+        if required and status in {"blocked", "failed"}:
+            reason = str(
+                decision_map.get("reason")
+                or decision_map.get("summary")
+                or "Required post-merge GitHub completion did not succeed."
+            ).strip()
+            self._status = STATE_FAILED
+            self._summary = reason
+            self._blockers = [
+                ReadinessBlockerModel.model_validate(
+                    {
+                        "kind": DISPOSITION_FAILED,
+                        "summary": reason,
+                        "retryable": False,
+                        "source": "github",
+                    }
+                )
+            ]
+            self._publish_visibility()
+            return False
+        return True
+
+    async def _complete_post_merge_integrations(
+        self,
+        *,
+        resolver_disposition: str,
+    ) -> bool:
+        if not await self._complete_post_merge_jira(
+            resolver_disposition=resolver_disposition
+        ):
+            return False
+        return await self._complete_post_merge_github(
+            resolver_disposition=resolver_disposition
+        )
+
     async def _evaluate_readiness_once(self) -> tuple[Any, Any]:
         if self._input is None:
             evaluation: dict[str, Any] = {}
@@ -588,7 +692,7 @@ class MoonMindMergeAutomationWorkflow:
             "Pull request is already merged; recovered after resolver "
             "disposition validation failed."
         )
-        if not await self._complete_post_merge_jira(
+        if not await self._complete_post_merge_integrations(
             resolver_disposition=DISPOSITION_ALREADY_MERGED
         ):
             return RESOLVER_ISSUE_RECOVERY_COMPLETED, await self._finish()
@@ -641,7 +745,7 @@ class MoonMindMergeAutomationWorkflow:
             await self._write_gate_snapshot(evidence_ready=evidence.ready)
             if evidence.pull_request_merged:
                 self._refresh_tracked_head_sha(evaluation)
-                if not await self._complete_post_merge_jira(
+                if not await self._complete_post_merge_integrations(
                     resolver_disposition=DISPOSITION_ALREADY_MERGED
                 ):
                     return await self._finish()
@@ -766,9 +870,48 @@ class MoonMindMergeAutomationWorkflow:
                     )
                     self._status = STATE_WAITING
                     self._publish_visibility()
+                    if workflow.patched(
+                        MERGE_AUTOMATION_RESOLVER_CONTINUATION_DELAY_PATCH
+                    ):
+                        try:
+                            continuation_deadline = self._continuation_deadline(
+                                resolver_result
+                            )
+                        except (TypeError, ValueError):
+                            return await self._failed_resolver_summary(
+                                summary="pr-resolver returned an invalid gated continuation.",
+                                blocker_kind="resolver_continuation_invalid",
+                            )
+                        if expire_at is not None and continuation_deadline >= expire_at:
+                            self._status = STATE_EXPIRED
+                            self._summary = (
+                                "Merge automation expired during resolver "
+                                "continuation wait."
+                            )
+                            self._publish_visibility()
+                            return await self._finish()
+                        delay = max(
+                            0.0, (continuation_deadline - workflow.now()).total_seconds()
+                        )
+                        try:
+                            await workflow.sleep(timedelta(seconds=delay))
+                        except CancelledError:
+                            self._status = STATE_CANCELED
+                            self._summary = (
+                                "Merge automation canceled during resolver "
+                                "continuation wait."
+                            )
+                            self._publish_visibility()
+                            return await self._finish()
+                        except Exception as exc:
+                            # Direct unit-boundary tests invoke run() without a
+                            # Temporal event loop. Production histories always
+                            # use the deterministic workflow timer above.
+                            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                                raise
                     continue
                 if resolver_disposition == DISPOSITION_ALREADY_MERGED:
-                    if not await self._complete_post_merge_jira(
+                    if not await self._complete_post_merge_integrations(
                         resolver_disposition=resolver_disposition
                     ):
                         return await self._finish()
@@ -777,7 +920,7 @@ class MoonMindMergeAutomationWorkflow:
                     self._publish_visibility()
                     return await self._finish()
                 if resolver_disposition == DISPOSITION_MERGED:
-                    if not await self._complete_post_merge_jira(
+                    if not await self._complete_post_merge_integrations(
                         resolver_disposition=resolver_disposition
                     ):
                         return await self._finish()

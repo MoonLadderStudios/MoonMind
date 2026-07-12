@@ -48,7 +48,7 @@ describe('dashboard masthead brand styles', () => {
       'box-shadow: var(--mm-control-focus-ring);',
     );
     expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]')).toContain(
-      'border-color: rgb(var(--mm-accent) / 0.6);',
+      'color: rgb(var(--mm-accent));',
     );
     expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]:hover')).toContain(
       'border-color: rgb(var(--mm-accent-2) / 0.72);',
@@ -94,5 +94,73 @@ describe('dashboard masthead brand styles', () => {
     expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.dashboard-system-trigger,[\s\S]*\.dashboard-system-popover\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
     );
+  });
+
+  it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
+    // The shared treatment: a bright top-edge inset plus a soft accent
+    // under-glow, with no flat 1px perimeter ring.
+    const highlightShadow =
+      /box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.2\),\s*0 12px 24px -16px rgb\(var\(--mm-accent\) \/ 0\.82\);/;
+
+    // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
+    // padding < 0.18rem) that it does not out-size the nav buttons, plus a
+    // segmented-control-style sliding thumb driven by the checked option.
+    const control = cssRuleBlock('.workflow-list-display-control');
+    expect(control).toContain('border: 0;');
+    expect(control).toContain('background: transparent;');
+    expect(control).toMatch(highlightShadow);
+    expect(control).toContain('padding: 0.12rem;');
+    const thumb = cssRuleBlock('.workflow-list-display-control::before');
+    expect(thumb).toContain(
+      'transform: translateX(calc(var(--list-display-active-index) * 1.8rem));',
+    );
+    expect(thumb).toContain('box-shadow: inset 0 0 0 1px rgb(var(--mm-accent) / 0.6);');
+    expect(thumb).toMatch(/transition: transform \d+ms/);
+    expect(dashboardCss).toMatch(
+      /\.workflow-list-display-control:has\(\.workflow-list-display-option:nth-child\(2\)\[aria-checked="true"\]\)\s*\{[^}]*--list-display-active-index: 1;/s,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.workflow-list-display-control::before\s*\{[^}]*transition:\s*none;/s,
+    );
+    expect(cssRuleBlock('.workflow-list-display-option')).toContain('width: 1.6rem;');
+    // Icons keep their size regardless of the tighter borders.
+    expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
+
+    // Workflows/Create and the System trigger share the same highlight-edge
+    // look. Both shadows are non-layout-affecting so the active underline
+    // geometry is unchanged.
+    const primary = cssRuleBlock('.route-nav-primary a');
+    expect(primary).not.toContain('var(--mm-glass-fill)');
+    expect(primary).toMatch(highlightShadow);
+    const trigger = cssRuleBlock('.dashboard-system-trigger');
+    expect(trigger).toContain('background: transparent;');
+    expect(trigger).toMatch(highlightShadow);
+  });
+
+  it('marks the open System selection like the sidebar instead of the trigger underline', () => {
+    // The trigger keeps its purple underline when a System destination is
+    // active (asserted above); the selected row inside the open popover must
+    // not repeat it, and instead gets the sidebar-style left accent bar + fill.
+    const underlineSuppression = cssRuleBlock('.dashboard-system-popover a.active::after');
+    expect(underlineSuppression).toContain('content: none;');
+    const activeRow = cssRuleBlock('.dashboard-system-popover a.active');
+    expect(activeRow).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
+    expect(activeRow).toContain('background: rgb(var(--mm-accent) / 0.12);');
+
+    // The active-row rule shares specificity with the earlier
+    // `a:focus-visible` rule, so a later, more specific rule must combine the
+    // focus ring with the active inset shadow; otherwise a keyboard-focused
+    // active row loses its distinct focus indicator.
+    const activeFocus = cssRuleBlock('.dashboard-system-popover a.active:focus-visible');
+    expect(activeFocus).toContain(
+      'box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));',
+    );
+  });
+
+  it('keeps the masthead-nav skills create button green and offset below the nav height', () => {
+    const button = cssRuleBlock('.skills-create-nav-button');
+    expect(button).toContain('color: rgb(var(--mm-ok));');
+    expect(button).toContain('background: rgb(var(--mm-ok) / 0.16);');
+    expect(button).toMatch(/box-shadow:\s*inset 0 0 0 1px rgb\(var\(--mm-ok\) \/ 0\.55\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
   });
 });

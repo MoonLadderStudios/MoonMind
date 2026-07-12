@@ -5,12 +5,22 @@ import pytest
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
+import signal
+import sys
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.runtime.strategies.base import ManagedRuntimeExitResult
+
+
+def test_terminal_cli_cleanup_targets_owned_process_group() -> None:
+    process = SimpleNamespace(pid=4321)
+    with patch("os.killpg") as killpg:
+        ManagedRunSupervisor._terminate_owned_process_group_best_effort(process)
+
+    killpg.assert_called_once_with(4321, signal.SIGKILL)
 
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""
@@ -86,6 +96,36 @@ async def test_success_exit_classification(supervisor_env):
     assert record.exit_code == 0
     assert record.failure_class is None
     assert record.diagnostics_ref is not None
+
+
+@pytest.mark.asyncio
+async def test_supervise_terminates_descendant_before_waiting_for_stream_eof(
+    supervisor_env,
+):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-descendant", "launching")
+
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        (
+            "import os,time; child=os.fork(); "
+            "os._exit(0) if child else time.sleep(60)"
+        ),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    record = await asyncio.wait_for(
+        supervisor.supervise(
+            run_id="run-descendant", process=process, timeout_seconds=30
+        ),
+        timeout=5,
+    )
+
+    assert record.status == "completed"
 
 @pytest.mark.asyncio
 async def test_failure_exit_classification(supervisor_env):

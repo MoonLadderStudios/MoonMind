@@ -59,6 +59,18 @@ def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]
     }
     return payload
 
+
+def _payload_with_post_merge_github(**post_merge_overrides: Any) -> dict[str, Any]:
+    payload = _payload()
+    payload["mergeAutomationConfig"]["postMergeGithub"] = {
+        "enabled": True,
+        "required": True,
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": 3143,
+        **post_merge_overrides,
+    }
+    return payload
+
 MERGE_AUTOMATION_WORKFLOW_ID = "merge-automation:wf-parent"
 
 
@@ -150,6 +162,29 @@ def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> No
     ]
     assert len(workflow._gate_snapshot_artifact_refs) == max_refs + 5
     assert len(workflow._resolver_attempt_artifact_refs) == max_refs + 3
+
+
+def test_legacy_gated_continuation_uses_fallback_poll_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        _payload()
+    )
+    now = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: now)
+
+    deadline = workflow._continuation_deadline(
+        {
+            "gatedContinuation": {
+                "schemaVersion": "gated-continuation/v1",
+                "gateType": "merge_automation",
+                "action": "reenter_gate",
+            }
+        }
+    )
+
+    assert deadline.timestamp() - now.timestamp() == 300
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_at", ["create", "write_complete"])
@@ -1072,6 +1107,79 @@ async def test_merge_automation_runs_post_merge_jira_before_merged_success(
         "merge_automation.complete_post_merge_jira"
     )
     assert result["postMergeJira"]["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_runs_post_merge_github_before_merged_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    activity_calls: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append(activity_type)
+        if activity_type == "merge_automation.evaluate_readiness":
+            return {
+                "headSha": "abc123",
+                "ready": True,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": True,
+                "checksPassing": True,
+                "automatedReviewComplete": True,
+                "jiraStatusAllowed": True,
+            }
+        if activity_type == "merge_automation.complete_post_merge_github":
+            assert payload["resolverDisposition"] == "merged"
+            assert payload["postMergeGithub"]["issueNumber"] == 3143
+            return {
+                "status": "succeeded",
+                "required": True,
+                "confirmedState": "closed",
+                "confirmedLabels": ["status: done"],
+            }
+        raise AssertionError(activity_type)
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow, "upsert_memo", lambda _memo: None
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload_with_post_merge_github())
+
+    assert result["status"] == "merged"
+    assert activity_calls.index("merge_automation.evaluate_readiness") < (
+        activity_calls.index("merge_automation.complete_post_merge_github")
+    )
+    assert result["postMergeGithub"]["confirmedState"] == "closed"
 
 @pytest.mark.asyncio
 async def test_merge_automation_blocks_when_required_post_merge_jira_blocks(
