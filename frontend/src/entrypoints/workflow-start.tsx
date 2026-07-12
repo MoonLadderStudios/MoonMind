@@ -3367,9 +3367,6 @@ function capabilityWidgetName(
     .toLowerCase();
   const aliases: Record<string, string> = {
     checkbox: "boolean",
-    select: "select",
-    "multi-select": "multi-select",
-    json: "json",
     editor: "textarea",
     "github.repository-picker": "repository-picker",
     repository: "repository-picker",
@@ -4404,6 +4401,9 @@ function SchemaCapabilityFields({
           );
         }
         if (widget === "textarea" || widget === "markdown" || widget === "json") {
+          const structuredValue =
+            widget === "json" &&
+            (fieldSchema.type === "array" || fieldSchema.type === "object");
           return (
             <label key={name} htmlFor={inputId}>
               {label}
@@ -4413,7 +4413,14 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, detail.defaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
-                onChange={(event) => onChange(name, event.target.value)}
+                onChange={(event) =>
+                  onChange(
+                    name,
+                    structuredValue
+                      ? parseComplexCapabilityValue(event.target.value)
+                      : event.target.value,
+                  )
+                }
               />
               {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}

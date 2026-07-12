@@ -16240,6 +16240,11 @@ describe("Task Create schema-driven capability inputs", () => {
                     title: "Starts at",
                   },
                   metadata: { type: "object", title: "Metadata" },
+                  json_metadata: {
+                    type: "object",
+                    title: "JSON metadata",
+                    "x-moonmind-widget": "json",
+                  },
                   unsupported_widget: {
                     type: "string",
                     title: "Unsupported widget",
@@ -16941,6 +16946,9 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Metadata"), {
       target: { value: '{"sourceIssue":"MM-1047"}' },
     });
+    fireEvent.change(within(step).getByLabelText("JSON metadata"), {
+      target: { value: '{"review":"structured"}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
@@ -16966,6 +16974,7 @@ describe("Task Create schema-driven capability inputs", () => {
       branch: "feature/mm-1056",
       unsupported_widget: "manual fallback survives",
       metadata: { sourceIssue: "MM-1047" },
+      json_metadata: { review: "structured" },
     });
     expect(request.payload.task.skill?.inputContractDigest).toBe(
       "sha256:current-skill-contract",
