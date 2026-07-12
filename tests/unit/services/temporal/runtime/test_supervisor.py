@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 import signal
+import sys
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -105,9 +106,12 @@ async def test_supervise_terminates_descendant_before_waiting_for_stream_eof(
     _make_record(store, "run-descendant", "launching")
 
     process = await asyncio.create_subprocess_exec(
-        "sh",
+        sys.executable,
         "-c",
-        "sleep 60 & exit 0",
+        (
+            "import os,time; child=os.fork(); "
+            "os._exit(0) if child else time.sleep(60)"
+        ),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
