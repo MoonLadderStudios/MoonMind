@@ -2329,6 +2329,68 @@ class TestFetchResultPushIntegration:
         assert "terminalPublication" not in result.metadata
 
     @pytest.mark.asyncio
+    async def test_terminal_publication_adopts_verified_existing_head(self):
+        """Equivalent remote evidence is adopted without another push."""
+        store = _make_mock_store(failure_class="execution_error")
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        with (
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_remote_branch_sha",
+                new_callable=AsyncMock,
+                return_value="abc123",
+            ),
+            patch.object(
+                activities, "_push_workspace_branch", new_callable=AsyncMock
+            ) as mock_push,
+        ):
+            result = await activities.agent_runtime_publish_terminal_checkpoint(
+                {
+                    "runId": "run-1",
+                    "agentId": "claude",
+                    "failureClass": "execution_error",
+                    "targetBranch": "main",
+                    "existingBranch": "mm/run-1/recovered-work",
+                    "existingHeadSha": "abc123",
+                    "existingPrUrl": "https://github.com/org/repo/pull/1",
+                    "idempotencyKey": "terminal-checkpoint-v1:run-1",
+                }
+            )
+
+        mock_push.assert_not_awaited()
+        assert result.status == "already_published"
+        assert result.remote_verified is True
+        assert result.branch_name == "mm/run-1/recovered-work"
+        assert result.pr_url == "https://github.com/org/repo/pull/1"
+
+    @pytest.mark.asyncio
+    async def test_terminal_publication_no_remote_writes_is_typed_skip(self):
+        activities = TemporalAgentRuntimeActivities(run_store=_make_mock_store())
+        with patch.object(
+            activities, "_push_workspace_branch", new_callable=AsyncMock
+        ) as mock_push:
+            result = await activities.agent_runtime_publish_terminal_checkpoint(
+                {
+                    "runId": "run-1",
+                    "agentId": "claude",
+                    "failureClass": "execution_error",
+                    "noRemoteWrites": True,
+                    "idempotencyKey": "terminal-checkpoint-v1:run-1",
+                }
+            )
+
+        mock_push.assert_not_awaited()
+        assert result.status == "skipped"
+        assert result.reason_code == "remote_writes_disabled"
+        assert result.attempted is False
+
+    @pytest.mark.asyncio
     async def test_terminal_publication_exception_preserves_primary_failure(self):
         store = _make_mock_store(failure_class="execution_error")
         activities = TemporalAgentRuntimeActivities(run_store=store)
