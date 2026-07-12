@@ -632,8 +632,7 @@ class TemporalClientAdapter:
         )
         try:
             handle = client.get_schedule_handle(MANAGED_SESSION_RECONCILE_SCHEDULE_ID)
-            async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
-                del input
+            async def _replace_schedule(_: Any) -> ScheduleUpdate:
                 return ScheduleUpdate(schedule=schedule)
 
             await handle.update(_replace_schedule)

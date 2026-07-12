@@ -274,6 +274,25 @@ def test_mm_949_live_docker_reference_prevents_deletion(tmp_path: Path) -> None:
     assert workspace_decision.reason == "live Docker reference"
 
 
+def test_mm_949_parent_docker_mount_prevents_child_deletion(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    result = _janitor(
+        root,
+        run_store,
+        session_store,
+        docker_state=DockerReferenceState(active_mount_paths=frozenset({str(root)})),
+    ).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "live Docker reference"
+
+
 def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
@@ -301,6 +320,44 @@ def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> N
     assert workspace_decision.classification == "protected_active"
     assert workspace_decision.reason == "failed rescan before delete"
     assert run_root.exists()
+
+
+def test_mm_949_final_rescan_rechecks_filesystem_recency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup
+
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+
+    def touch_during_size_walk(path: Path, **_kwargs: object) -> int:
+        os.utime(path, (RECENT.timestamp(), RECENT.timestamp()))
+        return 0
+
+    monkeypatch.setattr(cleanup, "_path_size", touch_during_size_walk)
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "failed rescan before delete"
+    assert run_root.exists()
+
+
+def test_mm_949_stale_janitor_lock_is_recovered(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    lock_path = root / ".janitor.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("stale-owner", encoding="utf-8")
+    os.utime(lock_path, (OLD.timestamp(), OLD.timestamp()))
+    run_store, session_store = _stores(root)
+
+    result = _janitor(root, run_store, session_store).run()
+
+    assert result.errors == ()
+    assert not lock_path.exists()
 
 
 def test_mm_949_cleanup_emits_progress_during_filesystem_walk(

@@ -305,7 +305,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 delete_budget_exhausted=0,
                 errors=errors,
             )
-        with _JanitorLock(config.lock_path):
+        with _JanitorLock(config.lock_path, stale_after=config.grace):
             return self._run_enabled_pass()
 
     def _run_enabled_pass(self) -> ManagedRuntimeCleanupResult:
@@ -729,7 +729,9 @@ class ManagedRuntimeWorkspaceJanitor:
         if ids.intersection(docker_state.active_container_refs):
             return True
         return any(
-            mount == path or mount.startswith(f"{path.rstrip('/')}/")
+            mount == path
+            or mount.startswith(f"{path.rstrip('/')}/")
+            or path.startswith(f"{mount.rstrip('/')}/")
             for mount in docker_state.active_mount_paths
             for path in paths
         )
@@ -808,9 +810,16 @@ class ManagedRuntimeWorkspaceJanitor:
             return True
         for fresh in current:
             if fresh.kind == candidate.kind and fresh.path == candidate.path:
-                return self._has_active_owner(fresh) or self._has_live_docker_reference(
+                if self._has_active_owner(fresh) or self._has_live_docker_reference(
                     fresh, docker_state
-                )
+                ):
+                    return True
+                newest = self._newest_activity(fresh)
+                retention = self._retention_for(fresh.kind)
+                if newest is None or retention is None:
+                    return True
+                age = self._now() - newest
+                return age < retention or age < self._config.grace
         return self._has_live_docker_reference(candidate, docker_state)
 
     def _delete_candidate(self, candidate: ManagedRuntimeCleanupCandidate) -> None:
@@ -953,13 +962,23 @@ class ManagedRuntimeWorkspaceJanitor:
 
 
 class _JanitorLock:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, stale_after: timedelta) -> None:
         self._path = path
+        self._stale_after = stale_after
         self._fd: int | None = None
 
     def __enter__(self) -> "_JanitorLock":
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            age = datetime.now(tz=UTC) - datetime.fromtimestamp(
+                self._path.stat().st_mtime, tz=UTC
+            )
+            if age < self._stale_after:
+                raise
+            self._path.unlink()
+            self._fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(self._fd, str(os.getpid()).encode("ascii"))
         return self
 

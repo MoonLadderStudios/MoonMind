@@ -1131,6 +1131,10 @@ async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fl
     assert binding.handler.__temporal_activity_definition.name == (
         "agent_runtime.cleanup_managed_runtime_files"
     )
+    route = build_default_activity_catalog().resolve_activity(
+        "agent_runtime.cleanup_managed_runtime_files"
+    )
+    assert route.timeouts.start_to_close_seconds == 1800
 
 def _approved_pentest_scope() -> dict[str, object]:
     now = datetime.now(timezone.utc)

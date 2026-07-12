@@ -10081,7 +10081,7 @@ class TemporalAgentRuntimeActivities:
             "estimated_deleted_bytes=%s skipped_active=%s skipped_recent=%s "
             "skipped_unsafe_path=%s skipped_ambiguous_owner=%s "
             "delete_budget_exhausted=%s errors=%s candidate_samples=%s",
-            not bool(result_payload.get("disabled")),
+            not result_payload.get("disabled", False),
             result_payload.get("dryRun"),
             result_payload.get("scannedRunRecords", 0),
             result_payload.get("scannedSessionRecords", 0),
