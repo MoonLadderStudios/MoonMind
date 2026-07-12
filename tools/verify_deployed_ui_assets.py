@@ -40,6 +40,7 @@ _CHUNK_REF_RE = re.compile(r"assets/[A-Za-z0-9_.-]+\.(?:js|css)")
 
 Fetcher = Callable[[str], tuple[int, bytes]]
 
+
 def _default_fetcher(url: str) -> tuple[int, bytes]:
     request = urllib.request.Request(url, headers={"User-Agent": "moonmind-ui-asset-check"})
     try:
@@ -47,6 +48,9 @@ def _default_fetcher(url: str) -> tuple[int, bytes]:
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, b""
+    except OSError:
+        return 0, b""
+
 
 def extract_page_assets(html: str) -> list[str]:
     """Return script/stylesheet asset URLs referenced by a served page."""
@@ -58,6 +62,7 @@ def extract_page_assets(html: str) -> list[str]:
 def extract_chunk_refs(entry_js: str) -> list[str]:
     """Return hashed chunk paths referenced inside a built entry bundle."""
     return list(dict.fromkeys(_CHUNK_REF_RE.findall(entry_js)))
+
 
 def verify_deployed_ui_assets(
     base_url: str,
@@ -90,15 +95,22 @@ def verify_deployed_ui_assets(
 
     seen: set[str] = set()
     for chunk in chunk_refs:
+        last_url: str | None = None
+        last_status: int | None = None
         for asset_dir in asset_dirs or [page_url]:
             chunk_url = urljoin(asset_dir, chunk)
             if chunk_url in seen:
                 break
-            seen.add(chunk_url)
             chunk_status, _ = fetch(chunk_url)
-            if chunk_status != 200:
-                errors.append(f"Entry bundle references a missing chunk (HTTP {chunk_status}): {chunk_url}")
-            break
+            if chunk_status == 200:
+                seen.add(chunk_url)
+                break
+            last_url = chunk_url
+            last_status = chunk_status
+        else:
+            errors.append(
+                f"Entry bundle references a missing chunk (HTTP {last_status}): {last_url}"
+            )
 
     ui_info_url = urljoin(base_url, UI_INFO_PATH)
     info_status, info_body = fetch(ui_info_url)
@@ -112,6 +124,7 @@ def verify_deployed_ui_assets(
         print(f"Server build id: {build_id or '(unset)'}")
 
     return errors
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -132,6 +145,7 @@ def main() -> int:
         return 1
     print(f"OK: {args.base_url} serves a coherent dashboard asset set for {args.page}")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

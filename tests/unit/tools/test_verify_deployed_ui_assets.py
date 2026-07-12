@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODULE_PATH = REPO_ROOT / "tools" / "verify_deployed_ui_assets.py"
@@ -86,3 +88,36 @@ def test_unreachable_page_fails_fast() -> None:
         BASE, fetch=_fetcher({})
     )
     assert errors == [f"Page {BASE}/workflows returned HTTP 404"]
+
+
+def test_multiple_asset_dirs_resolves_chunk_from_secondary_directory() -> None:
+    responses = _coherent_responses()
+    responses[f"{BASE}/workflows"] = (
+        200,
+        PAGE_HTML.replace(
+            "</head>",
+            '<script type="module" src="/static/other_console/dist/assets/other-AAA.js"></script></head>',
+        ).encode(),
+    )
+    responses[f"{BASE}/static/other_console/dist/assets/other-AAA.js"] = (
+        200,
+        b'const chunk="assets/other-chunk.js";',
+    )
+    responses[f"{BASE}/static/other_console/dist/assets/other-chunk.js"] = (
+        200,
+        b"// other chunk",
+    )
+
+    errors = verify_deployed_ui_assets.verify_deployed_ui_assets(
+        BASE, fetch=_fetcher(responses)
+    )
+
+    assert errors == []
+
+
+def test_default_fetcher_maps_network_errors_to_zero_status() -> None:
+    with patch(
+        "verify_deployed_ui_assets.urllib.request.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ):
+        assert verify_deployed_ui_assets._default_fetcher(BASE) == (0, b"")
