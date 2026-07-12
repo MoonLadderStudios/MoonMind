@@ -838,8 +838,11 @@ steps:
     instruction as the controlling instruction for this step only. If the workflow is
     submitted with PR merge automation enabled, the parent workflow must use the pull
     request URL produced by this step as the published PR and then run merge automation
-    against that PR; on a successful merge the parent workflow will transition {{
-    inputs.issue_provider }} issue {{ inputs.issue_ref }} to Done automatically. If
+    against that PR; {% if inputs.issue_provider == "github" %}the required closing
+    keyword in the pull request body makes the successful merge the authoritative
+    Done transition for issue {{ inputs.issue_ref }}{% else %}on a successful merge
+    the parent workflow will transition {{ inputs.issue_provider }} issue {{
+    inputs.issue_ref }} to Done automatically{% endif %}. If
     the runtime instructions, workflow parameters, authentication, remote configuration,
     branch protection, or repository permissions prevent committing, pushing, or creating
     the pull request in this step, stop before changing Jira to Review and report
@@ -863,6 +866,10 @@ steps:
     must include:
 
     - the issue reference
+
+    - {% if inputs.issue_provider == "github" %}a standalone `Closes {{ inputs.issue_ref
+    }}` line so GitHub closes the issue only after the pull request merges{% else %}the
+    issue tracker reference required by the configured review transition{% endif %}
 
     - a summary of the implementation
 

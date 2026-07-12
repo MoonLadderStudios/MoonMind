@@ -766,6 +766,60 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/explicit_github_preset.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "title": "Implement GitHub issue",
+                "instructions": (
+                    "Implement GitHub issue MoonLadderStudios/MoonMind#3143."
+                ),
+                "taskTemplate": {
+                    "slug": "github-issue-implement",
+                    "scope": "global",
+                },
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    },
+                    "run_verify": True,
+                },
+            }
+            await _expand_goal_preset_for_workflow_submission(
+                task_payload=task_payload,
+                request_payload={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+                session=session,
+                user_id=uuid4(),
+            )
+    finally:
+        await engine.dispose()
+
+    assert len(task_payload["steps"]) == 20
+    assert task_payload["steps"][0]["tool"]["id"] == (
+        "github.load_issue_preset_brief"
+    )
+    assert task_payload["steps"][-1]["tool"]["id"] == (
+        "github.update_issue_status"
+    )
+    assert task_payload["appliedStepTemplates"][0]["slug"] == (
+        "github-issue-implement"
+    )
+    assert "Closes MoonLadderStudios/MoonMind#3143" in task_payload["steps"][-2][
+        "instructions"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_goal_preset_submission_uses_default_runtime_for_composite_context(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

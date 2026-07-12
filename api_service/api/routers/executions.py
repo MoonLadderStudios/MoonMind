@@ -62,11 +62,15 @@ from moonmind.statuses.compat import (
 )
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
+from moonmind.workflows.executions.preset_expansion import (
+    expand_preset_for_child_run,
+    has_unexpanded_task_template,
+)
+from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.title_derivation import (
     is_generic_title,
     synthesize_workflow_title,
 )
-from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
@@ -7974,6 +7978,26 @@ async def _expand_goal_preset_for_workflow_submission(
     session: Any,
     user_id: Any,
 ) -> None:
+    if has_unexpanded_task_template({"workflow": task_payload}):
+        expanded_parameters = await expand_preset_for_child_run(
+            session=session,
+            initial_parameters={
+                "workflow": task_payload,
+                "repository": request_payload.get("repository"),
+                "targetRuntime": request_payload.get("targetRuntime"),
+            },
+            allow_goal_schedule=False,
+            user_id=user_id,
+        )
+        expanded_task = expanded_parameters.get("workflow")
+        if not isinstance(expanded_task, Mapping):
+            raise _invalid_workflow_request(
+                "Explicit preset expansion did not produce a workflow payload."
+            )
+        task_payload.clear()
+        task_payload.update(expanded_task)
+        return
+
     if workflow_is_already_authored(task_payload):
         return
 
