@@ -1724,6 +1724,7 @@ ReadinessBlockerKind = Literal[
     "manual_review",
     "failed",
     "resolver_disposition_invalid",
+    "resolver_continuation_invalid",
 ]
 
 class ReadinessBlockerModel(BaseModel):

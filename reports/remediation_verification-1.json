@@ -3,14 +3,21 @@
   "attempt": 1,
   "remediationAttempt": 1,
   "verifiesRemediationAttempt": 1,
-  "issueRef": "MM-1205",
-  "verificationTarget": "issue_brief",
   "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "authoritativeVerificationArtifact": "artifacts/jira-implement-verify.json",
-  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "authoritativeVerifierArtifact": "artifacts/jira-implement-verify.json",
+  "verificationTarget": "issue_brief",
+  "issueRef": "MM-1209",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
-  "summary": "Remediation attempt 1 is verified against the whole MM-1205 target state. All repository-verifiable requirements and controlling checks pass; external staging and deployed-asset checks are disclosed scope exclusions."
+  "summary": "Attempt 1 corrected fail-closed failure handling, direct-finalizer timing, and much of the typed ownership envelope. The whole target state remains incomplete because full real-workflow topology coverage, Temporal replay fixtures, complete identity binding, observability/counters, and documentation closeout remain.",
+  "remainingWork": [
+    "Full real MergeAutomation -> UserWorkflow -> AgentRun topology and adverse-variant tests",
+    "Old/new/legacy/rejected Temporal replay fixtures",
+    "Authoritative child run and execution-reference binding",
+    "Complete continuation attempt evidence and counters",
+    "Terminal-contract and managed-runtime documentation closeout"
+  ],
+  "remainingWorkRef": "artifacts/jira-implement-verify.json#/remainingWork"
 }

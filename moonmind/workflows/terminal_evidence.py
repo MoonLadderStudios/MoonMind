@@ -78,6 +78,7 @@ def evaluate_terminal_evidence(
         metadata = {
             "terminalContractId": contract_id,
             "terminalContractEvidencePath": normalized_relative,
+            "terminalContractExecutionRef": expected_execution,
             "mergeAutomationDisposition": disposition,
         }
         if not expected_execution or evidence_execution != expected_execution:

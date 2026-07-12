@@ -136,6 +136,13 @@ request without reimplementing review or CI semantics. Standalone and
 parent-mismatched handoffs fail closed, and detached polling after agent exit is
 unsupported.
 
+New handoffs bind the complete authority tuple: owner workflow ID, owner run ID,
+registered owner workflow type, resolver child workflow ID, resolver child run
+ID, step execution reference, and head SHA. The direct finalizer copies the
+existing Codex review-grace `expiresAt` into `notBefore`; it does not restart the
+grace period. Legacy untimed evidence is accepted only through the recorded
+fallback path and is reported as `legacy_continuation_fallback_used`.
+
 The canonical workflow terminal dispositions are `merged`, `already_merged`,
 `manual_review`, and `failed`. Intermediate waits and remediation dispatches stay
 inside workflow state and are not terminal agent dispositions.

@@ -132,7 +132,13 @@ Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDispos
 - `reenter_gate`: the current resolver child completed a typed handoff to its
   validated `MoonMind.MergeAutomation` parent. Include `gatedContinuation` with
   the reason and an absolute UTC `notBefore` deadline when the next cycle must
-  wait. Standalone resolvers cannot use this disposition successfully.
+  wait. For Codex review grace, the direct finalizer copies the snapshot's
+  original `codexReviewGrace.expiresAt`; it never restarts that deadline.
+  Standalone resolvers cannot use this disposition successfully. Provider,
+  authentication, rate-limit, infrastructure, timeout, cancellation, stale
+  evidence, and malformed evidence failures are never cleared by continuation
+  metadata; only the synthetic `PR_RESOLVER_REENTER_GATE` classification may be
+  cleared by an authorized handoff.
 - `manual_review`: the resolver stopped on a blocker, exhausted attempts, or needs human follow-up.
 - `failed`: the resolver hit a hard execution failure.
 

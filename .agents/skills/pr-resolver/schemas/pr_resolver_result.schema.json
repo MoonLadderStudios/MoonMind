@@ -41,11 +41,10 @@
         "evidenceRefs": { "type": "object", "additionalProperties": { "type": "string" } },
         "budget": { "type": "object" }
       },
-      "required": ["schemaVersion", "gateType", "action", "reason"],
+      "required": ["schemaVersion", "gateType", "action", "reason", "executionRef", "headSha"],
       "oneOf": [
         { "required": ["notBefore"], "not": { "required": ["retryAfterSeconds"] } },
-        { "required": ["retryAfterSeconds"], "not": { "required": ["notBefore"] } },
-        { "not": { "anyOf": [{ "required": ["notBefore"] }, { "required": ["retryAfterSeconds"] }] } }
+        { "required": ["retryAfterSeconds"], "not": { "required": ["notBefore"] } }
       ]
     },
     "reason": {
@@ -94,6 +93,10 @@
     {
       "if": { "required": ["gatedContinuation"] },
       "then": { "properties": { "mergeAutomationDisposition": { "const": "reenter_gate" } } }
+    },
+    {
+      "if": { "properties": { "mergeAutomationDisposition": { "const": "reenter_gate" } }, "required": ["mergeAutomationDisposition"] },
+      "then": { "required": ["gatedContinuation"] }
     }
   ]
 }

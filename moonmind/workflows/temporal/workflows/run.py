@@ -331,6 +331,9 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
+RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = (
+    "run-pr-resolver-continuation-identity-v1"
+)
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -1133,6 +1136,7 @@ class MoonMindRunWorkflow:
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
         self._gated_continuation_request: Optional[dict[str, Any]] = None
+        self._gated_continuation_execution_ref: Optional[str] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -7444,6 +7448,27 @@ class MoonMindRunWorkflow:
             output_status, output_message, publish_failure = (
                 self._determine_publish_completion(parameters=parameters)
             )
+            if (
+                publish_failure
+                and workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH)
+                and self._is_merge_automation_gated(parameters)
+                and (
+                    (
+                        self._gated_continuation_request
+                        and self._gated_continuation_failure_message(parameters) is None
+                    )
+                    or self._merge_automation_disposition
+                    in {"merged", "already_merged"}
+                )
+            ):
+                output_status = "success"
+                output_message = (
+                    "Workflow completed an authoritative durable continuation "
+                    "handoff to merge automation."
+                    if self._gated_continuation_request
+                    else "Workflow completed authoritative PR resolver terminal evidence."
+                )
+                publish_failure = False
             if publish_failure:
                 finalizing_status = "failed"
                 finalizing_error = output_message
@@ -7533,9 +7558,25 @@ class MoonMindRunWorkflow:
         if self._merge_automation_disposition:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
-            output["gatedContinuation"] = dict(self._gated_continuation_request)
+            gated_continuation = dict(self._gated_continuation_request)
             if workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH):
+                parent_info = workflow.info().parent
+                if parent_info is not None and self._is_merge_automation_gated(parameters):
+                    gated_continuation.update(
+                        {
+                            "ownerWorkflowId": parent_info.workflow_id,
+                            "ownerRunId": parent_info.run_id,
+                            "ownerWorkflowType": "MoonMind.MergeAutomation",
+                            "childWorkflowId": workflow.info().workflow_id,
+                            "childRunId": workflow.info().run_id,
+                        }
+                    )
                 output["completionDisposition"] = "gated_continuation"
+            output["gatedContinuation"] = gated_continuation
+            if workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH):
+                output["executionRef"] = self._gated_continuation_execution_ref
+                output["childRunId"] = gated_continuation.get("childRunId")
+                output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -12452,6 +12493,10 @@ class MoonMindRunWorkflow:
             node_id=node_id,
         )
         self._gated_continuation_request = gated_continuation
+        self._gated_continuation_execution_ref = self._coerce_text(
+            outputs.get("terminalContractExecutionRef"),
+            max_chars=240,
+        )
         if gated_continuation:
             self._publish_context["gatedContinuation"] = gated_continuation
         else:
@@ -14689,6 +14734,18 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if (
+            self._workflow_patch_enabled(
+                RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH
+            )
+            and isinstance(workflow_parameters, Mapping)
+        ):
+            merge_gate = workflow_parameters.get("mergeGate")
+            if isinstance(merge_gate, Mapping):
+                parameters["mergeGate"] = self._json_mapping(
+                    merge_gate,
+                    path="workflow.mergeGate",
+                )
         raw_omnigent_parameters = runtime_block.get("omnigent")
         if raw_omnigent_parameters is None:
             raw_omnigent_parameters = node_inputs.get("omnigent")
@@ -15402,7 +15459,8 @@ class MoonMindRunWorkflow:
                 "schemaVersion": "terminal-continuation-authority/v1",
                 "gateType": "merge_automation",
                 "ownerWorkflowId": parent_info.workflow_id,
-                "ownerRunId": getattr(parent_info, "run_id", None),
+                "ownerRunId": parent_info.run_id,
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
                 "allowedActions": ["reenter_gate"],
                 "source": "validated_temporal_parent",
             }
