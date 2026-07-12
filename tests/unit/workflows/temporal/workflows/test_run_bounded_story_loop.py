@@ -159,6 +159,16 @@ def test_workflow_payload_records_compiled_bounded_story_loop_context() -> None:
         ],
         "publishMode": "pr",
         "mergeAutomationEnabled": True,
+        "budgets": {
+            "maxAttempts": 3,
+            "maxConsecutiveNoProgressAttempts": 2,
+            "maxRepeatedFailedCommands": 2,
+            "maxUnsafeOrPolicyDeniedAttempts": 0,
+            "providerBudget": None,
+            "tokenBudget": None,
+            "costBudget": None,
+            "consumed": {},
+        },
         "scopeGuard": {"allowed": True, "reason": "selected_item_only"},
     }
 
@@ -185,8 +195,11 @@ def test_workflow_payload_rejects_full_supervisor_for_bounded_story_loop() -> No
         )
 
 
-def test_parent_loop_continues_from_structured_gate_when_remediation_remains() -> None:
+def test_parent_loop_continues_from_structured_gate_when_remediation_remains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _: True)
     workflow._step_ledger_rows = [
         {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}}
     ]
@@ -231,8 +244,11 @@ def test_parent_loop_continues_from_structured_gate_when_remediation_remains() -
     assert decision["gate"]["progressSignature"]
 
 
-def test_parent_loop_stops_when_verification_makes_no_progress() -> None:
+def test_parent_loop_stops_when_verification_makes_no_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _: True)
     workflow._step_ledger_rows = [
         {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}},
         {"logicalStepId": "verify-2", "attempt": 1, "artifacts": {}},
@@ -286,8 +302,11 @@ def test_parent_loop_stops_when_verification_makes_no_progress() -> None:
     assert second["hasRemainingRemediationStep"] is True
 
 
-def test_parent_loop_continues_when_verification_progress_changes() -> None:
+def test_parent_loop_continues_when_verification_progress_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _: True)
     workflow._step_ledger_rows = [
         {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}},
         {"logicalStepId": "verify-2", "attempt": 1, "artifacts": {}},
@@ -340,6 +359,144 @@ def test_parent_loop_continues_when_verification_progress_changes() -> None:
     assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
     assert second["continueLoop"] is True
     assert second["reason"] == "verification_requested_remediation"
+
+
+def test_parent_loop_progress_tracks_remaining_work_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _: True)
+    workflow._step_terminal_dispositions.update(
+        {"verify-1": "accepted", "verify-2": "accepted"}
+    )
+    ordered_nodes = [
+        {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-1",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+    ]
+    first = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            remaining_work_ref="artifact://remaining/one",
+        ),
+        gate_result_ref="artifact://gate/one",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    second = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            remaining_work_ref="artifact://remaining/two",
+        ),
+        gate_result_ref="artifact://gate/two",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert second["continueLoop"] is True
+
+
+def test_parent_loop_honors_configured_no_progress_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _: True)
+    workflow._publish_context["boundedStoryLoop"] = {
+        "budgets": {"maxConsecutiveNoProgressAttempts": 2}
+    }
+    workflow._step_terminal_dispositions.update(
+        {"verify-1": "accepted", "verify-2": "accepted"}
+    )
+    ordered_nodes = [
+        {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-1",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+    ]
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        remaining_work_ref="artifact://remaining/same",
+    )
+    workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/one",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    second = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/two",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert second["continueLoop"] is True
+
+
+def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_terminal_dispositions.update(
+        {"verify-1": "accepted", "verify-2": "accepted"}
+    )
+    ordered_nodes = [
+        {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-1",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+    ]
+    gate = StepGateResult(verdict="ADDITIONAL_WORK_NEEDED")
+    workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref=None,
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    second = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=gate,
+        gate_result_ref=None,
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert second["continueLoop"] is True
 
 
 def test_parent_loop_continues_to_scheduled_remediation_without_remaining_work_ref() -> None:

@@ -579,6 +579,9 @@ RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH = (
     "run-moonspec-title-remediation-detection-v1"
 )
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
+RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
+    "run-bounded-story-loop-progress-budget-v1"
+)
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
     "run-moonspec-gate-contract-repair-fresh-source-v1"
 )
@@ -5620,6 +5623,7 @@ class MoonMindRunWorkflow:
         gate_result: StepGateResult,
         gate_result_ref: str | None,
         logical_step_id: str,
+        progress_budget_enabled: bool,
     ) -> TypedGateResult:
         terminal = self._step_terminal_dispositions.get(logical_step_id)
         terminal_disposition = (
@@ -5628,6 +5632,8 @@ class MoonMindRunWorkflow:
         progress_payload = {
             "verdict": gate_result.verdict,
             "issues": [dict(issue) for issue in gate_result.issues],
+            "remainingWorkRef": gate_result.remaining_work_ref,
+            "blockingEvidenceRefs": list(gate_result.blocking_evidence_refs),
             "recommendedNextAction": gate_result.recommended_next_action,
             "workspacePolicyRecommendation": (
                 gate_result.workspace_policy_recommendation
@@ -5655,7 +5661,9 @@ class MoonMindRunWorkflow:
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
                 ),
-                "progressSignature": progress_signature,
+                "progressSignature": (
+                    progress_signature if progress_budget_enabled else None
+                ),
                 "degraded": gate_result.degraded,
             }
         )
@@ -5721,10 +5729,14 @@ class MoonMindRunWorkflow:
             ordered_nodes=ordered_nodes,
             current_index=current_index,
         )
+        progress_budget_enabled = self._patched_or_false_outside_workflow(
+            RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH
+        )
         gate = self._bounded_story_loop_gate_from_step_gate(
             gate_result=gate_result,
             gate_result_ref=gate_result_ref,
             logical_step_id=logical_step_id,
+            progress_budget_enabled=progress_budget_enabled,
         )
         attempt = self._bounded_story_loop_attempt_for_gate(
             logical_step_id=logical_step_id,
@@ -5741,13 +5753,21 @@ class MoonMindRunWorkflow:
                         prior_gate.get("progressSignature") or ""
                     ).strip() or None
         repeated_progress = bool(
-            gate.progress_signature
+            progress_budget_enabled
+            and gate.progress_signature
             and prior_progress_signature == gate.progress_signature
         )
+        max_no_progress_attempts = 1
+        if progress_budget_enabled and isinstance(loop_context, Mapping):
+            loop_budgets = loop_context.get("budgets")
+            if isinstance(loop_budgets, Mapping):
+                max_no_progress_attempts = int(
+                    loop_budgets.get("maxConsecutiveNoProgressAttempts") or 1
+                )
         budget = LoopBudget.model_validate(
             {
                 "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": max_no_progress_attempts,
                 "maxRepeatedFailedCommands": 1,
                 "maxUnsafeOrPolicyDeniedAttempts": 1,
                 "consumed": {
@@ -7695,6 +7715,7 @@ class MoonMindRunWorkflow:
             "nodeKinds": [node.kind for node in compiled.nodes],
             "publishMode": loop_input.publish_mode,
             "mergeAutomationEnabled": loop_input.merge_automation_enabled,
+            "budgets": loop_input.budgets.model_dump(by_alias=True, mode="json"),
             "scopeGuard": scope,
         }
 
