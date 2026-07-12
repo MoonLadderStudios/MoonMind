@@ -620,12 +620,20 @@ class ManagedRunSupervisor:
         pure process liveness and is intentionally ignored by that watchdog.
         """
         while True:
+            if process.returncode is not None:
+                return process.returncode
             try:
                 exit_code = await asyncio.wait_for(
                     process.wait(), timeout=HEARTBEAT_INTERVAL
                 )
                 return exit_code
             except asyncio.TimeoutError:
+                # asyncio's subprocess wait can remain blocked until inherited
+                # stdout/stderr pipes close even after the direct child exits.
+                # The transport still publishes returncode at child exit, which
+                # lets the caller clean up descendants before awaiting streams.
+                if process.returncode is not None:
+                    return process.returncode
                 if no_output_callback is not None:
                     await no_output_callback(datetime.now(tz=UTC))
                 try:
