@@ -333,14 +333,15 @@ samp {
    * and its presence/absence stops changing the masthead height. */
   padding: 0.12rem;
   /* Same highlight-edge treatment as the primary nav buttons: a bright
-   * top-edge inset that wraps the rounded corners plus a soft accent
-   * under-glow, with no flat 1px perimeter ring. */
+   * top-edge inset, a hairline ring that closes the shape so the bottom edge
+   * reads as lit, and an accent under-glow. */
   border: 0;
   border-radius: 0.5rem;
   background: transparent;
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.2),
-    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+    inset 0 1px 0 rgb(255 255 255 / 0.26),
+    0 0 0 1px rgb(255 255 255 / 0.34),
+    0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
 }
 
 /* Sliding selection thumb, echoing the create page's segmented control: the
@@ -672,17 +673,20 @@ h1 {
 }
 
 /* Workflows and Create adopt the System trigger's original highlight-edge
- * treatment: a bright top-edge inset that wraps the rounded corners plus a
- * soft accent under-glow, with no flat 1px perimeter ring. Scoped to
+ * treatment: a bright top-edge inset, a hairline ring that closes the shape
+ * (so the bottom edge reads as lit, not open), and an accent under-glow. The
+ * mid-strength idle glow alone is too diffuse to register against the
+ * masthead's glass fill, so the ring carries the bottom-edge light. Scoped to
  * `.route-nav-primary` so the System popover menu items — which also match
- * `.route-nav a` — keep their flat menu-row look. Both shadows are
+ * `.route-nav a` — keep their flat menu-row look. All three shadows are
  * non-layout-affecting, so the link box height, and thus the active underline
  * on the masthead edge, is unchanged. Higher-specificity :hover /
  * :focus-visible / .active rules still win, so those states are preserved. */
 .route-nav-primary a {
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.2),
-    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+    inset 0 1px 0 rgb(255 255 255 / 0.26),
+    0 0 0 1px rgb(255 255 255 / 0.34),
+    0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
 }
 
 .route-nav-icon {
@@ -739,16 +743,17 @@ h1 {
   padding: 0.48rem 0.82rem;
   border: 0;
   border-radius: 0.5rem;
-  /* Highlight-edge button: transparent fill with a bright top-edge inset that
-   * wraps the rounded corners plus a soft accent under-glow (the trigger's
-   * original look, stated explicitly rather than inherited from the global
-   * button rule). Both shadows are non-layout-affecting, so the box size — and
-   * therefore the active underline position on the masthead's bottom edge — is
-   * unchanged. */
+  /* Highlight-edge button: transparent fill with a bright top-edge inset, a
+   * hairline ring that closes the shape so the bottom edge reads as lit, and
+   * an accent under-glow (the trigger's original look, stated explicitly
+   * rather than inherited from the global button rules). All three shadows
+   * are non-layout-affecting, so the box size — and therefore the active
+   * underline position on the masthead's bottom edge — is unchanged. */
   background: transparent;
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.2),
-    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+    inset 0 1px 0 rgb(255 255 255 / 0.26),
+    0 0 0 1px rgb(255 255 255 / 0.34),
+    0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
   color: rgb(var(--mm-ink) / 0.82);
   font: inherit;
   font-size: 0.9rem;
