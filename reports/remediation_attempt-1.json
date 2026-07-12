@@ -1,77 +1,79 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueRef": "MM-1201",
+  "issueRef": "MM-1207",
   "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
   "status": "partial",
-  "summary": "Moved terminal evidence enforcement to the runtime-neutral AgentRun activity boundary, made terminal-contract compilation metadata-driven, added an isolated five-target external-workspace subprocess journey, and repaired the required reliability file. Provider-adapter-local bounded continuation and full UI/projection coherence coverage remain open.",
+  "summary": "Fixed the reported Settings UI capacity gap for Codex OAuth profiles. The broader profile-bound Omnigent host lifecycle remains unimplemented and is explicitly retained below.",
   "changedFiles": [
-    ".agents/skills/batch-workflows/SKILL.md",
-    "moonmind/workflows/temporal/activity_runtime.py",
-    "moonmind/workflows/temporal/workflows/agent_run.py",
-    "moonmind/workflows/temporal/workflows/run.py",
-    "tests/integration/reliability/test_escaped_failure_journeys.py",
-    "tests/unit/test_batch_workflows.py",
-    "tests/unit/workflows/temporal/test_agent_runtime_activities.py"
+    "frontend/src/components/settings/ProviderProfilesManager.tsx",
+    "frontend/src/components/settings/ProviderProfilesManager.test.tsx",
+    "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Runtime-neutral terminal evidence authority",
+      "requirement": "Codex OAuth max_parallel_runs=1 enforcement",
       "status": "partial",
-      "evidence": "AgentRun now invokes agent_runtime.evaluate_terminal_evidence for every typed terminal contract; contract compilation no longer checks the batch contract ID.",
-      "remaining": "Bounded same-session continuation is still performed inside CodexSessionAdapter and must move above provider adapters with replay-safe workflow versioning."
+      "resolved": "Settings renders capacity as fixed at one, forces one in save payloads, and has focused component coverage. Existing create/update backend row validation rejects other values.",
+      "remaining": "Seed repair/migration readiness, runtime selection, host allocation, reconnect, disconnect, and their lifecycle tests remain missing."
     },
     {
-      "requirement": "External repository isolation and five-target fan-out",
-      "status": "resolved",
-      "evidence": "A subprocess test runs the materialized snapshot from an external repository with a conflicting repo-owned helper and moonmind/api_service import traps; THOR-705 through THOR-709 produce five POSTs, five unique idempotency keys, and identity-bound evidence."
+      "requirement": "Shared capacity lane for direct, Omnigent, and maintenance consumers",
+      "status": "unresolved",
+      "remaining": "Wire all consumers to provider-profile-manager:codex_cli with retry-idempotent acquisition and release-last semantics."
     },
     {
-      "requirement": "Helper failure and outcome matrix",
-      "status": "partial",
-      "evidence": "Existing helper/evaluator tests cover stale, malformed, missing, partial, failed, zero-target, runtime normalization, idempotency construction, and publish-mode behavior; the new subprocess journey covers successful HTTP fan-out.",
-      "remaining": "Dedicated subprocess cases for endpoint unavailable, failure after two POSTs, missing runtime identity, and rerun artifact replacement remain to be consolidated into one outcome-matrix test."
+      "requirement": "Safe runtime-neutral auth, mount, binding, generation, and host lease refs",
+      "status": "unresolved",
+      "remaining": "Add the verifier-listed secret-free schemas, persistence, ownership checks, and generation validation."
     },
     {
-      "requirement": "Parent failure and coherent projections",
-      "status": "partial",
-      "evidence": "AgentRun converts completed prose without terminal evidence into AgentRunResult failureClass=execution_error before returning to the root workflow; existing root workflow integration tests covering structured result failure pass.",
-      "remaining": "No new end-to-end assertion jointly proves finishOutcome, mm_state, closeStatus, step ledger, dashboard projection, diagnostics, queued-child count, and partial child IDs."
+      "requirement": "Destination OAuth-home materialization and Codex preflight",
+      "status": "unresolved",
+      "remaining": "Mount and prepare only the selected OAuth home, clear competing credentials, and run the redacted destination preflight and generation checks."
     },
     {
-      "requirement": "Runtime orchestration coverage",
-      "status": "partial",
-      "evidence": "Runtime-neutral activity coverage proves completed prose cannot satisfy a contract, and existing Codex adapter tests cover bounded recovery/exhaustion.",
-      "remaining": "Successful recovery, exhaustion, and a runtime without continuation support are not yet tested through the same runtime-neutral AgentRun orchestration boundary."
+      "requirement": "Static and on-demand profile-bound Omnigent hosts",
+      "status": "unresolved",
+      "remaining": "Add the dedicated Compose host and idempotent on-demand launcher using one binding/readiness contract."
     },
     {
-      "requirement": "Required reliability replay passes and exercises the real journey",
+      "requirement": "Profile-aware routing and bridge authorization",
+      "status": "unresolved",
+      "remaining": "Resolve executionProfileRef to the exact leased host, validate generation, reject unrelated manual targets, and persist safe routing refs before session use."
+    },
+    {
+      "requirement": "Reconnect, disconnect, cleanup ordering, and reconciliation",
+      "status": "unresolved",
+      "remaining": "Implement drain, generation increment, stale-host invalidation, release-last cleanup, and idempotent recovery for the verifier-listed failure cases."
+    },
+    {
+      "requirement": "Cooldown attribution and lifecycle diagnostics",
+      "status": "unresolved",
+      "remaining": "Attribute failures to the profile, fail closed, drain the host, and publish secret-safe lifecycle and cleanup evidence."
+    },
+    {
+      "requirement": "Checkpoint, reattach, restore, and branch isolation",
+      "status": "unresolved",
+      "remaining": "Persist safe identity refs only and implement generation-aware live reattach, newly leased cold restore, and exclusive branches."
+    },
+    {
+      "requirement": "Required boundary and combined-stack verification",
       "status": "partial",
-      "evidence": "The required reliability_journey file now passes 3/3 and its stale workspace fixture uses the current sandbox authority contract.",
-      "remaining": "The MM-1201 replay still directly evaluates the fixture rather than executing root finalization and persisted projection."
+      "resolved": "Focused Settings component coverage passes.",
+      "remaining": "Add the verifier-listed unit, workflow-boundary, hermetic integration, and combined-stack coverage for the still-missing runtime lifecycle."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/test_batch_workflows.py tests/unit/workflows/test_terminal_evidence.py tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/api/test_batch_workflows_preset.py",
-      "result": "PYTHON_PASS_WRAPPER_UI_FAIL",
-      "details": "242 Python tests passed. The automatically appended full UI suite had 1000 passed, 238 skipped, and 2 unrelated failures in dashboard schedule routing and workflow-list focus timeout; this reproduces verifier-recorded wrapper noise and does not touch MM-1201 files."
+      "command": "npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx",
+      "result": "PASS",
+      "details": "56 tests passed."
     },
     {
-      "command": "pytest tests/integration/reliability/test_escaped_failure_journeys.py -q --tb=short",
-      "result": "PASS",
-      "details": "3 passed."
-    },
-    {
-      "command": "pytest tests/unit/workflows/temporal/workflows/test_run_integration.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py -q --tb=short",
-      "result": "PASS",
-      "details": "150 passed."
-    },
-    {
-      "command": "python -m py_compile moonmind/workflows/temporal/workflows/agent_run.py moonmind/workflows/temporal/activity_runtime.py && git diff --check",
-      "result": "PASS",
-      "details": "Compilation and whitespace validation passed."
+      "command": "git diff --check",
+      "result": "PASS"
     }
   ]
 }
