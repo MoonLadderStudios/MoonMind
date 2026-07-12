@@ -14735,7 +14735,9 @@ class MoonMindRunWorkflow:
             if param_val is not None:
                 parameters[param_key] = param_val
         if (
-            workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH)
+            self._workflow_patch_enabled(
+                RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH
+            )
             and isinstance(workflow_parameters, Mapping)
         ):
             merge_gate = workflow_parameters.get("mergeGate")
