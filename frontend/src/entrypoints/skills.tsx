@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import { marked } from 'marked';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -493,7 +494,7 @@ function SkillDetail({
         <div className="space-y-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-              Skill Preview
+              Skill Details
             </p>
             <h3 ref={detailHeadingRef} tabIndex={-1} className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
               {selectedSkill.label ?? selectedSkill.id}
@@ -831,19 +832,17 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
   };
 
   const pageHeader = (
-    <header className="flex items-start justify-between gap-4 px-1 sm:px-0">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-          Agent Skills
-        </p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl dark:text-white">
-          Skills
-        </h2>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-          Inspect runtime-visible skills and create local additions without the legacy dashboard renderer.
-        </p>
-      </div>
-      <button ref={drawerTriggerRef} type="button" className="queue-submit-primary shrink-0" onClick={openDrawer}>Create New Skill</button>
+    <header className="flex items-center justify-end gap-4 px-1 sm:px-0">
+      <button
+        ref={drawerTriggerRef}
+        type="button"
+        className="skills-create-button shrink-0"
+        onClick={openDrawer}
+        aria-label="Create New Skill"
+        title="Create New Skill"
+      >
+        <Plus size={20} aria-hidden="true" />
+      </button>
     </header>
   );
 

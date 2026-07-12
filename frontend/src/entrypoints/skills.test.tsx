@@ -338,7 +338,6 @@ describe('Skills Entrypoint', () => {
 
     renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
-    expect(screen.getByRole('heading', { name: 'Skills' })).toBeTruthy();
     expect(screen.getByText('Loading skills...')).toBeTruthy();
     expect(screen.getByText('Skills preview loading placeholder').closest('[role="status"]')).toBeTruthy();
   });

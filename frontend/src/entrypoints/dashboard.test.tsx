@@ -416,8 +416,8 @@ describe('Dashboard shared entry', () => {
     ]);
     expect(screen.queryByRole('link', { name: 'Recurring' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Skills' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
 
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
@@ -425,8 +425,8 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('menuitem', { name: 'Recurring' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
     expect(screen.getByText('Workflow resources')).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'RAG / Manifests' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Artifacts / Observability' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Artifacts' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
 
@@ -484,16 +484,16 @@ describe('Dashboard shared entry', () => {
   });
 
   it.each([
-    '/manifests',
-    '/artifacts/example',
-    '/observability/example',
-    '/remediations/example',
-    '/settings/providers',
-    '/schedules',
-    '/schedules/nightly-build',
-    '/skills',
-    '/skills/speckit-orchestrate',
-  ])('MM-1200 marks System active for the child route %s', (path) => {
+    ['/manifests', 'Manifests'],
+    ['/artifacts/example', 'Artifacts'],
+    ['/observability/example', 'Artifacts'],
+    ['/remediations/example', 'Remediation'],
+    ['/settings/providers', 'Settings'],
+    ['/schedules', 'Recurring'],
+    ['/schedules/nightly-build', 'Recurring'],
+    ['/skills', 'Skills'],
+    ['/skills/speckit-orchestrate', 'Skills'],
+  ])('MM-1200 marks the System menu active and relabels it for the child route %s', (path, label) => {
     renderWithClient(
       <MemoryRouter initialEntries={[path]}>
         <nav aria-label="Test navigation">
@@ -506,7 +506,11 @@ describe('Dashboard shared entry', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('button', { name: 'System' }).classList.contains('active')).toBe(true);
+    // The trigger takes on the active selection's one-word label in place of
+    // "System" while carrying the active underline treatment.
+    const trigger = screen.getByRole('button', { name: label });
+    expect(trigger.classList.contains('active')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Workflows' }).classList.contains('active')).toBe(false);
   });
 
@@ -586,8 +590,8 @@ describe('Dashboard shared entry', () => {
     // Recurring and Skills render as normal inline links, not a nested popover.
     expect(within(inline).getByRole('link', { name: 'Recurring' })).toBeTruthy();
     expect(within(inline).getByRole('link', { name: 'Skills' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'RAG / Manifests' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Artifacts / Observability' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Manifests' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Artifacts' })).toBeNull();
   });
 
   it('MM-1192 traps mobile navigation focus, locks scrolling, and restores focus on Escape', async () => {
@@ -3414,8 +3418,11 @@ describe('Dashboard shared entry', () => {
       'utf8',
     );
 
+    // Equal-weight side columns keep the middle nav column centered on the
+    // masthead so Workflows / Create / System never shift when the list display
+    // radio buttons appear or disappear in the brand group.
     expect(dashboardCss).toMatch(
-      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/s,
+      /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
     expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
