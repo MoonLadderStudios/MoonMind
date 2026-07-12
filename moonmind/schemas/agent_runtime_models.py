@@ -397,6 +397,7 @@ def validate_codex_oauth_profile_refs(
     runtime_materialization_mode: str | None,
     volume_ref: str | None,
     volume_mount_path: str | None,
+    max_parallel_runs: int | None = None,
     volume_ref_field_name: str = "volumeRef",
     volume_mount_path_field_name: str = "volumeMountPath",
 ) -> None:
@@ -414,6 +415,11 @@ def validate_codex_oauth_profile_refs(
         missing.append(f"{volume_mount_path_field_name} is required")
     if missing:
         raise ValueError("; ".join(missing))
+    if max_parallel_runs is not None and max_parallel_runs != 1:
+        raise ValueError(
+            "Codex OAuth Provider Profiles require max_parallel_runs=1 because "
+            "the OAuth home contains mutable refresh-token and credential state."
+        )
 
 def is_terminal_agent_run_state(status: AgentRunState) -> bool:
     """Return whether one canonical run status is terminal."""
@@ -902,6 +908,7 @@ class ManagedAgentProviderProfile(BaseModel):
             runtime_materialization_mode=self.runtime_materialization_mode,
             volume_ref=self.volume_ref,
             volume_mount_path=self.volume_mount_path,
+            max_parallel_runs=self.max_parallel_runs,
         )
 
         return self

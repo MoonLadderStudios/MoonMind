@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from api_service.db.models import ManagedAgentRateLimitPolicy, OAuthSessionStatus
 
@@ -29,6 +29,15 @@ class CreateOAuthSessionRequest(BaseModel):
     max_parallel_runs: int = 1
     cooldown_after_429_seconds: int = 900
     rate_limit_policy: ManagedAgentRateLimitPolicy = ManagedAgentRateLimitPolicy.BACKOFF
+
+    @model_validator(mode="after")
+    def _enforce_codex_oauth_exclusivity(self) -> "CreateOAuthSessionRequest":
+        if self.runtime_id == "codex_cli" and self.max_parallel_runs != 1:
+            raise ValueError(
+                "Codex OAuth Provider Profiles require max_parallel_runs=1 because "
+                "the OAuth home contains mutable refresh-token and credential state."
+            )
+        return self
 
 class OAuthSessionResponse(BaseModel):
     session_id: str

@@ -32,6 +32,21 @@ from api_service.services.provider_profile_service import (
     normalize_runtime_default_profile,
 )
 from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+from api_service.api.routers.provider_profiles import ProviderProfileCreate
+
+
+def test_codex_oauth_profile_rejects_parallel_capacity_above_one() -> None:
+    with pytest.raises(ValueError, match="require max_parallel_runs=1"):
+        ProviderProfileCreate(
+            profile_id="codex-oauth-invalid-capacity",
+            runtime_id="codex_cli",
+            provider_id="openai",
+            credential_source="oauth_volume",
+            runtime_materialization_mode="oauth_home",
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            max_parallel_runs=2,
+        )
 
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):

@@ -223,6 +223,7 @@ class ProviderProfileCreate(BaseModel):
             runtime_materialization_mode=self.runtime_materialization_mode,
             volume_ref=self.volume_ref,
             volume_mount_path=self.volume_mount_path,
+            max_parallel_runs=self.max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
@@ -1234,6 +1235,7 @@ def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
             ),
             volume_ref=row.volume_ref,
             volume_mount_path=row.volume_mount_path,
+            max_parallel_runs=row.max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )

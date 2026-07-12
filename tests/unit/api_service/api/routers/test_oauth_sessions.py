@@ -1087,7 +1087,7 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         )
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
-        assert profile.max_parallel_runs == 2
+        assert profile.max_parallel_runs == 1
     assert stopped == {
         "session_id": session_id,
         "container_name": "moonmind_auth_oas_registercodex1",

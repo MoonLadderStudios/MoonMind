@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
+    _validated_profile_capacity,
 )
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,17 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
 # ---------------------------------------------------------------------------
 
 class TestProfileSlotState:
+    def test_codex_oauth_capacity_validation_rejects_legacy_parallel_profile(self):
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            _validated_profile_capacity(
+                {
+                    "runtime_id": "codex_cli",
+                    "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 2,
+                }
+            )
+
     def test_available_slots_enabled(self):
         state = ProfileSlotState(
             profile_id="p1",

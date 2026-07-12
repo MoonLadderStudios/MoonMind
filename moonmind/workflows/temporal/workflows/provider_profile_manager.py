@@ -67,6 +67,26 @@ _VERIFY_WORKFLOW_STATUS_BATCH_SIZE = 100
 
 logger = logging.getLogger(__name__)
 
+_CODEX_OAUTH_EXCLUSIVE_ERROR = (
+    "Codex OAuth Provider Profiles require max_parallel_runs=1 because the "
+    "OAuth home contains mutable refresh-token and credential state."
+)
+
+
+def _validated_profile_capacity(profile: dict[str, Any]) -> int:
+    capacity = profile.get("max_parallel_runs", 1)
+    if (
+        profile.get("runtime_id") == "codex_cli"
+        and profile.get("credential_source") == "oauth_volume"
+        and profile.get("runtime_materialization_mode") == "oauth_home"
+        and capacity != 1
+    ):
+        raise exceptions.ApplicationError(
+            _CODEX_OAUTH_EXCLUSIVE_ERROR,
+            non_retryable=True,
+        )
+    return capacity
+
 def workflow_id_for_runtime(runtime_id: str) -> str:
     """Return the canonical ProviderProfileManager workflow ID for a runtime."""
 
@@ -712,7 +732,7 @@ class MoonMindProviderProfileManagerWorkflow:
             pid = p["profile_id"]
             state = ProfileSlotState(
                 profile_id=pid,
-                max_parallel_runs=p.get("max_parallel_runs", 1),
+                max_parallel_runs=_validated_profile_capacity(p),
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
@@ -744,9 +764,7 @@ class MoonMindProviderProfileManagerWorkflow:
             seen.add(pid)
             existing = self._profiles.get(pid)
             if existing:
-                existing.max_parallel_runs = p.get(
-                    "max_parallel_runs", existing.max_parallel_runs
-                )
+                existing.max_parallel_runs = _validated_profile_capacity(p)
                 existing.cooldown_after_429_seconds = p.get(
                     "cooldown_after_429_seconds",
                     existing.cooldown_after_429_seconds,
@@ -778,7 +796,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 pricing = pricing_from_profile_metadata(p)
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
-                    max_parallel_runs=p.get("max_parallel_runs", 1),
+                    max_parallel_runs=_validated_profile_capacity(p),
                     cooldown_after_429_seconds=p.get(
                         "cooldown_after_429_seconds", 900
                     ),

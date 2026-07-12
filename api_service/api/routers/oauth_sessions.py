@@ -790,7 +790,7 @@ async def finalize_oauth_session(
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,
-        "max_parallel_runs": metadata.get("max_parallel_runs", 1),
+        "max_parallel_runs": 1,
         "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
         "rate_limit_policy": policy_enum,
         "enabled": True,
@@ -809,6 +809,7 @@ async def finalize_oauth_session(
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME.value,
             volume_ref=session_obj.volume_ref,
             volume_mount_path=session_obj.volume_mount_path,
+            max_parallel_runs=1,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
