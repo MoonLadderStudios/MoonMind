@@ -913,6 +913,98 @@ class ManagedAgentProviderProfile(BaseModel):
 
         return self
 
+
+class AuthVolumeRef(BaseModel):
+    """Secret-free durable identity for a profile-owned OAuth home volume."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
+    runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    provider_id: str = Field(..., alias="providerId", min_length=1)
+    volume_ref: str = Field(..., alias="volumeRef", min_length=1)
+    credential_generation: int = Field(..., alias="credentialGeneration", ge=1)
+    owner_user_id: str = Field(..., alias="ownerUserId", min_length=1)
+
+
+class CredentialMountRef(BaseModel):
+    """Secret-free instructions for mounting one OAuth home into a leased host."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    auth_volume_ref: AuthVolumeRef = Field(..., alias="authVolumeRef")
+    target_path: str = Field(..., alias="targetPath", min_length=1)
+    access_mode: Literal["read_write"] = Field("read_write", alias="accessMode")
+    runtime_uid: int = Field(1000, alias="runtimeUid", ge=1)
+    runtime_gid: int = Field(1000, alias="runtimeGid", ge=1)
+    host_lease_ref: str = Field(..., alias="hostLeaseRef", min_length=1)
+
+    @field_validator("target_path")
+    @classmethod
+    def _require_absolute_target_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.startswith("/"):
+            raise ValueError("targetPath must be absolute")
+        return normalized
+
+
+class OmnigentOAuthHostBinding(BaseModel):
+    """Profile-owned authorization binding for a compatible Omnigent host."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    binding_ref: str = Field(..., alias="bindingRef", min_length=1)
+    provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
+    endpoint_ref: str = Field(..., alias="endpointRef", min_length=1)
+    harness: Literal["codex-native"]
+    credential_mount_ref: CredentialMountRef = Field(..., alias="credentialMountRef")
+    max_hosts: Literal[1] = Field(1, alias="maxHosts")
+    max_sessions_per_host: Literal[1] = Field(1, alias="maxSessionsPerHost")
+    static_host_id: str | None = Field(None, alias="staticHostId")
+    host_launch_profile_ref: str | None = Field(None, alias="hostLaunchProfileRef")
+
+    @model_validator(mode="after")
+    def _validate_profile_ownership(self) -> "OmnigentOAuthHostBinding":
+        mounted_profile_id = (
+            self.credential_mount_ref.auth_volume_ref.provider_profile_id
+        )
+        if mounted_profile_id != self.provider_profile_id:
+            raise ValueError(
+                "credentialMountRef must belong to providerProfileId"
+            )
+        return self
+
+
+class OmnigentHostLease(BaseModel):
+    """Durable, secret-free lifecycle state for one profile-bound host."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    lease_id: str = Field(..., alias="leaseId", min_length=1)
+    provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
+    provider_lease_id: str = Field(..., alias="providerLeaseId", min_length=1)
+    binding_ref: str = Field(..., alias="bindingRef", min_length=1)
+    credential_generation: int = Field(..., alias="credentialGeneration", ge=1)
+    container_id: str | None = Field(None, alias="containerId")
+    container_name: str | None = Field(None, alias="containerName")
+    omnigent_host_id: str | None = Field(None, alias="omnigentHostId")
+    omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
+    bridge_session_id: str | None = Field(None, alias="bridgeSessionId")
+    status: Literal[
+        "allocating", "starting", "ready", "assigned", "draining", "stopped", "failed"
+    ]
+    acquired_at: datetime = Field(..., alias="acquiredAt")
+    last_heartbeat_at: datetime = Field(..., alias="lastHeartbeatAt")
+    expires_at: datetime = Field(..., alias="expiresAt")
+
+    @model_validator(mode="after")
+    def _validate_lifecycle_times(self) -> "OmnigentHostLease":
+        if self.last_heartbeat_at < self.acquired_at:
+            raise ValueError("lastHeartbeatAt must not precede acquiredAt")
+        if self.expires_at <= self.acquired_at:
+            raise ValueError("expiresAt must be after acquiredAt")
+        return self
+
 WorkspaceMode = Literal["tempdir", "shared", "none"]
 ManagedRuntimeWorkloadMode = Literal[
     "docker-sidecar",
@@ -2120,6 +2212,8 @@ __all__ = [
     "RuntimeCommandRenderMode",
     "RuntimeCommandRenderResult",
     "RuntimeCommandRenderStatus",
+    "AuthVolumeRef",
+    "CredentialMountRef",
     "ManagedAgentProviderProfile",
     "ManagedAgentRuntimeProfile",
     "ManagedRunRecord",
@@ -2127,6 +2221,8 @@ __all__ = [
     "ManagedRuntimeWorkloadMode",
     "MoonMindOpsRuntime",
     "MoonMindOpsRuntimeOperation",
+    "OmnigentHostLease",
+    "OmnigentOAuthHostBinding",
     "ProfileSelector",
     "ProviderModelEffortTier",
     "ProviderCapabilityDescriptor",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
@@ -11,10 +13,14 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRuntimeStepExecutionLaunch,
     AgentRunResult,
     AgentRunStatus,
+    AuthVolumeRef,
+    CredentialMountRef,
     ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
     MoonMindOpsRuntime,
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
     LiveLogChunk,
     RuntimeCommandInvocation,
     RuntimeCommandRenderResult,
@@ -23,6 +29,81 @@ from moonmind.schemas.agent_runtime_models import (
     is_terminal_agent_run_state,
     resolve_managed_runtime_workload_mode,
 )
+
+
+def _oauth_mount_ref() -> CredentialMountRef:
+    return CredentialMountRef(
+        authVolumeRef=AuthVolumeRef(
+            providerProfileId="codex_openai_oauth",
+            runtimeId="codex_cli",
+            providerId="openai",
+            volumeRef="codex_auth_volume",
+            credentialGeneration=3,
+            ownerUserId="user-1",
+        ),
+        targetPath="/home/app/.codex",
+        hostLeaseRef="host-lease-1",
+    )
+
+
+def test_codex_oauth_host_contracts_preserve_only_secret_free_refs() -> None:
+    binding = OmnigentOAuthHostBinding(
+        bindingRef="binding-1",
+        providerProfileId="codex_openai_oauth",
+        endpointRef="default",
+        harness="codex-native",
+        credentialMountRef=_oauth_mount_ref(),
+    )
+    acquired_at = datetime(2026, 7, 12, tzinfo=UTC)
+    lease = OmnigentHostLease(
+        leaseId="host-lease-1",
+        providerProfileId="codex_openai_oauth",
+        providerLeaseId="provider-lease-1",
+        bindingRef=binding.binding_ref,
+        credentialGeneration=3,
+        status="ready",
+        acquiredAt=acquired_at,
+        lastHeartbeatAt=acquired_at,
+        expiresAt=acquired_at + timedelta(minutes=10),
+    )
+
+    assert binding.max_hosts == 1
+    assert binding.max_sessions_per_host == 1
+    assert binding.credential_mount_ref.runtime_uid == 1000
+    assert lease.credential_generation == 3
+    assert "token" not in str(binding.model_dump(mode="json")).lower()
+
+
+def test_codex_oauth_host_binding_rejects_cross_profile_mount() -> None:
+    with pytest.raises(ValidationError, match="must belong to providerProfileId"):
+        OmnigentOAuthHostBinding(
+            bindingRef="binding-1",
+            providerProfileId="another-profile",
+            endpointRef="default",
+            harness="codex-native",
+            credentialMountRef=_oauth_mount_ref(),
+        )
+
+
+def test_codex_oauth_mount_and_host_lease_fail_closed_on_unsafe_state() -> None:
+    mount = _oauth_mount_ref().model_dump(by_alias=True)
+    mount["targetPath"] = "relative/.codex"
+    with pytest.raises(ValidationError, match="targetPath must be absolute"):
+        CredentialMountRef.model_validate(mount)
+
+    acquired_at = datetime(2026, 7, 12, tzinfo=UTC)
+    with pytest.raises(ValidationError, match="expiresAt must be after acquiredAt"):
+        OmnigentHostLease(
+            leaseId="host-lease-1",
+            providerProfileId="codex_openai_oauth",
+            providerLeaseId="provider-lease-1",
+            bindingRef="binding-1",
+            credentialGeneration=1,
+            status="ready",
+            acquiredAt=acquired_at,
+            lastHeartbeatAt=acquired_at,
+            expiresAt=acquired_at,
+        )
 
 
 def test_terminal_contract_normalizes_backslash_separators() -> None:
