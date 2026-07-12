@@ -330,9 +330,8 @@ samp {
   /* Tightened so the group no longer out-sizes the always-present nav buttons
    * and its presence/absence stops changing the masthead height. */
   padding: 0.12rem;
-  /* Liquid-glass border to match the System trigger and the primary nav
-   * buttons: the inset top edge highlight makes the perimeter read as
-   * non-uniform glass rather than a flat 1px stroke. */
+  /* Liquid-glass border: the inset top edge highlight makes the perimeter
+   * read as non-uniform glass rather than a flat 1px stroke. */
   border: 1px solid var(--mm-glass-border);
   border-radius: 0.5rem;
   background: var(--mm-glass-fill);
@@ -626,19 +625,18 @@ h1 {
   transition: background 130ms ease, color 130ms ease;
 }
 
-/* Workflows and Create adopt the same liquid-glass button treatment as the
- * System trigger (translucent fill + inset glass border/edge highlight), minus
- * the dropdown arrow and menu behavior. Scoped to `.route-nav-primary` so the
- * System popover menu items — which also match `.route-nav a` — keep their flat
- * menu-row look. The border is an inset box-shadow (not a real border) so the
- * link box height, and thus the active underline on the masthead edge, is
- * unchanged. Higher-specificity :hover / :focus-visible / .active rules still
- * win, so those states are preserved. */
+/* Workflows and Create adopt the System trigger's original highlight-edge
+ * treatment: a bright top-edge inset that wraps the rounded corners plus a
+ * soft accent under-glow, with no flat 1px perimeter ring. Scoped to
+ * `.route-nav-primary` so the System popover menu items — which also match
+ * `.route-nav a` — keep their flat menu-row look. Both shadows are
+ * non-layout-affecting, so the link box height, and thus the active underline
+ * on the masthead edge, is unchanged. Higher-specificity :hover /
+ * :focus-visible / .active rules still win, so those states are preserved. */
 .route-nav-primary a {
-  background: var(--mm-glass-fill);
   box-shadow:
-    inset 0 0 0 1px var(--mm-glass-border),
-    inset 0 1px 0 var(--mm-glass-edge);
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
 .route-nav-icon {
@@ -695,14 +693,16 @@ h1 {
   padding: 0.48rem 0.82rem;
   border: 0;
   border-radius: 0.5rem;
-  /* Liquid-glass button: translucent fill with the border drawn as an inset
-   * box-shadow (not a real border) so the box size — and therefore the active
-   * underline position on the masthead's bottom edge — is unchanged. The extra
-   * top-edge highlight makes the perimeter read as non-uniform glass. */
-  background: var(--mm-glass-fill);
+  /* Highlight-edge button: transparent fill with a bright top-edge inset that
+   * wraps the rounded corners plus a soft accent under-glow (the trigger's
+   * original look, stated explicitly rather than inherited from the global
+   * button rule). Both shadows are non-layout-affecting, so the box size — and
+   * therefore the active underline position on the masthead's bottom edge — is
+   * unchanged. */
+  background: transparent;
   box-shadow:
-    inset 0 0 0 1px var(--mm-glass-border),
-    inset 0 1px 0 var(--mm-glass-edge);
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
   color: rgb(var(--mm-ink) / 0.82);
   font: inherit;
   font-size: 0.9rem;

@@ -96,7 +96,7 @@ describe('dashboard masthead brand styles', () => {
     );
   });
 
-  it('gives the list display control and primary nav buttons the liquid-glass treatment', () => {
+  it('gives the list display control the liquid-glass treatment and the nav buttons the highlight-edge look', () => {
     // Radio group: liquid-glass border/fill with the inset top-edge highlight,
     // and tightened enough (option < 2rem, padding < 0.18rem) that it no longer
     // out-sizes the nav buttons.
@@ -109,15 +109,18 @@ describe('dashboard masthead brand styles', () => {
     // Icons keep their size regardless of the tighter borders.
     expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
 
-    // Workflows/Create and the System trigger share the glass button look. The
-    // border is an inset box-shadow (no real border) so the active underline
-    // geometry is unchanged.
+    // Workflows/Create and the System trigger share the trigger's original
+    // highlight-edge look: a bright top-edge inset plus a soft accent
+    // under-glow, with no flat 1px perimeter ring. Both shadows are
+    // non-layout-affecting so the active underline geometry is unchanged.
+    const highlightShadow =
+      /box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.2\),\s*0 12px 24px -16px rgb\(var\(--mm-accent\) \/ 0\.82\);/;
     const primary = cssRuleBlock('.route-nav-primary a');
-    expect(primary).toContain('background: var(--mm-glass-fill);');
-    expect(primary).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--mm-glass-border\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
+    expect(primary).not.toContain('var(--mm-glass-fill)');
+    expect(primary).toMatch(highlightShadow);
     const trigger = cssRuleBlock('.dashboard-system-trigger');
-    expect(trigger).toContain('background: var(--mm-glass-fill);');
-    expect(trigger).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--mm-glass-border\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
+    expect(trigger).toContain('background: transparent;');
+    expect(trigger).toMatch(highlightShadow);
   });
 
   it('marks the open System selection like the sidebar instead of the trigger underline', () => {
