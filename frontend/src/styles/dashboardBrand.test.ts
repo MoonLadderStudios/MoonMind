@@ -95,4 +95,55 @@ describe('dashboard masthead brand styles', () => {
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.dashboard-system-trigger,[\s\S]*\.dashboard-system-popover\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
     );
   });
+
+  it('gives the list display control and primary nav buttons the liquid-glass treatment', () => {
+    // Radio group: liquid-glass border/fill with the inset top-edge highlight,
+    // and tightened enough (option < 2rem, padding < 0.18rem) that it no longer
+    // out-sizes the nav buttons.
+    const control = cssRuleBlock('.workflow-list-display-control');
+    expect(control).toContain('border: 1px solid var(--mm-glass-border);');
+    expect(control).toContain('background: var(--mm-glass-fill);');
+    expect(control).toContain('box-shadow: inset 0 1px 0 var(--mm-glass-edge);');
+    expect(control).toContain('padding: 0.12rem;');
+    expect(cssRuleBlock('.workflow-list-display-option')).toContain('width: 1.6rem;');
+    // Icons keep their size regardless of the tighter borders.
+    expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
+
+    // Workflows/Create and the System trigger share the glass button look. The
+    // border is an inset box-shadow (no real border) so the active underline
+    // geometry is unchanged.
+    const primary = cssRuleBlock('.route-nav-primary a');
+    expect(primary).toContain('background: var(--mm-glass-fill);');
+    expect(primary).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--mm-glass-border\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
+    const trigger = cssRuleBlock('.dashboard-system-trigger');
+    expect(trigger).toContain('background: var(--mm-glass-fill);');
+    expect(trigger).toMatch(/box-shadow:\s*inset 0 0 0 1px var\(--mm-glass-border\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
+  });
+
+  it('marks the open System selection like the sidebar instead of the trigger underline', () => {
+    // The trigger keeps its purple underline when a System destination is
+    // active (asserted above); the selected row inside the open popover must
+    // not repeat it, and instead gets the sidebar-style left accent bar + fill.
+    const underlineSuppression = cssRuleBlock('.dashboard-system-popover a.active::after');
+    expect(underlineSuppression).toContain('content: none;');
+    const activeRow = cssRuleBlock('.dashboard-system-popover a.active');
+    expect(activeRow).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
+    expect(activeRow).toContain('background: rgb(var(--mm-accent) / 0.12);');
+
+    // The active-row rule shares specificity with the earlier
+    // `a:focus-visible` rule, so a later, more specific rule must combine the
+    // focus ring with the active inset shadow; otherwise a keyboard-focused
+    // active row loses its distinct focus indicator.
+    const activeFocus = cssRuleBlock('.dashboard-system-popover a.active:focus-visible');
+    expect(activeFocus).toContain(
+      'box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));',
+    );
+  });
+
+  it('keeps the masthead-nav skills create button green and offset below the nav height', () => {
+    const button = cssRuleBlock('.skills-create-nav-button');
+    expect(button).toContain('color: rgb(var(--mm-ok));');
+    expect(button).toContain('background: rgb(var(--mm-ok) / 0.16);');
+    expect(button).toMatch(/box-shadow:\s*inset 0 0 0 1px rgb\(var\(--mm-ok\) \/ 0\.55\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
+  });
 });

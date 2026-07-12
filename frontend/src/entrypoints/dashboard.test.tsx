@@ -23,6 +23,7 @@ import {
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
 import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
+import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -954,11 +955,11 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
   });
 
-  function mockSkillsCatalogFetch(skillIds: string[]) {
+  function mockSkillsCatalogFetch(skillIds: string[], uiInfoOverrides: Record<string, unknown> = {}) {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
-        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+        return Promise.resolve({ ok: true, json: async () => uiInfo(uiInfoOverrides) } as Response);
       }
       if (url === '/api/workflows/skills') {
         return Promise.resolve({
@@ -1005,6 +1006,56 @@ describe('Dashboard shared entry', () => {
     // Skills mode changes never touch the Workflow or Recurring preferences.
     expect(prefs.workflowListDisplayMode).toBe('sidebar');
     expect(prefs.recurringListDisplayMode).toBe('table');
+  });
+
+  it('mounts the green Create New Skill button in the masthead to the right of System on skill routes', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver']);
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+
+    const createButton = screen.getByRole('button', { name: 'Create New Skill' });
+    expect(createButton.classList.contains('skills-create-nav-button')).toBe(true);
+
+    // It lives in the masthead route-nav, immediately after the System dropdown.
+    const systemMenu = document.querySelector<HTMLElement>('.dashboard-system-menu')!;
+    expect(systemMenu).toBeTruthy();
+    expect(createButton.closest('.route-nav')).toBe(systemMenu.closest('.route-nav'));
+    expect(
+      systemMenu.compareDocumentPosition(createButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Clicking it asks the Skills page to open its create drawer via the window
+    // event (the drawer is owned by the Skills page, not the masthead).
+    const handler = vi.fn();
+    window.addEventListener(SKILLS_CREATE_REQUEST_EVENT, handler);
+    fireEvent.click(createButton);
+    window.removeEventListener(SKILLS_CREATE_REQUEST_EVENT, handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mount the Create New Skill button off skill routes', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
+  });
+
+  it('does not mount the Create New Skill button when the skills feature is disabled', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver'], {
+      features: { ...uiInfo().features, skills: false },
+    });
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    // The skills page still renders for the route, but the masthead create
+    // affordance must stay hidden while the skills feature flag is off.
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
   });
 
   it('opens a remembered skill from /skills and clears a stale remembered skill before fallback', async () => {
