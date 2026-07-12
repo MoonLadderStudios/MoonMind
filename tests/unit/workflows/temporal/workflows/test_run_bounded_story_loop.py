@@ -228,6 +228,118 @@ def test_parent_loop_continues_from_structured_gate_when_remediation_remains() -
         workflow._publish_context["boundedStoryLoop"]["continuationDecision"]
         == decision
     )
+    assert decision["gate"]["progressSignature"]
+
+
+def test_parent_loop_stops_when_verification_makes_no_progress() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}},
+        {"logicalStepId": "verify-2", "attempt": 1, "artifacts": {}},
+    ]
+    workflow._step_terminal_dispositions.update(
+        {"verify-1": "accepted", "verify-2": "accepted"}
+    )
+    gate_result = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        confidence="medium",
+        issues=({"requirement": "still failing", "status": "unmet"},),
+        remaining_work_ref="artifact://remaining-work/unchanged",
+        recommended_next_action="reattempt_current_step",
+        target_logical_step_id="remediate-2",
+    )
+    ordered_nodes = [
+        {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-1",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+    ]
+
+    first = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate_result,
+        gate_result_ref="artifact://gate/attempt-1",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    second = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=gate_result,
+        gate_result_ref="artifact://gate/attempt-2",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert first["continueLoop"] is True
+    assert second["continueLoop"] is False
+    assert second["reason"] == "no_progress_attempts_exhausted"
+    assert second["hasRemainingRemediationStep"] is True
+
+
+def test_parent_loop_continues_when_verification_progress_changes() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}},
+        {"logicalStepId": "verify-2", "attempt": 1, "artifacts": {}},
+    ]
+    workflow._step_terminal_dispositions.update(
+        {"verify-1": "accepted", "verify-2": "accepted"}
+    )
+    ordered_nodes = [
+        {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-1",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+    ]
+
+    first = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            issues=({"requirement": "first gap", "status": "unmet"},),
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/attempt-1",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    second = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            issues=({"requirement": "different gap", "status": "unmet"},),
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/attempt-2",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert second["continueLoop"] is True
+    assert second["reason"] == "verification_requested_remediation"
 
 
 def test_parent_loop_continues_to_scheduled_remediation_without_remaining_work_ref() -> None:

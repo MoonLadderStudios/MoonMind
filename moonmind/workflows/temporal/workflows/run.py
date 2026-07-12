@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import re
@@ -5624,6 +5625,23 @@ class MoonMindRunWorkflow:
         terminal_disposition = (
             "accepted" if terminal == "accepted" else "failed_with_remaining_work"
         )
+        progress_payload = {
+            "verdict": gate_result.verdict,
+            "issues": [dict(issue) for issue in gate_result.issues],
+            "recommendedNextAction": gate_result.recommended_next_action,
+            "workspacePolicyRecommendation": (
+                gate_result.workspace_policy_recommendation
+            ),
+            "recoverableInCurrentRuntime": gate_result.recoverable_in_current_runtime,
+        }
+        progress_signature = hashlib.sha256(
+            json.dumps(
+                progress_payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         return TypedGateResult.model_validate(
             {
                 "verdict": gate_result.verdict,
@@ -5637,6 +5655,7 @@ class MoonMindRunWorkflow:
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
                 ),
+                "progressSignature": progress_signature,
                 "degraded": gate_result.degraded,
             }
         )
@@ -5711,6 +5730,20 @@ class MoonMindRunWorkflow:
             logical_step_id=logical_step_id,
             remediation_gate=remediation_gate,
         )
+        loop_context = self._publish_context.get("boundedStoryLoop")
+        prior_progress_signature = None
+        if isinstance(loop_context, Mapping):
+            prior_decision = loop_context.get("continuationDecision")
+            if isinstance(prior_decision, Mapping):
+                prior_gate = prior_decision.get("gate")
+                if isinstance(prior_gate, Mapping):
+                    prior_progress_signature = str(
+                        prior_gate.get("progressSignature") or ""
+                    ).strip() or None
+        repeated_progress = bool(
+            gate.progress_signature
+            and prior_progress_signature == gate.progress_signature
+        )
         budget = LoopBudget.model_validate(
             {
                 "maxAttempts": 1,
@@ -5719,7 +5752,7 @@ class MoonMindRunWorkflow:
                 "maxUnsafeOrPolicyDeniedAttempts": 1,
                 "consumed": {
                     "attempts": 0 if has_remaining_remediation_step else 1,
-                    "consecutive_no_progress_attempts": 0,
+                    "consecutiveNoProgressAttempts": 1 if repeated_progress else 0,
                     "repeated_failed_commands": 0,
                     "unsafe_or_policy_denied_attempts": 0,
                 },
@@ -5739,6 +5772,7 @@ class MoonMindRunWorkflow:
             "gateResultRef": gate.gate_result_ref,
             "remainingWorkRef": gate.remaining_work_ref,
             "diagnosticsRef": gate.diagnostics_ref,
+            "progressSignature": gate.progress_signature,
         }
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
