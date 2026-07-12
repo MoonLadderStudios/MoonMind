@@ -22,6 +22,7 @@ import {
   resetDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
+import { DASHBOARD_DESTINATIONS } from '../lib/dashboardRoutes';
 
 const animatedNavIconMocks = vi.hoisted(() => ({
   moonStart: vi.fn(),
@@ -436,6 +437,50 @@ describe('Dashboard shared entry', () => {
     fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(trigger);
+
+    // No skew alert when the server does not report a drifted registry.
+    expect(document.querySelector('[data-ui-version-skew]')).toBeNull();
+  });
+
+  it('keeps feature-gated navigation and raises a version-skew alert when the server destination registry drifts', async () => {
+    // Reproduces the deployed regression where a stale JS bundle met a newer
+    // API registry: the old behavior threw the whole uiInfo payload away, so
+    // the System menu (which has no null-uiInfo fallback) silently vanished
+    // while the primary links fell back to a stale layout. The skew must be
+    // loud, and capability-gated navigation must keep working.
+    const driftedDestinations = DASHBOARD_DESTINATIONS
+      .map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }))
+      .map((item) => (item.key === 'recurring' ? { ...item, navigationGroup: 'primary' as const } : item));
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => uiInfo({ buildId: '20990101.1', destinations: driftedDestinations }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const banner = await screen.findByRole('alert');
+    expect(banner.textContent).toContain('Dashboard build mismatch');
+    expect(banner.textContent).toContain('20990101.1');
+
+    // uiInfo stays usable: the System menu and its feature-gated entries survive.
+    const trigger = screen.getByRole('button', { name: 'System' });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menuitem', { name: 'Skills' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeTruthy();
   });
 
   it.each([

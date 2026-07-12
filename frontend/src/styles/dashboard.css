@@ -218,6 +218,23 @@ samp {
   width: 100%;
 }
 
+/* Version-skew alert: the served JS bundle and the API registry disagree, so
+   the browser is running UI assets from a different build than the server. */
+.ui-version-skew-banner {
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid rgb(var(--mm-danger) / 0.55);
+  background: rgb(var(--mm-danger) / 0.14);
+  color: rgb(var(--mm-ink));
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.ui-version-skew-banner p {
+  margin: 0;
+  max-width: min(72rem, calc(100vw - 2rem));
+  margin-inline: auto;
+}
+
 .masthead {
   --masthead-padding-block-end: 0.46rem;
 

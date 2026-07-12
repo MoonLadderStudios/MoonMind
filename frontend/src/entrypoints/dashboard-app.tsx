@@ -384,7 +384,14 @@ function useDashboardUiInfo() {
       }
       const uiInfo = (await response.json()) as DashboardUiInfo;
       if (uiInfo.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations)) {
-        throw new Error('Dashboard destination registry does not match /api/ui/info');
+        // Version skew between the served JS bundle and the API (stale or
+        // partially patched static assets). Discarding uiInfo here would
+        // silently collapse feature-gated navigation (the System menu has no
+        // null-uiInfo fallback), so keep the payload usable and let AppShell
+        // surface the skew loudly instead.
+        console.error(
+          'Dashboard destination registry does not match /api/ui/info; the served UI assets are out of sync with the server build.',
+        );
       }
       return uiInfo;
     },
@@ -842,9 +849,31 @@ function AppShell({
   onListDisplayModeSelect: (mode: CollectionListDisplayMode) => void;
   children: ReactNode;
 }) {
+  // Version skew between the compiled-in client destination registry and the
+  // server's /api/ui/info registry means this browser is running UI assets
+  // from a different build than the API (stale cache, partially patched
+  // static dist, or an interrupted deploy). Navigation stays functional from
+  // the server-provided capability flags, but the skew must be loud instead
+  // of silently rendering a wrong shell.
+  const registrySkew = Boolean(
+    uiInfo?.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations),
+  );
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
       <main className="dashboard-root">
+        {registrySkew ? (
+          <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
+            <p>
+              <strong>Dashboard build mismatch.</strong> The UI assets in this browser do not
+              match the server
+              {typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim()
+                ? ` (server build ${uiInfo.buildId})`
+                : ''}
+              . Hard-refresh this page; if the mismatch persists, the deployment is serving stale
+              or partially patched static assets and needs a clean redeploy.
+            </p>
+          </section>
+        ) : null}
         <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
           <p>
             <span className="worker-pause-label" data-worker-pause-status>

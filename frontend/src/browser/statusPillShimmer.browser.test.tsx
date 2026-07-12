@@ -48,7 +48,7 @@ function sleep(ms: number) {
 // (no alpha) is fully opaque.
 function gradientStopAlphas(backgroundImage: string): number[] {
   return Array.from(backgroundImage.matchAll(/rgba?\(([^)]+)\)/g)).map(([, channels]) => {
-    const parts = channels.split(',').map((part) => part.trim());
+    const parts = (channels ?? '').split(',').map((part) => part.trim());
     return parts.length === 4 ? Number.parseFloat(parts[3]!) : 1;
   });
 }
