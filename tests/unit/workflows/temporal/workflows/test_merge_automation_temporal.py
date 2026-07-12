@@ -173,15 +173,31 @@ def test_legacy_gated_continuation_uses_fallback_poll_deadline(
     )
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
     monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: now)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+    )
 
     deadline = workflow._continuation_deadline(
         {
+            "completionDisposition": "gated_continuation",
+            "headSha": "abcdef1",
             "gatedContinuation": {
                 "schemaVersion": "gated-continuation/v1",
                 "gateType": "merge_automation",
                 "action": "reenter_gate",
+                "reason": "legacy timing fallback",
+                "executionRef": "step:1",
+                "headSha": "abcdef1",
+                "ownerWorkflowId": "merge-owner",
+                "ownerRunId": "owner-run",
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
+                "childWorkflowId": "resolver-child",
+                "childRunId": "child-run",
             }
-        }
+        },
+        resolver_workflow_id="resolver-child",
     )
 
     assert deadline.timestamp() - now.timestamp() == 300

@@ -7533,9 +7533,21 @@ class MoonMindRunWorkflow:
         if self._merge_automation_disposition:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
-            output["gatedContinuation"] = dict(self._gated_continuation_request)
+            gated_continuation = dict(self._gated_continuation_request)
             if workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH):
+                parent_info = workflow.info().parent
+                if parent_info is not None and self._is_merge_automation_gated(parameters):
+                    gated_continuation.update(
+                        {
+                            "ownerWorkflowId": parent_info.workflow_id,
+                            "ownerRunId": parent_info.run_id,
+                            "ownerWorkflowType": "MoonMind.MergeAutomation",
+                            "childWorkflowId": workflow.info().workflow_id,
+                            "childRunId": workflow.info().run_id,
+                        }
+                    )
                 output["completionDisposition"] = "gated_continuation"
+            output["gatedContinuation"] = gated_continuation
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -15402,7 +15414,8 @@ class MoonMindRunWorkflow:
                 "schemaVersion": "terminal-continuation-authority/v1",
                 "gateType": "merge_automation",
                 "ownerWorkflowId": parent_info.workflow_id,
-                "ownerRunId": getattr(parent_info, "run_id", None),
+                "ownerRunId": parent_info.run_id,
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
                 "allowedActions": ["reenter_gate"],
                 "source": "validated_temporal_parent",
             }

@@ -339,18 +339,47 @@ class MoonMindMergeAutomationWorkflow:
             return ""
         return str(resolver_result.get("mergeAutomationDisposition") or "").strip()
 
-    def _continuation_deadline(self, resolver_result: Mapping[str, Any]) -> datetime:
+    def _continuation_deadline(
+        self, resolver_result: Mapping[str, Any], *, resolver_workflow_id: str
+    ) -> datetime:
         raw = resolver_result.get("gatedContinuation")
         if not isinstance(raw, Mapping):
-            return workflow.now() + timedelta(
-                seconds=self._input.config.timeouts.fallback_poll_seconds
-            )
+            raise ValueError("missing gated continuation contract")
         if (
-            raw.get("schemaVersion") != "gated-continuation/v1"
+            resolver_result.get("completionDisposition") != "gated_continuation"
+            or raw.get("schemaVersion") != "gated-continuation/v1"
             or raw.get("gateType") != "merge_automation"
             or raw.get("action") != "reenter_gate"
         ):
             raise ValueError("invalid gated continuation contract")
+        required_text = (
+            "reason",
+            "executionRef",
+            "headSha",
+            "ownerWorkflowId",
+            "ownerRunId",
+            "ownerWorkflowType",
+            "childWorkflowId",
+            "childRunId",
+        )
+        if any(not str(raw.get(key) or "").strip() for key in required_text):
+            raise ValueError("incomplete gated continuation contract")
+        info = workflow.info()
+        if (
+            raw.get("ownerWorkflowId") != info.workflow_id
+            or raw.get("ownerRunId") != info.run_id
+            or raw.get("ownerWorkflowType") != WORKFLOW_NAME
+            or raw.get("childWorkflowId") != resolver_workflow_id
+        ):
+            raise ValueError("gated continuation ownership mismatch")
+        head_sha = str(raw.get("headSha") or "").strip().lower()
+        expected_head = str(resolver_result.get("headSha") or "").strip().lower()
+        if not (7 <= len(head_sha) <= 64) or any(
+            c not in "0123456789abcdef" for c in head_sha
+        ):
+            raise ValueError("invalid gated continuation headSha")
+        if expected_head != head_sha:
+            raise ValueError("gated continuation headSha mismatch")
         not_before = str(raw.get("notBefore") or "").strip()
         retry_after = raw.get("retryAfterSeconds")
         if not not_before and retry_after is None:
@@ -875,7 +904,8 @@ class MoonMindMergeAutomationWorkflow:
                     ):
                         try:
                             continuation_deadline = self._continuation_deadline(
-                                resolver_result
+                                resolver_result,
+                                resolver_workflow_id=resolver_workflow_id,
                             )
                         except (TypeError, ValueError):
                             return await self._failed_resolver_summary(

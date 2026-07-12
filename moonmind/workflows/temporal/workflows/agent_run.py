@@ -2010,6 +2010,7 @@ class MoonMindAgentRun:
                     "gateAction": "reenter_gate",
                     "gateOwnerWorkflowId": continuation_authority.owner_workflow_id,
                     "gateOwnerRunId": continuation_authority.owner_run_id,
+                    "gateOwnerWorkflowType": continuation_authority.owner_workflow_type,
                 }
             )
             return evaluated.model_copy(
