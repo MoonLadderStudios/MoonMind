@@ -188,7 +188,7 @@ layers:
     keyframes: mm-status-pill-shimmer
     shape: two layered soft-edged linear gradients
     travel: slightly horizontally biased diagonal sweep using inverse background-position endpoints
-    angle_deg_target: -20
+    angle_deg_target: -28
     blend_mode:
       preferred: plus-lighter
       fallback: screen
@@ -252,13 +252,15 @@ motion:
     end_x_pct: -135
     end_y_pct: -160
     y_behavior: diagonal_travel
-    angle_deg: -18
+    angle_deg: -28
     keyframes: mm-status-pill-shimmer
     note: >
-      These are the approved on-screen values (MM-1036 as shipped). MM-1048's
-      -20deg / +/-120% horizontal-bias refinement never rendered (its own
-      commit broke gradient resolution) and is retired. Do not turn the shimmer
-      into a scanner beam or horizontal loading bar.
+      These are the approved on-screen values: the MM-1036 sweep steepened from
+      -18deg to -28deg per operator review so the shimmer line sits ~10deg
+      further from horizontal (closer to vertical). MM-1048's -20deg / +/-120%
+      horizontal-bias refinement never rendered (its own commit broke gradient
+      resolution) and is retired. Do not turn the shimmer into a scanner beam or
+      horizontal loading bar.
 
   band:
     width_pct: 24
