@@ -287,6 +287,29 @@ Rules:
 
 ---
 
+## 9.1 Build coherence and version skew
+
+The SPA is code-split: the served HTML references a hashed entry bundle, and the entry bundle references hashed lazy page chunks. Every file must come from one build. Skew has two independent defenses; neither may be removed without the other being strengthened:
+
+- **Client-side skew detection (fail-soft, loud).** The client compiles in its dashboard destination registry and compares it against `destinations` from `/api/ui/info`. A mismatch means the browser is executing assets from a different build than the API. The client must **not** discard the `uiInfo` payload on mismatch — server-provided capability flags remain the runtime truth and feature-gated navigation (for example the System menu) must keep working. Instead it renders a visible `role="alert"` version-skew banner (`.ui-version-skew-banner`) naming the server build id and logs the mismatch. Lazy chunk-load failures reload once per build id (`dynamicImportRecovery`) and otherwise surface the styled route error state.
+- **Deployment-side coherence verification.** `tools/verify_deployed_ui_assets.py --base-url <deployment>` fetches the served HTML, every asset it references, and every lazy chunk referenced by the entry bundle, and fails on any 404 or cross-build incoherence. Run it after every deploy.
+
+Operational rule: never hot-patch individual dist files into a running container (`docker cp` of an entry bundle without its chunks leaves a mixed-build static directory that appears to work only for browsers with warm caches). Ship UI changes by rebuilding and redeploying the image; the frontend dist is always rebuilt from source during the image build and verified by `tools/verify_vite_manifest.py`.
+
+## 9.2 Frontend regression-testing layers
+
+Each layer exists because the one above it cannot see that failure class:
+
+| Layer | Runner | Catches |
+| --- | --- | --- |
+| jsdom contract tests (`frontend/src/**/*.test.tsx`) | `./tools/test_unit.sh --dashboard-only` | DOM structure, routing, feature gating, authored-CSS contracts |
+| Real-browser computed-style tests (`frontend/src/browser/*.browser.test.{ts,tsx}`) | `npm run ui:test:browser` (CI: Playwright Chromium) | Computed styles jsdom cannot resolve: custom-property scoping, pseudo-element gradients, animation, viewport-driven media queries. **Approved visual aesthetics (exact colors, angles, alpha ceilings) are pinned here** — "an effect renders" is not the contract, "the approved effect renders" is |
+| Deployed-asset smoke (`tools/verify_deployed_ui_assets.py`) | post-deploy, any host | Mixed-build static dirs, missing lazy chunks, dead deployments that tests can never see |
+
+When a visual treatment is operator-approved, encode its computed values in a browser test in the same PR. A later "restore/fix the effect" change that alters the look must then fail tests and force an explicit, reviewed baseline update — this is the guardrail that was missing when the status-pill shimmer was restored with the wrong (never-approved) palette.
+
+---
+
 ## 10. Data contract posture
 
 The SPA must not cache detail-grade payloads for list or picker surfaces.
