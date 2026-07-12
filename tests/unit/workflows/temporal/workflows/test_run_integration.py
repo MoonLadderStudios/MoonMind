@@ -3494,6 +3494,56 @@ def test_moonspec_environment_blocked_publish_action_defaults_to_fail(
     )
 
 
+def test_additional_work_needed_publishes_draft_after_remediation_exhaustion(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "diagnostics_ref": "art_verify_remaining_work",
+        },
+    )
+    blocking_reason = mock_run_workflow._blocking_moonspec_gate_reason()
+    assert blocking_reason is not None
+
+    policy = mock_run_workflow._moonspec_draft_publication_policy(
+        environment_blocked_enabled=False,
+        additional_work_enabled=True,
+    )
+
+    assert policy == "draft_pr_on_additional_work_needed"
+    summary = mock_run_workflow._activate_moonspec_draft_publication(
+        blocking_reason,
+        policy=policy,
+    )
+    assert "draft pull request" in summary
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+    assert mock_run_workflow._publish_context["moonSpecGate"][
+        "publicationPolicy"
+    ] == "draft_pr_on_additional_work_needed"
+    assert "bounded remediation budget was exhausted" in (
+        mock_run_workflow._moonspec_draft_publication_body_section()
+    )
+
+
+def test_additional_work_draft_publish_patch_preserves_old_history_behavior(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "ADDITIONAL_WORK_NEEDED"},
+    )
+
+    assert (
+        mock_run_workflow._moonspec_draft_publication_policy(
+            environment_blocked_enabled=True,
+            additional_work_enabled=False,
+        )
+        is None
+    )
+
+
 def test_moonspec_draft_publication_supersedes_blocking_gate(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
