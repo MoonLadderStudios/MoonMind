@@ -325,24 +325,30 @@ samp {
   display: inline-flex;
   align-items: center;
   justify-self: start;
-  gap: 0.25rem;
+  gap: 0.2rem;
   min-width: 0;
-  padding: 0.18rem;
-  border: 1px solid rgb(var(--mm-border) / 0.7);
-  border-radius: 0.55rem;
-  background: rgb(var(--mm-panel) / 0.68);
+  /* Tightened so the group no longer out-sizes the always-present nav buttons
+   * and its presence/absence stops changing the masthead height. */
+  padding: 0.12rem;
+  /* Liquid-glass border to match the System trigger and the primary nav
+   * buttons: the inset top edge highlight makes the perimeter read as
+   * non-uniform glass rather than a flat 1px stroke. */
+  border: 1px solid var(--mm-glass-border);
+  border-radius: 0.5rem;
+  background: var(--mm-glass-fill);
+  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
 .workflow-list-display-option {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  min-width: 2rem;
+  width: 1.6rem;
+  height: 1.6rem;
+  min-width: 1.6rem;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 0.42rem;
+  border-radius: 0.4rem;
   background: transparent;
   color: rgb(var(--mm-muted));
   box-shadow: none;
@@ -620,6 +626,21 @@ h1 {
   transition: background 130ms ease, color 130ms ease;
 }
 
+/* Workflows and Create adopt the same liquid-glass button treatment as the
+ * System trigger (translucent fill + inset glass border/edge highlight), minus
+ * the dropdown arrow and menu behavior. Scoped to `.route-nav-primary` so the
+ * System popover menu items — which also match `.route-nav a` — keep their flat
+ * menu-row look. The border is an inset box-shadow (not a real border) so the
+ * link box height, and thus the active underline on the masthead edge, is
+ * unchanged. Higher-specificity :hover / :focus-visible / .active rules still
+ * win, so those states are preserved. */
+.route-nav-primary a {
+  background: var(--mm-glass-fill);
+  box-shadow:
+    inset 0 0 0 1px var(--mm-glass-border),
+    inset 0 1px 0 var(--mm-glass-edge);
+}
+
 .route-nav-icon {
   width: 1rem;
   height: 1rem;
@@ -674,7 +695,14 @@ h1 {
   padding: 0.48rem 0.82rem;
   border: 0;
   border-radius: 0.5rem;
-  background: transparent;
+  /* Liquid-glass button: translucent fill with the border drawn as an inset
+   * box-shadow (not a real border) so the box size — and therefore the active
+   * underline position on the masthead's bottom edge — is unchanged. The extra
+   * top-edge highlight makes the perimeter read as non-uniform glass. */
+  background: var(--mm-glass-fill);
+  box-shadow:
+    inset 0 0 0 1px var(--mm-glass-border),
+    inset 0 1px 0 var(--mm-glass-edge);
   color: rgb(var(--mm-ink) / 0.82);
   font: inherit;
   font-size: 0.9rem;
@@ -740,6 +768,22 @@ h1 {
 .dashboard-system-popover a {
   display: flex;
   width: 100%;
+}
+
+/* The System trigger keeps its purple underline when a System destination is
+ * active, but the selected row inside the open popover must not repeat that
+ * underline. Suppress the masthead underline on every popover row (it also
+ * matches `.route-nav a`) and mark the open selection the way the collection
+ * sidebar does instead: a left accent bar plus a faint accent fill. */
+.dashboard-system-popover a::after,
+.dashboard-system-popover a.active::after {
+  content: none;
+}
+
+.dashboard-system-popover a.active {
+  color: rgb(var(--mm-ink));
+  background: rgb(var(--mm-accent) / 0.12);
+  box-shadow: inset 3px 0 0 rgb(var(--mm-accent));
 }
 
 .dashboard-system-inline {
@@ -1584,6 +1628,13 @@ h1 {
 
 .schedules-page {
   width: 100%;
+}
+
+/* Recurring Schedules list: the routed panel bleeds to the nav's bottom border,
+ * so give the heading a little breathing room below that line. The detail view
+ * lives in a workspace shell that already insets its content, so exclude it. */
+.schedules-page:not(.schedules-detail-page) {
+  padding-top: 1.25rem;
 }
 
 .entity-detail-frame {
@@ -5936,6 +5987,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   object-fit: contain;
 }
 
+/* Create workflow page: the routed panel bleeds to the nav's bottom border, so
+ * give the page's first heading a little breathing room below that line. */
+.workflow-start-page {
+  padding-top: 1.25rem;
+}
+
 .workflow-start-heading {
   margin-bottom: 0.35rem;
 }
@@ -7994,32 +8051,45 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow-wrap: anywhere;
 }
 
-/* Compact "+" affordance that opens the create-skill drawer. The accessible
- * name and native tooltip both read "Create New Skill". */
-.skills-create-button {
+/* Green "+" affordance that lives in the masthead nav (to the right of the
+ * System dropdown) and opens the create-skill drawer on the Skills pages. The
+ * accessible name and native tooltip both read "Create New Skill". It uses the
+ * same inset glass-border technique as the nav buttons, tinted with the success
+ * green, and stays a touch shorter than the nav links so it never drives the
+ * masthead height. */
+.skills-create-nav-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  padding: 0;
-  border: 1px solid rgb(var(--mm-accent) / 0.6);
-  border-radius: 0.6rem;
-  background: rgb(var(--mm-accent) / 0.14);
-  color: rgb(var(--mm-accent));
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-ok) / 0.16);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--mm-ok) / 0.55),
+    inset 0 1px 0 var(--mm-glass-edge);
+  color: rgb(var(--mm-ok));
   cursor: pointer;
+  transition: background 130ms ease, color 130ms ease, box-shadow 130ms ease;
 }
 
-.skills-create-button:hover,
-.skills-create-button:focus-visible {
-  border-color: rgb(var(--mm-accent-2) / 0.72);
-  background: rgb(var(--mm-accent-2) / 0.16);
-  color: rgb(var(--mm-ink));
+.skills-create-nav-button:hover {
+  background: rgb(var(--mm-ok) / 0.24);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--mm-ok) / 0.8),
+    inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.skills-create-button:focus-visible {
+.skills-create-nav-button:focus-visible {
   outline: none;
   box-shadow: var(--mm-control-focus-ring);
+}
+
+.skills-create-nav-button svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: 0 0 auto;
+  stroke-width: 2.4;
 }
 
 .workflow-start-primary,

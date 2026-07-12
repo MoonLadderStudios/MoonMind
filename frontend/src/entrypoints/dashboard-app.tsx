@@ -21,7 +21,7 @@ import {
   useNavigate,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
-import { PanelLeft, Rows3, ScrollText, Square } from 'lucide-react';
+import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   RocketIcon,
   type RocketIconHandle,
@@ -63,6 +63,7 @@ import {
   workflowListApiQueryFromContext,
 } from '../lib/workflowListContext';
 import { requestWorkflowStartRouteChange } from '../lib/workflowStartRouteGuard';
+import { requestSkillsCreate } from '../lib/skillsCreateRequest';
 import { decodeWorkflowIdFromPath } from '../lib/workflowDetailRoutes';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
@@ -673,6 +674,8 @@ function DashboardNavigation({
   const location = useLocation();
   const isWorkflowStart = location.pathname.replace(/\/$/, '') === '/workflows/new';
   const isWorkflowDetail = location.pathname.startsWith('/workflows/') && !isWorkflowStart;
+  const normalizedPath = location.pathname.replace(/\/$/, '');
+  const isSkillsRoute = normalizedPath === '/skills' || normalizedPath.startsWith('/skills/');
   const visiblePrimaryKeys = new Set(visiblePrimaryDestinations(uiInfo).map(({ key }) => key));
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
@@ -816,6 +819,18 @@ function DashboardNavigation({
             ) : null}
           </div>
           <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
+          {isSkillsRoute ? (
+            <button
+              type="button"
+              className="skills-create-nav-button"
+              data-skills-create-trigger
+              onClick={() => requestSkillsCreate()}
+              aria-label="Create New Skill"
+              title="Create New Skill"
+            >
+              <Plus size={18} aria-hidden="true" />
+            </button>
+          ) : null}
         </nav>
       </div>
 

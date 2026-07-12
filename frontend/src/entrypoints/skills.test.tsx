@@ -5,6 +5,14 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { SkillsPage } from './skills';
+import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+
+// The "Create New Skill" trigger now lives in the masthead nav (outside the
+// SkillsPage subtree these tests mount), so open the drawer the same way the
+// nav button does: by dispatching the create-request window event.
+function requestSkillCreateDrawer() {
+  fireEvent(window, new Event(SKILLS_CREATE_REQUEST_EVENT));
+}
 
 type SkillsDisplayMode = 'hidden' | 'sidebar' | 'table';
 
@@ -391,8 +399,8 @@ describe('Skills Entrypoint', () => {
   it('creates a new skill, refreshes the list, and navigates to the created skill', async () => {
     renderSkills({ path: '/skills' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
-    fireEvent.change(screen.getByLabelText('Skill Name'), {
+    requestSkillCreateDrawer();
+    fireEvent.change(await screen.findByLabelText('Skill Name'), {
       target: { value: 'fresh-skill' },
     });
     fireEvent.change(screen.getByLabelText('Skill Markdown'), {
@@ -431,7 +439,7 @@ describe('Skills Entrypoint', () => {
   it('uploads a skill zip, refreshes the list, and navigates to the uploaded skill', async () => {
     renderSkills({ path: '/skills' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
     const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
     fireEvent.change(screen.getByLabelText('Skill Zip'), {
       target: { files: [file] },
@@ -459,7 +467,7 @@ describe('Skills Entrypoint', () => {
   it('keeps the shared skill sidebar mounted while create and upload are open', async () => {
     renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
 
     expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
     expect(screen.getByRole('complementary', { name: 'Skill navigation' })).toBeTruthy();
@@ -497,7 +505,7 @@ describe('Skills Entrypoint', () => {
   it('validates the skill name before submitting a create request', async () => {
     renderSkills({ path: '/skills' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
     fireEvent.change(screen.getByLabelText('Skill Markdown'), {
       target: { value: '# Body\n\nNeeds a name.' },
     });
@@ -528,7 +536,7 @@ describe('Skills Entrypoint', () => {
   it('shows an error when uploading a zip without choosing a file', async () => {
     renderSkills({ path: '/skills' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
     fireEvent.click(screen.getByRole('button', { name: 'Upload Zip' }));
 
     await waitFor(() => {
@@ -544,7 +552,7 @@ describe('Skills Entrypoint', () => {
   it('sends the collision policy when uploading a zip and does not expose the unsupported new-version mode', async () => {
     renderSkills({ path: '/skills' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
     const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
     fireEvent.change(screen.getByLabelText('Skill Zip'), {
       target: { files: [file] },
@@ -569,7 +577,7 @@ describe('Skills Entrypoint', () => {
   it('closes the create drawer when cancel or escape is used', async () => {
     renderSkills({ path: '/skills' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
     expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -577,7 +585,7 @@ describe('Skills Entrypoint', () => {
       expect(screen.queryByRole('dialog', { name: 'Create or upload skill' })).toBeNull();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create New Skill' }));
+    requestSkillCreateDrawer();
     const dialog = screen.getByRole('dialog', { name: 'Create or upload skill' });
     expect(dialog).toBeTruthy();
 
@@ -587,13 +595,18 @@ describe('Skills Entrypoint', () => {
     });
   });
 
-  it('traps focus in the create drawer and restores it to the trigger', async () => {
+  it('traps focus in the create drawer and restores it to the nav trigger', async () => {
+    // The real trigger lives in the masthead nav outside this subtree; stand in
+    // for it with a matching element so the drawer's focus-restore has a target.
+    const navTrigger = document.createElement('button');
+    navTrigger.setAttribute('data-skills-create-trigger', '');
+    document.body.appendChild(navTrigger);
+
     renderSkills({ path: '/skills' });
 
-    const trigger = await screen.findByRole('button', { name: 'Create New Skill' });
-    trigger.focus();
-    fireEvent.click(trigger);
-    const dialog = screen.getByRole('dialog', { name: 'Create or upload skill' });
+    navTrigger.focus();
+    requestSkillCreateDrawer();
+    const dialog = await screen.findByRole('dialog', { name: 'Create or upload skill' });
     const close = screen.getByRole('button', { name: 'Close create skill' });
     const lastAction = screen.getByRole('button', { name: 'Upload Zip' });
     dialog.querySelectorAll<HTMLElement>('button, input, textarea, select').forEach((element) => {
@@ -609,7 +622,9 @@ describe('Skills Entrypoint', () => {
     expect(document.activeElement).toBe(close);
 
     fireEvent.keyDown(dialog, { key: 'Escape' });
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await waitFor(() => expect(document.activeElement).toBe(navTrigger));
+
+    navTrigger.remove();
   });
 
   it('renders markdown without unsafe HTML or links', async () => {
