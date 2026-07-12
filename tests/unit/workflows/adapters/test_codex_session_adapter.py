@@ -1225,10 +1225,11 @@ async def test_start_passes_oauth_profile_auth_target_to_launch_session(
                     "runtime_id": "codex_cli",
                     "provider_id": "openai",
                     "credential_source": "oauth_volume",
-                    "runtime_materialization_mode": "oauth_home",
-                    "volume_ref": "codex_auth_volume",
-                    "volume_mount_path": "/home/app/.codex-auth",
-                }
+                        "runtime_materialization_mode": "oauth_home",
+                        "volume_ref": "codex_auth_volume",
+                        "volume_mount_path": "/home/app/.codex-auth",
+                        "max_parallel_runs": 1,
+                    }
             ]
         ),
         slot_requester=_async_noop,
