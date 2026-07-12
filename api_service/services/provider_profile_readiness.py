@@ -27,6 +27,13 @@ def provider_profile_launch_ready(
         return False
     if not row.max_parallel_runs or row.max_parallel_runs <= 0:
         return False
+    if _codex_oauth_capacity_invalid(
+        runtime_id=row.runtime_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
+        max_parallel_runs=row.max_parallel_runs,
+    ):
+        return False
     if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
         return False
     if not _credential_bindings_launch_ready(
@@ -44,6 +51,20 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
         return False
     if profile.get("launch_ready") is False or profile.get("launchReady") is False:
         return False
+    if _codex_oauth_capacity_invalid(
+        runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
+        credential_source=profile.get(
+            "credential_source", profile.get("credentialSource")
+        ),
+        materialization_mode=profile.get(
+            "runtime_materialization_mode",
+            profile.get("runtimeMaterializationMode"),
+        ),
+        max_parallel_runs=profile.get(
+            "max_parallel_runs", profile.get("maxParallelRuns")
+        ),
+    ):
+        return False
 
     readiness = profile.get("readiness")
     if isinstance(readiness, dict):
@@ -58,6 +79,25 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
         return _provider_validation_launch_ready(command_behavior)
 
     return True
+
+
+def _enum_value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _codex_oauth_capacity_invalid(
+    *,
+    runtime_id: Any,
+    credential_source: Any,
+    materialization_mode: Any,
+    max_parallel_runs: Any,
+) -> bool:
+    return (
+        _enum_value(runtime_id) == "codex_cli"
+        and _enum_value(credential_source) == "oauth_volume"
+        and _enum_value(materialization_mode) == "oauth_home"
+        and max_parallel_runs != 1
+    )
 
 
 def _credential_bindings_launch_ready(

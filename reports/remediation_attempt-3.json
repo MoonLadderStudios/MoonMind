@@ -1,58 +1,80 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 3,
-  "issueRef": "MM-1201",
-  "sourceVerificationArtifact": "reports/remediation_verification-2.json",
+  "issueRef": "MM-1207",
+  "sourceVerificationArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "partial",
-  "summary": "Preserved authoritative terminal-evidence details through the parent failure projection and dashboard, and upgraded the escaped-failure replay to cross the AgentRun terminal-evaluation activity boundary. Runtime-neutral capability-aware continuation remains open.",
+  "summary": "Closed the verifier-reported migration and readiness portion of Codex OAuth concurrency-one enforcement. Legacy rows are repaired by migration, the database rejects future nonexclusive Codex OAuth rows, and both DB-backed and payload-backed launch readiness reject max_parallel_runs other than one.",
   "changedFiles": [
-    "moonmind/workflows/temporal/workflows/run.py",
-    "frontend/src/entrypoints/workflow-detail.tsx",
-    "tests/unit/workflows/temporal/workflows/test_run_integration.py",
-    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "api_service/migrations/versions/336_codex_oauth_exclusive_capacity.py",
+    "api_service/services/provider_profile_readiness.py",
+    "api_service/api/routers/provider_profiles.py",
+    "tests/unit/api_service/api/routers/test_provider_profiles.py",
+    "tests/unit/api_service/test_codex_oauth_capacity_migration.py",
     "reports/remediation_attempt-3.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Runtime-neutral capability-aware continuation",
-      "status": "open",
-      "evidence": "Bounded continuation remains implemented inside CodexSessionAdapter; attempt 3 did not safely complete the workflow-owned capability-aware refactor.",
-      "remaining": "Move the continuation decision and retry bound into replay-safe AgentRun orchestration using an immutable runtime capability snapshot, with supported and unsupported runtime tests."
+      "requirement": "Complete concurrency-one enforcement across the profile lifecycle",
+      "status": "PARTIAL",
+      "resolvedInAttempt": "Added migration repair plus a database check constraint and made canonical DB/payload readiness reject nonexclusive Codex OAuth profiles.",
+      "remaining": "Runtime selection, host allocation, reconnect, and disconnect must still acquire the shared exclusive lease; focused pytest execution remains unavailable in this runtime."
     },
     {
-      "requirement": "Coherent parent and UI projections",
-      "status": "resolved",
-      "evidence": "Parent failure diagnostics now retain failureCode, terminalContractId, terminalContractMissingEvidence, queuedChildCount, and queuedChildren. The final summary and dashboard render the same failure code, queued count, diagnostics reference, and partial child workflow IDs; targeted parent and frontend suites pass.",
-      "remaining": null
+      "requirement": "Use one exclusive capacity lane for all consumers and maintenance",
+      "status": "NOT_STARTED",
+      "remaining": "Wire direct, Omnigent, reconnect, disconnect, and credential maintenance consumers to provider-profile-manager:codex_cli with release-last semantics."
     },
     {
-      "requirement": "Real reliability replay",
-      "status": "partial",
-      "evidence": "The MM-1201 replay now drives MoonMindAgentRun._evaluate_terminal_contract through TemporalAgentRuntimeActivities.agent_runtime_evaluate_terminal_evidence and proves the AgentRun authority metadata and execution_error result. Parent finalization/projection is covered by the focused parent workflow test, but not yet in the same integration replay.",
-      "remaining": "Extend the minimized integration replay through parent finalization/projection after the AgentRun failure result."
+      "requirement": "Define secret-free credential, binding, generation, and host-lease contracts",
+      "status": "NOT_STARTED",
+      "remaining": "Add runtime-neutral durable refs, ownership and generation validation, and cross-profile rejection."
+    },
+    {
+      "requirement": "Materialize and preflight the exact destination OAuth home",
+      "status": "NOT_STARTED",
+      "remaining": "Implement selected-volume mount, competing-credential clearing, permission repair, and destination-host login/harness/generation checks."
+    },
+    {
+      "requirement": "Provide profile-bound static and on-demand hosts and routing",
+      "status": "NOT_STARTED",
+      "remaining": "Implement the common binding/readiness contract, profile resolution, exact-host routing, and retry-safe launch behavior."
+    },
+    {
+      "requirement": "Implement generation, drain, cleanup, reconciliation, and recovery",
+      "status": "NOT_STARTED",
+      "remaining": "Coordinate generation advancement and drain, reject stale hosts, release last, reconcile stale state, and persist safe recovery refs."
+    },
+    {
+      "requirement": "Expose redacted lifecycle diagnostics and failure attribution",
+      "status": "NOT_STARTED",
+      "remaining": "Publish secret-safe profile, lease, binding, preflight, session, terminal, cooldown/authentication, and cleanup evidence."
+    },
+    {
+      "requirement": "Add required boundary and combined-stack verification",
+      "status": "PARTIAL",
+      "resolvedInAttempt": "Added readiness and migration regression tests.",
+      "remaining": "Run the tests in an environment with pytest and add lifecycle boundary coverage as each remaining production seam is implemented."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability/test_escaped_failure_journeys.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short",
-      "result": "PASS",
-      "details": "126 passed in 4.21s."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/test_codex_oauth_capacity_migration.py",
+      "status": "BLOCKED",
+      "details": "The runner completed repository audits but Python reported: No module named pytest. No tests started."
     },
     {
-      "command": "npm run ui:test -- frontend/src/entrypoints/workflow-detail.test.tsx",
-      "result": "PASS",
-      "details": "183 passed in 25.40s."
+      "command": "python tools/check_alembic_graph.py",
+      "status": "PASS",
+      "details": "One migration head: 336_codex_oauth_capacity."
     },
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/workflow-detail.test.tsx",
-      "result": "FAIL",
-      "details": "The command unexpectedly selected the broad Python unit suite before the UI target and exposed two unrelated pre-existing missing moonspec/bundle fixture files; it was stopped after recording the failures. The documented direct focused frontend command then passed."
+      "command": "python -m py_compile api_service/services/provider_profile_readiness.py api_service/api/routers/provider_profiles.py api_service/migrations/versions/336_codex_oauth_exclusive_capacity.py tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/test_codex_oauth_capacity_migration.py",
+      "status": "PASS"
     },
     {
       "command": "git diff --check",
-      "result": "PASS",
-      "details": "No whitespace errors."
+      "status": "PASS"
     }
   ]
 }

@@ -31,7 +31,10 @@ from api_service.services.provider_profile_service import (
     _manager_profile_payload,
     normalize_runtime_default_profile,
 )
-from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+from api_service.services.provider_profile_readiness import (
+    provider_profile_launch_ready,
+    provider_profile_launch_ready_from_payload,
+)
 from api_service.api.routers.provider_profiles import ProviderProfileCreate
 
 
@@ -384,6 +387,34 @@ def test_launch_ready_rejects_malformed_secret_refs() -> None:
     profile.secret_refs = {"provider_api_key": 123}
 
     assert provider_profile_launch_ready(profile) is False
+
+
+def test_launch_ready_rejects_nonexclusive_codex_oauth_profile() -> None:
+    profile = _TrackedProfile(
+        profile_id="codex_oauth_legacy_capacity",
+        runtime_id="codex_cli",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        events=[],
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        max_parallel_runs=2,
+    )
+
+    assert provider_profile_launch_ready(profile) is False
+
+    assert provider_profile_launch_ready_from_payload(
+        {
+            "runtimeId": "codex_cli",
+            "credentialSource": "oauth_volume",
+            "runtimeMaterializationMode": "oauth_home",
+            "maxParallelRuns": 2,
+        }
+    ) is False
 
 
 @pytest.mark.asyncio

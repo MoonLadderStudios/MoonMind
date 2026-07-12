@@ -1804,15 +1804,28 @@ def _oauth_volume_check(
 
 def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
     has_capacity = bool(row.max_parallel_runs and row.max_parallel_runs > 0)
+    requires_exclusive_capacity = (
+        row.runtime_id == "codex_cli"
+        and row.credential_source == ProviderCredentialSource.OAUTH_VOLUME
+        and row.runtime_materialization_mode == RuntimeMaterializationMode.OAUTH_HOME
+    )
+    valid_capacity = has_capacity and (
+        not requires_exclusive_capacity or row.max_parallel_runs == 1
+    )
+    if requires_exclusive_capacity and row.max_parallel_runs != 1:
+        message = (
+            "Codex OAuth Provider Profiles require max_parallel_runs=1 because "
+            "the OAuth home contains mutable refresh-token and credential state."
+        )
+    elif has_capacity:
+        message = f"Profile allows {row.max_parallel_runs} parallel run(s)."
+    else:
+        message = "Profile has no available configured concurrency."
     return _readiness_check(
         "concurrency",
         "Concurrency",
-        "pass" if has_capacity else "error",
-        (
-            f"Profile allows {row.max_parallel_runs} parallel run(s)."
-            if has_capacity
-            else "Profile has no available configured concurrency."
-        ),
+        "pass" if valid_capacity else "error",
+        message,
     )
 
 
