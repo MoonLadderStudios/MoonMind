@@ -208,7 +208,7 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
         return {
             "summary": "durable handoff",
             "failureClass": "execution_error",
-            "providerErrorCode": "CLI_NONZERO_EXIT",
+            "providerErrorCode": "PR_RESOLVER_REENTER_GATE",
             "metadata": {
                 "terminalContractOutcome": "continuation_requested",
                 "mergeAutomationDisposition": "reenter_gate",
@@ -227,6 +227,59 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
         == "durable_parent_handoff"
     )
     assert result.metadata["terminalContractContinuationCount"] == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_class", "provider_error_code"),
+    [
+        ("integration_error", "AUTHENTICATION_FAILED"),
+        ("integration_error", "RATE_LIMITED"),
+        ("system_error", "MANAGED_RUNTIME_UNAVAILABLE"),
+        ("execution_error", "CLI_NONZERO_EXIT"),
+    ],
+)
+async def test_continuation_metadata_does_not_suppress_runtime_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_class: str,
+    provider_error_code: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = AgentExecutionRequest.model_validate(
+        {
+            **_request_with_terminal_contract().model_dump(by_alias=True),
+            "managedSession": None,
+            "agentId": "claude_code",
+            "terminalContinuationAuthority": {
+                "schemaVersion": "terminal-continuation-authority/v1",
+                "gateType": "merge_automation",
+                "ownerWorkflowId": "merge-automation:1",
+                "ownerRunId": "owner-run-1",
+                "allowedActions": ["reenter_gate"],
+                "source": "validated_temporal_parent",
+            },
+        }
+    )
+
+    async def fake_activity(_name: str, _payload: Any, **_kwargs: Any) -> Any:
+        return {
+            "summary": "runtime failed",
+            "failureClass": failure_class,
+            "providerErrorCode": provider_error_code,
+            "metadata": {"terminalContractOutcome": "continuation_requested"},
+        }
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+    result = await run._evaluate_terminal_contract(
+        request=request, result=AgentRunResult(summary="initial")
+    )
+
+    assert result.failure_class == failure_class
+    assert result.provider_error_code == provider_error_code
+    assert (
+        result.metadata["terminalContractRecoveryOutcome"]
+        == "continuation_rejected_failure_provenance"
+    )
 
 
 async def test_terminal_contract_continuation_exhaustion_is_agent_run_owned(

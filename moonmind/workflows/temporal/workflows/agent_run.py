@@ -1987,6 +1987,10 @@ class MoonMindAgentRun:
                 raise
             owned_continuation_enabled = True
         continuation_authority = request.terminal_continuation_authority
+        synthetic_reenter_gate_failure = (
+            evaluated.failure_class == "execution_error"
+            and evaluated.provider_error_code == "PR_RESOLVER_REENTER_GATE"
+        )
         if (
             owned_continuation_enabled
             and (evaluated.metadata or {}).get("terminalContractOutcome")
@@ -1995,6 +1999,7 @@ class MoonMindAgentRun:
             and continuation_authority.allows(
                 gate_type="merge_automation", action="reenter_gate"
             )
+            and synthetic_reenter_gate_failure
         ):
             metadata = dict(evaluated.metadata or {})
             metadata.update(
@@ -2004,6 +2009,7 @@ class MoonMindAgentRun:
                     "gateType": continuation_authority.gate_type,
                     "gateAction": "reenter_gate",
                     "gateOwnerWorkflowId": continuation_authority.owner_workflow_id,
+                    "gateOwnerRunId": continuation_authority.owner_run_id,
                 }
             )
             return evaluated.model_copy(
@@ -2019,9 +2025,14 @@ class MoonMindAgentRun:
             == "continuation_requested"
         ):
             metadata = dict(evaluated.metadata or {})
+            rejection = (
+                "continuation_rejected_failure_provenance"
+                if continuation_authority is not None
+                else "continuation_rejected_unowned"
+            )
             metadata.update(
                 {
-                    "terminalContractRecoveryOutcome": "continuation_rejected_unowned",
+                    "terminalContractRecoveryOutcome": rejection,
                     "terminalContractContinuationCount": 0,
                 }
             )

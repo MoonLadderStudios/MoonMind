@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -1447,6 +1448,45 @@ def test_contract_finalize_retry_next_step_returns_reenter_gate(
 
     assert disposition == "reenter_gate"
 
+
+def test_direct_finalizer_preserves_original_codex_review_deadline(
+    pr_resolve_finalize_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    write_result = pr_resolve_finalize_module["_write_result"]
+    result_path = tmp_path / "result.json"
+    expires_at = "2026-07-12T05:05:49Z"
+    snapshot = {
+        "pr": {
+            "number": 1209,
+            "url": "https://example.invalid/pull/1209",
+            "headRefOid": "a8bb8c756f69e4508ed20776890417ba01d89c8d",
+        },
+        "commentsSummary": {
+            "codexReviewGrace": {
+                "active": True,
+                "expiresAt": expires_at,
+                "pollSeconds": 60,
+            }
+        },
+    }
+
+    write_result(
+        result_path,
+        snapshot=snapshot,
+        decision="blocked",
+        merge_outcome="blocked",
+        status="blocked",
+        reason="codex_review_grace_wait",
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    continuation = payload["gatedContinuation"]
+    assert continuation["notBefore"] == expires_at
+    assert continuation["executionRef"]
+    assert continuation["headSha"] == snapshot["pr"]["headRefOid"]
+    assert "retryAfterSeconds" not in continuation
+
 def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     pr_resolve_finalize_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -1488,7 +1528,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     payload = result_path.read_text(encoding="utf-8")
     assert '"status": "blocked"' in payload
     assert '"reason": "snapshot_refresh_failed"' in payload
-    assert '"mergeAutomationDisposition": "reenter_gate"' in payload
+    assert '"mergeAutomationDisposition": "failed"' in payload
 
     monkeypatch.setattr(
         "sys.argv",
