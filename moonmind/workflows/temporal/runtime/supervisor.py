@@ -619,41 +619,35 @@ class ManagedRunSupervisor:
         live, working run from a genuinely stuck one. ``last_heartbeat_at`` is
         pure process liveness and is intentionally ignored by that watchdog.
         """
+        loop = asyncio.get_running_loop()
+        next_heartbeat_at = loop.time() + HEARTBEAT_INTERVAL
         while True:
             if process.returncode is not None:
                 return process.returncode
+            await asyncio.sleep(0.1)
+            if loop.time() < next_heartbeat_at:
+                continue
+            next_heartbeat_at = loop.time() + HEARTBEAT_INTERVAL
+            if no_output_callback is not None:
+                await no_output_callback(datetime.now(tz=UTC))
             try:
-                exit_code = await asyncio.wait_for(
-                    process.wait(), timeout=HEARTBEAT_INTERVAL
-                )
-                return exit_code
-            except asyncio.TimeoutError:
-                # asyncio's subprocess wait can remain blocked until inherited
-                # stdout/stderr pipes close even after the direct child exits.
-                # The transport still publishes returncode at child exit, which
-                # lets the caller clean up descendants before awaiting streams.
-                if process.returncode is not None:
-                    return process.returncode
-                if no_output_callback is not None:
-                    await no_output_callback(datetime.now(tz=UTC))
-                try:
-                    activity.heartbeat({"run_id": run_id})
-                except Exception as e:
-                    # Activity heartbeat failures are non-fatal for the supervisor loop
-                    logger.debug("Activity heartbeat failed: %s", e)
-                progress_fields: dict[str, Any] = {}
-                if progress_snapshot is not None:
-                    last_log_at, last_log_offset = progress_snapshot()
-                    if last_log_at is not None:
-                        progress_fields["last_log_at"] = last_log_at
-                    if last_log_offset is not None:
-                        progress_fields["last_log_offset"] = last_log_offset
-                self._store.update_status(
-                    run_id,
-                    "running",
-                    last_heartbeat_at=datetime.now(tz=UTC),
-                    **progress_fields,
-                )
+                activity.heartbeat({"run_id": run_id})
+            except Exception as e:
+                # Activity heartbeat failures are non-fatal for the supervisor loop
+                logger.debug("Activity heartbeat failed: %s", e)
+            progress_fields: dict[str, Any] = {}
+            if progress_snapshot is not None:
+                last_log_at, last_log_offset = progress_snapshot()
+                if last_log_at is not None:
+                    progress_fields["last_log_at"] = last_log_at
+                if last_log_offset is not None:
+                    progress_fields["last_log_offset"] = last_log_offset
+            self._store.update_status(
+                run_id,
+                "running",
+                last_heartbeat_at=datetime.now(tz=UTC),
+                **progress_fields,
+            )
 
     async def _heartbeat_and_wait_with_timeout(
         self,
