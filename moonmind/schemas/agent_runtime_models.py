@@ -554,12 +554,29 @@ class AgentTerminalContinuationAuthority(BaseModel):
     )
     gate_type: Literal["merge_automation"] = Field(alias="gateType")
     owner_workflow_id: str = Field(alias="ownerWorkflowId", min_length=1)
-    owner_run_id: str | None = Field(None, alias="ownerRunId", min_length=1)
+    owner_run_id: str = Field(alias="ownerRunId", min_length=1)
+    owner_workflow_type: Literal["MoonMind.MergeAutomation"] = Field(
+        "MoonMind.MergeAutomation", alias="ownerWorkflowType"
+    )
     allowed_actions: list[Literal["reenter_gate"]] = Field(alias="allowedActions")
     source: Literal["validated_temporal_parent"]
 
-    def allows(self, *, gate_type: str, action: str) -> bool:
-        return self.gate_type == gate_type and action in self.allowed_actions
+    def allows(
+        self,
+        *,
+        gate_type: str,
+        action: str,
+        owner_workflow_id: str | None = None,
+        owner_run_id: str | None = None,
+        owner_workflow_type: str = "MoonMind.MergeAutomation",
+    ) -> bool:
+        return (
+            self.gate_type == gate_type
+            and action in self.allowed_actions
+            and self.owner_workflow_type == owner_workflow_type
+            and (owner_workflow_id is None or self.owner_workflow_id == owner_workflow_id)
+            and (owner_run_id is None or self.owner_run_id == owner_run_id)
+        )
 
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""

@@ -102,6 +102,15 @@ actual parent topology; user parameters are never sufficient proof. Once the
 managed CLI exits, detached descendants are not ongoing managed work and must
 not be used as completion evidence.
 
+An accepted handoff clears only the synthetic
+`PR_RESOLVER_REENTER_GATE` classification introduced by terminal-contract
+evaluation. An explicitly typed handoff-compatible process exit may be added to
+the contract in the future, but generic nonzero exits are not sufficient.
+Provider, authentication, rate-limit, infrastructure, timeout, cancellation,
+stale-evidence, and malformed-evidence failures remain terminal. Handoffs expose
+their outcome, owner tuple, reason, timing source, and requested/accepted or
+rejected counters in compact AgentRun metadata and metrics.
+
 ### 2.1 Unified lifecycle
 
 Both managed and external agents follow the same lifecycle shape:

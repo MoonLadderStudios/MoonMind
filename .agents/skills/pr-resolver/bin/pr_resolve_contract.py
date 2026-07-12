@@ -53,6 +53,66 @@ def normalize_text(value: Any) -> str:
 def current_execution_ref() -> str | None:
     return normalize_text(os.getenv("MOONMIND_STEP_EXECUTION_ID")) or None
 
+
+def build_gated_continuation(
+    snapshot: dict[str, Any],
+    *,
+    reason: str,
+    execution_ref: str,
+) -> dict[str, Any]:
+    """Build the typed handoff from the Skill's already-recorded gate state."""
+    pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
+    comments = (
+        snapshot.get("commentsSummary")
+        if isinstance(snapshot.get("commentsSummary"), dict)
+        else {}
+    )
+    grace = (
+        comments.get("codexReviewGrace")
+        if isinstance(comments.get("codexReviewGrace"), dict)
+        else {}
+    )
+    head_sha = normalize_text(pr.get("headRefOid"))
+    if not execution_ref:
+        raise ValueError("gated continuation requires an execution reference")
+    if len(head_sha) < 7 or len(head_sha) > 64 or any(
+        char not in "0123456789abcdefABCDEF" for char in head_sha
+    ):
+        raise ValueError("gated continuation requires a valid head SHA")
+    payload: dict[str, Any] = {
+        "schemaVersion": "gated-continuation/v1",
+        "gateType": "merge_automation",
+        "action": "reenter_gate",
+        "reason": normalize_text(reason) or "resolver_wait",
+        "executionRef": execution_ref,
+        "headSha": head_sha,
+    }
+    if reason == "codex_review_grace_wait":
+        expires_at = normalize_text(grace.get("expiresAt"))
+        try:
+            deadline = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("codex review grace requires a valid expiresAt") from exc
+        if deadline.tzinfo is None:
+            raise ValueError("codex review grace expiresAt must be timezone-aware")
+        payload["notBefore"] = deadline.astimezone(UTC).isoformat().replace(
+            "+00:00", "Z"
+        )
+    else:
+        poll_seconds = grace.get("pollSeconds", 60)
+        try:
+            if isinstance(poll_seconds, bool):
+                raise ValueError
+            poll_value = int(poll_seconds)
+            if poll_value < 1:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "gated continuation retry delay must be positive"
+            ) from exc
+        payload["retryAfterSeconds"] = poll_value
+    return payload
+
 def parse_reason(result_payload: dict[str, Any]) -> str:
     return normalize_text(
         result_payload.get("final_reason") or result_payload.get("reason")

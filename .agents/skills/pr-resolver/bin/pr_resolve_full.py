@@ -24,6 +24,7 @@ from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_MERGED,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
+    build_gated_continuation,
     current_execution_ref,
     merge_automation_disposition_for_result,
     normalize_text,
@@ -95,6 +96,17 @@ def _write_result(
     if reason:
         payload["reason"] = reason
         payload["final_reason"] = reason
+    if payload["mergeAutomationDisposition"] == "reenter_gate":
+        try:
+            payload["gatedContinuation"] = build_gated_continuation(
+                snapshot,
+                reason=reason or "resolver_wait",
+                execution_ref=(
+                    payload["executionRef"] or "local:pr_resolve_full"
+                ),
+            )
+        except ValueError:
+            payload["mergeAutomationDisposition"] = "failed"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -968,17 +969,28 @@ def test_orchestrate_no_progress_after_ci_wait_uses_min_attempt_floor(
     full_calls: list[tuple[int, int, str]] = []
     sleeps: list[int] = []
 
-    def finalize_runner(attempt: int) -> dict[str, str]:
+    def finalize_runner(attempt: int) -> dict[str, Any]:
+        continuation = {
+            "schemaVersion": "gated-continuation/v1",
+            "gateType": "merge_automation",
+            "action": "reenter_gate",
+            "reason": "resolver_wait",
+            "retryAfterSeconds": 60,
+            "executionRef": "step:1",
+            "headSha": "abcdef1234567890",
+        }
         if attempt == 1:
             return {
                 "status": "blocked",
                 "merge_outcome": "blocked",
                 "reason": "ci_running",
+                "gatedContinuation": continuation,
             }
         return {
             "status": "blocked",
             "merge_outcome": "blocked",
             "reason": "actionable_comments",
+            "gatedContinuation": continuation,
         }
 
     result, exit_code = run_orchestration(
@@ -1447,6 +1459,93 @@ def test_contract_finalize_retry_next_step_returns_reenter_gate(
 
     assert disposition == "reenter_gate"
 
+
+def test_gated_continuation_rejects_null_retry_delay(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    build = pr_resolve_contract_module["build_gated_continuation"]
+
+    with pytest.raises(ValueError, match="retry delay must be positive"):
+        build(
+            {
+                "pr": {"headRefOid": "abcdef1234567890"},
+                "commentsSummary": {
+                    "codexReviewGrace": {"pollSeconds": None}
+                },
+            },
+            reason="ci_running",
+            execution_ref="step:1",
+        )
+
+
+def test_full_result_emits_typed_reenter_gate_contract(
+    pr_resolve_full_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "full-result.json"
+    pr_resolve_full_module["_write_result"](
+        result_path,
+        snapshot={
+            "pr": {
+                "number": 1209,
+                "url": "https://example.invalid/pull/1209",
+                "headRefOid": "abcdef1234567890",
+            }
+        },
+        status="needs_remediation",
+        merge_outcome="blocked",
+        decision="remediation required",
+        reason="actionable_comments",
+        next_step="run_fix_comments_skill",
+        max_iterations=5,
+        merge_method="squash",
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["mergeAutomationDisposition"] == "reenter_gate"
+    assert payload["gatedContinuation"]["executionRef"]
+    assert payload["gatedContinuation"]["headSha"] == "abcdef1234567890"
+    assert payload["gatedContinuation"]["retryAfterSeconds"] == 60
+
+
+def test_direct_finalizer_preserves_original_codex_review_deadline(
+    pr_resolve_finalize_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    write_result = pr_resolve_finalize_module["_write_result"]
+    result_path = tmp_path / "result.json"
+    expires_at = "2026-07-12T05:05:49Z"
+    snapshot = {
+        "pr": {
+            "number": 1209,
+            "url": "https://example.invalid/pull/1209",
+            "headRefOid": "a8bb8c756f69e4508ed20776890417ba01d89c8d",
+        },
+        "commentsSummary": {
+            "codexReviewGrace": {
+                "active": True,
+                "expiresAt": expires_at,
+                "pollSeconds": 60,
+            }
+        },
+    }
+
+    write_result(
+        result_path,
+        snapshot=snapshot,
+        decision="blocked",
+        merge_outcome="blocked",
+        status="blocked",
+        reason="codex_review_grace_wait",
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    continuation = payload["gatedContinuation"]
+    assert continuation["notBefore"] == expires_at
+    assert continuation["executionRef"]
+    assert continuation["headSha"] == snapshot["pr"]["headRefOid"]
+    assert "retryAfterSeconds" not in continuation
+
 def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     pr_resolve_finalize_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -1488,7 +1587,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     payload = result_path.read_text(encoding="utf-8")
     assert '"status": "blocked"' in payload
     assert '"reason": "snapshot_refresh_failed"' in payload
-    assert '"mergeAutomationDisposition": "reenter_gate"' in payload
+    assert '"mergeAutomationDisposition": "failed"' in payload
 
     monkeypatch.setattr(
         "sys.argv",
@@ -1704,6 +1803,7 @@ def test_finalize_merge_request_waits_for_authoritative_merged_state(
         "pr": {
             "number": 3210,
             "state": "OPEN",
+            "headRefOid": "abcdef1234567890",
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "CLEAN",
         },
