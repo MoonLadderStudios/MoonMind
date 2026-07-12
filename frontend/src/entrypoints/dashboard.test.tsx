@@ -955,11 +955,11 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule')).toBe(true);
   });
 
-  function mockSkillsCatalogFetch(skillIds: string[]) {
+  function mockSkillsCatalogFetch(skillIds: string[], uiInfoOverrides: Record<string, unknown> = {}) {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
-        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+        return Promise.resolve({ ok: true, json: async () => uiInfo(uiInfoOverrides) } as Response);
       }
       if (url === '/api/workflows/skills') {
         return Promise.resolve({
@@ -1041,6 +1041,20 @@ describe('Dashboard shared entry', () => {
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+    expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
+  });
+
+  it('does not mount the Create New Skill button when the skills feature is disabled', async () => {
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver'], {
+      features: { ...uiInfo().features, skills: false },
+    });
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    // The skills page still renders for the route, but the masthead create
+    // affordance must stay hidden while the skills feature flag is off.
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Create New Skill' })).toBeNull();
   });
 

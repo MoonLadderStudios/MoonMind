@@ -129,6 +129,15 @@ describe('dashboard masthead brand styles', () => {
     const activeRow = cssRuleBlock('.dashboard-system-popover a.active');
     expect(activeRow).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
     expect(activeRow).toContain('background: rgb(var(--mm-accent) / 0.12);');
+
+    // The active-row rule shares specificity with the earlier
+    // `a:focus-visible` rule, so a later, more specific rule must combine the
+    // focus ring with the active inset shadow; otherwise a keyboard-focused
+    // active row loses its distinct focus indicator.
+    const activeFocus = cssRuleBlock('.dashboard-system-popover a.active:focus-visible');
+    expect(activeFocus).toContain(
+      'box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));',
+    );
   });
 
   it('keeps the masthead-nav skills create button green and offset below the nav height', () => {

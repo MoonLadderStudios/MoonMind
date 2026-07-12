@@ -819,7 +819,7 @@ function DashboardNavigation({
             ) : null}
           </div>
           <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
-          {isSkillsRoute ? (
+          {isSkillsRoute && uiInfo?.features?.skills === true ? (
             <button
               type="button"
               className="skills-create-nav-button"

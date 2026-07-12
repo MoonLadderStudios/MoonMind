@@ -786,6 +786,15 @@ h1 {
   box-shadow: inset 3px 0 0 rgb(var(--mm-accent));
 }
 
+/* The active-row rule above shares specificity with the earlier
+ * `.dashboard-system-popover a:focus-visible` rule, so on the currently active
+ * destination it would otherwise clobber the focus ring and leave keyboard
+ * users without a distinct focus indicator. Combine both here so the focused
+ * active row keeps its selected-row accent and regains the focus ring. */
+.dashboard-system-popover a.active:focus-visible {
+  box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));
+}
+
 .dashboard-system-inline {
   display: none;
 }
