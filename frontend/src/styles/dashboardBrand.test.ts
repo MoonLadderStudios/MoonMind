@@ -97,30 +97,45 @@ describe('dashboard masthead brand styles', () => {
   });
 
   it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
-    // The shared liquid-glass treatment: faint uniform edge lines plus
-    // diagonally offset corner boosts (top-left white, bottom-right violet),
-    // and a quite faint accent glow kept almost entirely on the bottom edge —
-    // the negative spread pulls the blur off the sides. The sides stay open —
-    // no perimeter ring. The hover variant swaps the under-glow to the cyan
-    // accent (executing-pill hue).
+    // The shared liquid-glass treatment: the edge light is a masked gradient
+    // ring built from two corner-anchored radials — white bleeding out of the
+    // top-left corner, violet out of the bottom-right, fading to nothing
+    // before the other two corners — plus a quite faint under-glow kept
+    // almost entirely on the bottom edge. The hover variant swaps the glow to
+    // light blue.
     const highlightShadow =
       /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
-    const asymmetricInsets =
-      String.raw`inset 0 1px 0 rgb\(255 255 255 \/ 0\.12\),\s*inset 2px 2px 3px -2px rgb\(255 255 255 \/ 0\.3\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.18\),\s*inset -2px -2px 3px -2px rgb\(167 139 250 \/ 0\.55\)`;
     expect(dashboardCss).toMatch(
-      new RegExp(
-        String.raw`--mm-shadow-highlight-edge:\s*${asymmetricInsets},\s*0 5px 9px -5px rgb\(var\(--mm-accent\) \/ 0\.45\);`,
-      ),
+      /--mm-highlight-edge-ring:\s*radial-gradient\(\s*130% 220% at 0% 0%,\s*rgb\(255 255 255 \/ 0\.6\) 0%,[\s\S]*?transparent 45%\s*\),\s*radial-gradient\(\s*130% 220% at 100% 100%,\s*rgb\(167 139 250 \/ 0\.7\) 0%,[\s\S]*?transparent 45%\s*\);/,
     );
     expect(dashboardCss).toMatch(
-      new RegExp(
-        String.raw`--mm-shadow-highlight-edge-hover:\s*${asymmetricInsets},\s*0 5px 9px -5px rgb\(var\(--mm-accent-2\) \/ 0\.55\);`,
-      ),
+      /--mm-shadow-highlight-edge:\s*0 5px 9px -5px rgb\(var\(--mm-accent\) \/ 0\.45\);/,
     );
-    // The tokens must stay side-open: no perimeter ring, so the buttons read
-    // as corner-lit glass instead of an outline.
+    expect(dashboardCss).toMatch(
+      /--mm-shadow-highlight-edge-hover:\s*0 5px 9px -5px rgb\(110 180 255 \/ 0\.6\);/,
+    );
+    // The shadow tokens carry only the under-glow — no inset edge lines and
+    // no perimeter ring — so the edge light comes solely from the diagonal
+    // gradient ring and cannot read as a full outline.
     expect(dashboardCss).not.toMatch(
-      /--mm-shadow-highlight-edge(?:-hover)?:[^;]*0 0 0 1px/s,
+      /--mm-shadow-highlight-edge(?:-hover)?:[^;]*(?:inset|0 0 0 1px)/s,
+    );
+    // The ring is drawn on a pseudo-element masked down to a 1px border band;
+    // the radio group uses ::after because ::before is its sliding thumb.
+    const ring = cssRuleBlock('.route-nav-primary a::before');
+    expect(ring).toContain('background: var(--mm-highlight-edge-ring);');
+    expect(ring).toContain('padding: 1px;');
+    expect(ring).toContain('mask-composite: exclude;');
+    expect(ring).toContain('pointer-events: none;');
+    expect(cssRuleBlock('.dashboard-system-trigger::before')).toContain(
+      'background: var(--mm-highlight-edge-ring);',
+    );
+    expect(cssRuleBlock('.workflow-list-display-control::after')).toContain(
+      'background: var(--mm-highlight-edge-ring);',
+    );
+    // The collapsed mobile nav renders flat menu rows without the ring.
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.route-nav-primary a::before\s*\{[^}]*content:\s*none;/s,
     );
 
     // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
@@ -158,7 +173,7 @@ describe('dashboard masthead brand styles', () => {
     expect(trigger).toMatch(highlightShadow);
 
     // Hover: all three buttons brighten, grow slightly, and swap the purple
-    // under-glow for the cyan accent. The trigger states these explicitly so
+    // under-glow for light blue. The trigger states these explicitly so
     // the filled-CTA global button:hover shadow cannot leak onto it.
     for (const hover of [
       cssRuleBlock('.route-nav-primary a:hover'),

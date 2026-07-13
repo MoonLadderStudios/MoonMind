@@ -21,26 +21,31 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
-  /* Highlight-edge treatment, liquid-glass style: faint uniform top/bottom
-   * edge lines plus diagonally offset corner boosts, so the top-left corner
-   * catches white light and the bottom-right corner catches the violet rim —
-   * deliberately asymmetric rather than horizontally uniform. A quite faint
-   * accent glow sits almost entirely under the bottom edge so it reads as
-   * backlit (the negative spread pulls the blur off the sides). No perimeter
-   * ring: the sides stay open. The hover variant swaps the under-glow to the
-   * cyan accent (the executing-pill hue). */
-  --mm-shadow-highlight-edge:
-    inset 0 1px 0 rgb(255 255 255 / 0.12),
-    inset 2px 2px 3px -2px rgb(255 255 255 / 0.3),
-    inset 0 -1px 0 rgb(167 139 250 / 0.18),
-    inset -2px -2px 3px -2px rgb(167 139 250 / 0.55),
-    0 5px 9px -5px rgb(var(--mm-accent) / 0.45);
-  --mm-shadow-highlight-edge-hover:
-    inset 0 1px 0 rgb(255 255 255 / 0.12),
-    inset 2px 2px 3px -2px rgb(255 255 255 / 0.3),
-    inset 0 -1px 0 rgb(167 139 250 / 0.18),
-    inset -2px -2px 3px -2px rgb(167 139 250 / 0.55),
-    0 5px 9px -5px rgb(var(--mm-accent-2) / 0.55);
+  /* Highlight-edge treatment, liquid-glass style. The edge light is a masked
+   * gradient ring (--mm-highlight-edge-ring, applied via pseudo-element):
+   * two corner-anchored radial gradients — white bleeding out of the top-left
+   * corner, violet out of the bottom-right — fading to nothing before they
+   * reach the top-right and bottom-left corners. Radials (not a 135° linear)
+   * so the light hugs the corners at any button aspect ratio, and a gradient
+   * (not box-shadow insets) because a shadow cannot fade along an edge. The
+   * shadow tokens carry only the faint under-glow, kept almost entirely on
+   * the bottom edge (the negative spread pulls the blur off the sides); the
+   * hover variant swaps it to light blue. */
+  --mm-highlight-edge-ring:
+    radial-gradient(
+      130% 220% at 0% 0%,
+      rgb(255 255 255 / 0.6) 0%,
+      rgb(255 255 255 / 0.12) 22%,
+      transparent 45%
+    ),
+    radial-gradient(
+      130% 220% at 100% 100%,
+      rgb(167 139 250 / 0.7) 0%,
+      rgb(167 139 250 / 0.16) 22%,
+      transparent 45%
+    );
+  --mm-shadow-highlight-edge: 0 5px 9px -5px rgb(var(--mm-accent) / 0.45);
+  --mm-shadow-highlight-edge-hover: 0 5px 9px -5px rgb(110 180 255 / 0.6);
   --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
   --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
   --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
@@ -702,11 +707,33 @@ h1 {
 }
 
 /* Hovered nav buttons brighten, grow slightly, and swap the purple under-glow
- * for the cyan accent — matching the System trigger's hover feel. */
+ * for light blue — matching the System trigger's hover feel. */
 .route-nav-primary a:hover {
   box-shadow: var(--mm-shadow-highlight-edge-hover);
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
+}
+
+/* Diagonal liquid-glass edge: a 1px gradient ring drawn on a pseudo-element
+ * (the border-box gradient is masked down to the ring between border-box and
+ * content-box), bright white at the top-left corner and violet at the
+ * bottom-right, fading to nothing at the other two corners. The radio group
+ * uses ::after because its ::before is the sliding selection thumb. The ring
+ * scales with the hover transform and never intercepts pointer events. */
+.route-nav-primary a::before,
+.dashboard-system-trigger::before,
+.workflow-list-display-control::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--mm-highlight-edge-ring);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }
 
 .route-nav-icon {
@@ -7832,6 +7859,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     transform: none;
+  }
+
+  /* The collapsed nav renders flat menu rows: drop the desktop liquid-glass
+   * gradient ring along with the shadows it accompanies. */
+  .route-nav-primary a::before {
+    content: none;
   }
 
   .route-nav a:hover {
