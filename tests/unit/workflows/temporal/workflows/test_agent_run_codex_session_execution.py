@@ -640,6 +640,27 @@ async def test_managed_fetch_result_versions_terminal_checkpoint_publication(
     assert activity_input.terminal_checkpoint_publication_enabled is True
 
 
+async def test_managed_fetch_result_omits_terminal_checkpoint_fields_before_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: False,
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert "terminal_checkpoint_publication_enabled" not in activity_input.model_fields_set
+    assert "no_remote_writes" not in activity_input.model_fields_set
+    assert "terminal_checkpoint_capability_supported" not in activity_input.model_fields_set
+
+
 async def test_managed_fetch_result_wires_terminal_checkpoint_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1858,7 +1858,7 @@ class MoonMindAgentRun:
                 activity_input["prResolverMergeGateOwned"] = (
                     _request_pr_resolver_merge_gate_owned(request)
                 )
-        activity_input["terminalCheckpointPublicationEnabled"] = workflow.patched(
+        terminal_checkpoint_patch_active = workflow.patched(
             TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID
         )
         workspace_spec = (
@@ -1869,23 +1869,23 @@ class MoonMindAgentRun:
             if isinstance(params.get("checkpointPolicy"), Mapping)
             else {}
         )
-        activity_input["terminalCheckpointPublicationEnabled"] = bool(
-            activity_input["terminalCheckpointPublicationEnabled"]
-            and checkpoint_policy.get("publishOnGracefulFailure", True)
-        )
-        activity_input["noRemoteWrites"] = bool(
-            params.get("noRemoteWrites") or workspace_spec.get("noRemoteWrites")
-        )
-        activity_input["readOnly"] = bool(
-            params.get("readOnly") or workspace_spec.get("readOnly")
-        )
-        activity_input["dryRun"] = bool(params.get("dryRun"))
-        activity_input["workspaceAuthoritative"] = not bool(
-            workspace_spec.get("authorityLost")
-        )
-        activity_input["terminalCheckpointCapabilitySupported"] = not bool(
-            workspace_spec.get("terminalCheckpointPublicationUnsupported")
-        )
+        if terminal_checkpoint_patch_active:
+            activity_input["terminalCheckpointPublicationEnabled"] = bool(
+                checkpoint_policy.get("publishOnGracefulFailure", True)
+            )
+            activity_input["noRemoteWrites"] = bool(
+                params.get("noRemoteWrites") or workspace_spec.get("noRemoteWrites")
+            )
+            activity_input["readOnly"] = bool(
+                params.get("readOnly") or workspace_spec.get("readOnly")
+            )
+            activity_input["dryRun"] = bool(params.get("dryRun"))
+            activity_input["workspaceAuthoritative"] = not bool(
+                workspace_spec.get("authorityLost")
+            )
+            activity_input["terminalCheckpointCapabilitySupported"] = not bool(
+                workspace_spec.get("terminalCheckpointPublicationUnsupported")
+            )
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(

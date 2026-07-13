@@ -4025,11 +4025,14 @@ def _verified_output_branch(
     ).strip()
     if not name:
         return None
+    intent_value = source.get("intent")
+    if intent_value not in {"normal", "terminal_checkpoint"}:
+        intent_value = "normal"
     result: dict[str, Any] = {
         "name": name,
         "headSha": source.get("headSha") or context.get("headSha"),
         "baseBranch": source.get("baseBranch") or context.get("baseRef"),
-        "intent": str(source.get("intent") or "normal"),
+        "intent": intent_value,
         "status": status_value,
         "evidenceRef": source.get("evidenceRef"),
     }

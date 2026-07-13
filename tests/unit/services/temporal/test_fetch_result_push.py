@@ -493,7 +493,10 @@ class TestPushWorkspaceBranch:
         assert result["push_branch"] == "main"
 
     @pytest.mark.asyncio
-    async def test_push_recovers_main_workspace_to_requested_pr_head_branch(self):
+    @pytest.mark.parametrize("starting_branch", ["main", "feature/live-task"])
+    async def test_push_recovers_workspace_to_requested_pr_head_branch(
+        self, starting_branch: str
+    ):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
         calls: list[tuple[object, ...]] = []
@@ -506,7 +509,9 @@ class TestPushWorkspaceBranch:
             calls.append(args)
             proc = AsyncMock()
             if call_count == 1:  # rev-parse --abbrev-ref HEAD
-                proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+                proc.communicate = AsyncMock(
+                    return_value=(f"{starting_branch}\n".encode(), b"")
+                )
                 proc.returncode = 0
             elif call_count == 2:  # checkout -B requested head branch
                 proc.communicate = AsyncMock(return_value=(b"", b""))

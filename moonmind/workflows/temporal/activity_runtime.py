@@ -12007,9 +12007,13 @@ class TemporalAgentRuntimeActivities:
             if target_branch_name and not target_branch_push_allowed:
                 protected.add(target_branch_name)
             if (
-                current_branch in {"main", "master"}
-                and head_branch_name
+                head_branch_name
+                and current_branch != head_branch_name
                 and head_branch_name not in protected
+                and (
+                    current_branch not in protected
+                    or current_branch in {"main", "master"}
+                )
             ):
                 checkout_proc = await asyncio.create_subprocess_exec(
                     *self._workspace_git_command(

@@ -9485,6 +9485,13 @@ class MoonMindRunWorkflow:
                         or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
                     )
                 ):
+                    # Failed managed runs may still carry independently verified
+                    # terminal-checkpoint publication evidence. Project it before
+                    # the failure short-circuit so operators can recover the work.
+                    self._record_publish_result(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
                     self._plan_blocked_message = (
                         step_failure_summary
                         or self._activity_result_provider_failure_summary(

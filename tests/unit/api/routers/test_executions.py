@@ -240,6 +240,22 @@ def test_verified_output_branch_rejects_unverified_claim() -> None:
     }) is None
 
 
+def test_verified_output_branch_coerces_unknown_intent() -> None:
+    result = _verified_output_branch({
+        "publishContext": {
+            "terminalPublication": {
+                "intent": "future_intent",
+                "status": "pushed",
+                "branchName": "mm/recovered",
+                "remoteVerified": True,
+            }
+        }
+    })
+
+    assert result is not None
+    assert result["intent"] == "normal"
+
+
 def test_mm_1129_derive_task_title_synthesizes_issue_title_from_instructions() -> None:
     title = _derive_task_title(
         {
