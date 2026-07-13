@@ -1272,43 +1272,47 @@ class MoonMindAgentRun:
         if agent_run_id:
             metadata.setdefault("agentRunId", agent_run_id)
 
-        runtime_id = (
-            request.managed_session.runtime_id
-            if request.managed_session is not None
-            else request.agent_id
-        )
-        capabilities = resolve_runtime_execution_capabilities(runtime_id)
-        metadata["agentKind"] = request.agent_kind
-        metadata["agentId"] = capabilities.runtime_id
-        metadata["runtimeCapabilities"] = capabilities.model_dump(
-            by_alias=True,
-            mode="json",
-        )
-        if capabilities.workspace_authority == "managed_runtime" and agent_run_id:
-            metadata["workspaceLocator"] = {
-                "kind": "managed_runtime",
-                "runtimeId": capabilities.runtime_id,
-                "agentRunId": agent_run_id,
-                "relativePath": "repo",
-            }
-            for legacy_path_key in (
-                "workspacePath",
-                "workspace_path",
-                "workspaceRoot",
-                "workspace_root",
+        if request.agent_kind == "managed":
+            runtime_id = (
+                request.managed_session.runtime_id
+                if request.managed_session is not None
+                else request.agent_id
+            )
+            capabilities = resolve_runtime_execution_capabilities(runtime_id)
+            metadata["agentKind"] = request.agent_kind
+            metadata["agentId"] = capabilities.runtime_id
+            metadata["runtimeCapabilities"] = capabilities.model_dump(
+                by_alias=True,
+                mode="json",
+            )
+            if (
+                capabilities.workspace_authority == "managed_runtime"
+                and agent_run_id
             ):
-                metadata.pop(legacy_path_key, None)
-            nested_workspace_spec = metadata.get("workspaceSpec")
-            if isinstance(nested_workspace_spec, Mapping):
-                sanitized_workspace_spec = dict(nested_workspace_spec)
+                metadata["workspaceLocator"] = {
+                    "kind": "managed_runtime",
+                    "runtimeId": capabilities.runtime_id,
+                    "agentRunId": agent_run_id,
+                    "relativePath": "repo",
+                }
                 for legacy_path_key in (
                     "workspacePath",
                     "workspace_path",
                     "workspaceRoot",
                     "workspace_root",
                 ):
-                    sanitized_workspace_spec.pop(legacy_path_key, None)
-                metadata["workspaceSpec"] = sanitized_workspace_spec
+                    metadata.pop(legacy_path_key, None)
+                nested_workspace_spec = metadata.get("workspaceSpec")
+                if isinstance(nested_workspace_spec, Mapping):
+                    sanitized_workspace_spec = dict(nested_workspace_spec)
+                    for legacy_path_key in (
+                        "workspacePath",
+                        "workspace_path",
+                        "workspaceRoot",
+                        "workspace_root",
+                    ):
+                        sanitized_workspace_spec.pop(legacy_path_key, None)
+                    metadata["workspaceSpec"] = sanitized_workspace_spec
 
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
