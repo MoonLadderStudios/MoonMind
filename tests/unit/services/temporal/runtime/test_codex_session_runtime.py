@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -4218,7 +4219,7 @@ def test_runtime_syncs_rotated_auth_to_durable_volume(tmp_path: Path) -> None:
     assert durable_auth_path.read_text(encoding="utf-8") == (
         '{"credentialVersion":"rotated"}'
     )
-    assert not Path(request.codex_home_path, ".moonmind-auth-sync.lock").exists()
+    assert (auth_volume_path / ".moonmind-auth-sync.lock").is_file()
 
 
 def test_runtime_auth_sync_preserves_concurrent_reconnect(tmp_path: Path) -> None:
@@ -4252,6 +4253,91 @@ def test_runtime_auth_sync_preserves_concurrent_reconnect(tmp_path: Path) -> Non
     assert durable_auth_path.read_text(encoding="utf-8") == (
         '{"credentialVersion":"reconnected"}'
     )
+
+
+def test_runtime_auth_sync_defers_when_volume_lock_is_busy(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+    lock_path = auth_volume_path / ".moonmind-auth-sync.lock"
+    with lock_path.open("a+b") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"seed"}'
+    )
+    assert "auth sync deferred" in Path(
+        request.artifact_spool_path, "stderr.log"
+    ).read_text(encoding="utf-8")
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"rotated"}'
+    )
+
+
+def test_runtime_auth_sync_contains_filesystem_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+
+    def fail_copy(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected auth-volume write failure")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.copy2",
+        fail_copy,
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"seed"}'
+    )
+    assert "rotated auth persistence failed" in Path(
+        request.artifact_spool_path, "stderr.log"
+    ).read_text(encoding="utf-8")
 
 
 def test_runtime_launch_session_rejects_missing_auth_volume_path(

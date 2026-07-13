@@ -261,7 +261,9 @@ rotates `auth.json`, MoonMind writes the rotated credential state back through a
 compare-and-swap boundary. The write is allowed only when the durable source
 still matches the digest that seeded the session; a concurrent reconnect or
 another credential owner wins and must never be overwritten by stale session
-state.
+state. Lock acquisition is non-blocking, and filesystem failures remain
+auxiliary to the authoritative assistant turn: MoonMind records a diagnostic
+and retries persistence at a later session lifecycle boundary.
 
 Provider responses such as `token_expired`, `refresh_token_reused`, or an access
 token that cannot be refreshed are authentication failures. They terminate with

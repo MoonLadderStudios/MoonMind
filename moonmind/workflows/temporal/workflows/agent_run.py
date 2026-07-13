@@ -1291,8 +1291,24 @@ class MoonMindAgentRun:
                 "agentRunId": agent_run_id,
                 "relativePath": "repo",
             }
-            metadata.pop("workspacePath", None)
-            metadata.pop("workspaceRoot", None)
+            for legacy_path_key in (
+                "workspacePath",
+                "workspace_path",
+                "workspaceRoot",
+                "workspace_root",
+            ):
+                metadata.pop(legacy_path_key, None)
+            nested_workspace_spec = metadata.get("workspaceSpec")
+            if isinstance(nested_workspace_spec, Mapping):
+                sanitized_workspace_spec = dict(nested_workspace_spec)
+                for legacy_path_key in (
+                    "workspacePath",
+                    "workspace_path",
+                    "workspaceRoot",
+                    "workspace_root",
+                ):
+                    sanitized_workspace_spec.pop(legacy_path_key, None)
+                metadata["workspaceSpec"] = sanitized_workspace_spec
 
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}

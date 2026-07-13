@@ -677,32 +677,57 @@ class CodexManagedSessionRuntime:
 
         if self._auth_volume_path is None or self._auth_seed_digest is None:
             return
-        local_auth = self._codex_home_path / _AUTH_STATE_FILENAME
-        local_digest = self._file_digest(local_auth)
-        if local_digest is None or local_digest == self._auth_seed_digest:
-            return
-
-        durable_auth = self._auth_volume_path / _AUTH_STATE_FILENAME
-        lock_path = self._auth_volume_path / _AUTH_SYNC_LOCK_FILENAME
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+b") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-            if self._file_digest(durable_auth) != self._auth_seed_digest:
+        try:
+            local_auth = self._codex_home_path / _AUTH_STATE_FILENAME
+            local_digest = self._file_digest(local_auth)
+            if local_digest is None or local_digest == self._auth_seed_digest:
                 return
-            temp_fd, temp_name = tempfile.mkstemp(
-                prefix=f".{_AUTH_STATE_FILENAME}.",
-                dir=str(self._auth_volume_path),
+
+            durable_auth = self._auth_volume_path / _AUTH_STATE_FILENAME
+            lock_path = self._auth_volume_path / _AUTH_SYNC_LOCK_FILENAME
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+b") as lock_handle:
+                try:
+                    fcntl.flock(
+                        lock_handle.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    self._record_auth_sync_warning(
+                        "durable auth volume lock is busy; a later lifecycle "
+                        "boundary will retry"
+                    )
+                    return
+                if self._file_digest(durable_auth) != self._auth_seed_digest:
+                    return
+                temp_fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{_AUTH_STATE_FILENAME}.",
+                    dir=str(self._auth_volume_path),
+                )
+                os.close(temp_fd)
+                temp_path = Path(temp_name)
+                try:
+                    shutil.copy2(local_auth, temp_path)
+                    with temp_path.open("rb") as temp_handle:
+                        os.fsync(temp_handle.fileno())
+                    os.replace(temp_path, durable_auth)
+                    self._auth_seed_digest = local_digest
+                finally:
+                    temp_path.unlink(missing_ok=True)
+        except Exception as exc:
+            self._record_auth_sync_warning(f"rotated auth persistence failed: {exc}")
+
+    def _record_auth_sync_warning(self, message: str) -> None:
+        try:
+            self._append_spool(
+                "stderr",
+                "auth sync deferred: "
+                f"{_redact_text(message, max_chars=_DIAGNOSTIC_TEXT_MAX_CHARS)}\n",
             )
-            os.close(temp_fd)
-            temp_path = Path(temp_name)
-            try:
-                shutil.copy2(local_auth, temp_path)
-                with temp_path.open("rb") as temp_handle:
-                    os.fsync(temp_handle.fileno())
-                os.replace(temp_path, durable_auth)
-                self._auth_seed_digest = local_digest
-            finally:
-                temp_path.unlink(missing_ok=True)
+        except OSError:
+            # Synchronization diagnostics are best-effort and must not replace
+            # the authoritative assistant turn outcome.
+            pass
 
     def _append_spool(self, stream_name: str, text: str) -> None:
         if stream_name not in {"stdout", "stderr"}:
