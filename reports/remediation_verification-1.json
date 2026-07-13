@@ -1,14 +1,24 @@
 {
   "artifact_type": "remediation.verification",
   "attempt": 1,
-  "issueRef": "MM-1207",
+  "remediationAttempt": 1,
+  "verifiesRemediationAttempt": 1,
+  "issueRef": "MoonLadderStudios/MoonMind#3229",
   "verificationTarget": "issue_brief",
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/reports/remediation_attempt-1.json",
-  "verifierResultArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json",
+  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
+  "authoritativeVerificationArtifact": "artifacts/github-issue-implement-verify.json",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
   "verdict": "ADDITIONAL_WORK_NEEDED",
-  "authoritativeVerdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "summary": "Attempt 1 verifies the Settings fixed-capacity sub-gap (56 focused UI tests pass), but the target state remains substantially incomplete across shared leasing, host binding/materialization/preflight/routing, generation and cleanup lifecycle, recovery, diagnostics, and boundary coverage.",
-  "remainingWorkRef": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json#/remainingWork"
+  "remainingWork": [
+    "Add authoritative live-workspace/checkpoint finalization and cleanup ordering, including parent gate/review recovery.",
+    "Adopt verified equivalent branch/PR evidence without republishing.",
+    "Persist and deduplicate typed terminal-publication evidence and checkpoint bindings.",
+    "Complete the eligibility, authority, security, infrastructure-failure, and remote-verification test matrix.",
+    "Add a Temporal patch/version guard and replay coverage.",
+    "Add Saved Work Branch frontend behavior tests.",
+    "Add the required hermetic production-layer controlled-failure journey."
+  ],
+  "summary": "Attempt 1 fixes primary-failure masking by converting terminal push and verification exceptions into secondary publication evidence. Focused tests pass, but the authoritative whole-target state remains incomplete due to the unresolved orchestration, adoption, persistence/idempotency, replay, frontend verification, and hermetic journey gaps recorded in artifacts/github-issue-implement-verify.json."
 }

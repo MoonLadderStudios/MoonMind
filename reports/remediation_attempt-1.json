@@ -1,79 +1,82 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueRef": "MM-1207",
-  "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
+  "issueRef": "MoonLadderStudios/MoonMind#3229",
+  "sourceVerificationArtifact": "artifacts/github-issue-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "partial",
-  "summary": "Fixed the reported Settings UI capacity gap for Codex OAuth profiles. The broader profile-bound Omnigent host lifecycle remains unimplemented and is explicitly retained below.",
+  "status": "additional_work_remaining",
+  "summary": "Remediation attempt 1 fixed the concrete primary-failure masking defect at the terminal publication boundary and added regression coverage. Controlled-failure push and remote-verification exceptions are now converted to secondary failed publication evidence while the original AgentRun failure remains canonical. The verifier's broader orchestration, adoption, persistence, replay, frontend, and hermetic journey gaps remain open.",
   "changedFiles": [
-    "frontend/src/components/settings/ProviderProfilesManager.tsx",
-    "frontend/src/components/settings/ProviderProfilesManager.test.tsx",
+    "moonmind/workflows/temporal/activity_runtime.py",
+    "tests/unit/services/temporal/test_fetch_result_push.py",
     "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Codex OAuth max_parallel_runs=1 enforcement",
-      "status": "partial",
-      "resolved": "Settings renders capacity as fixed at one, forces one in save payloads, and has focused component coverage. Existing create/update backend row validation rejects other values.",
-      "remaining": "Seed repair/migration readiness, runtime selection, host allocation, reconnect, disconnect, and their lifecycle tests remain missing."
+      "requirement": "Authoritative source resolution and parent-level gate/review failure recovery",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "Current implementation still publishes only from agent_runtime_fetch_result with a live managed workspace.",
+      "remaining": "Add checkpoint fallback and a parent finalization boundary that awaits publication before cleanup."
     },
     {
-      "requirement": "Shared capacity lane for direct, Omnigent, and maintenance consumers",
-      "status": "unresolved",
-      "remaining": "Wire all consumers to provider-profile-manager:codex_cli with retry-idempotent acquisition and release-last semantics."
+      "requirement": "Adopt already-published equivalent branch or PR evidence",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "Provider-native runtimes remain excluded from terminal publication and no verified adoption path was added.",
+      "remaining": "Verify expected remote SHA and adopt equivalent provider-native branch/PR evidence without republishing."
     },
     {
-      "requirement": "Safe runtime-neutral auth, mount, binding, generation, and host lease refs",
-      "status": "unresolved",
-      "remaining": "Add the verifier-listed secret-free schemas, persistence, ownership checks, and generation validation."
+      "requirement": "Idempotent retries and durable evidence consistency",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "Branch and idempotency-key generation are deterministic, but no durable publication record/binding or retry reuse test exists.",
+      "remaining": "Persist and deduplicate terminal publication evidence and project the same binding everywhere."
     },
     {
-      "requirement": "Destination OAuth-home materialization and Codex preflight",
-      "status": "unresolved",
-      "remaining": "Mount and prepare only the selected OAuth home, clear competing credentials, and run the redacted destination preflight and generation checks."
+      "requirement": "Eligibility, authority, security, and primary-failure invariants",
+      "gapType": "verification",
+      "status": "partially_remediated",
+      "evidence": "activity_runtime.py now catches controlled-failure push and remote-verification exceptions; test_terminal_publication_exception_preserves_primary_failure proves the original execution_error and summary survive with failed secondary publication evidence.",
+      "remaining": "Add the verifier's full classification/policy/security matrix, including no_changes, noRemoteWrites, scan/protected-ref/lease failures, inaccessible workspaces, and verification mismatch."
     },
     {
-      "requirement": "Static and on-demand profile-bound Omnigent hosts",
-      "status": "unresolved",
-      "remaining": "Add the dedicated Compose host and idempotent on-demand launcher using one binding/readiness contract."
+      "requirement": "Temporal replay/in-flight safety",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "No new patch marker or replay fixture was added in this attempt.",
+      "remaining": "Guard command-shaping changes with a Temporal patch/cutover and add prior-history replay coverage."
     },
     {
-      "requirement": "Profile-aware routing and bridge authorization",
-      "status": "unresolved",
-      "remaining": "Resolve executionProfileRef to the exact leased host, validate generation, reject unrelated manual targets, and persist safe routing refs before session use."
+      "requirement": "Saved Work Branch frontend behavior",
+      "gapType": "verification",
+      "status": "remaining",
+      "evidence": "The existing UI suite passes, but no issue-specific rendering/order/absence test was added.",
+      "remaining": "Add schema/render tests for verified Saved Work Branch placement before PR Link and absence for unverified evidence."
     },
     {
-      "requirement": "Reconnect, disconnect, cleanup ordering, and reconciliation",
-      "status": "unresolved",
-      "remaining": "Implement drain, generation increment, stale-host invalidation, release-last cleanup, and idempotent recovery for the verifier-listed failure cases."
-    },
-    {
-      "requirement": "Cooldown attribution and lifecycle diagnostics",
-      "status": "unresolved",
-      "remaining": "Attribute failures to the profile, fail closed, drain the host, and publish secret-safe lifecycle and cleanup evidence."
-    },
-    {
-      "requirement": "Checkpoint, reattach, restore, and branch isolation",
-      "status": "unresolved",
-      "remaining": "Persist safe identity refs only and implement generation-aware live reattach, newly leased cold restore, and exclusive branches."
-    },
-    {
-      "requirement": "Required boundary and combined-stack verification",
-      "status": "partial",
-      "resolved": "Focused Settings component coverage passes.",
-      "remaining": "Add the verifier-listed unit, workflow-boundary, hermetic integration, and combined-stack coverage for the still-missing runtime lifecycle."
+      "requirement": "Hermetic end-to-end controlled-failure preservation journey",
+      "gapType": "verification",
+      "status": "remaining",
+      "evidence": "Focused unit and UI suites pass, but no new compose-backed end-to-end journey was added or run.",
+      "remaining": "Add the verifier-specified workflow/activity/API integration journey and run the selected integration_ci suite."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx",
+      "command": "python -m compileall -q moonmind/workflows/temporal/activity_runtime.py",
       "result": "PASS",
-      "details": "56 tests passed."
+      "details": "Updated activity runtime compiles successfully."
+    },
+    {
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/test_fetch_result_push.py tests/unit/api/routers/test_executions.py",
+      "result": "PASS",
+      "details": "443 Python tests passed; the runner's UI phase also passed 1080 tests with 238 skipped. pytest and pytest-asyncio were installed into the ephemeral user environment because the managed image initially omitted them."
     },
     {
       "command": "git diff --check",
-      "result": "PASS"
+      "result": "PASS",
+      "details": "No whitespace errors."
     }
   ]
 }
