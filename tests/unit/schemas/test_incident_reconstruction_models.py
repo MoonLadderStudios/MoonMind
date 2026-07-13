@@ -65,15 +65,28 @@ def test_manifest_preserves_workflow_control_stop_without_failed_step():
             "logicalStepId": "verify-remediation-6",
             "verdict": "ADDITIONAL_WORK_NEEDED",
             "remainingWorkRef": "artifact://remaining/final",
-            "remediationAttempt": 6,
-            "remediationMaxAttempts": 6,
-            "remediationAttemptsConsumed": 6,
+            "reviewGateBudget": {
+                "maxExecutions": 2,
+                "executionsConsumed": 2,
+                "retriesConsumed": 1,
+                "remainingExecutions": 0,
+                "exhausted": True,
+            },
+            "remediationBudget": {
+                "maxAttempts": 6,
+                "currentAttempt": 6,
+                "attemptsStarted": 6,
+                "attemptsCompleted": 6,
+                "remainingAttempts": 0,
+                "exhausted": True,
+            },
         }
     )
     dumped = manifest.model_dump(by_alias=True, mode="json", exclude_none=True)
     assert manifest.failed_logical_step_id is None
     assert dumped["controlStop"]["reasonCode"] == "remediation_budget_exhausted"
-    assert dumped["controlStop"]["remediationAttemptsConsumed"] == 6
+    assert dumped["controlStop"]["reviewGateBudget"]["remainingExecutions"] == 0
+    assert dumped["controlStop"]["remediationBudget"]["remainingAttempts"] == 0
 
 
 def test_manifest_requires_every_evidence_category():

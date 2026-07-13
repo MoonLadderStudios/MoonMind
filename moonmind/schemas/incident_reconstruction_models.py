@@ -431,13 +431,11 @@ class IncidentControlStopModel(BaseModel):
     remaining_work_ref: str | None = Field(
         None, alias="remainingWorkRef", max_length=500
     )
-    remediation_attempt: int | None = Field(None, alias="remediationAttempt", ge=1)
-    remediation_max_attempts: int | None = Field(
-        None, alias="remediationMaxAttempts", ge=1
+    review_gate_budget: dict[str, Any] | None = Field(
+        None, alias="reviewGateBudget"
     )
-    review_retries_consumed: int = Field(0, alias="reviewRetriesConsumed", ge=0)
-    remediation_attempts_consumed: int = Field(
-        0, alias="remediationAttemptsConsumed", ge=0
+    remediation_budget: dict[str, Any] | None = Field(
+        None, alias="remediationBudget"
     )
 
     @field_validator("reason_code", "logical_step_id", "verdict", mode="before")

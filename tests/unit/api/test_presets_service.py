@@ -3633,6 +3633,29 @@ async def test_remediation_topology_rejects_partial_active_pair() -> None:
         _validate_moonspec_remediation_topology(steps)
 
 
+async def test_remediation_topology_rejects_string_final_gate_flag() -> None:
+    steps = [
+        {
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 1,
+            }
+        },
+        {
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 1,
+                "moonSpecFinalRemediationGate": "true",
+            }
+        },
+    ]
+
+    with pytest.raises(PresetValidationError, match="active final MoonSpec verifier"):
+        _validate_moonspec_remediation_topology(steps)
+
+
 async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]

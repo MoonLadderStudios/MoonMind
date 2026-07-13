@@ -1616,7 +1616,7 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
                 f"MoonSpec remediation attempt {attempt} must be one adjacent "
                 "remediation/verifier pair."
             )
-        if pair[1][4] is not (attempt == maximum):
+        if pair[1][4] != (attempt == maximum):
             raise PresetValidationError(
                 "Only the active final MoonSpec verifier may be marked as the final gate."
             )

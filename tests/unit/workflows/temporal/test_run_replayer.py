@@ -6,6 +6,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
 from moonmind.workflows.temporal.workflows.run import (
+    GateTransitionDecision,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
@@ -27,7 +28,17 @@ class _CurrentRemediationReplayFixture:
     @workflow.run
     async def run(self) -> list[str]:
         if not workflow.patched(RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH):
-            return ["verify-1", "verify-1"]
+            legacy_retry_allowed = (
+                MoonMindRunWorkflow._gate_transition_allows_review_retry(
+                    plan_routed_moonspec_remediation_enabled=False,
+                    transition=GateTransitionDecision(
+                        disposition="accept",
+                        routing_disposition="stop_at_control_gate",
+                        reason_code="no_remediation_successor",
+                    ),
+                )
+            )
+            return ["verify-1", "verify-1" if legacy_retry_allowed else "stop"]
         nodes = [
             {
                 "id": "remediate-1",

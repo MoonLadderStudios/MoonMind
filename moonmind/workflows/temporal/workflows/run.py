@@ -6013,35 +6013,14 @@ class MoonMindRunWorkflow:
         gate_result_ref: str | None,
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
+        plan_routed_moonspec_remediation_enabled: bool = True,
     ) -> dict[str, Any]:
         remediation_gate = current_index > 1 and self._is_moonspec_remediation_step(
             ordered_nodes[current_index - 2]
         )
-        successor, successor_reason = self._resolve_next_moonspec_remediation_step(
-            ordered_nodes=ordered_nodes,
-            current_index=current_index,
-        )
-        annotated_topology_declared = any(
-            self._coerce_positive_int(
-                self._node_annotations_mapping(candidate).get(
-                    "moonSpecRemediationAttempt"
-                )
-            )
-            is not None
-            and self._coerce_positive_int(
-                self._node_annotations_mapping(candidate).get(
-                    "moonSpecRemediationMaxAttempts"
-                )
-            )
-            is not None
-            for candidate in ordered_nodes
-            if self._moonspec_step_role(candidate)
-            in {"moonspec-remediation", "moonspec-verification-gate"}
-        )
-        if successor_reason == "not_explicit_remediation_chain" or (
-            successor_reason == "no_remediation_successor"
-            and not annotated_topology_declared
-        ):
+        successor: MoonSpecRemediationSuccessor | None = None
+        successor_reason = "legacy_remaining_remediation_scan"
+        if not plan_routed_moonspec_remediation_enabled:
             has_remaining_remediation_step = (
                 self._has_remaining_moonspec_remediation_step(
                     ordered_nodes=ordered_nodes,
@@ -6049,7 +6028,39 @@ class MoonMindRunWorkflow:
                 )
             )
         else:
-            has_remaining_remediation_step = successor is not None
+            successor, successor_reason = self._resolve_next_moonspec_remediation_step(
+                ordered_nodes=ordered_nodes,
+                current_index=current_index,
+            )
+            annotated_topology_declared = any(
+                self._coerce_positive_int(
+                    self._node_annotations_mapping(candidate).get(
+                        "moonSpecRemediationAttempt"
+                    )
+                )
+                is not None
+                and self._coerce_positive_int(
+                    self._node_annotations_mapping(candidate).get(
+                        "moonSpecRemediationMaxAttempts"
+                    )
+                )
+                is not None
+                for candidate in ordered_nodes
+                if self._moonspec_step_role(candidate)
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+            )
+            if successor_reason == "not_explicit_remediation_chain" or (
+                successor_reason == "no_remediation_successor"
+                and not annotated_topology_declared
+            ):
+                has_remaining_remediation_step = (
+                    self._has_remaining_moonspec_remediation_step(
+                        ordered_nodes=ordered_nodes,
+                        current_index=current_index,
+                    )
+                )
+            else:
+                has_remaining_remediation_step = successor is not None
         progress_budget_enabled = self._patched_or_false_outside_workflow(
             RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH
         )
@@ -6137,7 +6148,18 @@ class MoonMindRunWorkflow:
         }
         payload["budget"] = budget.model_dump(by_alias=True, mode="json")
         payload["currentLogicalStepId"] = logical_step_id
-        current_node = ordered_nodes[current_index]
+        current_node = next(
+            (
+                candidate
+                for candidate in ordered_nodes
+                if str(candidate.get("id") or "") == logical_step_id
+            ),
+            (
+                ordered_nodes[current_index]
+                if 0 <= current_index < len(ordered_nodes)
+                else {}
+            ),
+        )
         remediation_attempt, remediation_max = (
             self._moonspec_remediation_attempt_metadata(current_node)
         )
@@ -6431,6 +6453,18 @@ class MoonMindRunWorkflow:
             return recommended_next_action == "reattempt_current_step"
         return normalized == "NO_DETERMINATION" and bool(
             getattr(verdict, "recoverable_in_current_runtime", False)
+        )
+
+    @staticmethod
+    def _gate_transition_allows_review_retry(
+        *,
+        plan_routed_moonspec_remediation_enabled: bool,
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Keep pre-cutover review retries independent of new plan routing."""
+        return (
+            not plan_routed_moonspec_remediation_enabled
+            or transition.disposition in {"generic", "retry"}
         )
 
     @staticmethod
@@ -9794,10 +9828,12 @@ class MoonMindRunWorkflow:
                         consecutive_no_progress_attempts = 0
                     else:
                         consecutive_no_progress_attempts += 1
-                    if transition.disposition in {
-                        "generic",
-                        "retry",
-                    } and self._review_gate_retry_allowed(
+                    if self._gate_transition_allows_review_retry(
+                        plan_routed_moonspec_remediation_enabled=(
+                            plan_routed_moonspec_remediation_enabled
+                        ),
+                        transition=transition,
+                    ) and self._review_gate_retry_allowed(
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
@@ -10190,6 +10226,9 @@ class MoonMindRunWorkflow:
                             gate_result_ref=step_gate_result_ref,
                             ordered_nodes=ordered_nodes,
                             current_index=remaining_remediation_index,
+                            plan_routed_moonspec_remediation_enabled=(
+                                plan_routed_moonspec_remediation_enabled
+                            ),
                         )
                     )
                     if blocking_gate_reason and not bool(
@@ -10219,7 +10258,10 @@ class MoonMindRunWorkflow:
                             )
                         ):
                             transition_reason = "no_progress_attempts_exhausted"
-                        elif normalized_gate == "ADDITIONAL_WORK_NEEDED":
+                        elif (
+                            normalized_gate == "ADDITIONAL_WORK_NEEDED"
+                            and plan_routed_moonspec_remediation_enabled
+                        ):
                             _, transition_reason = (
                                 self._resolve_next_moonspec_remediation_step(
                                     ordered_nodes=ordered_nodes,
@@ -10239,31 +10281,22 @@ class MoonMindRunWorkflow:
                             "verdict": normalized_gate,
                             "gateResultRef": step_gate_result_ref,
                             "remainingWorkRef": step_gate_result.remaining_work_ref,
-                            "remediationAttempt": (
-                                remediation_budget.get("currentAttempt")
-                                if isinstance(remediation_budget, Mapping)
-                                else None
-                            ),
-                            "remediationMaxAttempts": (
-                                remediation_budget.get("maxAttempts")
-                                if isinstance(remediation_budget, Mapping)
-                                else None
-                            ),
-                            "reviewRetriesConsumed": (
-                                review_budget.get("retriesConsumed")
+                            "reviewGateBudget": (
+                                dict(review_budget)
                                 if isinstance(review_budget, Mapping)
-                                else 0
+                                else None
                             ),
-                            "remediationAttemptsConsumed": (
-                                remediation_budget.get("attemptsStarted")
+                            "remediationBudget": (
+                                dict(remediation_budget)
                                 if isinstance(remediation_budget, Mapping)
-                                else 0
+                                else None
                             ),
                         }
                         control_stop_summary = {
                             "remediation_budget_exhausted": (
                                 "Skipped because remediation budget was exhausted "
-                                f"after verification attempt {self._workflow_control_stop.get('remediationAttempt')}."
+                                "after verification attempt "
+                                f"{(self._workflow_control_stop.get('remediationBudget') or {}).get('currentAttempt')}."
                             ),
                             "no_remediation_successor": (
                                 "Skipped because no explicit remediation successor exists."

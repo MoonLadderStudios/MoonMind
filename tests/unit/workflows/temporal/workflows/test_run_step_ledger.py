@@ -18,7 +18,10 @@ from moonmind.workflows.executions.prepared_context import (
     build_durable_retrieval_manifest_artifact,
 )
 from moonmind.workflows.temporal.workflows import run as run_module
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    GateTransitionDecision,
+    MoonMindRunWorkflow,
+)
 
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     workflow_info = SimpleNamespace(
@@ -56,6 +59,23 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
         lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH,
     )
     return memo_updates
+
+
+def test_pre_cutover_review_retry_ignores_plan_routed_transition() -> None:
+    transition = GateTransitionDecision(
+        disposition="accept",
+        routing_disposition="stop_at_control_gate",
+        reason_code="no_remediation_successor",
+    )
+
+    assert MoonMindRunWorkflow._gate_transition_allows_review_retry(
+        plan_routed_moonspec_remediation_enabled=False,
+        transition=transition,
+    )
+    assert not MoonMindRunWorkflow._gate_transition_allows_review_retry(
+        plan_routed_moonspec_remediation_enabled=True,
+        transition=transition,
+    )
 
 def _ordered_nodes() -> list[dict]:
     return [

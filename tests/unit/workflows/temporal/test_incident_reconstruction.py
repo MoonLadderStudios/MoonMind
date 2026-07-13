@@ -318,12 +318,32 @@ def test_incident_preserves_control_stop_without_failed_execution():
             "verdict": "ADDITIONAL_WORK_NEEDED",
             "gateResultRef": "artifact://gate/final",
             "remainingWorkRef": "artifact://remaining/final",
-            "remediationAttempt": 6,
-            "remediationMaxAttempts": 6,
-            "reviewRetriesConsumed": 0,
-            "remediationAttemptsConsumed": 6,
+            "reviewGateBudget": {
+                "maxExecutions": 1,
+                "executionsConsumed": 1,
+                "retriesConsumed": 0,
+                "remainingExecutions": 0,
+                "exhausted": True,
+            },
+            "remediationBudget": {
+                "maxAttempts": 6,
+                "currentAttempt": 6,
+                "attemptsStarted": 6,
+                "attemptsCompleted": 6,
+                "remainingAttempts": 0,
+                "exhausted": True,
+            },
         },
     )
     assert manifest.failed_logical_step_id is None
     assert manifest.control_stop is not None
     assert manifest.control_stop.reason_code == "remediation_budget_exhausted"
+    assert manifest.control_stop.review_gate_budget == {
+        "maxExecutions": 1,
+        "executionsConsumed": 1,
+        "retriesConsumed": 0,
+        "remainingExecutions": 0,
+        "exhausted": True,
+    }
+    assert manifest.control_stop.remediation_budget is not None
+    assert manifest.control_stop.remediation_budget["remainingAttempts"] == 0
