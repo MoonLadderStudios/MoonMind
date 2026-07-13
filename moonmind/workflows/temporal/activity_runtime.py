@@ -9498,6 +9498,15 @@ class TemporalAgentRuntimeActivities:
             '- For `FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"; '
             "do not encode pull request creation or any other workflow-specific "
             "destination in this field.\n"
+            "- `recommendedNextAction` is advisory semantic metadata. The workflow "
+            "runtime owns routing and selects the next logical plan node. Never "
+            "encode a remediation node, publication node, or pull request destination.\n"
+            "- For `ADDITIONAL_WORK_NEEDED`, include bounded concrete remaining "
+            "work, recoverability, and evidence references. A read-only verifier "
+            "must not ask its own rerun to perform implementation remediation.\n"
+            '- Use "reattempt_current_step" only when rerunning this verifier can '
+            "obtain different evidence, especially for a recoverable "
+            "`NO_DETERMINATION`.\n"
             "- Treat integration, e2e, smoke, quickstart, map-entry, UI/browser, "
             "deployment, and external-service checks as advisory when they depend "
             "on unavailable non-repo assets, services, credentials, or tooling; "

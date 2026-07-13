@@ -57,6 +57,25 @@ def test_manifest_round_trips_and_sets_content_type():
     assert {item["kind"] for item in dumped["evidence"]} == set(INCIDENT_EVIDENCE_KINDS)
 
 
+def test_manifest_preserves_workflow_control_stop_without_failed_step():
+    manifest = _manifest(
+        controlStop={
+            "kind": "workflow_gate",
+            "reasonCode": "remediation_budget_exhausted",
+            "logicalStepId": "verify-remediation-6",
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "remainingWorkRef": "artifact://remaining/final",
+            "remediationAttempt": 6,
+            "remediationMaxAttempts": 6,
+            "remediationAttemptsConsumed": 6,
+        }
+    )
+    dumped = manifest.model_dump(by_alias=True, mode="json", exclude_none=True)
+    assert manifest.failed_logical_step_id is None
+    assert dumped["controlStop"]["reasonCode"] == "remediation_budget_exhausted"
+    assert dumped["controlStop"]["remediationAttemptsConsumed"] == 6
+
+
 def test_manifest_requires_every_evidence_category():
     partial = [
         IncidentEvidenceItemModel(kind="policy", present=False, reasonCode="x"),

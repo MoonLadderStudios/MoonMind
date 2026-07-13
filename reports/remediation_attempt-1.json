@@ -4,50 +4,70 @@
   "issueRef": "MoonLadderStudios/MoonMind#3238",
   "sourceVerificationArtifact": "artifacts/github-issue-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "partial",
-  "summary": "Preserved terminal MoonSpec verifier verdicts in accepted control evidence instead of rewriting them as ADDITIONAL_WORK_NEEDED. The broader transition, budget, control-stop, topology, contract, and boundary-test backlog remains bounded by the source verification report.",
+  "status": "implemented",
+  "summary": "Implemented workflow-owned verifier transitions, exact annotated remediation topology resolution, separate observable review/remediation budgets, cross-cycle no-progress accounting, workflow control-stop incident evidence, advisory verifier guidance, preset topology validation, and focused contract regressions.",
   "changedFiles": [
+    "api_service/services/presets/catalog.py",
+    "moonmind/schemas/incident_reconstruction_models.py",
+    "moonmind/workflows/temporal/activity_runtime.py",
+    "moonmind/workflows/temporal/incident_reconstruction.py",
     "moonmind/workflows/temporal/workflows/run.py",
-    "tests/unit/workflows/temporal/workflows/test_run_integration.py",
-    "reports/remediation_attempt-1.json"
+    "tests/unit/api/test_presets_service.py",
+    "tests/unit/schemas/test_incident_reconstruction_models.py",
+    "tests/unit/workflows/temporal/test_activity_runtime.py",
+    "tests/unit/workflows/temporal/test_incident_reconstruction.py",
+    "tests/unit/workflows/temporal/test_run_replayer.py",
+    "tests/unit/workflows/temporal/workflows/test_run_step_ledger.py"
   ],
   "gapStatuses": [
     {
-      "requirement": "Complete the plan-owned gate transition model and preserve every semantic verdict",
-      "status": "partial",
-      "resolved": "Accepted verifier control evidence now retains ADDITIONAL_WORK_NEEDED, BLOCKED, FAILED_UNRECOVERABLE, NO_DETERMINATION, and ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION exactly; focused parameterized coverage was added.",
-      "remaining": "Introduce the verifier transition decision before generic retry/no-progress accounting and explicitly distinguish successor advancement, exhaustion, malformed topology, verifier retry, and terminal stop."
+      "requirement": "Workflow-owned transition and exact remediation successor",
+      "status": "resolved",
+      "evidence": "GateTransitionDecision distinguishes advancement, verifier evidence retry, passing exit, invalid result, terminal stop, budget exhaustion, and malformed topology; plan routing ignores workflow-specific action metadata."
     },
     {
-      "requirement": "Separate and persist remediation, review, and no-progress budgets",
-      "status": "unresolved",
-      "remaining": "Derive remediation consumption from started remediation nodes, evaluate no-progress once across cycles, and persist complete budget and continuation objects in all required evidence."
+      "requirement": "Separate budgets and no-progress policy",
+      "status": "resolved",
+      "evidence": "Review retries and actual remediation node starts/completions are projected separately in checks, terminal manifests, boundedStoryLoop continuation state, and control-stop evidence; repeated signatures accumulate and changed evidence resets the counter."
     },
     {
-      "requirement": "Add workflow control-stop and incident reconstruction evidence",
-      "status": "unresolved",
-      "remaining": "Add controlStop schema/state, reconstruction, downstream diagnostics, and tests without fabricating a failed execution."
+      "requirement": "Control-stop incident evidence and actionable skip reasons",
+      "status": "resolved",
+      "evidence": "Incident reconstruction carries optional controlStop without fabricating failedLogicalStepId, including gate/remaining-work refs, reason code, and both consumed budgets."
     },
     {
-      "requirement": "Validate preset topology and clarify verifier contract",
-      "status": "unresolved",
-      "remaining": "Validate remediation-pair topology and publication placement, audit sibling presets, and make recommendedNextAction advisory in injected verifier guidance."
+      "requirement": "Preset and verifier contracts",
+      "status": "resolved",
+      "evidence": "Expansion rejects partial, non-contiguous, ambiguous, or interleaved remediation topology; injected guidance states that recommendedNextAction is advisory and the workflow owns routing."
     },
     {
-      "requirement": "Prove the full transition contract at workflow and replay boundaries",
-      "status": "partial",
-      "resolved": "Added focused unit coverage for exact semantic-verdict preservation.",
-      "remaining": "Add real-preset advancement, exhaustion, no-progress, recoverable NO_DETERMINATION, ledger/incident, and pre/post-patch replay coverage; run the focused suites in a runtime with pytest and the hermetic startup preset environment."
+      "requirement": "Regression verification",
+      "status": "resolved",
+      "evidence": "Added transition matrix, initial/final/malformed topology, structured events, incident schema/builder, verifier guidance, and preset validation tests. The declared pytest dependencies were installed session-locally and the selected suite passed after correcting one legacy unannotated-topology regression."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_run_integration.py",
-      "result": "NOT RUN",
-      "details": "The runner completed prerequisite audits, then reported /usr/local/bin/python: No module named pytest."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_incident_reconstruction_models.py tests/unit/workflows/temporal/test_incident_reconstruction.py tests/unit/workflows/temporal/workflows/test_run_step_ledger.py tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/api/test_presets_service.py",
+      "result": "PASS",
+      "details": "The first run completed 363 tests with one legacy unannotated-topology regression; the affected scopes plus replay coverage were rerun after the fix with 131 passing tests."
     },
     {
-      "command": "python -m py_compile moonmind/workflows/temporal/workflows/run.py tests/unit/workflows/temporal/workflows/test_run_integration.py",
+      "command": "python -m pytest -q tests/unit/workflows/temporal/test_run_replayer.py",
+      "result": "PASS",
+      "details": "2 replay and deterministic patch-placement tests passed."
+    },
+    {
+      "command": "MOONMIND_TEST_COMPOSE_PROJECT_NAME=moonmind-test-mm3238 ./tools/test_integration.sh",
+      "result": "NOT RUN",
+      "details": "The isolated integration image build stopped before tests because the Docker daemon lacks BuildKit support required by Dockerfile RUN --mount."
+    },
+    {
+      "command": "python -m compileall -q moonmind api_service tests/unit/workflows/temporal tests/unit/api/test_presets_service.py tests/unit/schemas/test_incident_reconstruction_models.py",
+      "result": "PASS"
+    },
+    {
+      "command": "direct incident, preset-expansion, transition-matrix, and three-cycle no-progress contract exercises",
       "result": "PASS"
     },
     {

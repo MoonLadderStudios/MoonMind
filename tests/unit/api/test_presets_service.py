@@ -3478,42 +3478,27 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            expanded = await service.expand_template(
-                slug="issue-implement-work-pr",
-                scope="global",
-                scope_ref=None,
-                inputs={
-                    "issue_provider": "github",
-                    "issue_ref": "MoonLadderStudios/MoonMind#123",
-                    "brief_artifact_path": "artifacts/brief.json",
-                    "assessment_artifact_path": "artifacts/assessment.json",
-                    "pr_artifact_path": "artifacts/pr.json",
-                    "verify_artifact_path": "artifacts/verify.json",
-                    "verification_target": "issue_brief",
-                    "remediation_max_attempts": "2",
-                    "constraints": "",
-                },
-                context={},
-            )
-
-    assert expanded["steps"][2]["title"] == "Remediate verification gaps — attempt 1 of 2"
-    assert expanded["steps"][2]["annotations"] == {
-        "issueImplementRole": "moonspec-remediation",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 2,
-    }
-    assert expanded["steps"][5]["title"] == "Verify remediation attempt 2 of 2"
-    assert expanded["steps"][5]["annotations"] == {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 2,
-        "moonSpecRemediationMaxAttempts": 2,
-    }
-    assert expanded["steps"][6]["title"] == "Remediate remaining gaps — attempt 3 of 2"
-    assert expanded["steps"][6]["annotations"] == {
-        "issueImplementRole": "moonspec-remediation",
-        "moonSpecRemediationAttempt": 3,
-        "moonSpecRemediationMaxAttempts": 2,
-    }
+            with pytest.raises(
+                PresetValidationError,
+                match="complete, unambiguous remediation and verification topology",
+            ):
+                await service.expand_template(
+                    slug="issue-implement-work-pr",
+                    scope="global",
+                    scope_ref=None,
+                    inputs={
+                        "issue_provider": "github",
+                        "issue_ref": "MoonLadderStudios/MoonMind#123",
+                        "brief_artifact_path": "artifacts/brief.json",
+                        "assessment_artifact_path": "artifacts/assessment.json",
+                        "pr_artifact_path": "artifacts/pr.json",
+                        "verify_artifact_path": "artifacts/verify.json",
+                        "verification_target": "issue_brief",
+                        "remediation_max_attempts": "2",
+                        "constraints": "",
+                    },
+                    context={},
+                )
 
 
 async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_path):

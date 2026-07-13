@@ -1544,6 +1544,84 @@ class SeedSyncResult:
     created: int = 0
     updated: int = 0
 
+
+def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None:
+    """Reject partial or ambiguous annotated remediation chains."""
+
+    chain: list[tuple[int, str, int, int, bool]] = []
+    for index, step in enumerate(steps):
+        annotations = step.get("annotations")
+        if not isinstance(annotations, Mapping):
+            continue
+        role = str(
+            annotations.get("issueImplementRole")
+            or annotations.get("jiraOrchestrateRole")
+            or ""
+        ).strip().lower()
+        if role not in {"moonspec-remediation", "moonspec-verification-gate"}:
+            continue
+        try:
+            attempt = int(annotations.get("moonSpecRemediationAttempt"))
+            maximum = int(annotations.get("moonSpecRemediationMaxAttempts"))
+        except (TypeError, ValueError) as exc:
+            raise PresetValidationError(
+                "MoonSpec remediation annotations require integer attempt metadata."
+            ) from exc
+        chain.append(
+            (
+                index,
+                role,
+                attempt,
+                maximum,
+                annotations.get("moonSpecFinalRemediationGate") is True,
+            )
+        )
+    if not chain:
+        return
+    maxima = {item[3] for item in chain}
+    if len(maxima) != 1:
+        raise PresetValidationError(
+            "MoonSpec remediation nodes must declare one shared maximum attempt count."
+        )
+    maximum = next(iter(maxima))
+    if maximum < 1:
+        raise PresetValidationError("MoonSpec remediation maximum must be positive.")
+    expected_count = maximum * 2
+    active = [item for item in chain if item[2] <= maximum]
+    if len(active) != expected_count or len(chain) != expected_count:
+        raise PresetValidationError(
+            "remediation_max_attempts must activate a complete, unambiguous "
+            "remediation and verification topology."
+        )
+    chain_indices = [item[0] for item in active]
+    if chain_indices != list(
+        range(chain_indices[0], chain_indices[0] + expected_count)
+    ):
+        raise PresetValidationError(
+            "No publication or unrelated node may appear inside the MoonSpec "
+            "remediation chain."
+        )
+    for attempt in range(1, maximum + 1):
+        pair = sorted(
+            (item for item in active if item[2] == attempt),
+            key=lambda item: item[0],
+        )
+        if (
+            len(pair) != 2
+            or pair[0][1] != "moonspec-remediation"
+            or pair[1][1] != "moonspec-verification-gate"
+            or pair[1][0] != pair[0][0] + 1
+        ):
+            raise PresetValidationError(
+                f"MoonSpec remediation attempt {attempt} must be one adjacent "
+                "remediation/verifier pair."
+            )
+        if pair[1][4] is not (attempt == maximum):
+            raise PresetValidationError(
+                "Only the final MoonSpec verifier may be marked as the final gate."
+            )
+
+
 class PresetCatalogService:
     """Catalog service for presets."""
 
@@ -2438,6 +2516,7 @@ class PresetCatalogService:
             visited={(normalized_scope.value, template.slug, normalized_scope_ref)},
             resolved_steps=resolved_steps,
         )
+        _validate_moonspec_remediation_topology(resolved_steps)
         authored_presets = _authored_presets_from_composition(composition)
 
         template_caps = _normalize_capabilities(

@@ -1091,11 +1091,19 @@ def test_moonspec_verifier_resolves_only_exact_next_remediation_attempt(
     workflow = MoonMindRunWorkflow()
     nodes = [
         {
+            "id": "remediate-1",
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+        {
             "id": "verify-1",
             "annotations": {
                 "issueImplementRole": "moonspec-verification-gate",
                 "moonSpecRemediationAttempt": 1,
-                "moonSpecRemediationMaxAttempts": 6,
+                "moonSpecRemediationMaxAttempts": 2,
             },
         },
         {
@@ -1103,34 +1111,33 @@ def test_moonspec_verifier_resolves_only_exact_next_remediation_attempt(
             "annotations": {
                 "issueImplementRole": "moonspec-remediation",
                 "moonSpecRemediationAttempt": 2,
-                "moonSpecRemediationMaxAttempts": 6,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+        {
+            "id": "verify-2",
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 2,
+                "moonSpecFinalRemediationGate": True,
             },
         },
     ]
 
-    assert workflow._exact_moonspec_remediation_successor(
+    successor, reason = workflow._resolve_next_moonspec_remediation_step(
         ordered_nodes=nodes,
-        current_index=0,
-    ) == nodes[1]
+        current_index=1,
+    )
+    assert successor is not None
+    assert successor.logical_step_id == "remediate-2"
+    assert reason == "verification_requested_remediation"
 
-    nodes[0]["annotations"] = {}
-    nodes[0]["tool"] = {"type": "agent_runtime", "name": "moonspec-verify"}
-    nodes[1]["annotations"]["moonSpecRemediationAttempt"] = 1
-    assert workflow._exact_moonspec_remediation_successor(
+    nodes[2]["annotations"]["moonSpecRemediationAttempt"] = 1
+    assert workflow._resolve_next_moonspec_remediation_step(
         ordered_nodes=nodes,
-        current_index=0,
-    ) == nodes[1]
-
-    nodes[0]["annotations"] = {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 6,
-    }
-    nodes[1]["annotations"]["moonSpecRemediationAttempt"] = 3
-    assert workflow._exact_moonspec_remediation_successor(
-        ordered_nodes=nodes,
-        current_index=0,
-    ) is None
+        current_index=1,
+    ) == (None, "no_remediation_successor")
 
 
 def test_final_moonspec_verifier_has_no_remediation_successor(
@@ -1147,10 +1154,175 @@ def test_final_moonspec_verifier_has_no_remediation_successor(
         },
     }
 
-    assert workflow._exact_moonspec_remediation_successor(
+    assert workflow._resolve_next_moonspec_remediation_step(
         ordered_nodes=[final_verifier],
         current_index=0,
-    ) is None
+    ) == (None, "remediation_budget_exhausted")
+
+
+@pytest.mark.parametrize(
+    ("verdict", "recoverable", "disposition", "routing", "reason"),
+    [
+        ("ADDITIONAL_WORK_NEEDED", True, "accept", "advance_to_next_remediation", "verification_requested_remediation"),
+        ("NO_DETERMINATION", True, "retry", "retry_current_verifier", "recoverable_no_determination"),
+        ("NO_DETERMINATION", False, "accept", "stop_at_control_gate", "unrecoverable_no_determination"),
+        ("BLOCKED", False, "accept", "stop_at_control_gate", "terminal_gate_verdict"),
+        ("FAILED_UNRECOVERABLE", False, "accept", "stop_at_control_gate", "terminal_gate_verdict"),
+        ("FULLY_IMPLEMENTED", False, "accept", "exit_remediation_loop", "verification_passed"),
+    ],
+)
+def test_moonspec_gate_transition_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    verdict: str,
+    recoverable: bool,
+    disposition: str,
+    routing: str,
+    reason: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    nodes = [
+        {
+            "id": "remediate-1",
+            "annotations": {"issueImplementRole": "moonspec-remediation", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 2},
+        },
+        {
+            "id": "verify-1",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 2},
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {"issueImplementRole": "moonspec-remediation", "moonSpecRemediationAttempt": 2, "moonSpecRemediationMaxAttempts": 2},
+        },
+        {
+            "id": "verify-2",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate", "moonSpecRemediationAttempt": 2, "moonSpecRemediationMaxAttempts": 2, "moonSpecFinalRemediationGate": True},
+        },
+    ]
+    decision = workflow._resolve_gate_transition(
+        verdict=SimpleNamespace(verdict=verdict, recoverable_in_current_runtime=recoverable),
+        ordered_nodes=nodes,
+        current_index=1,
+    )
+    assert (decision.disposition, decision.routing_disposition, decision.reason_code) == (
+        disposition,
+        routing,
+        reason,
+    )
+
+
+def test_moonspec_gate_transition_handles_initial_final_and_malformed_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    nodes = [
+        {
+            "id": "initial-verify",
+            "tool": {"name": "moonspec-verify"},
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        },
+        {
+            "id": "remediate-1",
+            "annotations": {"issueImplementRole": "moonspec-remediation", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 1},
+        },
+        {
+            "id": "verify-1",
+            "annotations": {"issueImplementRole": "moonspec-verification-gate", "moonSpecRemediationAttempt": 1, "moonSpecRemediationMaxAttempts": 1, "moonSpecFinalRemediationGate": True},
+        },
+    ]
+    verdict = SimpleNamespace(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        recoverable_in_current_runtime=True,
+    )
+
+    initial = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=nodes,
+        current_index=0,
+    )
+    assert initial.successor is not None
+    assert initial.successor.logical_step_id == "remediate-1"
+
+    final = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=nodes,
+        current_index=2,
+    )
+    assert final.routing_disposition == "stop_at_control_gate"
+    assert final.reason_code == "remediation_budget_exhausted"
+
+    malformed_nodes = [*nodes, {**nodes[1], "id": "duplicate-remediation"}]
+    malformed = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=malformed_nodes,
+        current_index=0,
+    )
+    assert malformed.routing_disposition == "stop_at_control_gate"
+    assert malformed.reason_code == "no_remediation_successor"
+
+    ordinary = workflow._resolve_gate_transition(
+        verdict=verdict,
+        ordered_nodes=[{"id": "ordinary", "tool": {"name": "agent"}}],
+        current_index=0,
+    )
+    assert ordinary.disposition == "generic"
+
+    invalid = workflow._resolve_gate_transition(
+        verdict=SimpleNamespace(
+            verdict="NO_DETERMINATION",
+            recoverable_in_current_runtime=False,
+            invalid=True,
+            degraded=False,
+        ),
+        ordered_nodes=nodes,
+        current_index=2,
+    )
+    assert invalid.disposition == "invalid"
+    assert invalid.reason_code == "invalid_gate_result"
+
+
+def test_moonspec_gate_transition_emits_structured_observability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        workflow,
+        "_get_logger",
+        lambda: SimpleNamespace(
+            info=lambda message, payload: events.append((message, payload))
+        ),
+    )
+    transition = run_module.GateTransitionDecision(
+        disposition="accept",
+        routing_disposition="advance_to_next_remediation",
+        reason_code="verification_requested_remediation",
+        successor=run_module.MoonSpecRemediationSuccessor(
+            logical_step_id="remediate-2",
+            attempt=2,
+            max_attempts=6,
+            node_index=4,
+        ),
+    )
+    workflow._record_moonspec_gate_transition_event(
+        logical_step_id="verify-1",
+        node={
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 6,
+            }
+        },
+        verdict="ADDITIONAL_WORK_NEEDED",
+        transition=transition,
+        review_retries_consumed=0,
+    )
+    assert events[0][0] == "moonspec_gate_transition %s"
+    payload = json.loads(events[0][1])
+    assert payload["nextLogicalStepId"] == "remediate-2"
+    assert payload["reviewRetriesConsumed"] == 0
 
 
 def test_run_progress_query_exposes_current_run_id(
@@ -4460,6 +4632,9 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         "gate": "approval_policy",
         "maxAttempts": 1,
         "attemptsConsumed": 1,
+        "maxExecutions": 1,
+        "executionsConsumed": 1,
+        "retriesConsumed": 0,
         "remainingExecutions": 0,
         "additionalStopDimension": {
             "type": "consecutive_no_progress_attempts",
