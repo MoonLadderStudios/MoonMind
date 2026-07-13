@@ -1084,6 +1084,75 @@ def test_review_gate_retry_requires_reattempt_recommendation(
     ) is True
 
 
+def test_moonspec_verifier_resolves_only_exact_next_remediation_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    nodes = [
+        {
+            "id": "verify-1",
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 6,
+            },
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 6,
+            },
+        },
+    ]
+
+    assert workflow._exact_moonspec_remediation_successor(
+        ordered_nodes=nodes,
+        current_index=0,
+    ) == nodes[1]
+
+    nodes[0]["annotations"] = {}
+    nodes[0]["tool"] = {"type": "agent_runtime", "name": "moonspec-verify"}
+    nodes[1]["annotations"]["moonSpecRemediationAttempt"] = 1
+    assert workflow._exact_moonspec_remediation_successor(
+        ordered_nodes=nodes,
+        current_index=0,
+    ) == nodes[1]
+
+    nodes[0]["annotations"] = {
+        "issueImplementRole": "moonspec-verification-gate",
+        "moonSpecRemediationAttempt": 1,
+        "moonSpecRemediationMaxAttempts": 6,
+    }
+    nodes[1]["annotations"]["moonSpecRemediationAttempt"] = 3
+    assert workflow._exact_moonspec_remediation_successor(
+        ordered_nodes=nodes,
+        current_index=0,
+    ) is None
+
+
+def test_final_moonspec_verifier_has_no_remediation_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    final_verifier = {
+        "id": "verify-6",
+        "annotations": {
+            "issueImplementRole": "moonspec-verification-gate",
+            "moonSpecRemediationAttempt": 6,
+            "moonSpecRemediationMaxAttempts": 6,
+        },
+    }
+
+    assert workflow._exact_moonspec_remediation_successor(
+        ordered_nodes=[final_verifier],
+        current_index=0,
+    ) is None
+
+
 def test_run_progress_query_exposes_current_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

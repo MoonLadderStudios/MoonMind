@@ -616,6 +616,9 @@ RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v
 # correlated under one trace id. Gated so in-flight histories that predate the
 # trace-ref stamp / incident-manifest writes keep replaying deterministically.
 RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
+RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = (
+    "run-plan-routed-moonspec-remediation-v1"
+)
 # Replay-stable patch id for the status-only memo update emitted from
 # _update_search_attributes. Histories that already recorded the prior ungated
 # memo command require a reset/versioning cutover; see
@@ -5317,6 +5320,48 @@ class MoonMindRunWorkflow:
                 return True
         return False
 
+    def _exact_moonspec_remediation_successor(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> Mapping[str, Any] | None:
+        """Return the one plan-authored remediation successor, if unambiguous."""
+        if current_index < 0 or current_index + 1 >= len(ordered_nodes):
+            return None
+        current = ordered_nodes[current_index]
+        successor = ordered_nodes[current_index + 1]
+        current_inputs = self._node_inputs_mapping(current)
+        current_tool = self._plan_node_tool_mapping(current)
+        current_tool_name = str(
+            current_tool.get("name") or current_tool.get("id") or ""
+        )
+        if (
+            self._moonspec_step_role(current) != "moonspec-verification-gate"
+            and not self._is_moonspec_verify_step(
+                tool_name=current_tool_name,
+                node_inputs=current_inputs,
+            )
+        ):
+            return None
+        if not self._is_moonspec_remediation_step(successor):
+            return None
+        current_attempt, current_max = self._moonspec_remediation_attempt_metadata(
+            current
+        )
+        successor_attempt, successor_max = (
+            self._moonspec_remediation_attempt_metadata(successor)
+        )
+        expected_attempt = 1 if current_attempt is None else current_attempt + 1
+        expected_max = successor_max if current_max is None else current_max
+        if (
+            successor_attempt != expected_attempt
+            or successor_max != expected_max
+            or successor_attempt > successor_max
+        ):
+            return None
+        return successor
+
     def _moonspec_remediation_loop_skip_reason(
         self,
         node: Mapping[str, Any],
@@ -5752,6 +5797,7 @@ class MoonMindRunWorkflow:
         )
         loop_context = self._publish_context.get("boundedStoryLoop")
         prior_progress_signature = None
+        prior_no_progress_attempts = 0
         if isinstance(loop_context, Mapping):
             prior_decision = loop_context.get("continuationDecision")
             if isinstance(prior_decision, Mapping):
@@ -5760,10 +5806,23 @@ class MoonMindRunWorkflow:
                     prior_progress_signature = str(
                         prior_gate.get("progressSignature") or ""
                     ).strip() or None
+                prior_budget = prior_decision.get("budget")
+                if isinstance(prior_budget, Mapping):
+                    prior_consumed = prior_budget.get("consumed")
+                    if isinstance(prior_consumed, Mapping):
+                        prior_no_progress_attempts = int(
+                            prior_consumed.get(
+                                "consecutiveNoProgressAttempts", 0
+                            )
+                            or 0
+                        )
         repeated_progress = bool(
             progress_budget_enabled
             and gate.progress_signature
             and prior_progress_signature == gate.progress_signature
+        )
+        consecutive_no_progress_attempts = (
+            prior_no_progress_attempts + 1 if repeated_progress else 0
         )
         max_no_progress_attempts = 1
         if progress_budget_enabled and isinstance(loop_context, Mapping):
@@ -5780,7 +5839,9 @@ class MoonMindRunWorkflow:
                 "maxUnsafeOrPolicyDeniedAttempts": 1,
                 "consumed": {
                     "attempts": 0 if has_remaining_remediation_step else 1,
-                    "consecutiveNoProgressAttempts": 1 if repeated_progress else 0,
+                    "consecutiveNoProgressAttempts": (
+                        consecutive_no_progress_attempts
+                    ),
                     "repeated_failed_commands": 0,
                     "unsafe_or_policy_denied_attempts": 0,
                 },
@@ -5802,6 +5863,8 @@ class MoonMindRunWorkflow:
             "diagnosticsRef": gate.diagnostics_ref,
             "progressSignature": gate.progress_signature,
         }
+        payload["budget"] = budget.model_dump(by_alias=True, mode="json")
+        payload["currentLogicalStepId"] = logical_step_id
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
         ] = payload
@@ -8267,6 +8330,9 @@ class MoonMindRunWorkflow:
         # cancellation/failure handling.
         workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         step_retry_overrides_enabled = workflow.patched(RUN_STEP_RETRY_OVERRIDES_PATCH)
+        plan_routed_moonspec_remediation_enabled = workflow.patched(
+            RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH
+        )
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
@@ -8370,6 +8436,9 @@ class MoonMindRunWorkflow:
             result_status: str | None = None
             execution_result = None
             accepted_execution = False
+            accepted_gate_verdict = "FULLY_IMPLEMENTED"
+            accepted_gate_action = "advance"
+            accepted_gate_disposition = "accepted"
             gate_stop_requested = False
             step_failure_summary: str | None = None
             blocked_outcome_wait_skipped = False
@@ -9322,6 +9391,90 @@ class MoonMindRunWorkflow:
                         artifact_ref=gate_result_ref,
                         metadata=gate_check_metadata,
                     )
+                    remediation_successor = None
+                    if (
+                        plan_routed_moonspec_remediation_enabled
+                        and review_verdict.verdict == "ADDITIONAL_WORK_NEEDED"
+                    ):
+                        remediation_successor = (
+                            self._exact_moonspec_remediation_successor(
+                                ordered_nodes=ordered_nodes,
+                                current_index=index - 1,
+                            )
+                        )
+                    plan_routed_verifier = (
+                        plan_routed_moonspec_remediation_enabled
+                        and (
+                            remediation_successor is not None
+                            or self._moonspec_step_role(node)
+                            == "moonspec-verification-gate"
+                        )
+                        and (
+                            review_verdict.verdict
+                            in {
+                                "ADDITIONAL_WORK_NEEDED",
+                                "BLOCKED",
+                                "FAILED_UNRECOVERABLE",
+                                "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+                            }
+                            or (
+                                review_verdict.verdict == "NO_DETERMINATION"
+                                and not review_verdict.recoverable_in_current_runtime
+                            )
+                        )
+                        and self._step_has_accepted_output_evidence(
+                            node_id,
+                            execution_result,
+                        )
+                    )
+                    if plan_routed_verifier:
+                        current_attempt, current_max = (
+                            self._moonspec_remediation_attempt_metadata(node)
+                        )
+                        successor_max = current_max
+                        if remediation_successor is not None:
+                            _, successor_max = (
+                                self._moonspec_remediation_attempt_metadata(
+                                    remediation_successor
+                                )
+                            )
+                        accepted_gate_verdict = "ADDITIONAL_WORK_NEEDED"
+                        accepted_gate_action = (
+                            "advance_to_remediation_successor"
+                            if remediation_successor is not None
+                            else "stop_at_control_gate"
+                        )
+                        accepted_gate_disposition = "accepted"
+                        self._upsert_step_check(
+                            node_id,
+                            kind="approval_policy",
+                            status="passed",
+                            summary=(
+                                "Valid verifier result accepted; routing to "
+                                + (
+                                    f"remediation attempt {current_attempt + 1}."
+                                    if remediation_successor is not None
+                                    and current_attempt is not None
+                                    else "the first remediation attempt."
+                                    if remediation_successor is not None
+                                    else "the workflow control gate."
+                                )
+                            ),
+                            retry_count=review_retry_count,
+                            artifact_ref=gate_result_ref,
+                            metadata={
+                                **gate_check_metadata,
+                                "workflowTransition": accepted_gate_action,
+                                "targetLogicalStepId": str(
+                                    remediation_successor.get("id") or ""
+                                ) if remediation_successor is not None else None,
+                                "reviewEvidenceRetriesConsumed": review_retry_count,
+                                "remediationAttemptsConsumed": current_attempt,
+                                "remediationAttemptsMaximum": successor_max,
+                            },
+                        )
+                        accepted_execution = True
+                        break
                     if self._review_gate_retry_allowed(
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
@@ -9521,7 +9674,7 @@ class MoonMindRunWorkflow:
                 updated_at=workflow.now(),
                 reason=attempt_reason,
                 status="completed",
-                terminal_disposition="accepted",
+                terminal_disposition=accepted_gate_disposition,
                 budget=self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
                     review_retry_count=review_retry_count,
@@ -9531,8 +9684,8 @@ class MoonMindRunWorkflow:
                     consecutive_no_progress_attempts=(
                         consecutive_no_progress_attempts
                     ),
-                    verdict="FULLY_IMPLEMENTED",
-                    recommended_next_action="advance",
+                    verdict=accepted_gate_verdict,
+                    recommended_next_action=accepted_gate_action,
                 )
                 if review_gate_active
                 else None,
