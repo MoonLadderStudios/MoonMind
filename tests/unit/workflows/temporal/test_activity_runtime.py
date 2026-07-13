@@ -168,6 +168,9 @@ async def test_prepare_managed_codex_turn_adds_moonspec_verify_artifact_hint() -
     assert '"advance"' in prepared
     assert '"reattempt_current_step"' in prepared
     assert '`FULLY_IMPLEMENTED`, set `recommendedNextAction` to "advance"' in prepared
+    assert "workflow runtime owns routing" in prepared
+    assert "read-only verifier must not ask its own rerun" in prepared
+    assert 'Use "reattempt_current_step" only when rerunning this verifier' in prepared
     assert "raw diagnostic" in prepared
     assert "map-entry" in prepared
     assert "missing map assets" in prepared

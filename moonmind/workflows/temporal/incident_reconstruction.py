@@ -410,6 +410,7 @@ def build_incident_reconstruction_manifest(
     workspace_changes: Sequence[Mapping[str, Any]] | None = None,
     logs_ref: str | None = None,
     artifact_refs: Mapping[str, str] | None = None,
+    control_stop: Mapping[str, Any] | None = None,
 ) -> IncidentReconstructionManifestModel:
     """Build the incident reconstruction manifest for a failed run.
 
@@ -563,6 +564,7 @@ def build_incident_reconstruction_manifest(
         failureCategory=failure_category,
         failedLogicalStepId=failed_logical_step_id,
         failedExecutionOrdinal=_positive_int(failed_execution_ordinal),
+        controlStop=dict(control_stop) if isinstance(control_stop, Mapping) else None,
         policyRef=normalized_policy_ref,
         provider=provider,
         cost=cost,

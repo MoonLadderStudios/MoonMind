@@ -419,7 +419,11 @@ def test_parent_loop_honors_configured_no_progress_budget(
         "budgets": {"maxConsecutiveNoProgressAttempts": 2}
     }
     workflow._step_terminal_dispositions.update(
-        {"verify-1": "accepted", "verify-2": "accepted"}
+        {
+            "verify-1": "accepted",
+            "verify-2": "accepted",
+            "verify-3": "accepted",
+        }
     )
     ordered_nodes = [
         {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
@@ -432,6 +436,13 @@ def test_parent_loop_honors_configured_no_progress_budget(
         {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
         {
             "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-3", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-3",
             "inputs": {
                 "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
             },
@@ -455,8 +466,17 @@ def test_parent_loop_honors_configured_no_progress_budget(
         ordered_nodes=ordered_nodes,
         current_index=2,
     )
+    third = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-3",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/three",
+        ordered_nodes=ordered_nodes,
+        current_index=4,
+    )
 
     assert second["continueLoop"] is True
+    assert third["continueLoop"] is False
+    assert third["reason"] == "no_progress_attempts_exhausted"
 
 
 def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() -> None:
@@ -615,6 +635,81 @@ def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted(
     assert decision["reason"] == "max_attempts_exhausted"
     assert decision["remainingWorkRef"] == "artifact://remaining-work/final"
     assert decision["hasRemainingRemediationStep"] is False
+
+
+def test_parent_loop_preserves_legacy_remediation_scan_before_plan_routing_patch() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}}
+    ]
+    workflow._step_terminal_dispositions["verify-1"] = "accepted"
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {"selectedSkill": "moonspec-verify"},
+            "annotations": {
+                "issueImplementRole": "moonspec-verification-gate",
+                "moonSpecRemediationAttempt": 1,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+        {
+            "id": "remediate-2",
+            "inputs": {"selectedSkill": "moonspec-implement"},
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": 2,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        },
+    ]
+
+    decision = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/legacy",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+        plan_routed_moonspec_remediation_enabled=False,
+    )
+
+    assert decision["continueLoop"] is True
+    assert decision["hasRemainingRemediationStep"] is True
+    assert decision["remediationRoutingReason"] == (
+        "legacy_remaining_remediation_scan"
+    )
+
+
+def test_parent_loop_guards_legacy_one_based_final_index() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-final", "attempt": 1, "artifacts": {}}
+    ]
+    workflow._step_terminal_dispositions["verify-final"] = "accepted"
+    ordered_nodes = [
+        {"id": "verify-final", "inputs": {"selectedSkill": "moonspec-verify"}}
+    ]
+
+    decision = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-final",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/legacy-final",
+        ordered_nodes=ordered_nodes,
+        current_index=len(ordered_nodes),
+        plan_routed_moonspec_remediation_enabled=False,
+    )
+
+    assert decision["continueLoop"] is False
+    assert decision["hasRemainingRemediationStep"] is False
+    assert decision["remediationBudget"]["currentAttempt"] is None
 
 
 def test_moonspec_gate_context_records_invalidated_refs_as_typed_data() -> None:

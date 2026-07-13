@@ -304,3 +304,46 @@ def test_minimal_incident_still_names_every_category_as_absent():
     for item in manifest.evidence:
         if not item.present:
             assert item.reason_code is not None
+
+
+def test_incident_preserves_control_stop_without_failed_execution():
+    manifest = build_incident_reconstruction_manifest(
+        workflow_id="wf-control-stop",
+        run_id="run-control-stop",
+        created_at=_NOW,
+        control_stop={
+            "kind": "workflow_gate",
+            "reasonCode": "remediation_budget_exhausted",
+            "logicalStepId": "verify-remediation-6",
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "gateResultRef": "artifact://gate/final",
+            "remainingWorkRef": "artifact://remaining/final",
+            "reviewGateBudget": {
+                "maxExecutions": 1,
+                "executionsConsumed": 1,
+                "retriesConsumed": 0,
+                "remainingExecutions": 0,
+                "exhausted": True,
+            },
+            "remediationBudget": {
+                "maxAttempts": 6,
+                "currentAttempt": 6,
+                "attemptsStarted": 6,
+                "attemptsCompleted": 6,
+                "remainingAttempts": 0,
+                "exhausted": True,
+            },
+        },
+    )
+    assert manifest.failed_logical_step_id is None
+    assert manifest.control_stop is not None
+    assert manifest.control_stop.reason_code == "remediation_budget_exhausted"
+    assert manifest.control_stop.review_gate_budget == {
+        "maxExecutions": 1,
+        "executionsConsumed": 1,
+        "retriesConsumed": 0,
+        "remainingExecutions": 0,
+        "exhausted": True,
+    }
+    assert manifest.control_stop.remediation_budget is not None
+    assert manifest.control_stop.remediation_budget["remainingAttempts"] == 0
