@@ -2,128 +2,122 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DOOD_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerOutOfDocker.md"
 BACKEND_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerBackendService.md"
+DOOD_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerOutOfDocker.md"
 SIDECAR_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "DockerSidecarRuntime.md"
 ARCH_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "ManagedAgentArchitecture.md"
 SESSION_DOC = REPO_ROOT / "docs" / "ManagedAgents" / "CodexCliManagedSessions.md"
-EXECUTION_DOC = (
-    REPO_ROOT / "docs" / "Temporal" / "ManagedAndExternalAgentExecutionModel.md"
-)
-TRACKER = (
-    REPO_ROOT
-    / "docs"
-    / "tmp"
-    / "remaining-work"
-    / "ManagedAgents-DockerOutOfDocker.md"
-)
-TRACKER_INDEX = REPO_ROOT / "docs" / "tmp" / "remaining-work" / "README.md"
+PLATFORM_DOC = REPO_ROOT / "docs" / "MoonMindArchitecture.md"
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_canonical_dood_doc_does_not_link_removed_phase0_tracker() -> None:
-    dood_text = _read(DOOD_DOC)
-
-    assert "../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md" not in dood_text
-    assert not TRACKER.exists()
+def _normalized(path: Path) -> str:
+    return " ".join(_read(path).split())
 
 
-def test_docker_backend_service_is_the_canonical_declarative_design() -> None:
+def test_docker_backend_service_is_api_owned_and_temporal_backed() -> None:
     text = _read(BACKEND_DOC)
 
-    assert "# Docker Backend Service" in text
-    assert "Document class:** Canonical declarative design" in text
+    assert "Docker Backend Service" in text
     assert "part of the MoonMind API subsystem" in text
-    assert "Temporal owns the durable execution interval" in text
+    assert "Temporal owns the execution interval" in text
     assert "existing system Docker daemon" in text
-    assert "No separate MoonMind workload daemon is required" in text
+    assert "No dedicated MoonMind Docker daemon is required today" in text
 
 
 def test_docker_backend_service_exposes_asynchronous_agent_tools() -> None:
     text = _read(BACKEND_DOC)
 
     for tool_name in (
-        "`container.submit`",
-        "`container.status`",
-        "`container.logs`",
-        "`container.artifacts`",
-        "`container.cancel`",
+        "container.submit",
+        "container.status",
+        "container.logs",
+        "container.artifacts",
+        "container.cancel",
     ):
         assert tool_name in text
 
-    assert "Agents do not receive Docker authority" in text
-    assert "raw Docker CLI execution remains" in text
+    assert "Docker CLI execution remains" in text
+    assert "rawDockerCliExposedToAgents: false" in text
 
 
-def test_docker_backend_service_reuses_images_across_workflows() -> None:
-    text = _read(BACKEND_DOC).lower()
-
-    for term in (
-        "cross-workflow image reuse",
-        "images are acquired on demand",
-        "cache survives",
-        "workflow cleanup never removes shared images",
-        "pull locking",
-        "removeimagesonterminal: false",
-    ):
-        assert term in text
-
-
-def test_docker_backend_service_declares_omnigent_integration() -> None:
+def test_docker_backend_service_reuses_arbitrary_images_across_workflows() -> None:
     text = _read(BACKEND_DOC)
 
-    assert "## 18. Omnigent integration" in text
-    assert "http://api:8000/mcp" in text
-    assert "omnigent-host" in text
-    assert "do not need" in text
-    assert "the Docker CLI" in text
-    assert "a mounted Docker socket" in text
+    assert "Images are arbitrary within policy and acquired on demand" in text
+    assert "cross-workflow image cache" in text
+    assert "reusableAcrossWorkflows: true" in text
+    assert "removeOnJobEnd: false" in text
+    assert "Per-image pull lock" in text
+    assert "Job cleanup never removes shared images" in text
 
 
-def test_sidecar_document_is_only_a_supersession_pointer() -> None:
-    text = _read(SIDECAR_DOC)
+def test_docker_backend_service_uses_logical_workspace_references() -> None:
+    text = _read(BACKEND_DOC)
 
-    assert "Status:** Superseded" in text
-    assert "DockerBackendService.md" in text
-    assert "no longer the MoonMind desired state" in text
-    assert "## 1. Purpose" not in text
-    assert "kind: ManagedAgentRuntimeProfile" not in text
+    assert "Workspaces are logical references" in text
+    assert "callerProvidesHostPath: false" in text
+    assert "visibilityProbeBeforeLargePull: true" in text
+    assert "A failed probe stops the job before expensive image acquisition" in text
 
 
-def test_execution_model_keeps_docker_workloads_on_tool_path() -> None:
-    execution_text = _read(EXECUTION_DOC)
+def test_omnigent_uses_mcp_without_receiving_docker_authority() -> None:
+    text = _read(BACKEND_DOC)
 
-    assert "Docker-backed workload tools are ordinary executable tools" in execution_text
-    assert (
-        "not new `MoonMind.AgentRun` instances unless the launched runtime is itself"
-        in execution_text
+    assert "Omnigent connects to MoonMind's authenticated MCP endpoint" in text
+    assert "do not receive a Docker socket or `DOCKER_HOST`" in text
+    assert "omnigent-session" in text
+
+
+def test_canonical_backend_doc_has_no_migration_or_compatibility_checklist() -> None:
+    text = _read(BACKEND_DOC).lower()
+
+    assert "## migration" not in text
+    assert "migration from per-session" not in text
+    assert "temporary compatibility" not in text
+    assert "while callers migrate" not in text
+
+
+def test_sidecar_document_is_only_a_removed_design_tombstone() -> None:
+    text = _normalized(SIDECAR_DOC)
+
+    assert "Removed from desired state" in text
+    assert "not a supported MoonMind desired state or compatibility path" in text
+    assert "only a tombstone for old links" in text
+    assert "does not define a runtime mode" in text
+    assert "may remain temporarily" not in text
+
+
+def test_dood_document_is_only_a_consolidation_tombstone() -> None:
+    text = _normalized(DOOD_DOC)
+
+    assert "Consolidated into" in text
+    assert "Docker Backend Service" in text
+    assert "does not define a parallel workload architecture" in text
+
+
+def test_related_architecture_docs_do_not_reinstate_sidecar_as_default() -> None:
+    forbidden = (
+        "per-session Docker sidecar",
+        "ordinary managed-session Docker work uses a per-session sidecar",
+        "ordinary repository test workloads use the sidecar",
+        "default way to provide it is the per-session Docker sidecar",
     )
 
-
-def test_dood_glossary_and_scope_terms_remain_present() -> None:
-    dood_text = _read(DOOD_DOC)
-    lowered = dood_text.lower()
-
-    for term in (
-        "session container",
-        "workload container",
-        "runner profile",
-        "session-assisted workload",
-        "one-shot workload tool",
-        "profile-backed helper containers remain explicitly owned",
-        '`tool.type = "skill"`',
-        "`agent_runtime.*`",
-        "`moonmind.agentrun`",
-    ):
-        assert term in lowered
+    for path in (ARCH_DOC, SESSION_DOC, PLATFORM_DOC):
+        contents = _read(path)
+        lowered = contents.lower()
+        assert "DockerBackendService.md" in contents, path
+        for phrase in forbidden:
+            assert phrase.lower() not in lowered, path
 
 
-def test_tracker_is_listed_in_remaining_work_index() -> None:
-    if not TRACKER_INDEX.exists():
-        return
-    tracker_index_text = _read(TRACKER_INDEX)
+def test_backend_doc_remains_domain_agnostic() -> None:
+    text = _read(BACKEND_DOC)
 
-    assert "ManagedAgents-DockerOutOfDocker.md" in tracker_index_text
+    assert "The core is workload-agnostic" in text
+    assert "No backend branch exists for Unreal" in text
+    assert "No dedicated toolchain pool" in text
