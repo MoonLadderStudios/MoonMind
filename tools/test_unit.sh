@@ -142,7 +142,9 @@ from temporalio.testing import WorkflowEnvironment
 
 
 async def main() -> None:
-    env = await WorkflowEnvironment.start_time_skipping()
+    env = await WorkflowEnvironment.start_time_skipping(
+        test_server_download_version="v1.29.0"
+    )
     await env.shutdown()
 
 

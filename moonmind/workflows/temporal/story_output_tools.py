@@ -5188,14 +5188,27 @@ async def update_github_issue_status(
         except (httpx.TransportError, httpx.TimeoutException) as exc:
             return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed: {exc.__class__.__name__}"})
     updated_issue = _github_issue_payload(updated, repository)
+    issue_url = updated_issue.get("url") or issue.get("url")
+    summary = f"Updated GitHub issue {issue_ref} with mode {mode}."
     return ToolResult(
         status="COMPLETED",
         outputs={
-            "issueUrl": updated_issue.get("url") or issue.get("url"),
+            "issueUrl": issue_url,
             "appliedActions": applied,
             "confirmedState": updated_issue.get("state"),
             "confirmedLabels": updated_issue.get("labels"),
-            "summary": f"Updated GitHub issue {issue_ref} with mode {mode}.",
+            "summary": summary,
+            "sideEffect": {
+                "effectClass": "external_non_idempotent",
+                "kind": "github",
+                "operation": (
+                    "github.issue.close"
+                    if actions.get("closeIssue")
+                    else "github.issue.update"
+                ),
+                "target": issue_url,
+                "summary": summary,
+            },
         },
     )
 
