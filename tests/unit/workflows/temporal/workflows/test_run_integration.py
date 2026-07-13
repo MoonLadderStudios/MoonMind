@@ -1611,6 +1611,18 @@ async def test_github_issue_implement_no_commit_closure_finalizes_as_no_commit(
             }
         },
     )
+    mock_run_workflow._record_declared_side_effect(
+        logical_step_id="finalize-github-issue",
+        outputs={
+            "sideEffect": {
+                "effectClass": "external_non_idempotent",
+                "kind": "github",
+                "operation": "github.issue.close",
+                "target": "https://github.com/MoonLadderStudios/MoonMind/issues/3144",
+                "summary": "Closed GitHub issue MoonLadderStudios/MoonMind#3144.",
+            }
+        },
+    )
 
     status, message, publish_failure = mock_run_workflow._determine_publish_completion(
         parameters=parameters
@@ -2507,6 +2519,51 @@ def test_jira_implement_task_makes_pr_publish_optional(
                 ],
             },
         }
+    )
+
+
+def test_github_issue_template_only_relaxes_pr_after_no_commit_evidence(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "tool": {"type": "skill", "name": "auto"},
+            "skill": {"name": "auto"},
+            "appliedStepTemplates": [
+                {"slug": "github-issue-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    assert not mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+    assert mock_run_workflow._is_canonical_no_commit_task(parameters)
+
+
+def test_record_declared_side_effect_tolerates_missing_record(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_record_step_side_effect",
+        lambda *_args, **_kwargs: None,
+    )
+
+    mock_run_workflow._record_declared_side_effect(
+        logical_step_id="finalize-github-issue",
+        outputs={
+            "sideEffect": {
+                "effectClass": "external_non_idempotent",
+                "kind": "github",
+                "operation": "github.issue.close",
+            }
+        },
     )
 
 

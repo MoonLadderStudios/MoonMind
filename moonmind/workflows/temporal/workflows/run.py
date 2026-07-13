@@ -3596,6 +3596,8 @@ class MoonMindRunWorkflow:
             workflow_state_accepted=True,
             reason=self._coerce_text(declaration.get("summary"), max_chars=300),
         )
+        if record is None:
+            return
         provider_kind = self._coerce_text(
             declaration.get("kind") or declaration.get("provider"),
             max_chars=80,
@@ -7204,7 +7206,7 @@ class MoonMindRunWorkflow:
         }
         self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
             if not self._unresolved_dependency_ids and self._dependency_failure is None:
                 self._dependency_resolution = DEPENDENCY_RESOLUTION_SATISFIED
@@ -7242,7 +7244,7 @@ class MoonMindRunWorkflow:
         ):
             return
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             # Idempotency: stale completed signals after already satisfied are no-ops.
             if existing_resolution in (
                 DEPENDENCY_RESOLUTION_SATISFIED,
@@ -7428,13 +7430,13 @@ class MoonMindRunWorkflow:
             )
             return
 
-        # Normalize "succeeded" to "completed" so the outcome recorder
-        # (which only treats "completed" as success) can satisfy the gate.
+        # Normalize "succeeded" to "completed" so the outcome recorder can
+        # satisfy the gate with either canonical successful terminal state.
         terminal_state = signal.terminal_state
         if terminal_state == "succeeded":
             terminal_state = "completed"
 
-        is_terminal_failure = terminal_state != "completed"
+        is_terminal_failure = terminal_state not in {STATE_COMPLETED, STATE_NO_COMMIT}
         if is_terminal_failure:
             self._get_logger().warning(
                 "DependencyResolved signal indicates non-success terminal state %s for %s",
@@ -7581,7 +7583,7 @@ class MoonMindRunWorkflow:
                 )
                 continue
 
-            if state == STATE_COMPLETED:
+            if state in {STATE_COMPLETED, STATE_NO_COMMIT}:
                 self._record_dependency_outcome(
                     prerequisite_workflow_id=dependency_id,
                     terminal_state=state,
@@ -10110,6 +10112,12 @@ class MoonMindRunWorkflow:
                 or self._summary,
                 last_error=None,
             )
+            outputs = self._effective_result_outputs(execution_result)
+            if isinstance(outputs, Mapping):
+                self._record_declared_side_effect(
+                    logical_step_id=node_id,
+                    outputs=outputs,
+                )
             self._record_downstream_dependency_effects(
                 node_id,
                 updated_at=workflow.now(),
@@ -12760,8 +12768,11 @@ class MoonMindRunWorkflow:
         self._record_publish_metadata_context(outputs)
 
         if push_status == "no_commits":
-            if publish_mode == "pr" and self._pr_publish_optional_for_task(
-                parameters, include_applied_templates=True
+            if publish_mode == "pr" and (
+                self._pr_publish_optional_for_task(
+                    parameters, include_applied_templates=True
+                )
+                or self._is_canonical_no_commit_task(parameters)
             ):
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_commit_publish_reason(
@@ -13230,10 +13241,6 @@ class MoonMindRunWorkflow:
             return
 
         self._last_step_id = node_id
-        self._record_declared_side_effect(
-            logical_step_id=node_id,
-            outputs=outputs,
-        )
         operator_summary = self._sanitize_operator_summary(
             self._coerce_text(
                 outputs.get("operator_summary") or outputs.get("operatorSummary"),
@@ -13573,12 +13580,21 @@ class MoonMindRunWorkflow:
             skill_names = skill_names | applied_template_slugs
         if not skill_names:
             return False
-        optional_task_skills = _PR_OPTIONAL_TASK_SKILLS
-        if self._canonical_no_commit_outcome_enabled:
-            optional_task_skills = (
-                optional_task_skills | _CANONICAL_NO_COMMIT_TASK_PRESETS
-            )
-        return skill_names.issubset(optional_task_skills)
+        return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
+
+    def _is_canonical_no_commit_task(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        return bool(
+            self._task_applied_template_slugs(parameters, task_payload)
+            & _CANONICAL_NO_COMMIT_TASK_PRESETS
+        )
 
     def _task_skill_names(
         self,

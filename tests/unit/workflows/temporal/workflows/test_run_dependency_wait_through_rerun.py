@@ -94,6 +94,27 @@ def test_failed_prerequisite_keeps_dependent_waiting(monkeypatch) -> None:
     assert outcome["terminalState"] == "failed"
 
 
+def test_no_commit_prerequisite_satisfies_dependency(monkeypatch) -> None:
+    """A safely completed no-change run is a successful prerequisite."""
+
+    wf = _make_workflow_under_rerun_patch(monkeypatch, declared=["dep-1"])
+
+    wf._record_dependency_outcome(
+        prerequisite_workflow_id="dep-1",
+        terminal_state="no_commit",
+        close_status="completed",
+        resolved_at="2026-05-08T12:00:00Z",
+        failure_category=None,
+        message="No repository commit was needed.",
+    )
+
+    assert wf._unresolved_dependency_ids == set()
+    assert wf._dependency_resolution == DEPENDENCY_RESOLUTION_SATISFIED
+    outcome = wf._dependency_outcomes_by_id["dep-1"]
+    assert outcome["terminalState"] == "no_commit"
+    assert outcome["resolution"] == DEPENDENCY_RESOLUTION_SATISFIED
+
+
 @pytest.mark.parametrize(
     "terminal_state,close_status",
     [
