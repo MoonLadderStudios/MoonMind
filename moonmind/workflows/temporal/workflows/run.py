@@ -17056,6 +17056,35 @@ class MoonMindRunWorkflow:
                         self._publish_context.get("blockedReason")
                     )
             if self._publish_context:
+                terminal_publication = self._publish_context.get(
+                    "terminalPublication"
+                )
+                if isinstance(terminal_publication, Mapping):
+                    # Keep preservation evidence on the canonical publish block
+                    # consumed by terminal-state persistence and execution detail.
+                    # The failed finish outcome above remains authoritative.
+                    finish_summary["publish"].update(
+                        {
+                            key: terminal_publication.get(key)
+                            for key in (
+                                "intent",
+                                "status",
+                                "reasonCode",
+                                "source",
+                                "attempted",
+                                "commitCreated",
+                                "branchPushed",
+                                "branchName",
+                                "branchUrl",
+                                "headSha",
+                                "baseBranch",
+                                "remoteVerified",
+                                "evidenceRef",
+                                "idempotencyKey",
+                            )
+                            if terminal_publication.get(key) is not None
+                        }
+                    )
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:

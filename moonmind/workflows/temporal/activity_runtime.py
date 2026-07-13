@@ -10261,10 +10261,50 @@ class TemporalAgentRuntimeActivities:
         instead of raising over the primary workflow failure.
         """
         request = _validate_agent_runtime_terminal_checkpoint_input(request)
+        if not request.publication_enabled:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="policy_disabled",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
         if request.no_remote_writes:
             return AgentRuntimeTerminalCheckpointResult(
                 status="skipped",
-                reasonCode="remote_writes_disabled",
+                reasonCode="no_remote_writes",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if request.read_only:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="read_only",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if request.dry_run:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="dry_run",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if not request.runtime_capability_supported:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="runtime_capability_unsupported",
+                source=request.source,
+                attempted=False,
+                idempotencyKey=request.idempotency_key,
+            )
+        if not request.workspace_authoritative:
+            return AgentRuntimeTerminalCheckpointResult(
+                status="skipped",
+                reasonCode="workspace_unavailable",
                 source=request.source,
                 attempted=False,
                 idempotencyKey=request.idempotency_key,
@@ -10567,6 +10607,16 @@ class TemporalAgentRuntimeActivities:
                         ),
                         existingPrUrl=(
                             existing.get("prUrl") or meta.get("pull_request_url")
+                        ),
+                        publicationEnabled=(
+                            request.terminal_checkpoint_publication_enabled
+                        ),
+                        noRemoteWrites=request.no_remote_writes,
+                        readOnly=request.read_only,
+                        dryRun=request.dry_run,
+                        workspaceAuthoritative=request.workspace_authoritative,
+                        runtimeCapabilitySupported=(
+                            request.terminal_checkpoint_capability_supported
                         ),
                         idempotencyKey=f"terminal-checkpoint-v1:{run_id}",
                     )

@@ -2392,7 +2392,45 @@ class TestFetchResultPushIntegration:
 
         mock_push.assert_not_awaited()
         assert result.status == "skipped"
-        assert result.reason_code == "remote_writes_disabled"
+        assert result.reason_code == "no_remote_writes"
+        assert result.attempted is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("policy_field", "reason_code"),
+        [
+            ("publicationEnabled", "policy_disabled"),
+            ("readOnly", "read_only"),
+            ("dryRun", "dry_run"),
+            ("workspaceAuthoritative", "workspace_unavailable"),
+            ("runtimeCapabilitySupported", "runtime_capability_unsupported"),
+        ],
+    )
+    async def test_terminal_publication_policy_returns_typed_skip(
+        self, policy_field, reason_code
+    ):
+        activities = TemporalAgentRuntimeActivities(run_store=_make_mock_store())
+        request = {
+            "runId": "run-1",
+            "agentId": "claude",
+            "failureClass": "execution_error",
+            "idempotencyKey": "terminal-checkpoint-v1:run-1",
+            policy_field: False if policy_field in {
+                "publicationEnabled",
+                "workspaceAuthoritative",
+                "runtimeCapabilitySupported",
+            } else True,
+        }
+        with patch.object(
+            activities, "_push_workspace_branch", new_callable=AsyncMock
+        ) as mock_push:
+            result = await activities.agent_runtime_publish_terminal_checkpoint(
+                request
+            )
+
+        mock_push.assert_not_awaited()
+        assert result.status == "skipped"
+        assert result.reason_code == reason_code
         assert result.attempted is False
 
     @pytest.mark.asyncio

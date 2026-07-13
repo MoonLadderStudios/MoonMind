@@ -279,6 +279,13 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
             "terminal_checkpoint_publication_enabled",
         ),
     )
+    no_remote_writes: bool = Field(False, alias="noRemoteWrites")
+    read_only: bool = Field(False, alias="readOnly")
+    dry_run: bool = Field(False, alias="dryRun")
+    workspace_authoritative: bool = Field(True, alias="workspaceAuthoritative")
+    terminal_checkpoint_capability_supported: bool = Field(
+        True, alias="terminalCheckpointCapabilitySupported"
+    )
 
     @model_validator(mode="after")
     def _normalize_fetch(self) -> "AgentRuntimeFetchResultInput":
@@ -301,6 +308,13 @@ class AgentRuntimeTerminalCheckpointInput(AgentRuntimeStatusInput):
     existing_head_sha: str | None = Field(None, alias="existingHeadSha")
     existing_pr_url: str | None = Field(None, alias="existingPrUrl")
     no_remote_writes: bool = Field(False, alias="noRemoteWrites")
+    publication_enabled: bool = Field(True, alias="publicationEnabled")
+    read_only: bool = Field(False, alias="readOnly")
+    dry_run: bool = Field(False, alias="dryRun")
+    workspace_authoritative: bool = Field(True, alias="workspaceAuthoritative")
+    runtime_capability_supported: bool = Field(
+        True, alias="runtimeCapabilitySupported"
+    )
     source: Literal["live_workspace", "checkpoint_restore", "provider_native"] = (
         "live_workspace"
     )

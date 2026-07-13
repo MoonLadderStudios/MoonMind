@@ -1855,6 +1855,31 @@ class MoonMindAgentRun:
         activity_input["terminalCheckpointPublicationEnabled"] = workflow.patched(
             TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID
         )
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, Mapping) else {}
+        )
+        checkpoint_policy = (
+            params.get("checkpointPolicy")
+            if isinstance(params.get("checkpointPolicy"), Mapping)
+            else {}
+        )
+        activity_input["terminalCheckpointPublicationEnabled"] = bool(
+            activity_input["terminalCheckpointPublicationEnabled"]
+            and checkpoint_policy.get("publishOnGracefulFailure", True)
+        )
+        activity_input["noRemoteWrites"] = bool(
+            params.get("noRemoteWrites") or workspace_spec.get("noRemoteWrites")
+        )
+        activity_input["readOnly"] = bool(
+            params.get("readOnly") or workspace_spec.get("readOnly")
+        )
+        activity_input["dryRun"] = bool(params.get("dryRun"))
+        activity_input["workspaceAuthoritative"] = not bool(
+            workspace_spec.get("authorityLost")
+        )
+        activity_input["terminalCheckpointCapabilitySupported"] = not bool(
+            workspace_spec.get("terminalCheckpointPublicationUnsupported")
+        )
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(

@@ -4451,3 +4451,40 @@ async def test_terminal_evidence_failure_projects_partial_fanout_consistently(
     assert summary["failure"]["queuedChildCount"] == len(queued)
     assert summary["failure"]["queuedChildren"] == queued
     assert summary["lastStep"]["diagnosticsRef"] == "artifact://mm-1201-diagnostics"
+
+
+@pytest.mark.asyncio
+async def test_failed_finish_summary_keeps_terminal_publication_evidence(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._publish_context["terminalPublication"] = {
+        "intent": "terminal_checkpoint",
+        "status": "pushed",
+        "reasonCode": "graceful_failure_checkpoint_pushed",
+        "source": "live_workspace",
+        "attempted": True,
+        "branchPushed": True,
+        "branchName": "mm/workflow/recovered-work",
+        "headSha": "abc123",
+        "baseBranch": "main",
+        "remoteVerified": True,
+        "evidenceRef": "artifact://terminal-publication",
+        "idempotencyKey": "terminal-checkpoint-v1:run-1",
+    }
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters={"publishMode": "branch"},
+        status="failed",
+        error="validation failed",
+    )
+
+    assert summary["finishOutcome"]["code"] == "FAILED"
+    assert summary["finishOutcome"]["reason"] == "validation failed"
+    assert summary["publish"]["intent"] == "terminal_checkpoint"
+    assert summary["publish"]["status"] == "pushed"
+    assert summary["publish"]["branchName"] == "mm/workflow/recovered-work"
+    assert summary["publish"]["remoteVerified"] is True
+    assert summary["publish"]["evidenceRef"] == "artifact://terminal-publication"
