@@ -56,14 +56,29 @@ def upgrade() -> None:
                 WHERE profile_id = :profile_id
                   AND runtime_id = :runtime_id
                   AND provider_id = :provider_id
+                  AND provider_label = :provider_label
                   AND account_label = :account_label
+                  AND default_model IS NULL
+                  AND default_effort IS NULL
+                  AND model_overrides IS NULL
                   AND enabled = false
                   AND is_default = false
+                  AND tags IS NULL
+                  AND priority = 100
                   AND credential_source = 'none'
                   AND runtime_materialization_mode = 'api_key_env'
                   AND auth_state = 'not_configured'
                   AND disabled_reason = 'missing_credentials'
                   AND (secret_refs IS NULL OR CAST(secret_refs AS TEXT) IN ('{}', 'null'))
+                  AND clear_env_keys IS NULL
+                  AND env_template IS NULL
+                  AND file_templates IS NULL
+                  AND home_path_overrides IS NULL
+                  AND command_behavior IS NULL
+                  AND max_parallel_runs = 1
+                  AND cooldown_after_429_seconds = 900
+                  AND rate_limit_policy = 'backoff'
+                  AND max_lease_duration_seconds = 7200
                   AND volume_ref IS NULL
                   AND volume_mount_path IS NULL
                   AND last_auth_method IS NULL
@@ -72,6 +87,11 @@ def upgrade() -> None:
                 profile_id=profile_id,
                 runtime_id=runtime_id,
                 provider_id=provider_id,
+                provider_label={
+                    "anthropic": "Anthropic",
+                    "openai": "OpenAI",
+                    "google": "Google",
+                }[provider_id],
                 account_label=account_label,
             )
         )

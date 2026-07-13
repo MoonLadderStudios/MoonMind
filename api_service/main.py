@@ -688,6 +688,13 @@ def _is_untouched_legacy_setup_profile(profile_id: str, row: dict[str, Any]) -> 
         row.get("runtime_id") == runtime_id
         and row.get("provider_id") == provider_id
         and row.get("account_label") == account_label
+        and row.get("provider_label")
+        == {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}[
+            provider_id
+        ]
+        and row.get("default_model") is None
+        and row.get("default_effort") is None
+        and row.get("model_overrides") is None
         and row.get("enabled") is False
         and row.get("is_default") is False
         and enum_value("credential_source") == "none"
@@ -695,6 +702,17 @@ def _is_untouched_legacy_setup_profile(profile_id: str, row: dict[str, Any]) -> 
         and enum_value("auth_state") == "not_configured"
         and enum_value("disabled_reason") == "missing_credentials"
         and not row.get("secret_refs")
+        and row.get("tags") is None
+        and row.get("priority") == 100
+        and row.get("clear_env_keys") is None
+        and row.get("env_template") is None
+        and row.get("file_templates") is None
+        and row.get("home_path_overrides") is None
+        and row.get("command_behavior") is None
+        and row.get("max_parallel_runs") == 1
+        and row.get("cooldown_after_429_seconds") == 900
+        and enum_value("rate_limit_policy") == "backoff"
+        and row.get("max_lease_duration_seconds") == 7200
         and row.get("volume_ref") is None
         and row.get("volume_mount_path") is None
         and row.get("last_auth_method") is None
@@ -1040,8 +1058,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.provider_label,
                     ManagedAgentProviderProfile.account_label,
                     ManagedAgentProviderProfile.default_model,
+                    ManagedAgentProviderProfile.default_effort,
+                    ManagedAgentProviderProfile.model_overrides,
+                    ManagedAgentProviderProfile.tags,
+                    ManagedAgentProviderProfile.priority,
                     ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
+                    ManagedAgentProviderProfile.home_path_overrides,
                     ManagedAgentProviderProfile.credential_source,
                     ManagedAgentProviderProfile.runtime_materialization_mode,
                     ManagedAgentProviderProfile.secret_refs,
@@ -1055,6 +1078,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.volume_ref,
                     ManagedAgentProviderProfile.volume_mount_path,
                     ManagedAgentProviderProfile.max_parallel_runs,
+                    ManagedAgentProviderProfile.cooldown_after_429_seconds,
+                    ManagedAgentProviderProfile.rate_limit_policy,
+                    ManagedAgentProviderProfile.max_lease_duration_seconds,
                 )
             )
             existing_rows = existing_result.all()
@@ -1065,8 +1091,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "provider_label": row.provider_label,
                     "account_label": row.account_label,
                     "default_model": row.default_model,
+                    "default_effort": row.default_effort,
+                    "model_overrides": row.model_overrides,
+                    "tags": row.tags,
+                    "priority": row.priority,
                     "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
+                    "home_path_overrides": row.home_path_overrides,
                     "credential_source": row.credential_source,
                     "runtime_materialization_mode": row.runtime_materialization_mode,
                     "secret_refs": row.secret_refs,
@@ -1080,6 +1111,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "volume_ref": row.volume_ref,
                     "volume_mount_path": row.volume_mount_path,
                     "max_parallel_runs": row.max_parallel_runs,
+                    "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
+                    "rate_limit_policy": row.rate_limit_policy,
+                    "max_lease_duration_seconds": row.max_lease_duration_seconds,
                 }
                 for row in existing_rows
             }

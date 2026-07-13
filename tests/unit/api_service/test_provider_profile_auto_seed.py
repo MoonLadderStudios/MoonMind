@@ -66,7 +66,11 @@ def test_legacy_setup_profile_detection_accepts_enum_values() -> None:
         {
             "runtime_id": "claude_code",
             "provider_id": "anthropic",
+            "provider_label": "Anthropic",
             "account_label": "Claude Code (setup required)",
+            "default_model": None,
+            "default_effort": None,
+            "model_overrides": None,
             "enabled": False,
             "is_default": False,
             "credential_source": DatabaseValue.NONE,
@@ -74,6 +78,17 @@ def test_legacy_setup_profile_detection_accepts_enum_values() -> None:
             "auth_state": DatabaseValue.NOT_CONFIGURED,
             "disabled_reason": DatabaseValue.MISSING_CREDENTIALS,
             "secret_refs": None,
+            "tags": None,
+            "priority": 100,
+            "clear_env_keys": None,
+            "env_template": None,
+            "file_templates": None,
+            "home_path_overrides": None,
+            "command_behavior": None,
+            "max_parallel_runs": 1,
+            "cooldown_after_429_seconds": 900,
+            "rate_limit_policy": "backoff",
+            "max_lease_duration_seconds": 7200,
             "volume_ref": None,
             "volume_mount_path": None,
             "last_auth_method": None,
@@ -548,7 +563,7 @@ async def test_auto_seed_deletes_untouched_legacy_setup_profiles(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("edit_field", ["secret_refs", "volume_ref"])
+@pytest.mark.parametrize("edit_field", ["secret_refs", "volume_ref", "default_model"])
 async def test_auto_seed_preserves_edited_legacy_setup_profile(
     _module_db, edit_field
 ):
@@ -568,7 +583,9 @@ async def test_auto_seed_preserves_edited_legacy_setup_profile(
         "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
         edit_field: {"anthropic_api_key": "secret://configured"}
         if edit_field == "secret_refs"
-        else "claude_oauth_volume",
+        else "claude_oauth_volume"
+        if edit_field == "volume_ref"
+        else "operator-selected-model",
     }
     async with db_base.async_session_maker() as session:
         session.add(ManagedAgentProviderProfile(**values))
