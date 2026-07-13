@@ -97,14 +97,19 @@ describe('dashboard masthead brand styles', () => {
   });
 
   it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
-    // The shared treatment: a bright top-edge inset, a lit bottom-edge inset,
-    // a hairline ring that closes the shape, and a tight accent glow hugging
-    // the bottom edge (a wide diffuse glow does not register at 1x against
-    // the masthead's glass fill).
+    // The shared treatment: a bright top-edge inset, a faint lit bottom-edge
+    // inset, and a tight accent glow hugging the bottom edge so it reads as
+    // backlit (a wide diffuse glow does not register at 1x against the
+    // masthead's glass fill). The sides stay open — no perimeter ring.
     const highlightShadow =
       /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
     expect(dashboardCss).toMatch(
-      /--mm-shadow-highlight-edge:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.26\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.75\),\s*0 0 0 1px rgb\(255 255 255 \/ 0\.34\),\s*0 3px 9px -2px rgb\(var\(--mm-accent\) \/ 0\.75\);/,
+      /--mm-shadow-highlight-edge:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.26\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.4\),\s*0 3px 9px -2px rgb\(var\(--mm-accent\) \/ 0\.75\);/,
+    );
+    // The token must stay side-open: no perimeter ring, so the buttons read
+    // as a top highlight plus a backlit bottom rim instead of an outline.
+    expect(dashboardCss).not.toMatch(
+      /--mm-shadow-highlight-edge:[^;]*0 0 0 1px/s,
     );
 
     // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
