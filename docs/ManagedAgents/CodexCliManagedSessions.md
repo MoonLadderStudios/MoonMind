@@ -3,7 +3,6 @@
 Status: Desired state  
 Owners: MoonMind Platform  
 Last updated: 2026-07-13
-
 Related:
 
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
@@ -247,7 +246,30 @@ are not authoritative publication paths.
 
 ---
 
-## 9. Rate-limit behavior
+## 9. OAuth token rotation
+
+OAuth-backed Codex sessions use two distinct filesystem authorities:
+
+- the provider profile's OAuth volume owns durable credential state;
+- the workflow-scoped writable Codex home owns disposable per-run state.
+
+At launch, MoonMind seeds the per-run home from the OAuth volume. When Codex
+rotates `auth.json`, MoonMind writes the rotated credential state back through a
+compare-and-swap boundary. The write is allowed only when the durable source
+still matches the digest that seeded the session; a concurrent reconnect or
+another credential owner wins and must never be overwritten by stale session
+state. Lock acquisition is non-blocking, and filesystem failures remain
+auxiliary to the authoritative assistant turn: MoonMind records a diagnostic
+and retries persistence at a later session lifecycle boundary.
+
+Provider responses such as `token_expired`, `refresh_token_reused`, or an access
+token that cannot be refreshed are authentication failures. They terminate with
+the canonical reauthentication recommendation and must not be retried as empty
+assistant turns.
+
+---
+
+## 10. Rate-limit behavior
 
 Codex turns surface provider rate limits through the shared managed-runtime
 failure taxonomy. The controller applies bounded exponential backoff with jitter,
@@ -258,7 +280,7 @@ rate-limit failure and set the canonical `AgentRunResult` metadata.
 
 ---
 
-## 10. Container-job behavior
+## 11. Container-job behavior
 
 A Codex session may request a job when repository instructions or verification
 require a containerized environment.
@@ -282,7 +304,7 @@ runtime-specific worker pool is part of the Codex contract.
 
 ---
 
-## 11. Non-goals
+## 12. Non-goals
 
 This contract does not define:
 
@@ -297,7 +319,7 @@ This contract does not define:
 
 ---
 
-## 12. Stable rules
+## 13. Stable rules
 
 1. One logical Codex session is workflow-scoped.
 2. Temporal owns orchestration and replay-safe command ordering.
