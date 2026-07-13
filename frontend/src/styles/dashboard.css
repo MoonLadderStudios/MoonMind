@@ -775,15 +775,18 @@ h1 {
   cursor: pointer;
 }
 
-/* Same hover feel as the primary nav links: brighten, grow slightly, cyan
- * under-glow. Stating box-shadow/transform/filter here also keeps the global
- * button:hover rule (ring + wide purple glow, for filled CTAs) from leaking
- * onto the trigger. */
+/* The open and hover states share the highlighted surface and cyan under-glow.
+ * Stating box-shadow here also keeps the global button:hover rule (ring + wide
+ * purple glow, for filled CTAs) from leaking onto the trigger. */
 .dashboard-system-trigger:hover,
 .dashboard-system-trigger[aria-expanded="true"] {
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
   box-shadow: var(--mm-shadow-highlight-edge-hover);
+}
+
+/* Keep hover-only motion and brightening out of the persistent open state. */
+.dashboard-system-trigger:hover {
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
 }

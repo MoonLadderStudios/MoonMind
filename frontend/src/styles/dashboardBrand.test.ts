@@ -168,6 +168,13 @@ describe('dashboard masthead brand styles', () => {
       expect(hover).toContain('transform: scale(var(--mm-control-hover-scale));');
       expect(hover).toMatch(/filter: brightness\([\d.]+\)/);
     }
+
+    // Opening the System popover keeps its highlighted surface without
+    // leaving the trigger scaled or brightened after hover ends.
+    const expandedTrigger = cssRuleBlock('.dashboard-system-trigger[aria-expanded="true"]');
+    expect(expandedTrigger).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
+    expect(expandedTrigger).not.toContain('transform:');
+    expect(expandedTrigger).not.toContain('filter:');
   });
 
   it('marks the open System selection like the sidebar instead of the trigger underline', () => {
