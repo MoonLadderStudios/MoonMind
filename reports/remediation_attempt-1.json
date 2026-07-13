@@ -5,63 +5,73 @@
   "sourceVerificationArtifact": "artifacts/github-issue-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
   "status": "additional_work_remaining",
-  "summary": "Remediation attempt 1 added the missing explicit Temporal replay boundary for terminal checkpoint publication. New histories opt in through a replay-stable workflow.patched decision carried in the existing fetch-result activity payload; old histories retain the pre-publication behavior. The verifier's parent checkpoint restoration, durable evidence persistence, eligibility policy, and hermetic journey gaps remain open.",
+  "summary": "Remediation attempt 1 fixed the concrete primary-failure masking defect at the terminal publication boundary and added regression coverage. Controlled-failure push and remote-verification exceptions are now converted to secondary failed publication evidence while the original AgentRun failure remains canonical. The verifier's broader orchestration, adoption, persistence, replay, frontend, and hermetic journey gaps remain open.",
   "changedFiles": [
-    "moonmind/schemas/temporal_activity_models.py",
     "moonmind/workflows/temporal/activity_runtime.py",
-    "moonmind/workflows/temporal/workflows/agent_run.py",
     "tests/unit/services/temporal/test_fetch_result_push.py",
-    "tests/unit/workflows/executions/test_legacy_contract_compatibility.py",
-    "tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py",
     "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Parent-level gate/review failures can publish from the latest authoritative checkpoint when the live workspace is gone.",
+      "requirement": "Authoritative source resolution and parent-level gate/review failure recovery",
       "gapType": "implementation",
       "status": "remaining",
-      "evidence": "No parent finalization or checkpoint restoration implementation was added in this bounded attempt.",
-      "remaining": "Adopt verified child evidence first or restore a digest-validated checkpoint and invoke terminal publication with source=checkpoint_restore."
+      "evidence": "Current implementation still publishes only from agent_runtime_fetch_result with a live managed workspace.",
+      "remaining": "Add checkpoint fallback and a parent finalization boundary that awaits publication before cleanup."
     },
     {
-      "requirement": "Finish summary, checkpoint binding, artifacts, execution detail, and UI agree on branch name, head SHA, intent, and status.",
+      "requirement": "Adopt already-published equivalent branch or PR evidence",
       "gapType": "implementation",
       "status": "remaining",
-      "evidence": "This attempt did not add authoritative checkpoint/git-binding or publication artifact persistence.",
-      "remaining": "Persist bounded terminal-publication evidence and derive API output from the durable binding."
+      "evidence": "Provider-native runtimes remain excluded from terminal publication and no verified adoption path was added.",
+      "remaining": "Verify expected remote SHA and adopt equivalent provider-native branch/PR evidence without republishing."
     },
     {
-      "requirement": "Old Temporal histories remain replay-compatible.",
+      "requirement": "Idempotent retries and durable evidence consistency",
       "gapType": "implementation",
-      "status": "remediated",
-      "evidence": "TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID gates a new terminalCheckpointPublicationEnabled activity field whose default is false; the activity publishes controlled failures only when enabled. Stable-ID and patched request-shape regression tests were added.",
-      "remaining": "Focused tests could not execute because pytest is absent from this runtime; compile and diff checks passed."
+      "status": "remaining",
+      "evidence": "Branch and idempotency-key generation are deterministic, but no durable publication record/binding or retry reuse test exists.",
+      "remaining": "Persist and deduplicate terminal publication evidence and project the same binding everywhere."
     },
     {
-      "requirement": "Hermetic journey coverage proves the end-to-end controlled-failure preservation path.",
+      "requirement": "Eligibility, authority, security, and primary-failure invariants",
+      "gapType": "verification",
+      "status": "partially_remediated",
+      "evidence": "activity_runtime.py now catches controlled-failure push and remote-verification exceptions; test_terminal_publication_exception_preserves_primary_failure proves the original execution_error and summary survive with failed secondary publication evidence.",
+      "remaining": "Add the verifier's full classification/policy/security matrix, including no_changes, noRemoteWrites, scan/protected-ref/lease failures, inaccessible workspaces, and verification mismatch."
+    },
+    {
+      "requirement": "Temporal replay/in-flight safety",
+      "gapType": "implementation",
+      "status": "remaining",
+      "evidence": "No new patch marker or replay fixture was added in this attempt.",
+      "remaining": "Guard command-shaping changes with a Temporal patch/cutover and add prior-history replay coverage."
+    },
+    {
+      "requirement": "Saved Work Branch frontend behavior",
       "gapType": "verification",
       "status": "remaining",
-      "evidence": "No issue-specific compose-backed journey was added or run in this attempt.",
-      "remaining": "Add and run the verifier-specified controlled-failure integration journey."
+      "evidence": "The existing UI suite passes, but no issue-specific rendering/order/absence test was added.",
+      "remaining": "Add schema/render tests for verified Saved Work Branch placement before PR Link and absence for unverified evidence."
     },
     {
-      "requirement": "Scan, protected-ref, workspace-authority, credential, lease, read-only, dry-run, and noRemoteWrites protections remain enforced through an explicit eligibility policy.",
-      "gapType": "implementation",
+      "requirement": "Hermetic end-to-end controlled-failure preservation journey",
+      "gapType": "verification",
       "status": "remaining",
-      "evidence": "This attempt introduced only the replay/version opt-in and did not expand terminal publication eligibility inputs.",
-      "remaining": "Add the typed eligibility policy and stable reason-code matrix at the activity boundary."
+      "evidence": "Focused unit and UI suites pass, but no new compose-backed end-to-end journey was added or run.",
+      "remaining": "Add the verifier-specified workflow/activity/API integration journey and run the selected integration_ci suite."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "python -m compileall -q moonmind/schemas/temporal_activity_models.py moonmind/workflows/temporal/activity_runtime.py moonmind/workflows/temporal/workflows/agent_run.py",
+      "command": "python -m compileall -q moonmind/workflows/temporal/activity_runtime.py",
       "result": "PASS",
-      "details": "Changed Python modules compile successfully."
+      "details": "Updated activity runtime compiles successfully."
     },
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/test_fetch_result_push.py tests/unit/api/routers/test_executions.py tests/unit/workflows/executions/test_legacy_contract_compatibility.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py",
-      "result": "NOT_RUN",
-      "details": "The repository audits passed, then Python exited with: No module named pytest."
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/test_fetch_result_push.py tests/unit/api/routers/test_executions.py",
+      "result": "PASS",
+      "details": "443 Python tests passed; the runner's UI phase also passed 1080 tests with 238 skipped. pytest and pytest-asyncio were installed into the ephemeral user environment because the managed image initially omitted them."
     },
     {
       "command": "git diff --check",

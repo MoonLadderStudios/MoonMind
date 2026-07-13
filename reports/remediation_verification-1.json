@@ -1,18 +1,24 @@
 {
-  "artifactType": "remediation.verification",
+  "artifact_type": "remediation.verification",
   "attempt": 1,
+  "remediationAttempt": 1,
   "verifiesRemediationAttempt": 1,
+  "issueRef": "MoonLadderStudios/MoonMind#3229",
+  "verificationTarget": "issue_brief",
   "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
   "authoritativeVerificationArtifact": "artifacts/github-issue-implement-verify.json",
-  "issueRef": "MoonLadderStudios/MoonMind#3229",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
   "verdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
   "remainingWork": [
-    "Implement parent-workflow adoption and authoritative checkpoint restoration publication.",
-    "Persist terminal publication in checkpoint/git bindings and bounded evidence artifacts, then derive outputBranch from durable verified state.",
-    "Complete typed eligibility/safety policy wiring without agent-name semantic selection.",
-    "Add hermetic end-to-end controlled-failure publication journey coverage."
+    "Add authoritative live-workspace/checkpoint finalization and cleanup ordering, including parent gate/review recovery.",
+    "Adopt verified equivalent branch/PR evidence without republishing.",
+    "Persist and deduplicate typed terminal-publication evidence and checkpoint bindings.",
+    "Complete the eligibility, authority, security, infrastructure-failure, and remote-verification test matrix.",
+    "Add a Temporal patch/version guard and replay coverage.",
+    "Add Saved Work Branch frontend behavior tests.",
+    "Add the required hermetic production-layer controlled-failure journey."
   ],
-  "summary": "Attempt 1 successfully added the replay-stable patch boundary, but the whole target state remains partially implemented. Continue only to the next remediation attempt using artifacts/github-issue-implement-verify.json as mandatory input."
+  "summary": "Attempt 1 fixes primary-failure masking by converting terminal push and verification exceptions into secondary publication evidence. Focused tests pass, but the authoritative whole-target state remains incomplete due to the unresolved orchestration, adoption, persistence/idempotency, replay, frontend verification, and hermetic journey gaps recorded in artifacts/github-issue-implement-verify.json."
 }
