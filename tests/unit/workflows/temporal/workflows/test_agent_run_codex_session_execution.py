@@ -858,11 +858,23 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     large_instruction = "Use this request as the canonical input:\n" + (
         "Implement the workflow cleanup. " * 400
     )
-    request = _managed_session_request(instruction_ref=large_instruction)
+    request = _managed_session_request(
+        instruction_ref=large_instruction,
+        workspace_spec={
+            "workspacePath": "/work/agent_jobs/wf-task-1/repo",
+            "workspaceRoot": "/work/agent_jobs/wf-task-1/repo",
+            "workspace_path": "/work/agent_jobs/wf-task-1/repo",
+            "workspace_root": "/work/agent_jobs/wf-task-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
 
     result = run._enrich_result_metadata(
         request=request,
-        result=AgentRunResult(summary="done", metadata={}),
+        result=AgentRunResult(
+            summary="done",
+            metadata={"workspacePath": "/work/agent_jobs/wf-task-1/repo"},
+        ),
     )
 
     assert result is not None
@@ -871,6 +883,21 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
     assert result.metadata["managedSession"]["agentRunId"] == "wf-task-1"
+    assert result.metadata["agentKind"] == "managed"
+    assert result.metadata["agentId"] == "codex_cli"
+    assert result.metadata["runtimeCapabilities"]["workspaceAuthority"] == (
+        "managed_runtime"
+    )
+    assert result.metadata["runtimeCapabilities"]["checkpointCaptureKinds"] == []
+    assert result.metadata["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-task-1",
+        "relativePath": "repo",
+    }
+    assert "workspacePath" not in result.metadata
+    assert "workspaceRoot" not in result.metadata
+    assert result.metadata["workspaceSpec"] == {"baseCommit": "abc123"}
 
 async def test_managed_session_result_enrichment_carries_story_output_paths(
     monkeypatch: pytest.MonkeyPatch,

@@ -2,7 +2,7 @@
 
 Status: Desired state
 Owners: MoonMind Platform
-Last updated: 2026-04-09
+Last updated: 2026-07-13
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
@@ -249,7 +249,28 @@ observability. The transitional in-container
 fallback or bring-up helpers, but they are not the production publication path while
 they return empty publication refs.
 
-## 9. Rate-limit retry behavior
+## 9. OAuth token rotation
+
+OAuth-backed Codex sessions use two distinct filesystem authorities:
+
+- the provider profile's OAuth volume owns durable credential state;
+- the workflow-scoped writable Codex home owns disposable per-run state.
+
+At launch, MoonMind seeds the per-run home from the OAuth volume. When Codex
+rotates `auth.json`, MoonMind writes the rotated credential state back through a
+compare-and-swap boundary. The write is allowed only when the durable source
+still matches the digest that seeded the session; a concurrent reconnect or
+another credential owner wins and must never be overwritten by stale session
+state. Lock acquisition is non-blocking, and filesystem failures remain
+auxiliary to the authoritative assistant turn: MoonMind records a diagnostic
+and retries persistence at a later session lifecycle boundary.
+
+Provider responses such as `token_expired`, `refresh_token_reused`, or an access
+token that cannot be refreshed are authentication failures. They terminate with
+the canonical reauthentication recommendation and must not be retried as empty
+assistant turns.
+
+## 10. Rate-limit retry behavior
 
 Codex managed-session turns must surface model-provider rate limits through the
 shared managed-runtime failure taxonomy. The session controller should retry
@@ -262,7 +283,7 @@ state that the turn hit a model-provider rate limit. The terminal result should
 set the same `AgentRunResult` rate-limit metadata used by other managed
 runtimes.
 
-## 10. Non-goals for This Contract Slice
+## 11. Non-goals for This Contract Slice
 
 This contract does not define:
 
