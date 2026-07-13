@@ -932,7 +932,7 @@ For Jira Orchestrate, the MoonSpec remediation loop is represented as bounded pl
 
 Remediation steps carry `annotations.jiraOrchestrateRole = "moonspec-remediation"` plus attempt and maximum-attempt metadata. Verification steps carry `annotations.jiraOrchestrateRole = "moonspec-verification-gate"` and mark only the final remediation verification as `moonSpecFinalRemediationGate`.
 
-`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains, or when the gate reports a non-retryable blocking verdict such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE`, the parent workflow stops before publication and skips downstream handoff steps.
+`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains and publish mode is `pr`, the parent workflow publishes the accumulated work as a draft pull request with `attention_required: true`, then skips downstream promotion and trusted handoff steps. Non-retryable blocking verdicts such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE` stop before publication unless an explicit environment-blocked draft policy applies.
 
 ---
 
@@ -1174,7 +1174,7 @@ Desired behavior:
 
 The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
 
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` stops before pull request creation and Jira movement. The final state includes the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
+If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, completes with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft annotation and final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
 
 ### 20.2 Failed-step recovery
 

@@ -3494,6 +3494,85 @@ def test_moonspec_environment_blocked_publish_action_defaults_to_fail(
     )
 
 
+def test_additional_work_needed_publishes_draft_after_remediation_exhaustion(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "diagnostics_ref": "art_verify_remaining_work",
+        },
+    )
+    blocking_reason = mock_run_workflow._blocking_moonspec_gate_reason()
+    assert blocking_reason is not None
+
+    policy = mock_run_workflow._moonspec_draft_publication_policy(
+        environment_blocked_enabled=False,
+        additional_work_enabled=True,
+    )
+
+    assert policy == "draft_pr_on_additional_work_needed"
+    summary = mock_run_workflow._activate_moonspec_draft_publication(
+        blocking_reason,
+        policy=policy,
+    )
+    assert "draft pull request" in summary
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+    assert mock_run_workflow._publish_context["moonSpecGate"][
+        "publicationPolicy"
+    ] == "draft_pr_on_additional_work_needed"
+    mock_run_workflow._publish_context["moonSpecGate"].update(
+        {
+            "gateResultRef": "artifact://gate/result",
+            "remainingWorkRef": "artifact://remaining/work",
+        }
+    )
+    body = mock_run_workflow._moonspec_draft_publication_body_section()
+    assert "bounded remediation budget was exhausted" in body
+    assert "Remaining work: artifact://remaining/work" in body
+    assert "Verification gate result: artifact://gate/result" in body
+
+
+@pytest.mark.asyncio
+async def test_moonspec_draft_publication_disables_merge_automation(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._moonspec_draft_publication_reason = (
+        "Additional implementation work remains."
+    )
+
+    await mock_run_workflow._maybe_start_merge_gate(
+        parameters={"mergeAutomation": {"enabled": True}},
+        pull_request_url="https://github.com/org/repo/pull/123",
+    )
+
+    assert (
+        mock_run_workflow._publish_context["mergeAutomationStatus"]
+        == "not_applicable"
+    )
+    assert "disabled" in mock_run_workflow._publish_context[
+        "mergeAutomationSummary"
+    ]
+
+
+def test_additional_work_draft_publish_patch_preserves_old_history_behavior(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "ADDITIONAL_WORK_NEEDED"},
+    )
+
+    assert (
+        mock_run_workflow._moonspec_draft_publication_policy(
+            environment_blocked_enabled=True,
+            additional_work_enabled=False,
+        )
+        is None
+    )
+
+
 def test_moonspec_draft_publication_supersedes_blocking_gate(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

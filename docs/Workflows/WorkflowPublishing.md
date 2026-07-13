@@ -296,7 +296,7 @@ Provider-native publishing may supply pull request metadata directly when the pr
 
 Workflows that include MoonSpec verification gates must use the latest structured verification verdict to decide publication eligibility.
 
-`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, `ADDITIONAL_WORK_NEEDED` blocks publication.
+`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, a workflow whose publish mode is `pr` opens a draft pull request annotated with the remaining-work verdict and verification report, completes with `attention_required: true`, and skips downstream promotion or trusted handoff steps. This preserves reviewable work without representing it as verified or ready.
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
@@ -318,7 +318,7 @@ The gate distinguishes a verifier judgment from a malformed verdict envelope:
   the verifier can rewrite its structured JSON. Remediation implement cycles
   are never spent on a malformed verdict envelope.
 
-When MoonSpec verification blocks publication, the workflow records
+When MoonSpec verification blocks publication without a permitted draft handoff, the workflow records
 `publicationBlockedBy: "moonspec_verify"` in publish context, preserves the
 latest verification report and evidence refs, writes a compact
 `failureSummary.type = "moonspec_verification_gate"` block in
@@ -333,8 +333,9 @@ or `NO_DETERMINATION` produced by a degraded/malformed gate payload — publishe
 a **draft** pull request annotated with a "MoonSpec verification incomplete"
 section and the verification report ref, and the run completes with
 `attention_required: true` and a distinct summary instead of failing.
-Implementation-gap verdicts (`ADDITIONAL_WORK_NEEDED`, `FAILED_UNRECOVERABLE`)
-and verifier-declared `NO_DETERMINATION` always remain fail-closed.
+`FAILED_UNRECOVERABLE` and verifier-declared `NO_DETERMINATION` remain
+fail-closed. `ADDITIONAL_WORK_NEEDED` uses the automatic draft handoff described
+above only after the bounded remediation budget is exhausted.
 
 ### Agent Instructions
 

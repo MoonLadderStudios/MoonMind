@@ -592,6 +592,9 @@ RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
 RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-gate-environment-draft-publish-v1"
 )
+RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
+    "run-moonspec-additional-work-draft-publish-v1"
+)
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -5886,7 +5889,31 @@ class MoonMindRunWorkflow:
             return False
         return bool(gate_context.get("degraded") or gate_context.get("invalid"))
 
-    def _activate_moonspec_draft_publication(self, gate_reason: str) -> str:
+    def _moonspec_draft_publication_policy(
+        self,
+        *,
+        environment_blocked_enabled: bool,
+        additional_work_enabled: bool,
+    ) -> str | None:
+        verdict = self._normalize_moonspec_verify_verdict(
+            self._moonspec_gate_verdict
+        )
+        if additional_work_enabled and verdict == "ADDITIONAL_WORK_NEEDED":
+            return "draft_pr_on_additional_work_needed"
+        if (
+            environment_blocked_enabled
+            and self._moonspec_environment_blocked_publish_action() == "draft_pr"
+            and self._moonspec_gate_qualifies_for_draft_publish()
+        ):
+            return "draft_pr_on_environment_blocked"
+        return None
+
+    def _activate_moonspec_draft_publication(
+        self,
+        gate_reason: str,
+        *,
+        policy: str = "draft_pr_on_environment_blocked",
+    ) -> str:
         summary = (
             "MoonSpec verification incomplete; publishing draft pull request "
             f"for operator review. {gate_reason}"
@@ -5895,11 +5922,9 @@ class MoonMindRunWorkflow:
         self._attention_required = True
         gate_context = self._publish_context.get("moonSpecGate")
         if isinstance(gate_context, dict):
-            gate_context["publicationPolicy"] = (
-                "draft_pr_on_environment_blocked"
-            )
+            gate_context["publicationPolicy"] = policy
         self._publish_context["moonSpecDraftPublication"] = {
-            "policy": "draft_pr_on_environment_blocked",
+            "policy": policy,
             "reason": gate_reason,
         }
         return summary
@@ -5908,10 +5933,35 @@ class MoonMindRunWorkflow:
         gate_context = self._publish_context.get("moonSpecGate")
         verdict = None
         diagnostics_ref = None
+        gate_result_ref = None
+        remaining_work_ref = None
         if isinstance(gate_context, Mapping):
             verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
             diagnostics_ref = self._coerce_text(
                 gate_context.get("diagnosticsRef"), max_chars=400
+            )
+            gate_result_ref = self._coerce_text(
+                gate_context.get("gateResultRef"), max_chars=400
+            )
+            remaining_work_ref = self._coerce_text(
+                gate_context.get("remainingWorkRef"), max_chars=400
+            )
+        draft_context = self._publish_context.get("moonSpecDraftPublication")
+        policy = (
+            draft_context.get("policy")
+            if isinstance(draft_context, Mapping)
+            else None
+        )
+        if policy == "draft_pr_on_additional_work_needed":
+            explanation = (
+                "the bounded remediation budget was exhausted with remaining "
+                "implementation work"
+            )
+        else:
+            explanation = (
+                "the operator policy "
+                "`workflow.moonspec_environment_blocked_publish_action` is "
+                "`draft_pr`"
             )
         lines = [
             "## MoonSpec verification incomplete",
@@ -5919,9 +5969,7 @@ class MoonMindRunWorkflow:
             (
                 "This pull request was opened as a **draft** because MoonSpec "
                 f"verification did not approve publication (verdict "
-                f"{verdict or 'unknown'}) and the operator policy "
-                "`workflow.moonspec_environment_blocked_publish_action` is "
-                "`draft_pr`."
+                f"{verdict or 'unknown'}) and {explanation}."
             ),
             "",
         ]
@@ -5930,6 +5978,10 @@ class MoonMindRunWorkflow:
             lines.append(f"- Gate outcome: {reason}")
         if diagnostics_ref:
             lines.append(f"- Verification report: {diagnostics_ref}")
+        if remaining_work_ref:
+            lines.append(f"- Remaining work: {remaining_work_ref}")
+        if gate_result_ref and gate_result_ref != diagnostics_ref:
+            lines.append(f"- Verification gate result: {gate_result_ref}")
         lines.append("")
         lines.append(
             "Review the verification evidence before marking this pull "
@@ -9640,18 +9692,30 @@ class MoonMindRunWorkflow:
                     if blocking_gate_reason and not bool(
                         continuation_decision.get("continueLoop")
                     ):
-                        if (
-                            workflow.patched(
-                                RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                        environment_draft_publish_enabled = workflow.patched(
+                            RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                        )
+                        additional_work_draft_publish_enabled = workflow.patched(
+                            RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH
+                        )
+                        draft_publication_policy = (
+                            self._moonspec_draft_publication_policy(
+                                environment_blocked_enabled=(
+                                    environment_draft_publish_enabled
+                                ),
+                                additional_work_enabled=(
+                                    additional_work_draft_publish_enabled
+                                ),
                             )
-                            and self._moonspec_environment_blocked_publish_action()
-                            == "draft_pr"
-                            and publish_mode == "pr"
-                            and self._moonspec_gate_qualifies_for_draft_publish()
+                        )
+                        if (
+                            publish_mode == "pr"
+                            and draft_publication_policy is not None
                         ):
                             draft_summary = (
                                 self._activate_moonspec_draft_publication(
-                                    blocking_gate_reason
+                                    blocking_gate_reason,
+                                    policy=draft_publication_policy,
                                 )
                             )
                             self._summary = draft_summary
@@ -9901,7 +9965,10 @@ class MoonMindRunWorkflow:
                     self._get_logger().info(
                         "Skipping native PR creation: publish output not required."
                     )
-                elif push_status == "no_commits":
+                elif (
+                    push_status == "no_commits"
+                    and self._moonspec_draft_publication_reason is None
+                ):
                     self._get_logger().info(
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
@@ -9953,6 +10020,7 @@ class MoonMindRunWorkflow:
                         )
                         pr_url = self._get_from_result(create_result, "url")
                         created = self._get_from_result(create_result, "created")
+                        adopted = self._get_from_result(create_result, "adopted")
                         summary = self._get_from_result(create_result, "summary") or ""
                         created_head_sha = self._coerce_text(
                             self._get_from_result(create_result, "headSha"),
@@ -9960,6 +10028,15 @@ class MoonMindRunWorkflow:
                         )
                         if created_head_sha:
                             self._publish_context["headSha"] = created_head_sha
+                        if (
+                            self._moonspec_draft_publication_reason is not None
+                            and not created
+                            and not adopted
+                        ):
+                            raise ValueError(
+                                "draft PR publication was rejected: "
+                                f"{summary or 'existing pull request is not a draft'}"
+                            )
                         if pr_url:
                             pull_request_url = pr_url
                             self._get_logger().info(
@@ -14216,6 +14293,13 @@ class MoonMindRunWorkflow:
         pull_request_url: str | None,
     ) -> None:
         if not pull_request_url:
+            return
+        if self._moonspec_draft_publication_reason is not None:
+            self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            self._publish_context["mergeAutomationSummary"] = (
+                "Merge automation is disabled for an attention-required "
+                "MoonSpec draft pull request."
+            )
             return
         info = workflow.info()
         payload = self._build_merge_gate_start_payload(
