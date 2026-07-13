@@ -102,6 +102,14 @@ class OmnigentHttpClient:
     async def get_agent(self, agent_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/api/agents/{quote(agent_id, safe='')}")
 
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/api/hosts")
+        if isinstance(data, list):
+            return [dict(item) for item in data if isinstance(item, Mapping)]
+        if isinstance(data, Mapping) and isinstance(data.get("hosts"), list):
+            return [dict(item) for item in data["hosts"] if isinstance(item, Mapping)]
+        return []
+
     async def create_agent_bundle(
         self,
         *,

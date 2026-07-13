@@ -34,6 +34,7 @@ INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 
+
 def get_workflow_task_queue(
     temporal_settings: TemporalSettings | None = None,
 ) -> str:
@@ -42,6 +43,7 @@ def get_workflow_task_queue(
     return resolve_user_workflow_start_contract(
         temporal_settings or settings.temporal
     ).task_queue
+
 
 def get_workflow_poll_task_queues(
     temporal_settings: TemporalSettings | None = None,
@@ -66,8 +68,10 @@ def get_workflow_poll_task_queues(
         return (start_queue, replay_queue)
     return (start_queue,)
 
+
 class TemporalActivityCatalogError(ValueError):
     """Raised when Temporal activity routing metadata is invalid."""
+
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityTimeouts:
@@ -94,10 +98,11 @@ class TemporalActivityTimeouts:
                 "heartbeat_timeout_seconds must be greater than zero"
             )
 
+
 @dataclass(frozen=True, slots=True)
 class TemporalActivityRetries:
     """Default retry policy for one activity type.
-    
+
     See docs/Temporal/ErrorTaxonomy.md for error classification rules.
     """
 
@@ -113,6 +118,7 @@ class TemporalActivityRetries:
                 "max_interval_seconds must be greater than zero"
             )
 
+
 @dataclass(frozen=True, slots=True)
 class TemporalActivityDefinition:
     """Stable routing contract for one activity type."""
@@ -126,6 +132,7 @@ class TemporalActivityDefinition:
     retries: TemporalActivityRetries
     heartbeat_required: bool = False
 
+
 @dataclass(frozen=True, slots=True)
 class TemporalWorkerFleet:
     """Worker fleet metadata used for routing and operational validation."""
@@ -136,6 +143,7 @@ class TemporalWorkerFleet:
     privileges: tuple[str, ...]
     scaling_notes: str
     activity_types: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityRoute:
@@ -149,6 +157,7 @@ class TemporalActivityRoute:
     retries: TemporalActivityRetries
     heartbeat_required: bool = False
 
+
 def _activity_retries(
     *, max_attempts: int, max_interval_seconds: int, non_retryable: tuple[str, ...] = ()
 ) -> TemporalActivityRetries:
@@ -157,6 +166,7 @@ def _activity_retries(
         max_interval_seconds=max_interval_seconds,
         non_retryable_error_codes=non_retryable,
     )
+
 
 def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, str]:
     categories: set[str] = set()
@@ -200,6 +210,7 @@ def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, st
     if category == "deployment_control":
         return DEPLOYMENT_FLEET, "deployment_control"
     return INTEGRATIONS_FLEET, integration_caps[0]
+
 
 class TemporalActivityCatalog:
     """Default activity catalog + worker fleet topology for Temporal workers."""
@@ -321,6 +332,7 @@ class TemporalActivityCatalog:
                     f"outside fleet '{activity.fleet}'"
                 )
 
+
 def build_default_activity_catalog(
     temporal_settings: TemporalSettings | None = None,
 ) -> TemporalActivityCatalog:
@@ -329,9 +341,13 @@ def build_default_activity_catalog(
     cfg = temporal_settings or settings.temporal
     workflow_task_queue = get_workflow_task_queue(cfg)
     workflow_poll_task_queues = get_workflow_poll_task_queues(cfg)
-    
+
     # See docs/Temporal/ErrorTaxonomy.md
-    NON_RETRYABLE_ERRORS = ("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus")
+    NON_RETRYABLE_ERRORS = (
+        "INVALID_INPUT",
+        "ProfileResolutionError",
+        "UnsupportedStatus",
+    )
 
     activities = (
         TemporalActivityDefinition(
@@ -665,6 +681,24 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
+            activity_type="oauth_session.prepare_credential_maintenance",
+            family="oauth_session",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 180),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
+            activity_type="oauth_session.revalidate_bound_host",
+            family="oauth_session",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(180, 240),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="oauth_session.ensure_volume",
             family="oauth_session",
             capability_class="agent_runtime",
@@ -878,9 +912,32 @@ def build_default_activity_catalog(
             capability_class="integration:omnigent",
             task_queue=cfg.activity_integrations_task_queue,
             fleet=INTEGRATIONS_FLEET,
-            timeouts=TemporalActivityTimeouts(3600, 3700, heartbeat_timeout_seconds=120),
+            timeouts=TemporalActivityTimeouts(
+                3600, 3700, heartbeat_timeout_seconds=120
+            ),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
+            activity_type="integration.omnigent.profile_bound_execute",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(
+                3600, 3700, heartbeat_timeout_seconds=120
+            ),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
+            activity_type="integration.omnigent.oauth_host_janitor",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(300, 600),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         # ---- General-purpose repo operations (provider-agnostic) ----
         TemporalActivityDefinition(
@@ -1475,6 +1532,7 @@ def build_default_activity_catalog(
 
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
 
+
 def manifest_ingest_activity_routes(
     catalog: TemporalActivityCatalog | None = None,
 ) -> tuple[TemporalActivityRoute, ...]:
@@ -1488,6 +1546,7 @@ def manifest_ingest_activity_routes(
             "manifest.write_summary",
         )
     )
+
 
 def skill_policy_as_route(
     *,
@@ -1519,6 +1578,7 @@ def skill_policy_as_route(
         ),
         heartbeat_required=heartbeat_required,
     )
+
 
 __all__ = [
     "AGENT_RUNTIME_FLEET",

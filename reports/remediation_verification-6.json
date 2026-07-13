@@ -3,21 +3,27 @@
   "attempt": 6,
   "remediationAttempt": 6,
   "verifiesRemediationAttempt": 6,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-6.json",
-  "verificationReportArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/artifacts/jira-implement-verify.json",
-  "verificationTarget": "MM-1201",
-  "authoritativeVerdictForTargetState": "FULLY_IMPLEMENTED",
-  "verdict": "FULLY_IMPLEMENTED",
-  "recommendedNextAction": "advance",
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/reports/remediation_attempt-6.json",
+  "verificationReportArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json",
+  "verificationTarget": "MM-1207",
+  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
+  "recommendedNextAction": "needs_human",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [],
+  "remainingWork": [
+    "Wire the shared lease across direct, Omnigent, and OAuth maintenance consumers.",
+    "Implement exact-host preflight, profile-aware routing/authorization, and on-demand launch.",
+    "Implement generation drain, cleanup/reconciliation, diagnostics, and checkpoint recovery.",
+    "Add and run controlling workflow and integration coverage for the complete lifecycle."
+  ],
   "testSummary": {
-    "targetedUnitAndReliability": "PASS (394 tests)",
+    "targetedComposeContract": "NOT RUN (pytest unavailable)",
+    "compilation": "PASS",
     "workspaceProjectionPreflight": "PASS",
     "diffHygiene": "PASS"
   },
   "environmentNotes": [
-    "The authoritative issue brief artifact is complete; no recovery was needed.",
+    "The authoritative issue brief is complete; no recovery was needed.",
     "Optional RAG enrichment was NOT RUN and does not gate the verdict."
   ]
 }

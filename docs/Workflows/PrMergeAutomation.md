@@ -583,7 +583,20 @@ result carries `completionDisposition=gated_continuation` and a normalized
 `gatedContinuation`. Merge automation waits until the Skill-authored
 `notBefore`; legacy handoffs without timing use `fallbackPollSeconds` rather than
 relaunching immediately. Runtime same-session continuation capability is not
-consulted for this parent-owned continuation.
+consulted for this parent-owned continuation. The direct resolver finalizer
+authors the exact review-grace `expiresAt` as `notBefore`; orchestration does not
+recompute or extend it. Authorization may clear only the synthetic
+`PR_RESOLVER_REENTER_GATE` terminal-contract failure. Provider, authentication,
+rate-limit, infrastructure, timeout, cancellation, stale-evidence, and
+malformed-evidence failures remain failures even when continuation metadata is
+present.
+
+The parent validates `childRunId` and `executionRef` against the corresponding
+authoritative fields returned by the resolver child, in addition to owner ID,
+owner run, owner workflow type, child workflow ID, reason, timing, and head SHA.
+The summary and resolver-attempt evidence expose normalized continuation data,
+timing source, and counters for requests, acceptance, ownership/schema
+rejections, wait start/completion, completed cycles, and legacy fallback use.
 - `manual_review`
 - `failed`
 

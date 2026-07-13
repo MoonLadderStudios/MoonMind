@@ -2510,10 +2510,14 @@ describe('Dashboard shared entry', () => {
     expect(iconBlock).toContain('width: 1.35rem');
     expect(iconBlock).toContain('height: 1.35rem');
     expect(iconBlock).toContain('border-radius: 50%');
+    // The .status pill padding must be reset here: with border-box sizing it
+    // starves the circle's content box and the svg flex-shrinks to ~4px.
+    expect(iconBlock).toContain('padding: 0');
 
     const svgBlock = cssRuleBlock(dashboardCss, '.step-tl-icon svg');
-    expect(svgBlock).toContain('width: 1.3rem');
-    expect(svgBlock).toContain('height: 1.3rem');
+    expect(svgBlock).toContain('width: 1.05rem');
+    expect(svgBlock).toContain('height: 1.05rem');
+    expect(svgBlock).toContain('flex: none');
     expect(svgBlock).toContain('stroke-width: 2');
   });
 

@@ -25,6 +25,12 @@ from temporalio import exceptions, workflow
 with workflow.unsafe.imports_passed_through():
     from temporalio.common import RetryPolicy
     from moonmind.billing.costs import pricing_from_profile_metadata
+    from moonmind.provider_profiles.oauth_policy import (
+        CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+        is_codex_oauth_profile,
+        validate_codex_oauth_capacity,
+    )
+    from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
 
 WORKFLOW_NAME = "MoonMind.ProviderProfileManager"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
@@ -35,7 +41,9 @@ WORKFLOW_ID_PREFIX = "provider-profile-manager"
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
 SLOT_HANDOFF_RESERVATION_PATCH = "provider-profile-manager-slot-handoff-v1"
-REFRESH_RESTORED_PROFILES_PATCH = "provider-profile-manager-refresh-restored-profiles-v1"
+REFRESH_RESTORED_PROFILES_PATCH = (
+    "provider-profile-manager-refresh-restored-profiles-v1"
+)
 DB_AUTHORITATIVE_PROFILE_SYNC_PATCH = (
     "provider-profile-manager-db-authoritative-profile-sync-v1"
 )
@@ -55,6 +63,12 @@ QUEUE_ORDER_PENDING_REQUESTS_PATCH = (
 SCHEDULED_PENDING_REQUESTS_PATCH = (
     "provider-profile-manager-scheduled-pending-requests-v1"
 )
+CODEX_OAUTH_LEGACY_RESTORE_PATCH = (
+    "provider-profile-manager-codex-oauth-legacy-restore-v1"
+)
+PURPOSE_AWARE_CREDENTIAL_LEASE_PATCH = (
+    "provider-profile-manager-purpose-aware-credential-lease-v1"
+)
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -67,6 +81,69 @@ _VERIFY_WORKFLOW_STATUS_BATCH_SIZE = 100
 
 logger = logging.getLogger(__name__)
 
+
+def _profile_is_codex_oauth(
+    profile: dict[str, Any],
+    *,
+    runtime_id: str | None = None,
+    infer_legacy_source: bool = False,
+) -> bool:
+    resolved_runtime_id = profile.get("runtime_id", runtime_id)
+    credential_source = profile.get("credential_source")
+    materialization_mode = profile.get("runtime_materialization_mode")
+    if (
+        infer_legacy_source
+        and credential_source is None
+        and str(resolved_runtime_id or "").strip() == "codex_cli"
+        and str(materialization_mode or "").strip() == "oauth_home"
+    ):
+        credential_source = "oauth_volume"
+    return is_codex_oauth_profile(
+        runtime_id=resolved_runtime_id,
+        credential_source=credential_source,
+        materialization_mode=materialization_mode,
+    )
+
+
+def _validated_profile_capacity(
+    profile: dict[str, Any],
+    *,
+    runtime_id: str | None = None,
+    existing_capacity: int | None = None,
+    repair_legacy: bool = False,
+) -> int:
+    if "max_parallel_runs" not in profile and existing_capacity is not None:
+        capacity = existing_capacity
+    else:
+        capacity = profile.get("max_parallel_runs", 1)
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
+        raise exceptions.ApplicationError(
+            "Provider Profile max_parallel_runs must be a positive integer",
+            non_retryable=True,
+        )
+    is_codex_oauth = _profile_is_codex_oauth(
+        profile,
+        runtime_id=runtime_id,
+        infer_legacy_source=repair_legacy,
+    )
+    if is_codex_oauth and capacity != 1:
+        if repair_legacy:
+            return 1
+        try:
+            validate_codex_oauth_capacity(
+                runtime_id=profile.get("runtime_id", runtime_id),
+                credential_source=profile.get("credential_source"),
+                materialization_mode=profile.get("runtime_materialization_mode"),
+                max_parallel_runs=capacity,
+            )
+        except ValueError as exc:
+            raise exceptions.ApplicationError(
+                CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+                non_retryable=True,
+            ) from exc
+    return capacity
+
+
 def workflow_id_for_runtime(runtime_id: str) -> str:
     """Return the canonical ProviderProfileManager workflow ID for a runtime."""
 
@@ -75,9 +152,11 @@ def workflow_id_for_runtime(runtime_id: str) -> str:
         raise ValueError("runtime_id is required")
     return f"{WORKFLOW_ID_PREFIX}:{normalized}"
 
+
 # ---------------------------------------------------------------------------
 # Input / Output types
 # ---------------------------------------------------------------------------
+
 
 class ProviderProfileManagerInput(TypedDict, total=False):
     """Input payload for starting or continuing the manager."""
@@ -89,14 +168,18 @@ class ProviderProfileManagerInput(TypedDict, total=False):
     lease_granted_at: dict[str, dict[str, str]]
     pending_requests: list[dict[str, Any]]
     handoff_reservations: dict[str, dict[str, str]]
+    lease_metadata: dict[str, dict[str, dict[str, Any]]]
+
 
 class ProviderProfileManagerOutput(TypedDict):
     status: str
     runtime_id: Optional[str]
 
+
 # ---------------------------------------------------------------------------
 # Signal payloads (documented as TypedDicts for clarity; actual transport is dict)
 # ---------------------------------------------------------------------------
+
 
 class SlotRequestPayload(TypedDict):
     """Signal payload: an AgentRun requests a profile slot."""
@@ -109,6 +192,7 @@ class SlotRequestPayload(TypedDict):
     execution_profile_ref: str | None
     lease_group_id: str | None
 
+
 class SlotAcquirePayload(TypedDict, total=False):
     """Update payload: synchronously reserve a provider slot for an activity caller."""
 
@@ -118,6 +202,9 @@ class SlotAcquirePayload(TypedDict, total=False):
     profile_selector: dict[str, Any] | None
     lease_group_id: str | None
     metadata: dict[str, Any]
+    owner_id: str
+    purpose: str
+
 
 class SlotReleasePayload(TypedDict):
     """Signal payload: an AgentRun releases its profile slot."""
@@ -127,16 +214,19 @@ class SlotReleasePayload(TypedDict):
     lease_group_id: str | None
     handoff_ttl_seconds: int | None
 
+
 class CooldownReportPayload(TypedDict):
     """Signal payload: report a 429 cooldown on a profile."""
 
     profile_id: str
     cooldown_seconds: int
 
+
 class ProfileSyncPayload(TypedDict):
     """Signal payload: updated profile list from DB."""
 
     profiles: list[dict[str, Any]]
+
 
 # ---------------------------------------------------------------------------
 # Internal state helpers
@@ -144,6 +234,7 @@ class ProfileSyncPayload(TypedDict):
 
 _MAX_LEASE_DURATION_SECONDS = 5400  # 1.5 hours — safety net for leaked slots
 _MAX_HANDOFF_RESERVATION_SECONDS = 30
+
 
 @dataclass
 class ProfileSlotState:
@@ -159,8 +250,10 @@ class ProfileSlotState:
     max_lease_duration_seconds: int = _MAX_LEASE_DURATION_SECONDS
     current_leases: list[str] = field(default_factory=list)
     lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
+    lease_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
     cooldown_until: Optional[str] = None  # ISO timestamp string or None
     provider_id: Optional[str] = None
+    credential_source: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     priority: int = 100
     runtime_materialization_mode: Optional[str] = None
@@ -169,6 +262,8 @@ class ProfileSlotState:
     pricing_source: Optional[str] = None
     model_tiers: list[dict[str, Any]] = field(default_factory=list)
     default_model_tier: int = 1
+    over_capacity_legacy_snapshot: bool = False
+    authoritative_policy_confirmed: bool = False
 
     @property
     def available_slots(self) -> int:
@@ -183,21 +278,50 @@ class ProfileSlotState:
             return False
         return True
 
-    def reserve(self, requester_workflow_id: str, now: datetime) -> bool:
-        if not self.is_available():
+    def reserve(
+        self,
+        requester_workflow_id: str,
+        now: datetime,
+        *,
+        purpose: str = "execution_direct",
+        metadata: dict[str, Any] | None = None,
+        allow_unready: bool = False,
+    ) -> bool:
+        if allow_unready:
+            if len(self.current_leases) >= self.max_parallel_runs:
+                return False
+        elif not self.is_available():
             return False
         self.current_leases.append(requester_workflow_id)
         self.lease_granted_at[requester_workflow_id] = now.isoformat()
+        self.lease_metadata[requester_workflow_id] = {
+            "leaseId": requester_workflow_id,
+            "ownerId": requester_workflow_id,
+            "purpose": purpose,
+            "acquiredAt": now.isoformat(),
+            "expiresAt": (
+                now + timedelta(seconds=self.max_lease_duration_seconds)
+            ).isoformat(),
+            **dict(metadata or {}),
+        }
         return True
 
     def release(self, requester_workflow_id: str) -> bool:
         if requester_workflow_id in self.current_leases:
             self.current_leases.remove(requester_workflow_id)
             self.lease_granted_at.pop(requester_workflow_id, None)
+            self.lease_metadata.pop(requester_workflow_id, None)
+            if (
+                self.authoritative_policy_confirmed
+                and len(self.current_leases) <= self.max_parallel_runs
+            ):
+                self.over_capacity_legacy_snapshot = False
             return True
         return False
 
-    def evict_expired_leases(self, now: datetime, max_duration_seconds: int) -> list[str]:
+    def evict_expired_leases(
+        self, now: datetime, max_duration_seconds: int
+    ) -> list[str]:
         """Remove leases that have exceeded the maximum duration. Returns evicted IDs."""
         evicted: list[str] = []
         for wf_id in list(self.current_leases):
@@ -205,6 +329,7 @@ class ProfileSlotState:
             if granted_str is None:
                 # Legacy lease without timestamp — evict it as we can't verify age.
                 self.current_leases.remove(wf_id)
+                self.lease_metadata.pop(wf_id, None)
                 evicted.append(wf_id)
                 continue
             try:
@@ -214,10 +339,12 @@ class ProfileSlotState:
                 if (now - granted_dt).total_seconds() > max_duration_seconds:
                     self.current_leases.remove(wf_id)
                     self.lease_granted_at.pop(wf_id, None)
+                    self.lease_metadata.pop(wf_id, None)
                     evicted.append(wf_id)
             except (ValueError, TypeError):
                 self.current_leases.remove(wf_id)
                 self.lease_granted_at.pop(wf_id, None)
+                self.lease_metadata.pop(wf_id, None)
                 evicted.append(wf_id)
         return evicted
 
@@ -233,8 +360,10 @@ class ProfileSlotState:
             "max_lease_duration_seconds": self.max_lease_duration_seconds,
             "current_leases": list(self.current_leases),
             "lease_granted_at": dict(self.lease_granted_at),
+            "lease_metadata": dict(self.lease_metadata),
             "cooldown_until": self.cooldown_until,
             "provider_id": self.provider_id,
+            "credential_source": self.credential_source,
             "tags": list(self.tags),
             "priority": self.priority,
             "runtime_materialization_mode": self.runtime_materialization_mode,
@@ -243,6 +372,7 @@ class ProfileSlotState:
             "pricing_source": self.pricing_source,
             "model_tiers": list(self.model_tiers),
             "default_model_tier": self.default_model_tier,
+            "overCapacityLegacySnapshot": self.over_capacity_legacy_snapshot,
         }
 
     @property
@@ -250,6 +380,7 @@ class ProfileSlotState:
         if self.input_per_million_usd is None or self.output_per_million_usd is None:
             return None
         return self.input_per_million_usd + self.output_per_million_usd
+
 
 @dataclass
 class PendingRequest:
@@ -263,6 +394,9 @@ class PendingRequest:
     execution_profile_ref: str | None = None
     profile_selector: Optional[dict[str, Any]] = None
     lease_group_id: str | None = None
+    purpose: str = "execution_direct"
+    lease_metadata: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class HandoffReservation:
@@ -271,9 +405,11 @@ class HandoffReservation:
     profile_id: str
     expires_at: str
 
+
 # ---------------------------------------------------------------------------
 # Workflow definition
 # ---------------------------------------------------------------------------
+
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindProviderProfileManagerWorkflow:
@@ -294,7 +430,9 @@ class MoonMindProviderProfileManagerWorkflow:
         try:
             info = workflow.info()
         except Exception:
-            logging.getLogger(__name__).exception("Error getting workflow info in _get_logger")
+            logging.getLogger(__name__).exception(
+                "Error getting workflow info in _get_logger"
+            )
             return logging.getLogger(__name__)
 
         extra = {
@@ -311,7 +449,9 @@ class MoonMindProviderProfileManagerWorkflow:
             logger_to_use.isEnabledFor(logging.INFO)
             return logging.LoggerAdapter(logger_to_use, extra=extra)
         except Exception:
-            logging.getLogger(__name__).exception("Error checking logger capabilities in _get_logger")
+            logging.getLogger(__name__).exception(
+                "Error checking logger capabilities in _get_logger"
+            )
             return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
 
     def __init__(self) -> None:
@@ -324,12 +464,47 @@ class MoonMindProviderProfileManagerWorkflow:
         self._has_new_events: bool = False
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
+        self._purpose_aware_leases: bool = False
         # Cache of resolved scheduled/created ordering keyed by queue-order
         # workflow id. Workflow creation/scheduled times are immutable, so a
         # resolved entry never has to be re-queried; this keeps the
         # ``provider_profile.pending_request_order`` activity from re-hitting the
         # database for the same ids on every drain cycle.
         self._resolved_orders: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _lease_purpose(payload: dict[str, Any], *, maintenance: bool = False) -> str:
+        default = (
+            CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+            if maintenance
+            else CredentialLeasePurpose.EXECUTION_DIRECT.value
+        )
+        try:
+            purpose = CredentialLeasePurpose(payload.get("purpose", default))
+        except ValueError as exc:
+            raise exceptions.ApplicationError(
+                "Unsupported credential lease purpose", non_retryable=True
+            ) from exc
+        if purpose.is_maintenance != maintenance:
+            raise exceptions.ApplicationError(
+                "Credential lease purpose does not match acquisition mode",
+                non_retryable=True,
+            )
+        return purpose.value
+
+    @staticmethod
+    def _safe_lease_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+        source = payload.get("metadata")
+        if not isinstance(source, dict):
+            source = {}
+        allowed = {
+            "workflowId",
+            "stepExecutionId",
+            "oauthSessionId",
+            "idempotencyKey",
+            "ownerIsWorkflow",
+        }
+        return {key: source[key] for key in allowed if source.get(key) is not None}
 
     # -- Signals ---------------------------------------------------------------
 
@@ -351,6 +526,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     queued_at=queued_at,
                     execution_profile_ref=payload.get("execution_profile_ref"),
                     profile_selector=payload.get("profile_selector"),
+                    purpose=self._lease_purpose(payload),
+                    lease_metadata=self._safe_lease_metadata(payload),
                 )
             )
             return
@@ -365,6 +542,8 @@ class MoonMindProviderProfileManagerWorkflow:
             lease_group_id=self._normalize_optional_string(
                 payload.get("lease_group_id")
             ),
+            purpose=self._lease_purpose(payload),
+            lease_metadata=self._safe_lease_metadata(payload),
         )
         for index, existing in enumerate(self._pending_requests):
             if existing.requester_workflow_id == request.requester_workflow_id:
@@ -478,6 +657,8 @@ class MoonMindProviderProfileManagerWorkflow:
             payload.get("execution_profile_ref")
         )
         lease_group_id = self._normalize_optional_string(payload.get("lease_group_id"))
+        purpose = self._lease_purpose(payload)
+        lease_metadata = self._safe_lease_metadata(payload)
 
         while not self._shutdown_requested:
             existing_profile_id = self._profile_id_for_lease(requester_id)
@@ -496,7 +677,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 execution_profile_ref=execution_profile_ref,
                 lease_group_id=lease_group_id,
             )
-            if profile and profile.reserve(requester_id, now):
+            if profile and profile.reserve(
+                requester_id,
+                now,
+                purpose=purpose,
+                metadata=lease_metadata,
+            ):
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
                     await self._sync_leases_to_db()
                 self._has_new_events = True
@@ -508,12 +694,14 @@ class MoonMindProviderProfileManagerWorkflow:
 
             try:
                 await workflow.wait_condition(
-                    lambda: self._shutdown_requested
-                    or self._profile_id_for_lease(requester_id) is not None
-                    or self._has_available_profile(
-                        selector=selector,
-                        execution_profile_ref=execution_profile_ref,
-                        lease_group_id=lease_group_id,
+                    lambda: (
+                        self._shutdown_requested
+                        or self._profile_id_for_lease(requester_id) is not None
+                        or self._has_available_profile(
+                            selector=selector,
+                            execution_profile_ref=execution_profile_ref,
+                            lease_group_id=lease_group_id,
+                        )
                     ),
                     timeout=timedelta(seconds=60),
                 )
@@ -525,6 +713,109 @@ class MoonMindProviderProfileManagerWorkflow:
             "provider profile manager is shutting down", non_retryable=True
         )
 
+    @workflow.update(name="AcquireCredentialMaintenanceLease")
+    async def acquire_credential_maintenance_lease(
+        self, payload: SlotAcquirePayload
+    ) -> dict[str, Any]:
+        """Acquire exact-profile capacity while a profile is disabled or unready."""
+
+        requester_id = self._normalize_optional_string(
+            payload.get("requester_workflow_id") or payload.get("owner_id")
+        )
+        runtime_id = self._normalize_optional_string(payload.get("runtime_id"))
+        profile_id = self._normalize_optional_string(
+            payload.get("execution_profile_ref")
+        )
+        if not requester_id or not runtime_id or not profile_id:
+            raise exceptions.ApplicationError(
+                "maintenance lease requires requester_workflow_id, runtime_id, and exact profile",
+                non_retryable=True,
+            )
+        if payload.get("profile_selector"):
+            raise exceptions.ApplicationError(
+                "maintenance lease does not allow profile selectors",
+                non_retryable=True,
+            )
+        purpose = self._lease_purpose(payload, maintenance=True)
+        existing_profile_id = self._profile_id_for_lease(requester_id)
+        if existing_profile_id is not None:
+            if existing_profile_id != profile_id:
+                raise exceptions.ApplicationError(
+                    "lease owner already holds a different profile",
+                    non_retryable=True,
+                )
+            return {
+                "profile_id": profile_id,
+                "lease_id": requester_id,
+                "already_held": True,
+            }
+        profile = self._profiles.get(profile_id)
+        if profile is None:
+            profile = ProfileSlotState(
+                profile_id=profile_id,
+                max_parallel_runs=1,
+                cooldown_after_429_seconds=900,
+                rate_limit_policy="backoff",
+                enabled=False,
+                launch_ready=False,
+            )
+            self._profiles[profile_id] = profile
+        if profile.max_parallel_runs != 1:
+            raise exceptions.ApplicationError(
+                "credential maintenance requires exclusive profile capacity",
+                non_retryable=True,
+            )
+        while not self._shutdown_requested:
+            if profile.reserve(
+                requester_id,
+                workflow.now(),
+                purpose=purpose,
+                metadata=self._safe_lease_metadata(payload),
+                allow_unready=True,
+            ):
+                if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                    await self._sync_leases_to_db()
+                return {
+                    "profile_id": profile_id,
+                    "lease_id": requester_id,
+                    "already_held": False,
+                }
+            try:
+                await workflow.wait_condition(
+                    lambda: (
+                        self._shutdown_requested
+                        or not profile.current_leases
+                        or requester_id in profile.current_leases
+                    ),
+                    timeout=timedelta(seconds=60),
+                )
+            except TimeoutError:
+                continue
+        raise exceptions.ApplicationError(
+            "provider profile manager is shutting down", non_retryable=True
+        )
+
+    @workflow.update(name="InspectCredentialLease")
+    def inspect_credential_lease(self, payload: dict[str, Any]) -> dict[str, Any]:
+        lease_id = self._normalize_optional_string(
+            payload.get("lease_id") or payload.get("owner_id")
+        )
+        if not lease_id:
+            raise exceptions.ApplicationError(
+                "lease_id is required", non_retryable=True
+            )
+        profile_id = self._profile_id_for_lease(lease_id)
+        if profile_id is None:
+            return {"active": False, "lease_id": lease_id}
+        profile = self._profiles[profile_id]
+        return {
+            "active": True,
+            "lease_id": lease_id,
+            "profile_id": profile_id,
+            **dict(profile.lease_metadata.get(lease_id) or {}),
+            "acquiredAt": profile.lease_granted_at.get(lease_id),
+        }
+
     # -- Queries ---------------------------------------------------------------
 
     @workflow.query
@@ -532,9 +823,7 @@ class MoonMindProviderProfileManagerWorkflow:
         """Return current manager state for observability."""
         return {
             "runtime_id": self._runtime_id,
-            "profiles": {
-                pid: p.to_dict() for pid, p in self._profiles.items()
-            },
+            "profiles": {pid: p.to_dict() for pid, p in self._profiles.items()},
             "pending_requests": [
                 {
                     "requester_workflow_id": r.requester_workflow_id,
@@ -545,6 +834,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                     "lease_group_id": r.lease_group_id,
+                    "purpose": r.purpose,
+                    "lease_metadata": dict(r.lease_metadata),
                 }
                 for r in self._pending_requests
             ],
@@ -561,9 +852,7 @@ class MoonMindProviderProfileManagerWorkflow:
     # -- Main loop -------------------------------------------------------------
 
     @workflow.run
-    async def run(
-        self, input_payload: dict[str, Any]
-    ) -> ProviderProfileManagerOutput:
+    async def run(self, input_payload: dict[str, Any]) -> ProviderProfileManagerOutput:
         self._runtime_id = input_payload.get("runtime_id")
         if not self._runtime_id:
             raise exceptions.ApplicationError(
@@ -571,7 +860,14 @@ class MoonMindProviderProfileManagerWorkflow:
             )
 
         # Restore state from continue-as-new or initial profile load.
-        self._restore_state(input_payload)
+        repair_legacy_codex_oauth = workflow.patched(CODEX_OAUTH_LEGACY_RESTORE_PATCH)
+        self._purpose_aware_leases = workflow.patched(
+            PURPOSE_AWARE_CREDENTIAL_LEASE_PATCH
+        )
+        self._restore_state(
+            input_payload,
+            repair_legacy_codex_oauth=repair_legacy_codex_oauth,
+        )
 
         # If no profiles were provided, load them via activity.
         if not self._profiles:
@@ -605,8 +901,9 @@ class MoonMindProviderProfileManagerWorkflow:
                         self._has_new_events = False
                         try:
                             await workflow.wait_condition(
-                                lambda: self._has_new_events
-                                or self._shutdown_requested,
+                                lambda: (
+                                    self._has_new_events or self._shutdown_requested
+                                ),
                                 timeout=timedelta(seconds=60),
                             )
                         except TimeoutError:
@@ -642,7 +939,11 @@ class MoonMindProviderProfileManagerWorkflow:
             # Check continue-as-new threshold.
             # We use get_current_history_length() to account for timer loops
             # that don't increment self._event_count, or server suggestions.
-            if workflow.info().get_current_history_length() >= _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW or workflow.info().is_continue_as_new_suggested():
+            if (
+                workflow.info().get_current_history_length()
+                >= _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW
+                or workflow.info().is_continue_as_new_suggested()
+            ):
                 workflow.continue_as_new(self._build_continue_as_new_input())
 
             # Reset event flag and wait for new signals or periodic wake-up.
@@ -663,12 +964,18 @@ class MoonMindProviderProfileManagerWorkflow:
 
     # -- Internal helpers ------------------------------------------------------
 
-    def _restore_state(self, input_payload: dict[str, Any]) -> None:
+    def _restore_state(
+        self,
+        input_payload: dict[str, Any],
+        *,
+        repair_legacy_codex_oauth: bool = True,
+    ) -> None:
         """Restore profile and lease state from input (e.g. after continue-as-new)."""
         profiles_data = input_payload.get("profiles", [])
         leases_data = input_payload.get("leases", {})
         cooldowns_data = input_payload.get("cooldowns", {})
         lease_times_data = input_payload.get("lease_granted_at", {})
+        lease_metadata_data = input_payload.get("lease_metadata", {})
         pending_data = input_payload.get("pending_requests", [])
         reservations_data = input_payload.get("handoff_reservations", {})
 
@@ -683,6 +990,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 profile_selector=req.get("profile_selector"),
                 lease_group_id=self._normalize_optional_string(
                     req.get("lease_group_id")
+                ),
+                purpose=str(req.get("purpose") or "execution_direct"),
+                lease_metadata=(
+                    dict(req.get("lease_metadata") or {})
+                    if isinstance(req.get("lease_metadata"), dict)
+                    else {}
                 ),
             )
             for req in pending_data
@@ -710,9 +1023,30 @@ class MoonMindProviderProfileManagerWorkflow:
 
         for p in profiles_data:
             pid = p["profile_id"]
+            original_capacity = p.get("max_parallel_runs", 1)
+            restored_credential_source = p.get("credential_source")
+            if (
+                repair_legacy_codex_oauth
+                and restored_credential_source is None
+                and self._runtime_id == "codex_cli"
+                and p.get("runtime_materialization_mode") == "oauth_home"
+            ):
+                restored_credential_source = "oauth_volume"
+            is_legacy_codex_oauth = _profile_is_codex_oauth(
+                {
+                    **p,
+                    "credential_source": restored_credential_source,
+                },
+                runtime_id=self._runtime_id,
+                infer_legacy_source=repair_legacy_codex_oauth,
+            )
             state = ProfileSlotState(
                 profile_id=pid,
-                max_parallel_runs=p.get("max_parallel_runs", 1),
+                max_parallel_runs=_validated_profile_capacity(
+                    p,
+                    runtime_id=self._runtime_id,
+                    repair_legacy=repair_legacy_codex_oauth,
+                ),
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
@@ -723,8 +1057,10 @@ class MoonMindProviderProfileManagerWorkflow:
                 ),
                 current_leases=list(leases_data.get(pid, [])),
                 lease_granted_at=dict(lease_times_data.get(pid, {})),
+                lease_metadata=dict(lease_metadata_data.get(pid, {})),
                 cooldown_until=cooldowns_data.get(pid),
                 provider_id=p.get("provider_id"),
+                credential_source=restored_credential_source,
                 tags=p.get("tags") or [],
                 priority=p.get("priority", 100),
                 runtime_materialization_mode=p.get("runtime_materialization_mode"),
@@ -733,10 +1069,19 @@ class MoonMindProviderProfileManagerWorkflow:
                 pricing_source=p.get("pricing_source"),
                 model_tiers=p.get("model_tiers") or [],
                 default_model_tier=p.get("default_model_tier", 1),
+                over_capacity_legacy_snapshot=(
+                    is_legacy_codex_oauth and original_capacity != 1
+                )
+                or bool(p.get("over_capacity_legacy_snapshot", False)),
             )
             self._profiles[pid] = state
 
-    def _apply_profile_sync(self, profiles_data: list[dict[str, Any]]) -> None:
+    def _apply_profile_sync(
+        self,
+        profiles_data: list[dict[str, Any]],
+        *,
+        authoritative: bool = False,
+    ) -> None:
         """Merge a fresh profile list from the DB into in-memory state."""
         seen: set[str] = set()
         for p in profiles_data:
@@ -744,8 +1089,10 @@ class MoonMindProviderProfileManagerWorkflow:
             seen.add(pid)
             existing = self._profiles.get(pid)
             if existing:
-                existing.max_parallel_runs = p.get(
-                    "max_parallel_runs", existing.max_parallel_runs
+                existing.max_parallel_runs = _validated_profile_capacity(
+                    p,
+                    runtime_id=self._runtime_id,
+                    existing_capacity=existing.max_parallel_runs,
                 )
                 existing.cooldown_after_429_seconds = p.get(
                     "cooldown_after_429_seconds",
@@ -764,24 +1111,34 @@ class MoonMindProviderProfileManagerWorkflow:
                     "max_lease_duration_seconds", existing.max_lease_duration_seconds
                 )
                 existing.provider_id = p.get("provider_id", existing.provider_id)
+                existing.credential_source = p.get(
+                    "credential_source", existing.credential_source
+                )
                 existing.tags = p.get("tags") or existing.tags
                 existing.priority = p.get("priority", existing.priority)
                 existing.runtime_materialization_mode = p.get(
-                    "runtime_materialization_mode", existing.runtime_materialization_mode
+                    "runtime_materialization_mode",
+                    existing.runtime_materialization_mode,
                 )
                 existing.model_tiers = p.get("model_tiers") or existing.model_tiers
                 existing.default_model_tier = p.get(
                     "default_model_tier", existing.default_model_tier
                 )
                 self._apply_profile_pricing(existing, p)
+                if authoritative:
+                    existing.authoritative_policy_confirmed = True
+                    existing.over_capacity_legacy_snapshot = (
+                        len(existing.current_leases) > existing.max_parallel_runs
+                    )
             else:
                 pricing = pricing_from_profile_metadata(p)
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
-                    max_parallel_runs=p.get("max_parallel_runs", 1),
-                    cooldown_after_429_seconds=p.get(
-                        "cooldown_after_429_seconds", 900
+                    max_parallel_runs=_validated_profile_capacity(
+                        p,
+                        runtime_id=self._runtime_id,
                     ),
+                    cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),
                     launch_ready=p.get("launch_ready", p.get("launchReady", True)),
@@ -790,6 +1147,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
                     ),
                     provider_id=p.get("provider_id"),
+                    credential_source=p.get("credential_source"),
                     tags=p.get("tags") or [],
                     priority=p.get("priority", 100),
                     runtime_materialization_mode=p.get("runtime_materialization_mode"),
@@ -802,6 +1160,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     pricing_source=pricing.source if pricing else None,
                     model_tiers=p.get("model_tiers") or [],
                     default_model_tier=p.get("default_model_tier", 1),
+                    authoritative_policy_confirmed=authoritative,
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).
@@ -920,15 +1279,14 @@ class MoonMindProviderProfileManagerWorkflow:
             return False
         if not selector:
             return True
-        if (
-            selector.get("providerId")
-            and profile.provider_id != selector.get("providerId")
+        if selector.get("providerId") and profile.provider_id != selector.get(
+            "providerId"
         ):
             return False
-        if (
-            selector.get("runtimeMaterializationMode")
-            and profile.runtime_materialization_mode
-            != selector.get("runtimeMaterializationMode")
+        if selector.get(
+            "runtimeMaterializationMode"
+        ) and profile.runtime_materialization_mode != selector.get(
+            "runtimeMaterializationMode"
         ):
             return False
 
@@ -980,7 +1338,9 @@ class MoonMindProviderProfileManagerWorkflow:
                         req.requester_workflow_id,
                         e,
                     )
-                    self._profiles[existing_profile_id].release(req.requester_workflow_id)
+                    self._profiles[existing_profile_id].release(
+                        req.requester_workflow_id
+                    )
                     leases_changed = True
                 continue
 
@@ -989,7 +1349,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 execution_profile_ref=req.execution_profile_ref,
                 lease_group_id=req.lease_group_id,
             )
-            if profile and profile.reserve(req.requester_workflow_id, now):
+            if profile and profile.reserve(
+                req.requester_workflow_id,
+                now,
+                purpose=req.purpose,
+                metadata=req.lease_metadata,
+            ):
                 leases_changed = True
                 try:
                     await self._signal_slot_assigned(
@@ -1303,7 +1668,10 @@ class MoonMindProviderProfileManagerWorkflow:
         now = workflow.now()
         total_evicted = 0
         for profile in self._profiles.values():
-            max_duration = getattr(profile, "max_lease_duration_seconds", None) or _MAX_LEASE_DURATION_SECONDS
+            max_duration = (
+                getattr(profile, "max_lease_duration_seconds", None)
+                or _MAX_LEASE_DURATION_SECONDS
+            )
             evicted = profile.evict_expired_leases(now, max_duration)
             total_evicted += len(evicted)
             for wf_id in evicted:
@@ -1318,7 +1686,11 @@ class MoonMindProviderProfileManagerWorkflow:
         """Return unique workflow IDs that currently hold profile leases."""
         all_wf_ids: list[str] = []
         for profile in self._profiles.values():
-            all_wf_ids.extend(profile.current_leases)
+            for lease_id in profile.current_leases:
+                metadata = profile.lease_metadata.get(lease_id) or {}
+                if metadata.get("ownerIsWorkflow") is False:
+                    continue
+                all_wf_ids.append(str(metadata.get("workflowId") or lease_id))
         return list(dict.fromkeys(all_wf_ids))
 
     def _pending_requester_workflow_ids(self) -> list[str]:
@@ -1373,7 +1745,11 @@ class MoonMindProviderProfileManagerWorkflow:
 
         for profile in list(self._profiles.values()):
             for wf_id in list(profile.current_leases):
-                status_info = workflow_statuses.get(wf_id, {})
+                metadata = profile.lease_metadata.get(wf_id) or {}
+                if metadata.get("ownerIsWorkflow") is False:
+                    continue
+                owner_workflow_id = str(metadata.get("workflowId") or wf_id)
+                status_info = workflow_statuses.get(owner_workflow_id, {})
                 if not status_info.get("running", True):
                     profile.release(wf_id)
                     reclaimed = True
@@ -1481,6 +1857,7 @@ class MoonMindProviderProfileManagerWorkflow:
         leases: dict[str, list[str]] = {}
         cooldowns: dict[str, str] = {}
         lease_times: dict[str, dict[str, str]] = {}
+        lease_metadata: dict[str, dict[str, dict[str, Any]]] = {}
 
         for pid, state in self._profiles.items():
             profiles_list.append(
@@ -1493,18 +1870,24 @@ class MoonMindProviderProfileManagerWorkflow:
                     "is_default": state.is_default,
                     "max_lease_duration_seconds": state.max_lease_duration_seconds,
                     "provider_id": state.provider_id,
+                    "credential_source": state.credential_source,
                     "tags": list(state.tags),
                     "priority": state.priority,
                     "runtime_materialization_mode": state.runtime_materialization_mode,
                     "input_per_million_usd": state.input_per_million_usd,
                     "output_per_million_usd": state.output_per_million_usd,
                     "pricing_source": state.pricing_source,
+                    "over_capacity_legacy_snapshot": (
+                        state.over_capacity_legacy_snapshot
+                    ),
                 }
             )
             if state.current_leases:
                 leases[pid] = list(state.current_leases)
             if state.lease_granted_at:
                 lease_times[pid] = dict(state.lease_granted_at)
+            if state.lease_metadata:
+                lease_metadata[pid] = dict(state.lease_metadata)
             if state.cooldown_until:
                 cooldowns[pid] = state.cooldown_until
 
@@ -1513,6 +1896,7 @@ class MoonMindProviderProfileManagerWorkflow:
             "profiles": profiles_list,
             "leases": leases,
             "lease_granted_at": lease_times,
+            "lease_metadata": lease_metadata,
             "cooldowns": cooldowns,
             "pending_requests": [
                 {
@@ -1524,6 +1908,14 @@ class MoonMindProviderProfileManagerWorkflow:
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                     "lease_group_id": r.lease_group_id,
+                    **(
+                        {
+                            "purpose": r.purpose,
+                            "lease_metadata": dict(r.lease_metadata),
+                        }
+                        if self._purpose_aware_leases
+                        else {}
+                    ),
                 }
                 for r in self._pending_requests
             ],
@@ -1555,7 +1947,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 ),
             )
             profiles_data = result.get("profiles", []) if result else []
-            self._apply_profile_sync(profiles_data)
+            self._apply_profile_sync(profiles_data, authoritative=True)
             if prune_removed_profiles:
                 self._prune_disabled_profiles_without_leases()
             self._has_db_profile_snapshot = True
@@ -1574,11 +1966,16 @@ class MoonMindProviderProfileManagerWorkflow:
             leases = []
             for profile in self._profiles.values():
                 for wf_id in profile.current_leases:
-                    leases.append({
-                        "workflow_id": wf_id,
-                        "profile_id": profile.profile_id,
-                        "granted_at": profile.lease_granted_at.get(wf_id),
-                    })
+                    leases.append(
+                        {
+                            "workflow_id": wf_id,
+                            "profile_id": profile.profile_id,
+                            "granted_at": profile.lease_granted_at.get(wf_id),
+                            "profileId": profile.profile_id,
+                            "runtimeId": self._runtime_id,
+                            **dict(profile.lease_metadata.get(wf_id) or {}),
+                        }
+                    )
             await workflow.execute_activity(
                 "provider_profile.sync_slot_leases",
                 {"runtime_id": self._runtime_id, "leases": leases, "action": "save"},
@@ -1672,7 +2069,12 @@ class MoonMindProviderProfileManagerWorkflow:
 
                 # Check if this profile still exists and is enabled
                 profile = self._profiles.get(profile_id)
-                if not profile or not profile.enabled:
+                purpose = str(lease.get("purpose") or "execution_direct")
+                is_maintenance = purpose not in {
+                    CredentialLeasePurpose.EXECUTION_DIRECT.value,
+                    CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
+                }
+                if not profile or (not profile.enabled and not is_maintenance):
                     self._get_logger().warning(
                         "Persisted lease for %s references unknown or disabled profile %s, skipping",
                         wf_id,
@@ -1686,8 +2088,26 @@ class MoonMindProviderProfileManagerWorkflow:
                     granted_at = lease.get("granted_at")
                     if granted_at:
                         profile.lease_granted_at[wf_id] = granted_at
+                    profile.lease_metadata[wf_id] = {
+                        "leaseId": lease.get("leaseId") or wf_id,
+                        "ownerId": lease.get("ownerId") or wf_id,
+                        "purpose": purpose,
+                        **{
+                            key: lease[key]
+                            for key in (
+                                "workflowId",
+                                "stepExecutionId",
+                                "oauthSessionId",
+                                "idempotencyKey",
+                                "ownerIsWorkflow",
+                            )
+                            if lease.get(key) is not None
+                        },
+                    }
 
                 # Send slot_assigned to the workflow to reconnect
+                if is_maintenance:
+                    continue
                 try:
                     await self._signal_slot_assigned(wf_id, profile_id)
                     self._get_logger().info(

@@ -3747,13 +3747,15 @@ def _serialize_execution(
 
     publish_payload = _normalize_publish_payload(task_payload.get("publish"))
 
-    # Precedence: task.git.startingBranch > task.startingBranch > params.startingBranch
-    starting_branch = str(
-        git_payload.get("startingBranch")
-        or task_payload.get("startingBranch")
-        or params.get("startingBranch")
-        or ""
-    ).strip() or None
+    # Precedence: task.git.startingBranch > task.git.branch >
+    # task.startingBranch > params.startingBranch
+    starting_branch = (
+        _coerce_temporal_scalar(git_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(git_payload.get("branch"))
+        or _coerce_temporal_scalar(task_payload.get("startingBranch"))
+        or _coerce_temporal_scalar(params.get("startingBranch"))
+        or None
+    )
     # Only show the "(default)" fallback when git context exists in the payload.
     has_git_context = bool(git_payload) or any(
         task_payload.get(k) or params.get(k)

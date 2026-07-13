@@ -10,7 +10,6 @@ import shlex
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -140,23 +139,18 @@ def _build_result(
         ],
     }
     if payload["mergeAutomationDisposition"] == "reenter_gate":
-        wait_seconds = next(
+        continuation = next(
             (
-                int(item["sleep_seconds"])
+                item["gatedContinuation"]
                 for item in reversed(history)
-                if item.get("stage") == "wait" and item.get("sleep_seconds")
+                if isinstance(item.get("gatedContinuation"), dict)
             ),
-            60,
+            None,
         )
-        payload["gatedContinuation"] = {
-            "schemaVersion": "gated-continuation/v1",
-            "gateType": "merge_automation",
-            "action": "reenter_gate",
-            "reason": final_reason or "resolver_wait",
-            "notBefore": (
-                datetime.now(timezone.utc) + timedelta(seconds=wait_seconds)
-            ).isoformat().replace("+00:00", "Z"),
-        }
+        if continuation is not None:
+            payload["gatedContinuation"] = dict(continuation)
+        else:
+            payload["mergeAutomationDisposition"] = "failed"
     return payload
 
 def run_orchestration(
@@ -212,15 +206,17 @@ def run_orchestration(
         finalize_payload = finalize_runner(attempt)
         reason = parse_reason(finalize_payload)
         finalize_status = _normalize_status(finalize_payload)
-        history.append(
-            {
-                "attempt": attempt,
-                "stage": "finalize",
-                "status": finalize_status,
-                "reason": reason,
-                "timestamp": now_utc_iso(),
-            }
-        )
+        finalize_history = {
+            "attempt": attempt,
+            "stage": "finalize",
+            "status": finalize_status,
+            "reason": reason,
+            "timestamp": now_utc_iso(),
+        }
+        gated_continuation = finalize_payload.get("gatedContinuation")
+        if isinstance(gated_continuation, dict):
+            finalize_history["gatedContinuation"] = dict(gated_continuation)
+        history.append(finalize_history)
 
         if finalize_status == "merged":
             result = _build_result(

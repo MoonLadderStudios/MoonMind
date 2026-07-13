@@ -1,39 +1,65 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 4,
-  "issueRef": "MM-1201",
-  "sourceVerificationArtifact": "reports/remediation_verification-3.json",
-  "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "partial",
-  "summary": "Extended the escaped MM-1201 reliability replay through AgentRun terminal-evidence enforcement and parent finalization/projection in one integration journey. Runtime-neutral capability-aware continuation remains open.",
+  "issueRef": "MM-1207",
+  "authoritativeVerificationArtifact": "artifacts/jira-implement-verify.json",
+  "authoritativeVerdict": "ADDITIONAL_WORK_NEEDED",
+  "scope": "Runtime-neutral, secret-free Codex OAuth volume, mount, Omnigent host-binding, and host-lease contracts",
   "changedFiles": [
-    "tests/integration/reliability/test_escaped_failure_journeys.py",
+    "moonmind/schemas/agent_runtime_models.py",
+    "tests/unit/schemas/test_agent_runtime_models.py",
     "reports/remediation_attempt-4.json"
   ],
-  "gapStatuses": [
+  "gapStatus": [
     {
-      "requirement": "Runtime-neutral capability-aware continuation",
-      "status": "open",
-      "evidence": "The bounded continuation loop remains in CodexSessionAdapter. Attempt 4 did not introduce a duplicate or partially migrated side-effect path without a replay-safe workflow/activity contract.",
-      "remaining": "Move the continuation decision and bounded retry loop from CodexSessionAdapter to AgentRun using the immutable RuntimeExecutionCapabilities snapshot, with supported- and unsupported-runtime workflow tests."
+      "requirement": "Finish the exclusive capacity lifecycle",
+      "status": "OPEN",
+      "notes": "Direct, Omnigent, and OAuth-maintenance consumers are not yet all wired through one release-last lease lifecycle."
     },
     {
-      "requirement": "Escaped incident reliability replay",
-      "status": "resolved",
-      "evidence": "The batch-workflows replay now evaluates missing evidence through TemporalAgentRuntimeActivities and MoonMindAgentRun, records the resulting structured child failure in MoonMindRunWorkflow, runs parent finalization, and asserts FAILED finish outcome plus the same failure code and missing-evidence path.",
-      "remaining": null
+      "requirement": "Add profile-bound credential and host contracts",
+      "status": "PARTIAL",
+      "notes": "Added runtime-neutral AuthVolumeRef, CredentialMountRef, OmnigentOAuthHostBinding, and OmnigentHostLease schemas with secret-free fields, fixed one-host/one-session limits, ownership checks, generation, and lifecycle validation. Durable database persistence and runtime ownership validation remain open."
+    },
+    {
+      "requirement": "Materialize, preflight, and route the destination host",
+      "status": "OPEN",
+      "notes": "The new contracts provide typed inputs for this work, but host materialization, destination preflight, and exact-host routing remain absent."
+    },
+    {
+      "requirement": "Complete lifecycle durability and observability",
+      "status": "OPEN",
+      "notes": "Generation/drain transitions, reconciliation, checkpoints, and Workflow Detail lifecycle evidence remain absent."
+    },
+    {
+      "requirement": "Add and run required verification",
+      "status": "PARTIAL",
+      "notes": "Added schema tests for valid secret-free refs, cross-profile rejection, absolute mount paths, fixed capacity, and host-lease timestamps. Pytest is unavailable in the runtime, so the controlling unit suite did not start; syntax, contract smoke, Alembic graph, and diff hygiene passed."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability/test_escaped_failure_journeys.py tests/unit/workflows/temporal/workflows/test_run_integration.py -q --tb=short",
+      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_agent_runtime_models.py tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/test_codex_oauth_capacity_migration.py",
+      "result": "NOT_RUN",
+      "details": "/usr/local/bin/python: No module named pytest"
+    },
+    {
+      "command": "python -m py_compile moonmind/schemas/agent_runtime_models.py tests/unit/schemas/test_agent_runtime_models.py api_service/services/provider_profile_readiness.py api_service/api/routers/provider_profiles.py api_service/migrations/versions/336_codex_oauth_exclusive_capacity.py",
+      "result": "PASS"
+    },
+    {
+      "command": "python tools/check_alembic_graph.py",
       "result": "PASS",
-      "details": "126 passed in 3.92s."
+      "details": "One head: 336_codex_oauth_capacity"
+    },
+    {
+      "command": "Python model-construction smoke for AuthVolumeRef, CredentialMountRef, OmnigentOAuthHostBinding, and OmnigentHostLease",
+      "result": "PASS"
     },
     {
       "command": "git diff --check",
-      "result": "PASS",
-      "details": "No whitespace errors."
+      "result": "PASS"
     }
-  ]
+  ],
+  "summary": "Attempt 4 partially closes the profile-bound credential and host-contract gap. The broader MM-1207 lifecycle backlog remains open and bounded by the latest verification report."
 }

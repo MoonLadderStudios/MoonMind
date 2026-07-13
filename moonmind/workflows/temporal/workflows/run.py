@@ -331,6 +331,9 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
+RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = (
+    "run-pr-resolver-continuation-identity-v1"
+)
 _REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
@@ -588,6 +591,9 @@ RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
 )
 RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-gate-environment-draft-publish-v1"
+)
+RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
+    "run-moonspec-additional-work-draft-publish-v1"
 )
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
@@ -1133,6 +1139,7 @@ class MoonMindRunWorkflow:
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
         self._gated_continuation_request: Optional[dict[str, Any]] = None
+        self._gated_continuation_execution_ref: Optional[str] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -5882,7 +5889,31 @@ class MoonMindRunWorkflow:
             return False
         return bool(gate_context.get("degraded") or gate_context.get("invalid"))
 
-    def _activate_moonspec_draft_publication(self, gate_reason: str) -> str:
+    def _moonspec_draft_publication_policy(
+        self,
+        *,
+        environment_blocked_enabled: bool,
+        additional_work_enabled: bool,
+    ) -> str | None:
+        verdict = self._normalize_moonspec_verify_verdict(
+            self._moonspec_gate_verdict
+        )
+        if additional_work_enabled and verdict == "ADDITIONAL_WORK_NEEDED":
+            return "draft_pr_on_additional_work_needed"
+        if (
+            environment_blocked_enabled
+            and self._moonspec_environment_blocked_publish_action() == "draft_pr"
+            and self._moonspec_gate_qualifies_for_draft_publish()
+        ):
+            return "draft_pr_on_environment_blocked"
+        return None
+
+    def _activate_moonspec_draft_publication(
+        self,
+        gate_reason: str,
+        *,
+        policy: str = "draft_pr_on_environment_blocked",
+    ) -> str:
         summary = (
             "MoonSpec verification incomplete; publishing draft pull request "
             f"for operator review. {gate_reason}"
@@ -5891,11 +5922,9 @@ class MoonMindRunWorkflow:
         self._attention_required = True
         gate_context = self._publish_context.get("moonSpecGate")
         if isinstance(gate_context, dict):
-            gate_context["publicationPolicy"] = (
-                "draft_pr_on_environment_blocked"
-            )
+            gate_context["publicationPolicy"] = policy
         self._publish_context["moonSpecDraftPublication"] = {
-            "policy": "draft_pr_on_environment_blocked",
+            "policy": policy,
             "reason": gate_reason,
         }
         return summary
@@ -5904,10 +5933,35 @@ class MoonMindRunWorkflow:
         gate_context = self._publish_context.get("moonSpecGate")
         verdict = None
         diagnostics_ref = None
+        gate_result_ref = None
+        remaining_work_ref = None
         if isinstance(gate_context, Mapping):
             verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
             diagnostics_ref = self._coerce_text(
                 gate_context.get("diagnosticsRef"), max_chars=400
+            )
+            gate_result_ref = self._coerce_text(
+                gate_context.get("gateResultRef"), max_chars=400
+            )
+            remaining_work_ref = self._coerce_text(
+                gate_context.get("remainingWorkRef"), max_chars=400
+            )
+        draft_context = self._publish_context.get("moonSpecDraftPublication")
+        policy = (
+            draft_context.get("policy")
+            if isinstance(draft_context, Mapping)
+            else None
+        )
+        if policy == "draft_pr_on_additional_work_needed":
+            explanation = (
+                "the bounded remediation budget was exhausted with remaining "
+                "implementation work"
+            )
+        else:
+            explanation = (
+                "the operator policy "
+                "`workflow.moonspec_environment_blocked_publish_action` is "
+                "`draft_pr`"
             )
         lines = [
             "## MoonSpec verification incomplete",
@@ -5915,9 +5969,7 @@ class MoonMindRunWorkflow:
             (
                 "This pull request was opened as a **draft** because MoonSpec "
                 f"verification did not approve publication (verdict "
-                f"{verdict or 'unknown'}) and the operator policy "
-                "`workflow.moonspec_environment_blocked_publish_action` is "
-                "`draft_pr`."
+                f"{verdict or 'unknown'}) and {explanation}."
             ),
             "",
         ]
@@ -5926,6 +5978,10 @@ class MoonMindRunWorkflow:
             lines.append(f"- Gate outcome: {reason}")
         if diagnostics_ref:
             lines.append(f"- Verification report: {diagnostics_ref}")
+        if remaining_work_ref:
+            lines.append(f"- Remaining work: {remaining_work_ref}")
+        if gate_result_ref and gate_result_ref != diagnostics_ref:
+            lines.append(f"- Verification gate result: {gate_result_ref}")
         lines.append("")
         lines.append(
             "Review the verification evidence before marking this pull "
@@ -7444,6 +7500,27 @@ class MoonMindRunWorkflow:
             output_status, output_message, publish_failure = (
                 self._determine_publish_completion(parameters=parameters)
             )
+            if (
+                publish_failure
+                and workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH)
+                and self._is_merge_automation_gated(parameters)
+                and (
+                    (
+                        self._gated_continuation_request
+                        and self._gated_continuation_failure_message(parameters) is None
+                    )
+                    or self._merge_automation_disposition
+                    in {"merged", "already_merged"}
+                )
+            ):
+                output_status = "success"
+                output_message = (
+                    "Workflow completed an authoritative durable continuation "
+                    "handoff to merge automation."
+                    if self._gated_continuation_request
+                    else "Workflow completed authoritative PR resolver terminal evidence."
+                )
+                publish_failure = False
             if publish_failure:
                 finalizing_status = "failed"
                 finalizing_error = output_message
@@ -7533,9 +7610,25 @@ class MoonMindRunWorkflow:
         if self._merge_automation_disposition:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
         if self._gated_continuation_request:
-            output["gatedContinuation"] = dict(self._gated_continuation_request)
+            gated_continuation = dict(self._gated_continuation_request)
             if workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH):
+                parent_info = workflow.info().parent
+                if parent_info is not None and self._is_merge_automation_gated(parameters):
+                    gated_continuation.update(
+                        {
+                            "ownerWorkflowId": parent_info.workflow_id,
+                            "ownerRunId": parent_info.run_id,
+                            "ownerWorkflowType": "MoonMind.MergeAutomation",
+                            "childWorkflowId": workflow.info().workflow_id,
+                            "childRunId": workflow.info().run_id,
+                        }
+                    )
                 output["completionDisposition"] = "gated_continuation"
+            output["gatedContinuation"] = gated_continuation
+            if workflow.patched(RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH):
+                output["executionRef"] = self._gated_continuation_execution_ref
+                output["childRunId"] = gated_continuation.get("childRunId")
+                output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -9599,18 +9692,30 @@ class MoonMindRunWorkflow:
                     if blocking_gate_reason and not bool(
                         continuation_decision.get("continueLoop")
                     ):
-                        if (
-                            workflow.patched(
-                                RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                        environment_draft_publish_enabled = workflow.patched(
+                            RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+                        )
+                        additional_work_draft_publish_enabled = workflow.patched(
+                            RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH
+                        )
+                        draft_publication_policy = (
+                            self._moonspec_draft_publication_policy(
+                                environment_blocked_enabled=(
+                                    environment_draft_publish_enabled
+                                ),
+                                additional_work_enabled=(
+                                    additional_work_draft_publish_enabled
+                                ),
                             )
-                            and self._moonspec_environment_blocked_publish_action()
-                            == "draft_pr"
-                            and publish_mode == "pr"
-                            and self._moonspec_gate_qualifies_for_draft_publish()
+                        )
+                        if (
+                            publish_mode == "pr"
+                            and draft_publication_policy is not None
                         ):
                             draft_summary = (
                                 self._activate_moonspec_draft_publication(
-                                    blocking_gate_reason
+                                    blocking_gate_reason,
+                                    policy=draft_publication_policy,
                                 )
                             )
                             self._summary = draft_summary
@@ -9860,7 +9965,10 @@ class MoonMindRunWorkflow:
                     self._get_logger().info(
                         "Skipping native PR creation: publish output not required."
                     )
-                elif push_status == "no_commits":
+                elif (
+                    push_status == "no_commits"
+                    and self._moonspec_draft_publication_reason is None
+                ):
                     self._get_logger().info(
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
@@ -9912,6 +10020,7 @@ class MoonMindRunWorkflow:
                         )
                         pr_url = self._get_from_result(create_result, "url")
                         created = self._get_from_result(create_result, "created")
+                        adopted = self._get_from_result(create_result, "adopted")
                         summary = self._get_from_result(create_result, "summary") or ""
                         created_head_sha = self._coerce_text(
                             self._get_from_result(create_result, "headSha"),
@@ -9919,6 +10028,15 @@ class MoonMindRunWorkflow:
                         )
                         if created_head_sha:
                             self._publish_context["headSha"] = created_head_sha
+                        if (
+                            self._moonspec_draft_publication_reason is not None
+                            and not created
+                            and not adopted
+                        ):
+                            raise ValueError(
+                                "draft PR publication was rejected: "
+                                f"{summary or 'existing pull request is not a draft'}"
+                            )
                         if pr_url:
                             pull_request_url = pr_url
                             self._get_logger().info(
@@ -12469,6 +12587,10 @@ class MoonMindRunWorkflow:
             node_id=node_id,
         )
         self._gated_continuation_request = gated_continuation
+        self._gated_continuation_execution_ref = self._coerce_text(
+            outputs.get("terminalContractExecutionRef"),
+            max_chars=240,
+        )
         if gated_continuation:
             self._publish_context["gatedContinuation"] = gated_continuation
         else:
@@ -14189,6 +14311,13 @@ class MoonMindRunWorkflow:
     ) -> None:
         if not pull_request_url:
             return
+        if self._moonspec_draft_publication_reason is not None:
+            self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            self._publish_context["mergeAutomationSummary"] = (
+                "Merge automation is disabled for an attention-required "
+                "MoonSpec draft pull request."
+            )
+            return
         info = workflow.info()
         payload = self._build_merge_gate_start_payload(
             parameters=parameters,
@@ -14706,6 +14835,18 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if (
+            self._workflow_patch_enabled(
+                RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH
+            )
+            and isinstance(workflow_parameters, Mapping)
+        ):
+            merge_gate = workflow_parameters.get("mergeGate")
+            if isinstance(merge_gate, Mapping):
+                parameters["mergeGate"] = self._json_mapping(
+                    merge_gate,
+                    path="workflow.mergeGate",
+                )
         raw_omnigent_parameters = runtime_block.get("omnigent")
         if raw_omnigent_parameters is None:
             raw_omnigent_parameters = node_inputs.get("omnigent")
@@ -15419,7 +15560,8 @@ class MoonMindRunWorkflow:
                 "schemaVersion": "terminal-continuation-authority/v1",
                 "gateType": "merge_automation",
                 "ownerWorkflowId": parent_info.workflow_id,
-                "ownerRunId": getattr(parent_info, "run_id", None),
+                "ownerRunId": parent_info.run_id,
+                "ownerWorkflowType": "MoonMind.MergeAutomation",
                 "allowedActions": ["reenter_gate"],
                 "source": "validated_temporal_parent",
             }

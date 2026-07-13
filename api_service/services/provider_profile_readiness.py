@@ -10,6 +10,7 @@ from api_service.db.models import (
     SecretStatus,
 )
 from moonmind.auth.secret_refs import SecretBackend, SecretReferenceError, parse_secret_ref
+from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 
 
 def provider_profile_launch_ready(
@@ -27,6 +28,12 @@ def provider_profile_launch_ready(
         return False
     if not row.max_parallel_runs or row.max_parallel_runs <= 0:
         return False
+    if is_codex_oauth_profile(
+        runtime_id=row.runtime_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
+    ) and row.max_parallel_runs != 1:
+        return False
     if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
         return False
     if not _credential_bindings_launch_ready(
@@ -43,6 +50,17 @@ def provider_profile_launch_ready_from_payload(profile: dict[str, Any]) -> bool:
     if profile.get("enabled") is False:
         return False
     if profile.get("launch_ready") is False or profile.get("launchReady") is False:
+        return False
+    if is_codex_oauth_profile(
+        runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
+        credential_source=profile.get(
+            "credential_source", profile.get("credentialSource")
+        ),
+        materialization_mode=profile.get(
+            "runtime_materialization_mode",
+            profile.get("runtimeMaterializationMode"),
+        ),
+    ) and profile.get("max_parallel_runs", profile.get("maxParallelRuns")) != 1:
         return False
 
     readiness = profile.get("readiness")

@@ -483,6 +483,21 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: 'Reset form' })).toBeNull();
   });
 
+  it('renders Codex OAuth concurrency as a fixed exclusive capacity', () => {
+    renderProviderProfilesManager([{ ...codexOauthProfile, max_parallel_runs: 7 }]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    const maxParallelRuns = screen.getByLabelText(/Max parallel runs/) as HTMLInputElement;
+    expect(maxParallelRuns.disabled).toBe(true);
+    expect(maxParallelRuns.value).toBe('1');
+    expect(
+      screen.getByText(
+        'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.',
+      ),
+    ).toBeTruthy();
+  });
+
   it('exposes table cell labels for the mobile provider profile card layout', () => {
     renderProviderProfilesManager([profile]);
 

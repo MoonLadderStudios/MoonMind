@@ -97,10 +97,15 @@ describe('dashboard masthead brand styles', () => {
   });
 
   it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
-    // The shared treatment: a bright top-edge inset plus a soft accent
-    // under-glow, with no flat 1px perimeter ring.
+    // The shared treatment: a bright top-edge inset, a lit bottom-edge inset,
+    // a hairline ring that closes the shape, and a tight accent glow hugging
+    // the bottom edge (a wide diffuse glow does not register at 1x against
+    // the masthead's glass fill).
     const highlightShadow =
-      /box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.2\),\s*0 12px 24px -16px rgb\(var\(--mm-accent\) \/ 0\.82\);/;
+      /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
+    expect(dashboardCss).toMatch(
+      /--mm-shadow-highlight-edge:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.26\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.75\),\s*0 0 0 1px rgb\(255 255 255 \/ 0\.34\),\s*0 3px 9px -2px rgb\(var\(--mm-accent\) \/ 0\.75\);/,
+    );
 
     // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
     // padding < 0.18rem) that it does not out-size the nav buttons, plus a

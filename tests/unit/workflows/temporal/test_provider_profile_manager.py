@@ -10,6 +10,7 @@ import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     BILLING_AWARE_PROFILE_SELECTION_PATCH,
+    CODEX_OAUTH_LEGACY_RESTORE_PATCH,
     DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
     DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH,
     HandoffReservation,
@@ -22,6 +23,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
+    _validated_profile_capacity,
 )
 
 # ---------------------------------------------------------------------------
@@ -29,6 +31,17 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
 # ---------------------------------------------------------------------------
 
 class TestProfileSlotState:
+    def test_codex_oauth_capacity_validation_rejects_legacy_parallel_profile(self):
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            _validated_profile_capacity(
+                {
+                    "runtime_id": "codex_cli",
+                    "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 2,
+                }
+            )
+
     def test_available_slots_enabled(self):
         state = ProfileSlotState(
             profile_id="p1",
@@ -187,6 +200,133 @@ class TestProviderProfileManagerHelpers:
         assert len(wf._profiles) == 2
         assert wf._profiles["p1"].current_leases == ["wf1"]
         assert wf._profiles["p2"].cooldown_until == "2099-01-01T00:00:00+00:00"
+
+    def test_restore_legacy_codex_oauth_state_normalizes_without_evicting_leases(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._restore_state(
+            {
+                "runtime_id": "codex_cli",
+                "profiles": [
+                    {
+                        "profile_id": "codex-oauth",
+                        "credential_source": "oauth_volume",
+                        "runtime_materialization_mode": "oauth_home",
+                        "max_parallel_runs": 3,
+                    }
+                ],
+                "leases": {"codex-oauth": ["wf-1", "wf-2"]},
+            }
+        )
+
+        state = wf._profiles["codex-oauth"]
+        assert state.max_parallel_runs == 1
+        assert state.current_leases == ["wf-1", "wf-2"]
+        assert state.over_capacity_legacy_snapshot is True
+        assert state.available_slots == 0
+        assert not state.reserve("wf-3", datetime.now(timezone.utc))
+
+    def test_authoritative_refresh_clears_legacy_diagnostic_after_leases_drain(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._restore_state(
+            {
+                "profiles": [
+                    {
+                        "profile_id": "codex-oauth",
+                        "credential_source": "oauth_volume",
+                        "runtime_materialization_mode": "oauth_home",
+                        "max_parallel_runs": 3,
+                    }
+                ],
+                "leases": {"codex-oauth": ["wf-1", "wf-2"]},
+            }
+        )
+        wf._apply_profile_sync(
+            [
+                {
+                    "profile_id": "codex-oauth",
+                    "runtime_id": "codex_cli",
+                    "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "max_parallel_runs": 1,
+                }
+            ],
+            authoritative=True,
+        )
+
+        state = wf._profiles["codex-oauth"]
+        assert state.over_capacity_legacy_snapshot is True
+        assert state.release("wf-1") is True
+        assert state.over_capacity_legacy_snapshot is False
+        assert state.available_slots == 0
+        assert state.release("wf-2") is True
+        assert state.available_slots == 1
+
+    @pytest.mark.parametrize(
+        ("runtime_id", "credential_source", "materialization_mode"),
+        [
+            ("claude_code", "oauth_volume", "oauth_home"),
+            ("codex_cli", "secret_ref", "api_key_env"),
+            ("codex_cli", "oauth_volume", "oauth_home"),
+        ],
+    )
+    def test_partial_sync_omitting_capacity_preserves_existing_capacity(
+        self,
+        runtime_id: str,
+        credential_source: str,
+        materialization_mode: str,
+    ) -> None:
+        wf = self._make_workflow()
+        wf._runtime_id = runtime_id
+        initial_capacity = (
+            1
+            if runtime_id == "codex_cli" and credential_source == "oauth_volume"
+            else 4
+        )
+        wf._profiles["profile"] = ProfileSlotState(
+            profile_id="profile",
+            max_parallel_runs=initial_capacity,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            credential_source=credential_source,
+            runtime_materialization_mode=materialization_mode,
+        )
+
+        wf._apply_profile_sync(
+            [
+                {
+                    "profile_id": "profile",
+                    "runtime_id": runtime_id,
+                    "credential_source": credential_source,
+                    "runtime_materialization_mode": materialization_mode,
+                    "enabled": False,
+                }
+            ]
+        )
+
+        assert wf._profiles["profile"].max_parallel_runs == initial_capacity
+
+    def test_authoritative_invalid_codex_oauth_payload_fails_closed(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        with pytest.raises(Exception, match="require max_parallel_runs=1"):
+            wf._apply_profile_sync(
+                [
+                    {
+                        "profile_id": "codex-oauth",
+                        "runtime_id": "codex_cli",
+                        "credential_source": "oauth_volume",
+                        "runtime_materialization_mode": "oauth_home",
+                        "max_parallel_runs": 2,
+                    }
+                ],
+                authoritative=True,
+            )
+
+    def test_legacy_restore_has_durable_replay_patch_marker(self):
+        assert CODEX_OAUTH_LEGACY_RESTORE_PATCH.endswith("-v1")
 
     def test_apply_profile_sync_adds_new(self):
         wf = self._make_workflow()
@@ -1670,6 +1810,58 @@ class TestProviderProfileManagerHelpers:
             "pentest:run-1:step-1:1": "2026-06-12T00:00:00+00:00"
         }
         assert wf._pending_requests == []
+
+    @pytest.mark.asyncio
+    async def test_maintenance_lease_uses_same_ledger_on_disabled_profile(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["codex_oauth"] = ProfileSlotState(
+            profile_id="codex_oauth",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=False,
+            launch_ready=False,
+        )
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 7, 12, tzinfo=timezone.utc)
+            mock_wf.patched.return_value = False
+            acquired = await wf.acquire_credential_maintenance_lease(
+                {
+                    "requester_workflow_id": "oauth-session:oas-1",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "codex_oauth",
+                    "purpose": "oauth_reconnect",
+                    "metadata": {
+                        "workflowId": "oauth-session:oas-1",
+                        "oauthSessionId": "oas-1",
+                    },
+                }
+            )
+
+        assert acquired["profile_id"] == "codex_oauth"
+        profile = wf._profiles["codex_oauth"]
+        assert profile.current_leases == ["oauth-session:oas-1"]
+        assert profile.available_slots == 0
+        assert profile.lease_metadata["oauth-session:oas-1"]["purpose"] == "oauth_reconnect"
+        assert profile.is_available() is False
+
+    @pytest.mark.asyncio
+    async def test_maintenance_lease_requires_exact_profile_without_selector(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        with pytest.raises(Exception, match="does not allow profile selectors"):
+            await wf.acquire_credential_maintenance_lease(
+                {
+                    "requester_workflow_id": "oauth-session:oas-1",
+                    "runtime_id": "codex_cli",
+                    "execution_profile_ref": "codex_oauth",
+                    "profile_selector": {"providerId": "openai"},
+                    "purpose": "oauth_connect",
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_release_slot_creates_short_handoff_reservation(self):

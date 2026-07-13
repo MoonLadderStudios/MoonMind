@@ -7,10 +7,11 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
+from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,10 @@ from moonmind.provider_profiles.model_tiers import (
     is_single_runtime_default_model_effort_tier,
     legacy_default_model_effort_tier,
 )
+from moonmind.provider_profiles.oauth_policy import (
+    CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR,
+    is_codex_oauth_profile,
+)
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.utils.logging import (
@@ -54,10 +59,57 @@ router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 _claude_manual_validation_client: httpx.AsyncClient | None = None
 
 
+async def _credential_maintenance_guard(
+    *,
+    profile_id: str,
+    purpose: str,
+    request: Request,
+    session: AsyncSession,
+    current_user: User,
+) -> AsyncIterator[object]:
+    """Hold the shared credential lane through an HTTP maintenance action."""
+
+    from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
+    from moonmind.provider_profiles.maintenance import (
+        acquire_credential_maintenance_guard,
+        drain_profile_bound_hosts,
+    )
+
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_profile_management(profile, current_user)
+    operation_id = (
+        request.headers.get("Idempotency-Key")
+        or request.headers.get("X-Request-ID")
+        or uuid4().hex
+    )
+    guard = await acquire_credential_maintenance_guard(
+        runtime_id=profile.runtime_id,
+        profile_id=profile.profile_id,
+        purpose=CredentialLeasePurpose(purpose),
+        operation_id=operation_id,
+        metadata={
+            "workflowId": f"http:{operation_id}",
+            "ownerIsWorkflow": False,
+        },
+    )
+    try:
+        await drain_profile_bound_hosts(
+            profile_id=profile.profile_id,
+            operation_id=operation_id,
+        )
+        yield guard
+    finally:
+        await guard.release()
+
+
 @dataclass(frozen=True, slots=True)
 class _SecretRefParseResult:
     parsed: ParsedSecretRef | None = None
     error: str | None = None
+
 
 def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] | None:
     if not value:
@@ -102,11 +154,17 @@ def _validate_default_model_tier_value(
     model_tiers: list[dict[str, Any]],
 ) -> int:
     if isinstance(default_model_tier, bool) or not isinstance(default_model_tier, int):
-        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+        raise ValueError(
+            "default_model_tier must be an integer greater than or equal to 1"
+        )
     if default_model_tier < 1:
-        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+        raise ValueError(
+            "default_model_tier must be an integer greater than or equal to 1"
+        )
     if default_model_tier > len(model_tiers):
-        raise ValueError("default_model_tier must be within configured model_tiers range")
+        raise ValueError(
+            "default_model_tier must be within configured model_tiers range"
+        )
     return default_model_tier
 
 
@@ -114,9 +172,13 @@ def _validate_default_model_tier_input(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+        raise ValueError(
+            "default_model_tier must be an integer greater than or equal to 1"
+        )
     if value < 1:
-        raise ValueError("default_model_tier must be an integer greater than or equal to 1")
+        raise ValueError(
+            "default_model_tier must be an integer greater than or equal to 1"
+        )
     return value
 
 
@@ -129,6 +191,7 @@ def _validate_profile_tier_policy(row: ManagedAgentProviderProfile) -> None:
     row.model_tiers = model_tiers
     row.default_model_tier = default_model_tier
 
+
 class ProviderProfileCreate(BaseModel):
     profile_id: str = Field(..., max_length=128)
     runtime_id: str = Field(..., max_length=64)
@@ -139,17 +202,19 @@ class ProviderProfileCreate(BaseModel):
     model_tiers: Optional[list[ProviderModelEffortTier]] = None
     default_model_tier: Optional[int] = Field(default=None, ge=1)
     model_overrides: Optional[dict[str, str]] = None
-    
+
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
-    runtime_materialization_mode: str = Field(..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
-    
+    runtime_materialization_mode: str = Field(
+        ..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$"
+    )
+
     volume_ref: Optional[str] = None
     volume_mount_path: Optional[str] = None
     account_label: Optional[str] = None
-    
+
     tags: Optional[list[str]] = None
     priority: int = Field(default=100)
-    
+
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
     env_template: Optional[dict[str, Any]] = None
@@ -159,7 +224,9 @@ class ProviderProfileCreate(BaseModel):
 
     max_parallel_runs: int = Field(default=1, ge=1)
     cooldown_after_429_seconds: int = Field(default=900, ge=0)
-    rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
+    rate_limit_policy: str = Field(
+        default="backoff", pattern="^(backoff|queue|fail_fast)$"
+    )
     enabled: bool = False
     is_default: bool = False
     max_lease_duration_seconds: int = Field(default=7200, ge=60)
@@ -180,9 +247,7 @@ class ProviderProfileCreate(BaseModel):
 
     @field_validator("env_template", mode="before")
     @classmethod
-    def _stringify_runtime_env(
-        cls, value: object
-    ) -> dict[str, Any] | None:
+    def _stringify_runtime_env(cls, value: object) -> dict[str, Any] | None:
         if value is None:
             return None
         if not isinstance(value, dict):
@@ -191,7 +256,9 @@ class ProviderProfileCreate(BaseModel):
 
     @field_validator("secret_refs", mode="after")
     @classmethod
-    def _validate_secret_refs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+    def _validate_secret_refs(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
         return validate_secret_refs_helper(value)
 
     @field_validator("model_tiers", mode="before")
@@ -223,10 +290,12 @@ class ProviderProfileCreate(BaseModel):
             runtime_materialization_mode=self.runtime_materialization_mode,
             volume_ref=self.volume_ref,
             volume_mount_path=self.volume_mount_path,
+            max_parallel_runs=self.max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
         return self
+
 
 class ProviderProfileUpdate(BaseModel):
     provider_id: Optional[str] = Field(default=None, max_length=64)
@@ -236,8 +305,13 @@ class ProviderProfileUpdate(BaseModel):
     model_tiers: Optional[list[ProviderModelEffortTier]] = None
     default_model_tier: Optional[int] = Field(default=None, ge=1)
     model_overrides: Optional[dict[str, str]] = None
-    credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
-    runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
+    credential_source: Optional[str] = Field(
+        default=None, pattern="^(oauth_volume|secret_ref|none)$"
+    )
+    runtime_materialization_mode: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$",
+    )
     volume_ref: Optional[str] = None
     volume_mount_path: Optional[str] = None
     account_label: Optional[str] = None
@@ -254,15 +328,13 @@ class ProviderProfileUpdate(BaseModel):
 
     @field_validator("env_template", mode="before")
     @classmethod
-    def _stringify_runtime_env_update(
-        cls, value: object
-    ) -> dict[str, Any] | None:
+    def _stringify_runtime_env_update(cls, value: object) -> dict[str, Any] | None:
         if value is None:
             return None
         if not isinstance(value, dict):
             raise ValueError("env_template must be a JSON object")
         return value
-        
+
     cooldown_after_429_seconds: Optional[int] = Field(default=None, ge=0)
     rate_limit_policy: Optional[str] = Field(
         default=None, pattern="^(backoff|queue|fail_fast)$"
@@ -287,14 +359,14 @@ class ProviderProfileUpdate(BaseModel):
 
     @field_validator("secret_refs", mode="after")
     @classmethod
-    def _validate_secret_refs_update(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+    def _validate_secret_refs_update(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
         return validate_secret_refs_helper(value)
 
     @field_validator("model_tiers", mode="before")
     @classmethod
-    def _validate_model_tiers_update(
-        cls, value: object
-    ) -> list[dict[str, Any]] | None:
+    def _validate_model_tiers_update(cls, value: object) -> list[dict[str, Any]] | None:
         if value is None:
             return None
         return _validate_model_tiers_value(value)
@@ -312,6 +384,7 @@ class ProviderProfileUpdate(BaseModel):
                 self.model_tiers,
             )
         return self
+
 
 class ProviderProfileResponse(BaseModel):
     profile_id: str
@@ -396,21 +469,25 @@ class ProviderReadinessCheck(BaseModel):
     status: str = Field(..., pattern="^(pass|warning|error)$")
     message: str
 
+
 class ProviderProfileReadiness(BaseModel):
     status: str = Field(..., pattern="^(ready|warning|blocked)$")
     launch_ready: bool
     summary: str
     checks: list[ProviderReadinessCheck]
 
+
 class ClaudeManualAuthCommitRequest(BaseModel):
     token: str = Field(..., min_length=1, max_length=8192)
     account_label: Optional[str] = None
+
 
 class ProviderApiKeySetupRequest(BaseModel):
     api_key: str = Field(..., min_length=1, max_length=8192)
     account_label: Optional[str] = None
     make_default: bool = False
     enable_after_validation: bool = True
+
 
 class ClaudeManualAuthReadiness(BaseModel):
     connected: bool
@@ -419,12 +496,14 @@ class ClaudeManualAuthReadiness(BaseModel):
     launch_ready: bool
     failure_reason: Optional[str] = None
 
+
 class ClaudeManualAuthCommitResponse(BaseModel):
     status: str
     status_label: str
     readiness: ClaudeManualAuthReadiness
     profile_id: str
     secret_ref: str
+
 
 class ProviderApiKeySetupResponse(BaseModel):
     status: str
@@ -433,9 +512,11 @@ class ProviderApiKeySetupResponse(BaseModel):
     profile_id: str
     secret_ref: str
 
+
 # ---------------------------------------------------------------------------
 # Dependency: DB session
 # ---------------------------------------------------------------------------
+
 
 def _get_session() -> Any:
     """Return the session dependency. Resolved at import-time from the app."""
@@ -443,9 +524,43 @@ def _get_session() -> Any:
 
     return get_async_session
 
+
+async def _credential_validation_guard(
+    profile_id: str,
+    request: Request,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> AsyncIterator[object]:
+    async for guard in _credential_maintenance_guard(
+        profile_id=profile_id,
+        purpose="credential_validation",
+        request=request,
+        session=session,
+        current_user=current_user,
+    ):
+        yield guard
+
+
+async def _credential_disconnect_guard(
+    profile_id: str,
+    request: Request,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> AsyncIterator[object]:
+    async for guard in _credential_maintenance_guard(
+        profile_id=profile_id,
+        purpose="oauth_disconnect",
+        request=request,
+        session=session,
+        current_user=current_user,
+    ):
+        yield guard
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("", response_model=list[ProviderProfileResponse])
 async def list_profiles(
@@ -484,6 +599,7 @@ async def list_profiles(
         for r in visible_rows
     ]
 
+
 @router.get("/{profile_id}", response_model=ProviderProfileResponse)
 async def get_profile(
     profile_id: str,
@@ -510,6 +626,7 @@ async def get_profile(
         managed_secret_statuses=secret_statuses,
         secret_ref_results=secret_ref_results.get(row.profile_id),
     )
+
 
 @router.post("", response_model=ProviderProfileResponse, status_code=201)
 async def create_profile(
@@ -546,7 +663,9 @@ async def create_profile(
         default_model_tier=default_model_tier,
         model_overrides=body.model_overrides,
         credential_source=ProviderCredentialSource(body.credential_source),
-        runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
+        runtime_materialization_mode=RuntimeMaterializationMode(
+            body.runtime_materialization_mode
+        ),
         volume_ref=body.volume_ref,
         volume_mount_path=body.volume_mount_path,
         account_label=body.account_label,
@@ -616,6 +735,7 @@ async def create_profile(
         managed_secret_statuses=secret_statuses,
         secret_ref_results=secret_ref_results.get(profile.profile_id),
     )
+
 
 @router.patch("/{profile_id}", response_model=ProviderProfileResponse)
 async def update_profile(
@@ -920,6 +1040,7 @@ async def setup_provider_api_key(
         },
     }
 
+
 @router.post(
     "/{profile_id}/manual-auth/commit",
     response_model=ClaudeManualAuthCommitResponse,
@@ -1031,11 +1152,13 @@ async def commit_claude_manual_auth(
         },
     }
 
+
 @router.post("/{profile_id}/oauth/validate")
 async def validate_claude_oauth_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
+    _maintenance_guard: object = Depends(_credential_validation_guard),
 ) -> dict[str, Any]:
     """Validate an OAuth-backed provider profile against its auth volume.
 
@@ -1115,11 +1238,13 @@ async def validate_claude_oauth_profile(
         else None,
     }
 
+
 @router.post("/{profile_id}/oauth/disconnect")
 async def disconnect_claude_oauth_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
+    _maintenance_guard: object = Depends(_credential_disconnect_guard),
 ) -> dict[str, Any]:
     """Disconnect an OAuth-backed provider profile and clear its volume fields.
 
@@ -1165,6 +1290,7 @@ async def disconnect_claude_oauth_profile(
         "profile_id": profile.profile_id,
     }
 
+
 @router.delete("/{profile_id}", status_code=204)
 async def delete_profile(
     profile_id: str,
@@ -1183,15 +1309,18 @@ async def delete_profile(
     await session.commit()
     await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _user_id(user: Any) -> str | None:
     raw = getattr(user, "id", None)
     if raw is None:
         return None
     return str(raw)
+
 
 def _require_provider_profile_permission(user: Any, permission: str) -> None:
     if has_settings_permission(user, permission):
@@ -1201,12 +1330,14 @@ def _require_provider_profile_permission(user: Any, permission: str) -> None:
         detail=f"Missing required provider profile permission: {permission}.",
     )
 
+
 def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
     user_id = _user_id(user)
     if user_id is None or bool(getattr(user, "is_superuser", False)):
         return True
     owner_id = row.owner_user_id
     return owner_id is None or str(owner_id) == user_id
+
 
 def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
     user_id = _user_id(user)
@@ -1219,6 +1350,7 @@ def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> 
         status_code=403,
         detail="Not authorized to manage this provider profile.",
     )
+
 
 def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
     try:
@@ -1234,11 +1366,13 @@ def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
             ),
             volume_ref=row.volume_ref,
             volume_mount_path=row.volume_mount_path,
+            max_parallel_runs=row.max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 
 def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
     if row.runtime_id != "claude_code" or row.provider_id != "anthropic":
@@ -1262,6 +1396,7 @@ def _require_first_party_oauth_profile(
         )
     return mapping
 
+
 @dataclass(frozen=True, slots=True)
 class _ApiKeyMapping:
     runtime_id: str
@@ -1271,6 +1406,7 @@ class _ApiKeyMapping:
     clear_env_keys: tuple[str, ...]
     auth_strategy: str
     ready_label: str
+
 
 _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
     ("claude_code", "anthropic"): _ApiKeyMapping(
@@ -1293,6 +1429,7 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
     ),
 }
 
+
 def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMapping:
     mapping = _API_KEY_MAPPINGS.get((row.runtime_id, row.provider_id))
     if mapping is None:
@@ -1305,8 +1442,10 @@ def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMap
         )
     return mapping
 
+
 def _looks_like_claude_manual_token(token: str) -> bool:
     return token.startswith("sk-ant-") and len(token) >= 12
+
 
 def _claude_manual_secret_slug(profile_id: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
@@ -1315,15 +1454,17 @@ def _claude_manual_secret_slug(profile_id: str) -> str:
     digest = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:16]
     return f"{normalized}-{digest}-token"
 
+
 def _provider_api_key_secret_slug(profile_id: str, secret_role: str) -> str:
     normalized_profile = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
     normalized_role = re.sub(r"[^a-z0-9]+", "-", secret_role.lower()).strip("-")
     if not normalized_profile:
         normalized_profile = "provider-profile"
-    digest = hashlib.sha256(
-        f"{profile_id}:{secret_role}".encode("utf-8")
-    ).hexdigest()[:16]
+    digest = hashlib.sha256(f"{profile_id}:{secret_role}".encode("utf-8")).hexdigest()[
+        :16
+    ]
     return f"{normalized_profile}-{normalized_role}-{digest}"
+
 
 def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
     if not api_key:
@@ -1333,6 +1474,7 @@ def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
     return False
+
 
 def _apply_api_key_setup_to_profile(
     row: ManagedAgentProviderProfile,
@@ -1389,6 +1531,7 @@ def _apply_api_key_setup_to_profile(
     )
     row.command_behavior = behavior
 
+
 async def _mark_api_key_validation_failed(
     *,
     session: AsyncSession,
@@ -1415,10 +1558,13 @@ async def _mark_api_key_validation_failed(
         }
     )
     profile.command_behavior = behavior
-    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
+    await normalize_runtime_default_profile(
+        session=session, runtime_id=profile.runtime_id
+    )
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+
 
 async def _upsert_managed_secret(
     *,
@@ -1427,7 +1573,9 @@ async def _upsert_managed_secret(
     plaintext: str,
     details: dict[str, Any],
 ) -> ManagedSecret:
-    result = await session.execute(select(ManagedSecret).where(ManagedSecret.slug == slug))
+    result = await session.execute(
+        select(ManagedSecret).where(ManagedSecret.slug == slug)
+    )
     secret = result.scalar_one_or_none()
     if secret is None:
         secret = ManagedSecret(
@@ -1444,6 +1592,7 @@ async def _upsert_managed_secret(
     secret.details = {**(secret.details or {}), **details}
     secret.updated_at = datetime.now(UTC)
     return secret
+
 
 async def validate_claude_manual_token(token: str) -> None:
     headers = {
@@ -1473,6 +1622,7 @@ async def validate_claude_manual_token(token: str) -> None:
             detail="Claude token validation failed.",
         )
 
+
 async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
     provider_id = provider_id.strip().lower()
     if provider_id == "anthropic":
@@ -1486,6 +1636,7 @@ async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
         detail="Unsupported provider API-key setup.",
     )
 
+
 async def _validate_openai_api_key(api_key: str) -> None:
     try:
         response = await _get_claude_manual_validation_client().get(
@@ -1494,11 +1645,14 @@ async def _validate_openai_api_key(api_key: str) -> None:
         )
     except httpx.HTTPError as exc:
         logger.warning("openai_api_key_validation_failed")
-        raise HTTPException(status_code=502, detail="API key validation failed.") from exc
+        raise HTTPException(
+            status_code=502, detail="API key validation failed."
+        ) from exc
     if response.status_code in {401, 403}:
         raise HTTPException(status_code=401, detail="API key validation failed.")
     if response.status_code >= 400:
         raise HTTPException(status_code=502, detail="API key validation failed.")
+
 
 def _get_claude_manual_validation_client() -> httpx.AsyncClient:
     global _claude_manual_validation_client
@@ -1508,6 +1662,7 @@ def _get_claude_manual_validation_client() -> httpx.AsyncClient:
     ):
         _claude_manual_validation_client = httpx.AsyncClient(timeout=10.0)
     return _claude_manual_validation_client
+
 
 async def _managed_secret_statuses_for_rows(
     session: AsyncSession,
@@ -1641,9 +1796,7 @@ def _require_enabled_profile_launchable(
         secret_ref_results=secret_ref_results,
     )
     blockers = [
-        check["message"]
-        for check in readiness["checks"]
-        if check["status"] == "error"
+        check["message"] for check in readiness["checks"] if check["status"] == "error"
     ]
     if blockers:
         raise HTTPException(
@@ -1699,8 +1852,7 @@ def _auth_state_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
         message = f"Profile is enabled but still has disabled reason {disabled_reason}."
     elif disabled_reason:
         message = (
-            f"Profile credentials are {auth_state or 'unknown'} "
-            f"({disabled_reason})."
+            f"Profile credentials are {auth_state or 'unknown'} ({disabled_reason})."
         )
     else:
         message = f"Profile credentials are {auth_state or 'unknown'}."
@@ -1802,15 +1954,25 @@ def _oauth_volume_check(
 
 def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
     has_capacity = bool(row.max_parallel_runs and row.max_parallel_runs > 0)
+    requires_exclusive_capacity = is_codex_oauth_profile(
+        runtime_id=row.runtime_id,
+        credential_source=row.credential_source,
+        materialization_mode=row.runtime_materialization_mode,
+    )
+    valid_capacity = has_capacity and (
+        not requires_exclusive_capacity or row.max_parallel_runs == 1
+    )
+    if requires_exclusive_capacity and row.max_parallel_runs != 1:
+        message = CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR
+    elif has_capacity:
+        message = f"Profile allows {row.max_parallel_runs} parallel run(s)."
+    else:
+        message = "Profile has no available configured concurrency."
     return _readiness_check(
         "concurrency",
         "Concurrency",
-        "pass" if has_capacity else "error",
-        (
-            f"Profile allows {row.max_parallel_runs} parallel run(s)."
-            if has_capacity
-            else "Profile has no available configured concurrency."
-        ),
+        "pass" if valid_capacity else "error",
+        message,
     )
 
 
@@ -1888,8 +2050,12 @@ def _row_to_dict(
         "model_tiers": model_tiers,
         "default_model_tier": default_model_tier,
         "model_overrides": row.model_overrides or {},
-        "credential_source": row.credential_source.value if row.credential_source else None,
-        "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
+        "credential_source": row.credential_source.value
+        if row.credential_source
+        else None,
+        "runtime_materialization_mode": row.runtime_materialization_mode.value
+        if row.runtime_materialization_mode
+        else None,
         "volume_ref": row.volume_ref,
         "volume_mount_path": row.volume_mount_path,
         "account_label": row.account_label,
@@ -1910,9 +2076,7 @@ def _row_to_dict(
         "is_default": row.is_default,
         "max_lease_duration_seconds": row.max_lease_duration_seconds,
         "auth_state": row.auth_state.value if row.auth_state else None,
-        "disabled_reason": (
-            row.disabled_reason.value if row.disabled_reason else None
-        ),
+        "disabled_reason": (row.disabled_reason.value if row.disabled_reason else None),
         "first_authenticated_at": (
             row.first_authenticated_at.isoformat()
             if row.first_authenticated_at
@@ -1933,6 +2097,7 @@ def _row_to_dict(
         payload[key] = redact_sensitive_payload(payload[key])
     payload["file_templates"] = redact_profile_file_templates(payload["file_templates"])
     return payload
+
 
 from api_service.services.provider_profile_service import (
     FirstPartyOAuthProfile,

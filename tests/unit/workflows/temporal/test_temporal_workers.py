@@ -136,6 +136,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.ManagedRuntimeWorkspaceCleanup",
         "MoonMind.AgentRun",
         "MoonMind.OAuthSession",
+        "MoonMind.OmnigentOAuthHostJanitor",
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",
     )
