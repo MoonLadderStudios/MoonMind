@@ -1,0 +1,184 @@
+from datetime import datetime, timezone
+import json
+
+import pytest
+from pydantic import ValidationError
+
+from moonmind.schemas.container_job_models import (
+    AuxiliaryOutcome,
+    ContainerJobAccepted,
+    ContainerJobArtifactPage,
+    ContainerJobCancelResult,
+    ContainerJobFailureClass,
+    ContainerJobLogPage,
+    ContainerJobState,
+    ContainerJobStatus,
+    ContainerJobSubmitRequest,
+    ImageObservation,
+    MAX_ARTIFACT_PAGE_ENTRIES,
+    MAX_LOG_PAGE_ENTRIES,
+    ResolvedContainerLaunchPlan,
+    TerminalOutcome,
+    ensure_temporal_safe,
+)
+
+JOB_ID = "container-job:" + "a" * 32
+NOW = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+
+def payload() -> dict:
+    return {
+        "idempotencyKey": "request-1",
+        "source": {"source": "omnigent", "omnigentSessionId": "s"},
+        "spec": {
+            "image": "ubuntu:24.04",
+            "workspaceRef": {"kind": "omnigent-session", "sessionId": "ws"},
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+        },
+    }
+
+
+def test_submit_has_deterministic_shared_golden_serialization() -> None:
+    model = ContainerJobSubmitRequest.model_validate(payload())
+    expected = (
+        b'{"contractVersion":"v1","idempotencyKey":"request-1","source":'
+        b'{"omnigentSessionId":"s","source":"omnigent"},"spec":{"caches":[],'
+        b'"command":[],"entrypoint":[],"environment":[],"image":"ubuntu:24.04",'
+        b'"networkMode":"none","outputs":[],"pullPolicy":"if-missing","resources":'
+        b'{"cpuMillis":1000,"memoryMiB":512,"pids":256},"timeoutSeconds":1800,'
+        b'"workdir":"/workspace","workspaceRef":{"kind":"omnigent-session",'
+        b'"sessionId":"ws"}}}'
+    )
+    assert ensure_temporal_safe(model) == expected
+    # HTTP, MCP, and Temporal consume this one alias-preserving model dump.
+    assert model.model_dump(mode="json", by_alias=True, exclude_none=True) == json.loads(expected)
+
+
+@pytest.mark.parametrize(
+    "source", ["http", "mcp", "workflow", "managed_session", "omnigent"]
+)
+def test_one_contract_family_serializes_every_caller_source(source: str) -> None:
+    data = payload()
+    data["source"] = {"source": source, "callerRequestId": "request"}
+    encoded = ensure_temporal_safe(ContainerJobSubmitRequest.model_validate(data))
+    assert json.loads(encoded)["source"] == {
+        "callerRequestId": "request", "source": source
+    }
+
+
+@pytest.mark.parametrize("state", list(ContainerJobState))
+def test_status_accepts_every_canonical_state(state: ContainerJobState) -> None:
+    assert ContainerJobStatus(jobId=JOB_ID, state=state, updatedAt=NOW).state == state.value
+
+
+@pytest.mark.parametrize("failure", list(ContainerJobFailureClass))
+def test_terminal_accepts_every_failure_class(failure: ContainerJobFailureClass) -> None:
+    assert TerminalOutcome(failureClass=failure).failure_class == failure.value
+
+
+@pytest.mark.parametrize("state", ["not_attempted", "succeeded", "failed"])
+def test_auxiliary_outcomes_are_independent(state: str) -> None:
+    assert AuxiliaryOutcome(state=state).state == state
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("dockerHost", "tcp://daemon"), ("dockerUrl", "https://daemon"),
+        ("socketPath", "/var/run/docker.sock"), ("tlsPath", "/certs"),
+        ("hostPath", "/tmp"), ("sourcePath", "/host"), ("privileged", True),
+        ("devices", ["/dev/kvm"]), ("pidMode", "host"), ("ipcMode", "host"),
+        ("utsMode", "host"), ("usernsMode", "host"),
+        ("labels", {"moonmind.owner": "x"}),
+        ("registryCredentials", {"password": "x"}),
+    ],
+)
+def test_submit_rejects_every_caller_authority_field(field: str, value: object) -> None:
+    data = payload()
+    data["spec"][field] = value
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+@pytest.mark.parametrize("secret_key", ["password", "apiKey", "authToken", "credential"])
+def test_history_contracts_reject_secret_like_keys(secret_key: str) -> None:
+    data = payload()
+    data["source"][secret_key] = "raw"
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+def test_secret_values_outputs_and_credential_references_are_validated() -> None:
+    data = payload()
+    data["spec"]["environment"] = [{"name": "API_TOKEN", "value": "raw"}]
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+    data = payload()
+    data["spec"]["outputs"] = [{"name": "x", "relativePath": "/host/x"}]
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+    data = payload()
+    data["spec"]["registryCredentialRef"] = "raw-password"
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+    data = payload()
+    data["spec"]["environment"] = [{"name": "API_TOKEN", "secretRef": "raw-value"}]
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+@pytest.mark.parametrize("workdir", ["/workspace/..", "/workspace/./repo"])
+def test_workdir_rejects_traversal(workdir: str) -> None:
+    data = payload()
+    data["spec"]["workdir"] = workdir
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+def test_documented_container_job_wire_values_are_accepted() -> None:
+    data = payload()
+    data["spec"].update({"networkMode": "bridge", "pullPolicy": "if-missing"})
+    assert ContainerJobSubmitRequest.model_validate(data).spec.image == "ubuntu:24.04"
+
+
+def test_image_observation_and_async_identity_serialization() -> None:
+    image = ImageObservation(
+        requestedReference="ubuntu:24.04", resolvedDigest="sha256:" + "b" * 64,
+        cachePresent=True, cacheHit=True, pullLockWaitMs=5, pullDurationMs=10,
+    )
+    accepted = ContainerJobAccepted(jobId=JOB_ID, createdAt=NOW)
+    assert accepted.state == "queued"
+    assert image.model_dump(mode="json", by_alias=True)["resolvedDigest"].startswith("sha256:")
+    with pytest.raises(ValidationError):
+        ContainerJobAccepted(jobId="job-1", createdAt=NOW)
+
+
+def test_log_and_artifact_pages_enforce_bounds() -> None:
+    entry = {"sequence": 1, "timestamp": NOW, "stream": "stdout", "text": "x"}
+    ContainerJobLogPage(jobId=JOB_ID, entries=[entry] * MAX_LOG_PAGE_ENTRIES)
+    with pytest.raises(ValidationError):
+        ContainerJobLogPage(jobId=JOB_ID, entries=[entry] * (MAX_LOG_PAGE_ENTRIES + 1))
+    artifact = {"name": "x", "artifactRef": "artifact://x", "sizeBytes": 1, "sha256": "c" * 64}
+    ContainerJobArtifactPage(
+        jobId=JOB_ID, artifacts=[artifact] * MAX_ARTIFACT_PAGE_ENTRIES,
+        publication={"state": "succeeded"},
+    )
+    with pytest.raises(ValidationError):
+        ContainerJobArtifactPage(
+            jobId=JOB_ID, artifacts=[artifact] * (MAX_ARTIFACT_PAGE_ENTRIES + 1),
+            publication={"state": "succeeded"},
+        )
+
+
+def test_every_history_facing_contract_enforces_temporal_limit(monkeypatch) -> None:
+    monkeypatch.setattr("moonmind.schemas.container_job_models.MAX_TEMPORAL_PAYLOAD_BYTES", 100)
+    with pytest.raises(ValidationError, match="payload must serialize"):
+        ContainerJobStatus(jobId=JOB_ID, state="running", backendRef="b" * 80, updatedAt=NOW)
+    with pytest.raises(ValidationError, match="payload must serialize"):
+        ResolvedContainerLaunchPlan(
+            jobId=JOB_ID, backendKind="docker", backendRef="local",
+            resolvedWorkspaceRef="workspace://" + "x" * 80,
+            spec=payload()["spec"],
+        )
+    with pytest.raises(ValidationError, match="payload must serialize"):
+        ContainerJobCancelResult(jobId=JOB_ID, state="canceling", accepted=True)
