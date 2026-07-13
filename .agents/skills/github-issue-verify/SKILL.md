@@ -18,34 +18,46 @@ inputSchema:
     - github_issue
   properties:
     github_issue:
-      type: object
       title: GitHub issue
-      description: Issue to verify against the selected repository state.
+      description: >-
+        Issue to verify against the selected repository state. Accepts either a
+        structured issue object (repository plus number) or a manual reference
+        string such as "MoonLadderStudios/MoonMind#123" or an issue URL, which
+        the skill normalizes to the same repository and number. Both forms must
+        pass the shared backend input contract so API and batch callers can use
+        the advertised manual reference path without first knowing the object
+        shape.
       x-moonmind-semantic-type: issue-reference
       x-moonmind-provider: github
-      required:
-        - repository
-        - number
-      properties:
-        repository:
-          type: string
-          title: Repository
-        number:
-          type: integer
-          title: Issue number
-        title:
-          type: string
-        body:
-          type: string
-        url:
-          type: string
-          format: uri
-        state:
-          type: string
-        labels:
-          type: array
-          items:
-            type: string
+      anyOf:
+        - type: object
+          title: Structured issue
+          required:
+            - repository
+            - number
+          properties:
+            repository:
+              type: string
+              title: Repository
+            number:
+              type: integer
+              title: Issue number
+            title:
+              type: string
+            body:
+              type: string
+            url:
+              type: string
+              format: uri
+            state:
+              type: string
+            labels:
+              type: array
+              items:
+                type: string
+        - type: string
+          title: Issue reference
+          description: Manual reference such as "owner/repo#123" or an issue URL.
     verification_mode:
       type: string
       title: Verification mode
@@ -124,12 +136,13 @@ If the issue cannot be fetched, or issue commenting is unavailable or policy-den
    - If requirements are ambiguous, mark them `unverifiable` instead of inventing criteria.
 
 2. Choose a verification mode and resolve the comparison.
-   - Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`.
+   - Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`. When `git branch --show-current` is empty (a detached-HEAD checkout, common in CI), do not treat the empty value as a branch. Derive a branch label from `git rev-parse --short HEAD` (or an explicitly provided ref name) for reporting and file paths, and decide the mode from the base-ref comparison below rather than from the missing branch name.
    - Resolve the repository default branch from GitHub metadata when available. Determine the candidate base ref from user input, upstream tracking branch, `origin/<default-branch>`, `<default-branch>`, `origin/main`, `origin/master`, `main`, or `master`. Fetch the base ref only when needed and safe.
    - Decide the mode:
      - **Branch mode** when the current checkout is not the default branch and `git rev-list --count <base>..HEAD` is greater than `0`.
-     - **Main/trunk mode** when the current checkout is the default branch, HEAD already equals the base ref, `git rev-list --count <base>..HEAD` is `0`, or the user explicitly requested `main` mode.
+     - **Main/trunk mode** when the current checkout is the default branch, HEAD already equals the base ref, or `git rev-list --count <base>..HEAD` is `0`.
      - Honor an explicit mode hint unless it is impossible. For example, block with a clear reason when branch mode is explicitly required but no distinct branch exists.
+     - When `main` mode is requested explicitly but `HEAD` is not the default ref (for example, a feature branch is still checked out), do not treat the branch `HEAD` as default-branch evidence — that would credit branch-only, unmerged changes as already implemented on the default branch. First resolve and check out the default ref (or its fetched `origin/<default-branch>`) and verify against that ref. Block with a clear reason when the default ref cannot be resolved, fetched, or checked out.
    - For branch mode, use `git merge-base <base> HEAD`, then inspect `git diff --stat <merge-base>..HEAD`, `git diff --name-status <merge-base>..HEAD`, and relevant hunks as the primary evidence set.
    - For main/trunk mode, do not block on an empty diff. The repository state at HEAD is itself evidence. Also locate the merge or merges that implemented the issue when possible:
      - `git log -i --grep '#<ISSUE-NUMBER>' --oneline -n 200`
@@ -165,21 +178,12 @@ If the issue cannot be fetched, or issue commenting is unavailable or policy-den
    - `FAIL`: at least one in-scope item is `not_met`, including the main/trunk case where no implementing change can be found and the requirements are concrete enough to expect one.
    - `BLOCKED`: authenticated issue content or issue comment access is unavailable, or both verification modes fail to produce usable evidence and the requirements are too ambiguous to assess. A clean checkout on the default branch is not, by itself, a blocked condition.
 
-6. If `mark_completed_if_pass` is true, decide whether to mark the issue completed.
-   - Do not attempt any issue state mutation unless the overall verdict is `PASS`.
-   - Re-read the issue state immediately before mutation when the earlier read may be stale.
+6. If `mark_completed_if_pass` is true, decide whether the issue should be marked completed, but do not close it yet.
+   - Only plan a completion when the overall verdict is `PASS`; if the verdict is not `PASS`, record completion as `skipped` even when the boolean is true.
+   - Re-read the issue state immediately before the later mutation when the earlier read may be stale.
    - If the issue is already closed with state reason `completed`, record `already_completed`; do not mutate it.
-   - If the issue is open, close it with the `completed` reason through the authenticated GitHub path.
-   - If the issue is already closed with `not_planned`, `duplicate`, or another non-completed reason, do not silently reopen and re-close it. Record completion as blocked and leave the issue unchanged.
-   - With `gh`, use:
-
-```bash
-gh issue close <issue> --repo <owner/repo> --reason completed
-```
-
-   - With a trusted connector, update the issue to `state: closed` and `state_reason: completed`.
-   - If completion fails, keep the verification verdict unchanged and report the completion failure separately. Do not claim the issue was completed.
-   - If the verdict is not `PASS`, report completion as `skipped` even when the boolean is true.
+   - If the issue is already closed with `not_planned`, `duplicate`, or another non-completed reason, do not silently reopen and re-close it. Record completion as `blocked` and leave the issue unchanged.
+   - Defer the actual close until after the verification comment has been drafted, secret-scanned, and successfully posted (steps 7–8). Closing here — before the evidence is posted — risks marking the issue completed without the promised verification comment if the later scan or `gh issue comment` call is blocked, so completion and audit evidence must stay together.
 
 7. Draft the GitHub issue comment.
    - Start with the verdict, repository and issue number, verification mode, branch name, commit SHA, and comparison ref, or say that verification used the current default-branch state.
@@ -248,13 +252,16 @@ gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
 ```
 
    - Otherwise use the trusted GitHub connector's issue-comment operation.
-   - If posting fails, keep the comment body artifact and report the exact sanitized blocker. Do not claim GitHub was updated.
+   - If posting fails, keep the comment body artifact and report the exact sanitized blocker. Do not claim GitHub was updated. When posting fails, also do not close the issue: report completion as `blocked`.
+   - Only after the comment posts successfully, perform any completion planned in step 6: close the issue with the `completed` reason through the authenticated GitHub path (`gh issue close <issue> --repo <owner/repo> --reason completed`, or update the issue to `state: closed` with `state_reason: completed` through a trusted connector). Posting the verification comment first keeps it as durable audit evidence for the completion.
+   - If the close fails after a successful post, leave the verification verdict and posted comment unchanged and report the completion failure separately. Do not claim the issue was completed.
 
 ## Outputs
 
 - GitHub issue URL and comment result or comment ID/URL when posting succeeds.
-- Verification ledger path, preferably `var/github_issue_verify/<owner>-<repo>-<issue>-<branch>.json`. Include verification mode and, in main/trunk mode, implementing merge SHAs or pull request numbers when identified.
-- Comment body path, preferably `var/github_issue_verify/<owner>-<repo>-<issue>-<branch>.md`.
+- Verification ledger path, preferably `var/github_issue_verify/<owner>-<repo>-<issue>-<branch-slug>.json`. Include verification mode and, in main/trunk mode, implementing merge SHAs or pull request numbers when identified.
+- Comment body path, preferably `var/github_issue_verify/<owner>-<repo>-<issue>-<branch-slug>.md`.
+- Sanitize `<branch-slug>` before constructing these paths: replace path separators and other unsafe characters (for example, the `/` in `feature/some-change`) with `-` so the branch name does not introduce unexpected subdirectories. In a detached-HEAD checkout with no branch name, use the short commit SHA as the slug.
 - Completion result: `not_requested` when `mark_completed_if_pass` is false; otherwise `skipped`, `already_completed`, `completed`, `blocked`, or `failed`.
 - Final verdict: `PASS`, `PARTIAL`, `FAIL`, or `BLOCKED`.
 
