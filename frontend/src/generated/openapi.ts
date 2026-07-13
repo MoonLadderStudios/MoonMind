@@ -7169,6 +7169,16 @@ export interface components {
             /** Failedrecoveryphase */
             failedRecoveryPhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
         };
+        /** ExternalStateLocator */
+        ExternalStateLocator: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "external_state";
+            /** Artifactref */
+            artifactRef: string;
+        };
         /**
          * GateSummaryStatusModel
          * @description Bounded gate verdict summary for Step Execution detail surfaces.
@@ -7567,6 +7577,23 @@ export interface components {
          * @enum {string}
          */
         ManagedAgentRateLimitPolicy: "backoff" | "queue" | "fail_fast";
+        /** ManagedWorkspaceLocator */
+        ManagedWorkspaceLocator: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "managed_runtime";
+            /** Runtimeid */
+            runtimeId: string;
+            /** Agentrunid */
+            agentRunId: string;
+            /**
+             * Relativepath
+             * @default repo
+             */
+            relativePath: string;
+        };
         /**
          * ManifestDetailModel
          * @description Detail response for one manifest registry entry.
@@ -9044,14 +9071,39 @@ export interface components {
             /** Eligible */
             eligible: boolean;
             /**
+             * Requestedaction
+             * @default resume_from_workspace_checkpoint
+             * @enum {string}
+             */
+            requestedAction: "continue_same_session" | "resume_from_workspace_checkpoint" | "full_retry" | "fix_environment" | "manual_intervention";
+            /**
              * Defaultaction
              * @enum {string}
              */
-            defaultAction: "resume_from_checkpoint" | "full_retry" | "environment_fix" | "none";
+            defaultAction: "continue_same_session" | "resume_from_workspace_checkpoint" | "full_retry" | "fix_environment" | "manual_intervention";
             /** Disabledreasoncode */
             disabledReasonCode?: string | null;
-            /** Requiredboundary */
-            requiredBoundary?: string | null;
+            /** Checkpointboundary */
+            checkpointBoundary?: string | null;
+            /** Resumephase */
+            resumePhase?: ("rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "resume_publication" | "retry_restoration") | null;
+            /** Checkpointkind */
+            checkpointKind?: string | null;
+            /** Targetruntimeid */
+            targetRuntimeId?: string | null;
+            /** Capabilitysetversion */
+            capabilitySetVersion?: string | null;
+            /** Capabilitydigest */
+            capabilityDigest?: string | null;
+            /**
+             * Checkpointrestorekinds
+             * @default []
+             */
+            checkpointRestoreKinds: string[];
+            /** Restoreactivity */
+            restoreActivity?: string | null;
+            /** Workspaceauthority */
+            workspaceAuthority?: string | null;
             /** Checkpointref */
             checkpointRef?: string | null;
             /** Sourceworkflowid */
@@ -9062,7 +9114,7 @@ export interface components {
              * Operatorguidance
              * @enum {string}
              */
-            operatorGuidance: "resume" | "full_retry" | "fix_environment" | "needs_human";
+            operatorGuidance: "continue_same_session" | "resume_from_workspace_checkpoint" | "full_retry" | "fix_environment" | "manual_intervention";
             /** Evidence */
             evidence?: components["schemas"]["EvidenceRefStatusModel"][];
         };
@@ -9620,6 +9672,21 @@ export interface components {
             /** Reference */
             reference: string;
         };
+        /** SandboxWorkspaceLocator */
+        SandboxWorkspaceLocator: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "sandbox";
+            /** Workspaceid */
+            workspaceId: string;
+            /**
+             * Relativepath
+             * @default repo
+             */
+            relativePath: string;
+        };
         /**
          * ScheduleCreatedResponse
          * @description Response returned when a recurring schedule is created from the create endpoint.
@@ -10095,7 +10162,7 @@ export interface components {
             /** Diagnosticsref */
             diagnosticsRef?: string | null;
             /** Workspacelocator */
-            workspaceLocator?: string | null;
+            workspaceLocator?: (components["schemas"]["SandboxWorkspaceLocator"] | components["schemas"]["ManagedWorkspaceLocator"] | components["schemas"]["ExternalStateLocator"]) | string | null;
             /**
              * Recordedat
              * Format: date-time

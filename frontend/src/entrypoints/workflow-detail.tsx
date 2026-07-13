@@ -706,13 +706,16 @@ const EvidenceRefStatusSchema = z
 const RecoveryEligibilitySchema = z
   .object({
     eligible: z.boolean(),
-    defaultAction: z.enum(['resume_from_checkpoint', 'full_retry', 'environment_fix', 'none']),
+    requestedAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention']).optional(),
+    defaultAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume_from_checkpoint', 'environment_fix', 'none']),
     disabledReasonCode: z.string().nullable().optional(),
+    checkpointBoundary: z.string().nullable().optional(),
     requiredBoundary: z.string().nullable().optional(),
+    resumePhase: z.enum(['rerun_failed_step', 'continue_to_gate', 'continue_after_gate', 'resume_publication', 'retry_restoration']).nullable().optional(),
     checkpointRef: z.string().nullable().optional(),
     sourceWorkflowId: z.string().nullable().optional(),
     sourceRunId: z.string().nullable().optional(),
-    operatorGuidance: z.enum(['resume', 'full_retry', 'fix_environment', 'needs_human']),
+    operatorGuidance: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume', 'needs_human']),
     evidence: z.array(EvidenceRefStatusSchema).default([]),
   })
   .passthrough();
@@ -5935,7 +5938,7 @@ function RecoveryEvidencePanel({
   const diagnosticsRecovery = diagnostics?.recovery ?? null;
   if (!recovery && !diagnosticsRecovery && !resume?.checkpointRef) return null;
   const checkpointRef = recovery?.checkpointRef || resume?.checkpointRef || diagnostics?.recovery?.checkpointRef || null;
-  const requiredBoundary = recovery?.requiredBoundary || 'before_execution';
+  const requiredBoundary = recovery?.checkpointBoundary || recovery?.requiredBoundary || 'before_execution';
   const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
   const sourceWorkflowId = recovery?.sourceWorkflowId || diagnostics?.recovery?.sourceWorkflowId || null;
   const sourceRunId = recovery?.sourceRunId || resume?.sourceRunId || diagnostics?.recovery?.sourceRunId || null;
@@ -5968,7 +5971,7 @@ function RecoveryEvidencePanel({
         ) : null}
         {taskEditingOn ? (
           <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
-            Full retry
+            Retry from source
           </button>
         ) : null}
       </div>

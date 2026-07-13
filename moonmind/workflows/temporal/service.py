@@ -73,6 +73,13 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityCatalogError,
+    build_default_activity_catalog,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -3359,6 +3366,50 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest does not allow resume."
             )
+        eligibility = recovery_manifest.recovery_eligibility
+        if eligibility.requested_action != "resume_from_workspace_checkpoint":
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery manifest does not authorize checkpoint Resume."
+            )
+        if not all((eligibility.resume_phase, eligibility.checkpoint_boundary,
+                    eligibility.checkpoint_kind, eligibility.target_runtime_id,
+                    eligibility.capability_set_version, eligibility.capability_digest,
+                    eligibility.restore_activity, eligibility.workspace_authority)):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
+            )
+        if eligibility.checkpoint_boundary != recovery_manifest.validation.boundary:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
+            )
+        if any(
+            item.disposition in {"blocked", "needs_compensation"}
+            for item in recovery_manifest.side_effect_dispositions
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_SIDE_EFFECT_UNSAFE"
+            )
+        capabilities = resolve_runtime_execution_capabilities(
+            eligibility.target_runtime_id
+        )
+        if capabilities.capability_digest != eligibility.capability_digest:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH"
+            )
+        if eligibility.checkpoint_kind not in capabilities.checkpoint_restore_kinds:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_KIND_INCOMPATIBLE"
+            )
+        if capabilities.checkpoint_restore_activity != eligibility.restore_activity:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_RESTORE_ROUTE_MISSING"
+            )
+        try:
+            build_default_activity_catalog().resolve_activity(eligibility.restore_activity)
+        except TemporalActivityCatalogError as exc:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_RESTORE_ROUTE_MISSING"
+            ) from exc
         if recovery_manifest.workflow_id != record.workflow_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest workflowId does not match source execution."
@@ -3454,6 +3505,15 @@ class TemporalExecutionService:
         for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
         recovery_source_payload = RecoverySourceModel(
+            recoveryAction="resume_from_workspace_checkpoint",
+            resumePhase=eligibility.resume_phase,
+            targetRuntimeId=eligibility.target_runtime_id,
+            capabilitySetVersion=eligibility.capability_set_version,
+            capabilityDigest=eligibility.capability_digest,
+            checkpointKind=eligibility.checkpoint_kind,
+            checkpointRestoreKinds=eligibility.checkpoint_restore_kinds,
+            checkpointRestoreActivity=eligibility.restore_activity,
+            workspaceAuthority=eligibility.workspace_authority,
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,

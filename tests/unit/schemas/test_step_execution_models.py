@@ -273,7 +273,7 @@ def test_recovery_eligibility_diagnostic_is_fail_closed_and_typed() -> None:
         ],
     )
 
-    assert eligible.default_action == "resume_from_checkpoint"
+    assert eligible.default_action == "resume_from_workspace_checkpoint"
     assert eligible.disabled_reason_code is None
 
     disabled = RecoveryEligibilityDiagnosticModel(
