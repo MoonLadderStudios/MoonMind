@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -3338,17 +3339,32 @@ class TemporalArtifactActivities:
             ProviderProfileLeaseClient,
         )
         from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from temporalio import activity
 
-        lease = await ProviderProfileLeaseClient(
-            TemporalClientAdapter()
-        ).acquire_maintenance_lease(
-            runtime_id=runtime_id,
-            profile_id=profile_id,
-            owner_id=owner_id,
-            purpose=CredentialLeasePurpose(purpose),
-            metadata=metadata,
-            owner_is_workflow=True,
+        lease_task = asyncio.create_task(
+            ProviderProfileLeaseClient(
+                TemporalClientAdapter()
+            ).acquire_maintenance_lease(
+                runtime_id=runtime_id,
+                profile_id=profile_id,
+                owner_id=owner_id,
+                purpose=CredentialLeasePurpose(purpose),
+                metadata=metadata,
+                owner_is_workflow=True,
+            )
         )
+        try:
+            while not lease_task.done():
+                await asyncio.wait({lease_task}, timeout=10)
+                if not lease_task.done():
+                    activity.heartbeat({"phase": "waiting_for_maintenance_lease"})
+            lease = await lease_task
+        except BaseException:
+            if not lease_task.done():
+                lease_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await lease_task
+            raise
         return {
             "profile_id": lease.profile_id,
             "runtime_id": lease.runtime_id,

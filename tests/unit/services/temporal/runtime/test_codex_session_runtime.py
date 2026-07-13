@@ -1510,6 +1510,59 @@ def test_runtime_send_turn_waits_for_auth_log_after_system_error(
     assert "retryRecommendedAction" not in response.metadata
 
 
+def test_runtime_send_turn_honors_system_error_with_visible_in_progress_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        thread_status_type="systemError",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "model_client:auth: Failed to refresh token: " + auth_summary,
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+
+
 def test_system_error_thread_status_is_terminal_failure() -> None:
     outcome = CodexManagedSessionRuntime._terminal_thread_outcome(
         {"thread": {"status": {"type": "systemError"}}}

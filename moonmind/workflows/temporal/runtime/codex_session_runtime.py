@@ -2289,20 +2289,14 @@ class CodexManagedSessionRuntime:
         vendor_turn_id: str,
         rollout_scan: _RolloutTurnScan | None = None,
     ) -> _TurnTerminalOutcome | None:
+        failed_thread_outcome = self._failed_thread_terminal_outcome(
+            state=state,
+            thread_payload=thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if failed_thread_outcome is not None:
+            return failed_thread_outcome
         thread_outcome = self._terminal_thread_outcome(thread_payload)
-        if thread_outcome is not None and thread_outcome.status != "completed":
-            if self._thread_status_type(thread_payload) == "systemerror":
-                recovered_error = self._settled_turn_error_from_logs(
-                    vendor_turn_id,
-                    turn_started_at=state.last_control_at,
-                )
-                if recovered_error:
-                    return _TurnTerminalOutcome(
-                        status="failed",
-                        error_text=recovered_error,
-                        failure_class="permanent",
-                    )
-            return thread_outcome
 
         if rollout_scan is None:
             vendor_thread_path = self._resolved_rollout_path(
@@ -2330,6 +2324,29 @@ class CodexManagedSessionRuntime:
         if thread_outcome is not None and not rollout_scan.references_turn:
             return thread_outcome
         return None
+
+    def _failed_thread_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> _TurnTerminalOutcome | None:
+        thread_outcome = self._terminal_thread_outcome(thread_payload)
+        if thread_outcome is None or thread_outcome.status == "completed":
+            return None
+        if self._thread_status_type(thread_payload) == "systemerror":
+            recovered_error = self._settled_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            )
+            if recovered_error:
+                return _TurnTerminalOutcome(
+                    status="failed",
+                    error_text=recovered_error,
+                    failure_class="permanent",
+                )
+        return thread_outcome
 
     def _wait_for_turn_completion(
         self,
@@ -2389,6 +2406,13 @@ class CodexManagedSessionRuntime:
             if isinstance(turn_payload, Mapping):
                 missing_turn_first_seen_at = None
                 outcome = self._terminal_turn_outcome(turn_payload)
+                if outcome is not None:
+                    return thread_payload, outcome
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                )
                 if outcome is not None:
                     return thread_payload, outcome
             else:

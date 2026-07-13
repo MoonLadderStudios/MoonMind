@@ -474,7 +474,10 @@ class MoonMindOAuthSessionWorkflow:
                 payload,
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=1800),
-                retry_policy=RetryPolicy(maximum_attempts=1),
+                heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1), maximum_attempts=3
+                ),
             )
         else:
             # Replay-only path for histories recorded before workflow-context

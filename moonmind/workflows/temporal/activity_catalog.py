@@ -641,8 +641,11 @@ def build_default_activity_catalog(
             capability_class="artifacts",
             task_queue=cfg.activity_artifacts_task_queue,
             fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(1800, 1860),
-            retries=_activity_retries(max_attempts=1, max_interval_seconds=30),
+            timeouts=TemporalActivityTimeouts(
+                1800, 1860, heartbeat_timeout_seconds=30
+            ),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+            heartbeat_required=True,
         ),
         TemporalActivityDefinition(
             activity_type="provider_profile.reset_manager",
