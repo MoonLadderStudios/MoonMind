@@ -540,6 +540,11 @@ async def test_auto_seed_deletes_untouched_legacy_setup_profiles(
                     profile_id=profile_id,
                     runtime_id=runtime_id,
                     provider_id=provider_id,
+                    provider_label={
+                        "anthropic": "Anthropic",
+                        "openai": "OpenAI",
+                        "google": "Google",
+                    }[provider_id],
                     account_label=account_label,
                     credential_source=ProviderCredentialSource.NONE,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,

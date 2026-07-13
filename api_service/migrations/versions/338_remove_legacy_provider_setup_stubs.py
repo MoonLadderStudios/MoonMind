@@ -60,21 +60,21 @@ def upgrade() -> None:
                   AND account_label = :account_label
                   AND default_model IS NULL
                   AND default_effort IS NULL
-                  AND model_overrides IS NULL
+                  AND (model_overrides IS NULL OR CAST(model_overrides AS TEXT) = 'null')
                   AND enabled = false
                   AND is_default = false
-                  AND tags IS NULL
+                  AND (tags IS NULL OR CAST(tags AS TEXT) = 'null')
                   AND priority = 100
                   AND credential_source = 'none'
                   AND runtime_materialization_mode = 'api_key_env'
                   AND auth_state = 'not_configured'
                   AND disabled_reason = 'missing_credentials'
                   AND (secret_refs IS NULL OR CAST(secret_refs AS TEXT) IN ('{}', 'null'))
-                  AND clear_env_keys IS NULL
-                  AND env_template IS NULL
-                  AND file_templates IS NULL
-                  AND home_path_overrides IS NULL
-                  AND command_behavior IS NULL
+                  AND (clear_env_keys IS NULL OR CAST(clear_env_keys AS TEXT) = 'null')
+                  AND (env_template IS NULL OR CAST(env_template AS TEXT) = 'null')
+                  AND (file_templates IS NULL OR CAST(file_templates AS TEXT) = 'null')
+                  AND (home_path_overrides IS NULL OR CAST(home_path_overrides AS TEXT) = 'null')
+                  AND (command_behavior IS NULL OR CAST(command_behavior AS TEXT) = 'null')
                   AND max_parallel_runs = 1
                   AND cooldown_after_429_seconds = 900
                   AND rate_limit_policy = 'backoff'
