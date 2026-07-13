@@ -21,16 +21,26 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
-  /* Highlight-edge treatment: a bright top-edge inset, a faint lit
-   * bottom-edge inset (accent lightened toward white), and a quite faint
-   * accent glow kept almost entirely on the bottom edge so it reads as
-   * backlit (the negative spread pulls the blur off the sides). Deliberately
-   * NO perimeter ring: the sides stay open — light on the top and bottom
-   * edges only — rather than reading as an outlined button. */
+  /* Highlight-edge treatment, liquid-glass style: faint uniform top/bottom
+   * edge lines plus diagonally offset corner boosts, so the top-left corner
+   * catches white light and the bottom-right corner catches the violet rim —
+   * deliberately asymmetric rather than horizontally uniform. A quite faint
+   * accent glow sits almost entirely under the bottom edge so it reads as
+   * backlit (the negative spread pulls the blur off the sides). No perimeter
+   * ring: the sides stay open. The hover variant swaps the under-glow to the
+   * cyan accent (the executing-pill hue). */
   --mm-shadow-highlight-edge:
-    inset 0 1px 0 rgb(255 255 255 / 0.26),
-    inset 0 -1px 0 rgb(167 139 250 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    inset 2px 2px 3px -2px rgb(255 255 255 / 0.3),
+    inset 0 -1px 0 rgb(167 139 250 / 0.18),
+    inset -2px -2px 3px -2px rgb(167 139 250 / 0.55),
     0 5px 9px -5px rgb(var(--mm-accent) / 0.45);
+  --mm-shadow-highlight-edge-hover:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    inset 2px 2px 3px -2px rgb(255 255 255 / 0.3),
+    inset 0 -1px 0 rgb(167 139 250 / 0.18),
+    inset -2px -2px 3px -2px rgb(167 139 250 / 0.55),
+    0 5px 9px -5px rgb(var(--mm-accent-2) / 0.55);
   --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
   --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
   --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
@@ -679,18 +689,24 @@ h1 {
   transition: background 130ms ease, color 130ms ease;
 }
 
-/* Workflows and Create adopt the System trigger's original highlight-edge
- * treatment: a bright top-edge inset, a hairline ring that closes the shape
- * (so the bottom edge reads as lit, not open), and an accent under-glow. The
- * mid-strength idle glow alone is too diffuse to register against the
- * masthead's glass fill, so the ring carries the bottom-edge light. Scoped to
- * `.route-nav-primary` so the System popover menu items — which also match
- * `.route-nav a` — keep their flat menu-row look. All three shadows are
- * non-layout-affecting, so the link box height, and thus the active underline
- * on the masthead edge, is unchanged. Higher-specificity :hover /
- * :focus-visible / .active rules still win, so those states are preserved. */
+/* Workflows and Create share the liquid-glass highlight-edge treatment with
+ * the System trigger. Scoped to `.route-nav-primary` so the System popover
+ * menu items — which also match `.route-nav a` — keep their flat menu-row
+ * look. The shadows are non-layout-affecting and the hover scale is a
+ * transform, so the link box height, and thus the active underline on the
+ * masthead edge, is unchanged. :focus-visible / .active rules have higher
+ * specificity and still win. */
 .route-nav-primary a {
   box-shadow: var(--mm-shadow-highlight-edge);
+  transition: var(--mm-control-transition), color 130ms ease;
+}
+
+/* Hovered nav buttons brighten, grow slightly, and swap the purple under-glow
+ * for the cyan accent — matching the System trigger's hover feel. */
+.route-nav-primary a:hover {
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
 }
 
 .route-nav-icon {
@@ -747,12 +763,10 @@ h1 {
   padding: 0.48rem 0.82rem;
   border: 0;
   border-radius: 0.5rem;
-  /* Highlight-edge button: transparent fill with a bright top-edge inset, a
-   * hairline ring that closes the shape so the bottom edge reads as lit, and
-   * an accent under-glow (the trigger's original look, stated explicitly
-   * rather than inherited from the global button rules). All three shadows
-   * are non-layout-affecting, so the box size — and therefore the active
-   * underline position on the masthead's bottom edge — is unchanged. */
+  /* Liquid-glass highlight-edge button: transparent fill with the shared
+   * asymmetric edge shadows. Non-layout-affecting, so the box size — and
+   * therefore the active underline position on the masthead's bottom edge —
+   * is unchanged. */
   background: transparent;
   box-shadow: var(--mm-shadow-highlight-edge);
   color: rgb(var(--mm-ink) / 0.82);
@@ -761,10 +775,20 @@ h1 {
   cursor: pointer;
 }
 
+/* The open and hover states share the highlighted surface and cyan under-glow.
+ * Stating box-shadow here also keeps the global button:hover rule (ring + wide
+ * purple glow, for filled CTAs) from leaking onto the trigger. */
 .dashboard-system-trigger:hover,
 .dashboard-system-trigger[aria-expanded="true"] {
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+}
+
+/* Keep hover-only motion and brightening out of the persistent open state. */
+.dashboard-system-trigger:hover {
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
 }
 
 .dashboard-system-trigger.active {
@@ -7882,6 +7906,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     transform: none !important;
   }
 
+  .route-nav-primary a,
   .dashboard-system-trigger,
   .dashboard-system-popover {
     animation: none !important;
