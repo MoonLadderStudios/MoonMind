@@ -231,7 +231,7 @@ Rules:
 
 1. Loading state shows `Loading workflows...`.
 2. API errors render a visible error notice.
-3. Empty first pages show `No workflows found for the current filters.`
+3. Empty first pages show `No workflows found for the current filters.` followed by a `Create a workflow` link to `/workflows/new`. On desktop, successful empty results retain the normal table header and its sorting and filtering controls.
 4. Empty later pages keep the previous-page button enabled.
 5. Pagination uses an opaque `nextPageToken` plus a client-side cursor stack for previous-page navigation.
 6. The results footer shows row range and count when available.

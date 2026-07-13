@@ -10,21 +10,9 @@ interface SecretsListResponse {
 
 interface ProviderProfileResponse {
   profile_id: string;
-  credential_source: string;
   enabled: boolean;
+  launch_ready: boolean;
 }
-
-/** Slugs stored in Managed Secrets (often match env var names after import). */
-const PROVIDER_KEY_SLUGS = [
-  'GOOGLE_API_KEY',
-  'GEMINI_API_KEY',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'CLAUDE_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'CODEX_API_KEY',
-  'MINIMAX_API_KEY',
-] as const;
 
 const GITHUB_TOKEN_SLUGS = ['GITHUB_PAT', 'GITHUB_TOKEN'] as const;
 
@@ -46,7 +34,11 @@ export function DashboardAlerts() {
     },
   });
 
-  const { data: profilesData } = useQuery<ProviderProfileResponse[]>({
+  const {
+    data: profilesData,
+    isLoading: profilesLoading,
+    isError: profilesError,
+  } = useQuery<ProviderProfileResponse[]>({
     queryKey: ['provider-profiles'],
     queryFn: async () => {
       const response = await fetch('/api/v1/provider-profiles', {
@@ -59,39 +51,31 @@ export function DashboardAlerts() {
     },
   });
 
-  if (secretsLoading || !secretsData) {
+  if (secretsLoading || profilesLoading || !secretsData || (!profilesData && !profilesError)) {
     return null;
   }
 
-  const hasProviderSecret = hasActiveSlug(secretsData.items, PROVIDER_KEY_SLUGS);
-
-  const hasOauthVolume = profilesData
-    ? profilesData.some((p) => p.enabled && p.credential_source === 'oauth_volume')
-    : false;
-
-  const hasProviderKey = hasProviderSecret || hasOauthVolume;
+  const hasLaunchReadyProviderProfile = profilesData?.some((profile) => profile.launch_ready) ?? false;
   const hasGithub = hasActiveSlug(secretsData.items, GITHUB_TOKEN_SLUGS);
+  const needsProviderProfileSetup = !hasLaunchReadyProviderProfile;
 
-  const needsAiKey = !hasProviderKey;
-
-  if (!needsAiKey && hasGithub) {
+  if (!profilesError && !needsProviderProfileSetup && hasGithub) {
     return null;
   }
 
   return (
     <div className="notice notice-warning" style={{ marginBottom: '20px' }}>
-      <strong>First-Run Setup:</strong> You are missing crucial API keys to run agent tasks.
+      <strong>First-Run Setup:</strong> Complete setup before running agent tasks.
       <ul style={{ marginTop: '8px', marginLeft: '20px', listStyleType: 'disc' }}>
-         {needsAiKey && (
+         {profilesError ? (
            <li>
-             A provider API key in Settings is missing (e.g.{' '}
-             <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>MINIMAX_API_KEY</code>).
+             MoonMind could not verify provider profile readiness. Review Provider Profiles in Settings.
            </li>
-         )}
+         ) : needsProviderProfileSetup ? (
+           <li>Set up and enable at least one provider profile in Settings.</li>
+         ) : null}
          {!hasGithub && (
-           <li>
-             A GitHub token in Settings is missing (use slug <code>GITHUB_TOKEN</code> or <code>GITHUB_PAT</code>).
-           </li>
+           <li>Set up GitHub access in Settings.</li>
          )}
       </ul>
       <div style={{ marginTop: '12px' }}>

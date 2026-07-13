@@ -55,6 +55,12 @@ The Settings experience has one additional product rule:
 
 This means “disabled by default” is a safety state for unconfigured providers. It is not an extra manual step after setup succeeds.
 
+On a fresh installation with no provider credentials configured, the persisted
+profile set contains exactly `claude_anthropic_oauth` and
+`codex_openai_oauth`. Both profiles are disabled and not configured. API-key
+and alternative-provider profiles are added and enabled only when their
+corresponding credentials are configured.
+
 ---
 
 ## 2. Document Boundaries

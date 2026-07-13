@@ -2415,15 +2415,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <div className="notice error workflow-list-empty-message">{(error as Error).message}</div>
             {resultsFooter}
           </>
-        ) : sortedItems.length === 0 ? (
-          <>
-            {!hasPaginationContext ? (
-              <p className="small workflow-list-empty-message">No workflows found for the current filters.</p>
-            ) : (
-              <div className="card small workflow-list-empty-message">No workflows found for the current filters.</div>
-            )}
-            {resultsFooter}
-          </>
         ) : (
           <>
             <div className="queue-table-wrapper" data-layout="table" data-density={density}>
@@ -2692,6 +2683,19 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       );
                     })}
               </ul>
+              {sortedItems.length === 0 ? (
+                !hasPaginationContext ? (
+                  <p className="small workflow-list-empty-message">
+                    <span>No workflows found for the current filters.</span>{' '}
+                    <a href="/workflows/new">Create a workflow</a>
+                  </p>
+                ) : (
+                  <div className="card small workflow-list-empty-message">
+                    <span>No workflows found for the current filters.</span>{' '}
+                    <a href="/workflows/new">Create a workflow</a>
+                  </div>
+                )
+              ) : null}
               {resultsFooter}
             </>
           )}

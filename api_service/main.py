@@ -652,6 +652,15 @@ def _should_reconcile_openrouter_codex_file_templates(
         _legacy_codex_openrouter_qwen36_plus_file_templates(),
     )
 
+_LEGACY_SETUP_PROFILE_SPECS = {
+    "claude_anthropic_default": ("claude_code", "anthropic", "Claude Code (setup required)"),
+    "claude_anthropic": ("claude_code", "anthropic", "Claude Code (setup required)"),
+    "codex_openai_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "codex_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "gemini_google_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
+    "gemini_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
+}
+
 async def _auto_seed_provider_profiles() -> list[str]:
     """Seed well-known provider profiles that are missing from the DB.
 
@@ -989,12 +998,16 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.runtime_id,
                     ManagedAgentProviderProfile.provider_id,
                     ManagedAgentProviderProfile.provider_label,
+                    ManagedAgentProviderProfile.account_label,
+                    ManagedAgentProviderProfile.is_default,
                     ManagedAgentProviderProfile.default_model,
                     ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
                     ManagedAgentProviderProfile.credential_source,
                     ManagedAgentProviderProfile.runtime_materialization_mode,
                     ManagedAgentProviderProfile.secret_refs,
+                    ManagedAgentProviderProfile.volume_ref,
+                    ManagedAgentProviderProfile.volume_mount_path,
                     ManagedAgentProviderProfile.env_template,
                     ManagedAgentProviderProfile.enabled,
                     ManagedAgentProviderProfile.auth_state,
@@ -1010,12 +1023,16 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "runtime_id": row.runtime_id,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
+                    "account_label": row.account_label,
+                    "is_default": row.is_default,
                     "default_model": row.default_model,
                     "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
                     "credential_source": row.credential_source,
                     "runtime_materialization_mode": row.runtime_materialization_mode,
                     "secret_refs": row.secret_refs,
+                    "volume_ref": row.volume_ref,
+                    "volume_mount_path": row.volume_mount_path,
                     "env_template": row.env_template,
                     "enabled": row.enabled,
                     "auth_state": row.auth_state,
@@ -1028,28 +1045,46 @@ async def _auto_seed_provider_profiles() -> list[str]:
             }
             existing_ids: set[str] = set(existing_by_id)
 
-            deprecated_gemini_profile_ids = {
-                "gemini_google_default",
-                "gemini_default",
+            def is_untouched_legacy_setup_stub(profile_id: str, row: dict[str, Any]) -> bool:
+                spec = _LEGACY_SETUP_PROFILE_SPECS.get(profile_id)
+                return bool(
+                    spec
+                    and (row["runtime_id"], row["provider_id"], row["account_label"]) == spec
+                    and row["enabled"] is False
+                    and row["is_default"] is False
+                    and row["credential_source"] == ProviderCredentialSource.NONE
+                    and row["runtime_materialization_mode"] == RuntimeMaterializationMode.API_KEY_ENV
+                    and row["auth_state"] == ProviderProfileAuthState.NOT_CONFIGURED
+                    and row["disabled_reason"] == ProviderProfileDisabledReason.MISSING_CREDENTIALS
+                    and not row["secret_refs"]
+                    and not row["volume_ref"]
+                    and not row["volume_mount_path"]
+                    and row["last_auth_method"] is None
+                )
+
+            legacy_setup_profile_ids_to_delete = {
+                profile_id for profile_id, row in existing_by_id.items()
+                if is_untouched_legacy_setup_stub(profile_id, row)
             }
-            deprecated_gemini_profile_ids_to_delete = (
-                deprecated_gemini_profile_ids.intersection(existing_ids)
-            )
             needs_commit = False
-            if deprecated_gemini_profile_ids_to_delete:
+            if legacy_setup_profile_ids_to_delete:
                 await session.execute(
                     delete(ManagedAgentProviderProfile).where(
                         ManagedAgentProviderProfile.profile_id.in_(
-                            deprecated_gemini_profile_ids_to_delete
-                        ),
-                        ManagedAgentProviderProfile.runtime_id == "gemini_cli",
+                            legacy_setup_profile_ids_to_delete
+                        )
                     )
+                )
+                logger.info(
+                    "Removed %d untouched legacy provider setup stubs: %s",
+                    len(legacy_setup_profile_ids_to_delete),
+                    ", ".join(sorted(legacy_setup_profile_ids_to_delete)),
                 )
                 needs_commit = True
                 existing_by_id = {
                     profile_id: row
                     for profile_id, row in existing_by_id.items()
-                    if profile_id not in deprecated_gemini_profile_ids_to_delete
+                    if profile_id not in legacy_setup_profile_ids_to_delete
                 }
                 existing_ids = set(existing_by_id)
 

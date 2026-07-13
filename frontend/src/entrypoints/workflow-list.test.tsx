@@ -215,11 +215,33 @@ describe('Workflows Entrypoint', () => {
     applyFilterDrawer();
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
+    expect(screen.getByRole('table')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Create a workflow' }).getAttribute('href')).toBe('/workflows/new');
+    expect(screen.getByRole('columnheader', { name: /Workflow/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   }, 10000);
+
+  it('keeps the full table header, create action, and footer on an unfiltered empty result', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: { dashboardConfig: { features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } } } },
+    };
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({ items: [], count: 0 }) } as Response);
+
+    renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+
+    expect(await screen.findByRole('table')).toBeTruthy();
+    for (const name of ['Workflow', 'Status', 'Progress', 'Repo', 'Runtime', 'Updated', 'Actions']) {
+      expect(screen.getByRole('columnheader', { name: new RegExp(name, 'i') })).toBeTruthy();
+    }
+    expect(screen.getByText('No workflows found for the current filters.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Create a workflow' }).getAttribute('href')).toBe('/workflows/new');
+    expect(screen.getByRole('combobox', { name: 'Show' })).toBeTruthy();
+  });
 
   it('announces the current sort state on table headers', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
@@ -2556,6 +2578,8 @@ describe('Workflows Entrypoint', () => {
     try {
       renderWithClient(<WorkflowListPage payload={actionsPayload} />);
       expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
+      expect(screen.getByRole('table')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Create a workflow' }).getAttribute('href')).toBe('/workflows/new');
 
       expect(document.querySelector('.workflow-list-results-header')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
