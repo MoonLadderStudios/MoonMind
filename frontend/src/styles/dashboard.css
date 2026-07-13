@@ -6118,6 +6118,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-start-heading {
   margin-bottom: 0.35rem;
+  text-align: center;
 }
 
 .queue-advanced-settings-body {
