@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
@@ -3362,8 +3361,7 @@ class TemporalArtifactActivities:
         except BaseException:
             if not lease_task.done():
                 lease_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await lease_task
+                await asyncio.gather(lease_task, return_exceptions=True)
             raise
         return {
             "profile_id": lease.profile_id,
