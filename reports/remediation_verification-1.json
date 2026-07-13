@@ -9,10 +9,12 @@
   "verdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "summary": "Attempt 1 prevents accepted ADDITIONAL_WORK_NEEDED results from using generic same-verifier retry when an exact adjacent remediation successor exists and preserves semantic terminal verdicts. The authoritative target remains incomplete because transition ordering, distinct durable budgets, control-stop incident evidence, topology/contract changes, and required workflow/replay regressions remain outstanding.",
+  "summary": "Attempt 1 implements the central routing correction and most supporting controls, and targeted verification passes. The whole target remains incomplete because incident evidence lacks complete review/remediation budget objects, the real-preset regression does not execute the production workflow boundary, and replay uses a synthetic fixture instead of a production MoonMindRunWorkflow history.",
   "remainingWorkRef": "artifacts/github-issue-implement-verify.json#/remainingWork",
   "testEvidence": {
-    "targetedUnit": "NOT RUN: /usr/local/bin/python: No module named pytest",
-    "staticInspection": "PASS"
+    "targetedUnit": "PASS: 546 Python tests; 1081 frontend tests passed with 238 skipped",
+    "startupPresetIntegration": "PASS: 2 tests",
+    "compileAndDiffHygiene": "PASS",
+    "composeIntegrationCi": "NOT RUN: Docker builder lacks BuildKit RUN --mount support; advisory environment limitation"
   }
 }
