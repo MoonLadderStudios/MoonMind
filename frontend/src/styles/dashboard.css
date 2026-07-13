@@ -22,14 +22,15 @@
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
   /* Highlight-edge treatment: a bright top-edge inset, a faint lit
-   * bottom-edge inset (accent lightened toward white), and a tight accent
-   * glow hugging the bottom edge so it reads as backlit. Deliberately NO
-   * perimeter ring: the sides stay open — light on the top and bottom edges
-   * only — rather than reading as an outlined button. */
+   * bottom-edge inset (accent lightened toward white), and a quite faint
+   * accent glow kept almost entirely on the bottom edge so it reads as
+   * backlit (the negative spread pulls the blur off the sides). Deliberately
+   * NO perimeter ring: the sides stay open — light on the top and bottom
+   * edges only — rather than reading as an outlined button. */
   --mm-shadow-highlight-edge:
     inset 0 1px 0 rgb(255 255 255 / 0.26),
     inset 0 -1px 0 rgb(167 139 250 / 0.4),
-    0 3px 9px -2px rgb(var(--mm-accent) / 0.75);
+    0 5px 9px -5px rgb(var(--mm-accent) / 0.45);
   --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
   --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
   --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
