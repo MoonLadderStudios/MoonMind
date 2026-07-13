@@ -97,14 +97,30 @@ describe('dashboard masthead brand styles', () => {
   });
 
   it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
-    // The shared treatment: a bright top-edge inset, a lit bottom-edge inset,
-    // a hairline ring that closes the shape, and a tight accent glow hugging
-    // the bottom edge (a wide diffuse glow does not register at 1x against
-    // the masthead's glass fill).
+    // The shared liquid-glass treatment: faint uniform edge lines plus
+    // diagonally offset corner boosts (top-left white, bottom-right violet),
+    // and a quite faint accent glow kept almost entirely on the bottom edge —
+    // the negative spread pulls the blur off the sides. The sides stay open —
+    // no perimeter ring. The hover variant swaps the under-glow to the cyan
+    // accent (executing-pill hue).
     const highlightShadow =
       /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
+    const asymmetricInsets =
+      String.raw`inset 0 1px 0 rgb\(255 255 255 \/ 0\.12\),\s*inset 2px 2px 3px -2px rgb\(255 255 255 \/ 0\.3\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.18\),\s*inset -2px -2px 3px -2px rgb\(167 139 250 \/ 0\.55\)`;
     expect(dashboardCss).toMatch(
-      /--mm-shadow-highlight-edge:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.26\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.75\),\s*0 0 0 1px rgb\(255 255 255 \/ 0\.34\),\s*0 3px 9px -2px rgb\(var\(--mm-accent\) \/ 0\.75\);/,
+      new RegExp(
+        String.raw`--mm-shadow-highlight-edge:\s*${asymmetricInsets},\s*0 5px 9px -5px rgb\(var\(--mm-accent\) \/ 0\.45\);`,
+      ),
+    );
+    expect(dashboardCss).toMatch(
+      new RegExp(
+        String.raw`--mm-shadow-highlight-edge-hover:\s*${asymmetricInsets},\s*0 5px 9px -5px rgb\(var\(--mm-accent-2\) \/ 0\.55\);`,
+      ),
+    );
+    // The tokens must stay side-open: no perimeter ring, so the buttons read
+    // as corner-lit glass instead of an outline.
+    expect(dashboardCss).not.toMatch(
+      /--mm-shadow-highlight-edge(?:-hover)?:[^;]*0 0 0 1px/s,
     );
 
     // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
@@ -132,7 +148,7 @@ describe('dashboard masthead brand styles', () => {
     expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
 
     // Workflows/Create and the System trigger share the same highlight-edge
-    // look. Both shadows are non-layout-affecting so the active underline
+    // look. The shadows are non-layout-affecting so the active underline
     // geometry is unchanged.
     const primary = cssRuleBlock('.route-nav-primary a');
     expect(primary).not.toContain('var(--mm-glass-fill)');
@@ -140,6 +156,25 @@ describe('dashboard masthead brand styles', () => {
     const trigger = cssRuleBlock('.dashboard-system-trigger');
     expect(trigger).toContain('background: transparent;');
     expect(trigger).toMatch(highlightShadow);
+
+    // Hover: all three buttons brighten, grow slightly, and swap the purple
+    // under-glow for the cyan accent. The trigger states these explicitly so
+    // the filled-CTA global button:hover shadow cannot leak onto it.
+    for (const hover of [
+      cssRuleBlock('.route-nav-primary a:hover'),
+      cssRuleBlock('.dashboard-system-trigger:hover'),
+    ]) {
+      expect(hover).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
+      expect(hover).toContain('transform: scale(var(--mm-control-hover-scale));');
+      expect(hover).toMatch(/filter: brightness\([\d.]+\)/);
+    }
+
+    // Opening the System popover keeps its highlighted surface without
+    // leaving the trigger scaled or brightened after hover ends.
+    const expandedTrigger = cssRuleBlock('.dashboard-system-trigger[aria-expanded="true"]');
+    expect(expandedTrigger).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
+    expect(expandedTrigger).not.toContain('transform:');
+    expect(expandedTrigger).not.toContain('filter:');
   });
 
   it('marks the open System selection like the sidebar instead of the trigger underline', () => {

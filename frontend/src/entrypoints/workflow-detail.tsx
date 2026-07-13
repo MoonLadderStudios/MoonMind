@@ -867,6 +867,18 @@ const ExecutionDetailSchema = z
     priority: z.number().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
+    outputBranch: z
+      .object({
+        name: z.string(),
+        url: z.string().nullable().optional(),
+        headSha: z.string().nullable().optional(),
+        baseBranch: z.string().nullable().optional(),
+        intent: z.enum(['normal', 'terminal_checkpoint']),
+        status: z.string(),
+        evidenceRef: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
     repository: z.string().nullable().optional(),
     prUrl: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
@@ -8467,6 +8479,17 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 {execution.targetBranch ? (
                   <Fact label="Target Branch">
                     <code className="text-xs break-all">{execution.targetBranch}</code>
+                  </Fact>
+                ) : null}
+                {execution.outputBranch ? (
+                  <Fact label={execution.outputBranch.intent === 'terminal_checkpoint' ? 'Saved Work Branch' : 'Published Branch'}>
+                    {execution.outputBranch.url ? (
+                      <a className="text-xs break-all" href={execution.outputBranch.url} target="_blank" rel="noreferrer">
+                        <code>{execution.outputBranch.name}</code>
+                      </a>
+                    ) : (
+                      <code className="text-xs break-all">{execution.outputBranch.name}</code>
+                    )}
                   </Fact>
                 ) : null}
                 {prUrl ? (

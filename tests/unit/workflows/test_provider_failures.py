@@ -139,6 +139,19 @@ def test_classifies_codex_revoked_refresh_token_as_auth_user_error() -> None:
     assert result.retry_recommendation == "reauthenticate"
 
 
+def test_classifies_codex_reused_refresh_token_as_auth_user_error() -> None:
+    result = classify_provider_failure(
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again. "
+        "error_code=refresh_token_reused"
+    )
+
+    assert result is not None
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "401"
+    assert result.retry_recommendation == "reauthenticate"
+
+
 def test_provider_cooldown_accepts_capacity_code_or_retry_recommendation() -> None:
     assert provider_error_requires_cooldown(
         provider_error_code="provider_capacity",

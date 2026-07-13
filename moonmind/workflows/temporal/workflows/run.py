@@ -9980,6 +9980,13 @@ class MoonMindRunWorkflow:
                         or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
                     )
                 ):
+                    # Failed managed runs may still carry independently verified
+                    # terminal-checkpoint publication evidence. Project it before
+                    # the failure short-circuit so operators can recover the work.
+                    self._record_publish_result(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
                     self._plan_blocked_message = (
                         step_failure_summary
                         or self._activity_result_provider_failure_summary(
@@ -12616,6 +12623,23 @@ class MoonMindRunWorkflow:
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
+        terminal_publication = outputs.get("terminalPublication")
+        if isinstance(terminal_publication, Mapping):
+            compact_terminal = {
+                key: terminal_publication.get(key)
+                for key in (
+                    "intent", "status", "reasonCode", "source", "attempted",
+                    "commitCreated", "branchPushed", "branchName", "branchUrl",
+                    "headSha", "baseBranch", "remoteVerified", "evidenceRef",
+                    "idempotencyKey",
+                )
+                if terminal_publication.get(key) is not None
+            }
+            self._publish_context["terminalPublication"] = compact_terminal
+            if compact_terminal.get("remoteVerified") is True:
+                self._publish_context["branch"] = compact_terminal.get("branchName")
+                self._publish_context["headSha"] = compact_terminal.get("headSha")
+                self._publish_context["baseRef"] = compact_terminal.get("baseBranch")
         self._record_no_commit_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
@@ -17768,6 +17792,35 @@ class MoonMindRunWorkflow:
                         self._publish_context.get("blockedReason")
                     )
             if self._publish_context:
+                terminal_publication = self._publish_context.get(
+                    "terminalPublication"
+                )
+                if isinstance(terminal_publication, Mapping):
+                    # Keep preservation evidence on the canonical publish block
+                    # consumed by terminal-state persistence and execution detail.
+                    # The failed finish outcome above remains authoritative.
+                    finish_summary["publish"].update(
+                        {
+                            key: terminal_publication.get(key)
+                            for key in (
+                                "intent",
+                                "status",
+                                "reasonCode",
+                                "source",
+                                "attempted",
+                                "commitCreated",
+                                "branchPushed",
+                                "branchName",
+                                "branchUrl",
+                                "headSha",
+                                "baseBranch",
+                                "remoteVerified",
+                                "evidenceRef",
+                                "idempotencyKey",
+                            )
+                            if terminal_publication.get(key) is not None
+                        }
+                    )
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:

@@ -621,6 +621,80 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
     assert activity_input.head_branch is None
 
 
+async def test_managed_fetch_result_versions_terminal_checkpoint_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: patch_id == "agent-run-terminal-checkpoint-publication-v1",
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input.terminal_checkpoint_publication_enabled is True
+
+
+async def test_managed_fetch_result_omits_terminal_checkpoint_fields_before_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: False,
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={"publishMode": "pr"},
+        workspace_spec={"startingBranch": "main"},
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert "terminal_checkpoint_publication_enabled" not in activity_input.model_fields_set
+    assert "no_remote_writes" not in activity_input.model_fields_set
+    assert "terminal_checkpoint_capability_supported" not in activity_input.model_fields_set
+
+
+async def test_managed_fetch_result_wires_terminal_checkpoint_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+        lambda patch_id: patch_id == "agent-run-terminal-checkpoint-publication-v1",
+    )
+    run = MoonMindAgentRun()
+    request = _managed_session_request(
+        parameters={
+            "publishMode": "pr",
+            "checkpointPolicy": {"publishOnGracefulFailure": False},
+            "dryRun": True,
+        },
+        workspace_spec={
+            "startingBranch": "main",
+            "noRemoteWrites": True,
+            "readOnly": True,
+            "authorityLost": True,
+            "terminalCheckpointPublicationUnsupported": True,
+        },
+    )
+
+    activity_input = run._build_managed_fetch_result_activity_input(request)
+
+    assert activity_input.terminal_checkpoint_publication_enabled is False
+    assert activity_input.no_remote_writes is True
+    assert activity_input.read_only is True
+    assert activity_input.dry_run is True
+    assert activity_input.workspace_authoritative is False
+    assert activity_input.terminal_checkpoint_capability_supported is False
+
+
 async def test_managed_fetch_result_input_uses_publish_base_for_pr_target_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -784,11 +858,23 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     large_instruction = "Use this request as the canonical input:\n" + (
         "Implement the workflow cleanup. " * 400
     )
-    request = _managed_session_request(instruction_ref=large_instruction)
+    request = _managed_session_request(
+        instruction_ref=large_instruction,
+        workspace_spec={
+            "workspacePath": "/work/agent_jobs/wf-task-1/repo",
+            "workspaceRoot": "/work/agent_jobs/wf-task-1/repo",
+            "workspace_path": "/work/agent_jobs/wf-task-1/repo",
+            "workspace_root": "/work/agent_jobs/wf-task-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
 
     result = run._enrich_result_metadata(
         request=request,
-        result=AgentRunResult(summary="done", metadata={}),
+        result=AgentRunResult(
+            summary="done",
+            metadata={"workspacePath": "/work/agent_jobs/wf-task-1/repo"},
+        ),
     )
 
     assert result is not None
@@ -797,6 +883,21 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
     assert result.metadata["managedSession"]["agentRunId"] == "wf-task-1"
+    assert result.metadata["agentKind"] == "managed"
+    assert result.metadata["agentId"] == "codex_cli"
+    assert result.metadata["runtimeCapabilities"]["workspaceAuthority"] == (
+        "managed_runtime"
+    )
+    assert result.metadata["runtimeCapabilities"]["checkpointCaptureKinds"] == []
+    assert result.metadata["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-task-1",
+        "relativePath": "repo",
+    }
+    assert "workspacePath" not in result.metadata
+    assert "workspaceRoot" not in result.metadata
+    assert result.metadata["workspaceSpec"] == {"baseCommit": "abc123"}
 
 async def test_managed_session_result_enrichment_carries_story_output_paths(
     monkeypatch: pytest.MonkeyPatch,

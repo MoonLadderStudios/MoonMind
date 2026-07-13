@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,11 +12,13 @@ from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnR
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.workflows.adapters.codex_session_adapter import _pr_resolver_terminal_contract
+from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -265,6 +268,97 @@ async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_pa
 
     assert exc_info.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
     assert sandbox_calls == expected["sandboxResolverCalls"] == 0
+
+
+async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:28dae38e through the child-to-parent authority handoff."""
+    replay_id = "codex-oauth-checkpoint-masking"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    classified = classify_provider_failure(manifest["providerLog"])
+
+    assert classified is not None
+    assert classified.failure_class == expected["failureClass"]
+    assert classified.provider_error_code == expected["providerErrorCode"]
+    assert classified.retry_recommendation == expected["retryRecommendation"]
+
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=f"{manifest['incidentWorkflowId']}:agent:node-1",
+        run_id="replay-run",
+        search_attributes={},
+        parent=None,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        executionProfileRef="codex-default",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:replay",
+        managedSession={
+            "workflowId": f"{manifest['incidentWorkflowId']}:session:codex_cli",
+            "agentRunId": manifest["incidentWorkflowId"],
+            "sessionId": f"sess:{manifest['incidentWorkflowId']}:codex_cli",
+            "sessionEpoch": 1,
+            "runtimeId": "codex_cli",
+            "executionProfileRef": "codex-default",
+        },
+    )
+    result = MoonMindAgentRun()._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(
+            summary=manifest["providerLog"],
+            failureClass=classified.failure_class,
+            providerErrorCode=classified.provider_error_code,
+            retryRecommendation=classified.retry_recommendation,
+            metadata={"workspacePath": manifest["legacyWorkspacePath"]},
+        ),
+    )
+
+    assert result is not None
+    assert result.metadata["workspaceLocator"] == expected["workspaceLocator"]
+    assert "workspacePath" not in result.metadata
+
+    parent_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id="replay-parent-run",
+        task_queue="mm.workflow",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+
+    async def unexpected_activity(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("managed workspace must not reach a sandbox activity")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        unexpected_activity,
+    )
+    parent = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 13, tzinfo=timezone.utc)
+    parent._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Replay"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    parent._mark_step_running("node-1", updated_at=now, summary="Running")
+    parent._record_step_workspace_capture_input("node-1", result.metadata)
+
+    checkpoint_ref = await parent._record_canonical_step_checkpoint(
+        "node-1", boundary="after_execution", updated_at=now
+    )
+
+    assert checkpoint_ref is None
+    assert parent._step_checkpoint_capture_outcomes["node-1"] == (
+        expected["checkpointOutcome"]
+    )
 
 
 async def test_checkpoint_finalization_fault_is_retryable(
