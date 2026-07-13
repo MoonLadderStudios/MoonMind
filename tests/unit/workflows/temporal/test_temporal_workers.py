@@ -43,8 +43,12 @@ from moonmind.workflows.temporal.activity_runtime import (
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
-from moonmind.workflows.temporal.publish_auto_evidence import parse_auto_publish_evidence
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    parse_auto_publish_evidence,
+)
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
     build_worker_activity_bindings,
@@ -76,6 +80,7 @@ async def _artifact_service(
         session,
         engine,
     )
+
 
 def test_build_all_worker_topologies_covers_canonical_fleets():
     topologies = {
@@ -129,6 +134,7 @@ def test_workflow_worker_startup_rejects_unroutable_activity_handler(
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
+        "MoonMind.ContainerJob",
         "MoonMind.ManifestIngest",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
@@ -257,6 +263,7 @@ def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
 
     asyncio.run(_run())
 
+
 def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     temporal_settings = settings.temporal.model_copy(
         update={
@@ -278,6 +285,7 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
         "agent_runtime",
         "docker_workload",
     )
+
 
 def test_agent_runtime_topology_exposes_docker_workload_capability():
     topology = describe_configured_worker(
@@ -305,6 +313,7 @@ def test_deployment_topology_exposes_deployment_control_capability():
     assert "docker_admin" in topology.capabilities
     assert "mm.tool.execute" in topology.activity_types
     assert "workload.run" not in topology.activity_types
+
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
     async def _run() -> None:
@@ -353,6 +362,7 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
 
     asyncio.run(_run())
 
+
 def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fleet(
     tmp_path: Path,
 ):
@@ -394,6 +404,7 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
 
     asyncio.run(_run())
 
+
 def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_fleet(
     tmp_path: Path,
 ):
@@ -421,7 +432,9 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
             )
 
             workload_bindings = [
-                binding for binding in bindings if binding.activity_type == "workload.run"
+                binding
+                for binding in bindings
+                if binding.activity_type == "workload.run"
             ]
             reconcile_bindings = [
                 binding
@@ -431,7 +444,8 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
             cleanup_bindings = [
                 binding
                 for binding in bindings
-                if binding.activity_type == "agent_runtime.cleanup_managed_runtime_files"
+                if binding.activity_type
+                == "agent_runtime.cleanup_managed_runtime_files"
             ]
             oauth_runner_bindings = [
                 binding

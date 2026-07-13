@@ -641,9 +641,7 @@ def build_default_activity_catalog(
             capability_class="artifacts",
             task_queue=cfg.activity_artifacts_task_queue,
             fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(
-                1800, 1860, heartbeat_timeout_seconds=30
-            ),
+            timeouts=TemporalActivityTimeouts(1800, 1860, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
             heartbeat_required=True,
         ),
@@ -1333,6 +1331,37 @@ def build_default_activity_catalog(
                 max_interval_seconds=300,
                 non_retryable=NON_RETRYABLE_ERRORS,
             ),
+        ),
+        *(
+            TemporalActivityDefinition(
+                activity_type=f"container_job.{name}",
+                family="container_job",
+                capability_class="docker_workload",
+                task_queue=cfg.activity_agent_runtime_task_queue,
+                fleet=AGENT_RUNTIME_FLEET,
+                timeouts=TemporalActivityTimeouts(60, 300),
+                retries=_activity_retries(
+                    max_attempts=(
+                        1
+                        if name
+                        in {"create_container", "start_container", "stop_container"}
+                        else 3
+                    ),
+                    max_interval_seconds=30,
+                    non_retryable=NON_RETRYABLE_ERRORS,
+                ),
+            )
+            for name in (
+                "resolve_workspace",
+                "acquire_image",
+                "create_container",
+                "start_container",
+                "observe_container",
+                "stop_container",
+                "publish_evidence",
+                "project_status",
+                "cleanup",
+            )
         ),
         TemporalActivityDefinition(
             activity_type="security.pentest.execute",

@@ -21,6 +21,10 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.config.settings import settings
 from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel
+from moonmind.schemas.container_job_models import (
+    ContainerJobInput,
+    container_job_workflow_id,
+)
 from moonmind.workflows.temporal.workers import (
     WORKFLOW_FLEET,
     TemporalWorkerTopology,
@@ -49,9 +53,7 @@ _MOONMIND_TASK_QUEUES: tuple[str, ...] = (
     "mm.activity.agent_runtime",
 )
 MANAGED_SESSION_RECONCILE_SCHEDULE_ID = "mm-operational:managed-session-reconcile"
-MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE = (
-    "mm-operational:managed-session-reconcile"
-)
+MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE = "mm-operational:managed-session-reconcile"
 MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID = (
     "mm-operational:managed-runtime-workspace-cleanup"
 )
@@ -70,6 +72,7 @@ _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
     }
 )
 
+
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
 
@@ -86,6 +89,7 @@ def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
         pass  # gRPC/Temporal SDK not available; fall through to string match
     # Fallback: string match on the exception message.
     return status_name.lower().replace("_", " ") in str(exc).lower()
+
 
 def _build_typed_search_attributes(
     search_attributes: Mapping[str, Any] | None,
@@ -137,12 +141,14 @@ def _build_typed_search_attributes(
 
     return TypedSearchAttributes(pairs)
 
+
 @dataclass(frozen=True, slots=True)
 class WorkflowStartResult:
     """Result of starting a Temporal workflow."""
 
     workflow_id: str
     run_id: str
+
 
 @dataclass(frozen=True, slots=True)
 class ScheduleTriggerResult:
@@ -152,6 +158,7 @@ class ScheduleTriggerResult:
     started_at: datetime | None = None
     workflow_id: str | None = None
     run_id: str | None = None
+
 
 def _schedule_object_value(source: object, *keys: str) -> Any:
     if source is None:
@@ -166,6 +173,7 @@ def _schedule_object_value(source: object, *keys: str) -> Any:
         if value is not None:
             return value
     return None
+
 
 def _schedule_datetime(value: object) -> datetime | None:
     if value is None:
@@ -184,6 +192,7 @@ def _schedule_datetime(value: object) -> datetime | None:
             return None
         return _schedule_datetime(parsed)
     return None
+
 
 def _latest_schedule_trigger_result(
     description: object,
@@ -220,21 +229,15 @@ def _latest_schedule_trigger_result(
 
     threshold = _schedule_datetime(not_before) if not_before is not None else None
     for action_result in sorted(action_results, key=_sort_key, reverse=True):
-        scheduled_at = (
-            _schedule_datetime(
-                _schedule_object_value(action_result, "schedule_time", "scheduleTime")
-            )
-            or _schedule_datetime(
-                _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
-            )
+        scheduled_at = _schedule_datetime(
+            _schedule_object_value(action_result, "schedule_time", "scheduleTime")
+        ) or _schedule_datetime(
+            _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
         )
-        started_at = (
-            _schedule_datetime(
-                _schedule_object_value(action_result, "actual_time", "actualTime")
-            )
-            or _schedule_datetime(
-                _schedule_object_value(action_result, "started_at", "startedAt")
-            )
+        started_at = _schedule_datetime(
+            _schedule_object_value(action_result, "actual_time", "actualTime")
+        ) or _schedule_datetime(
+            _schedule_object_value(action_result, "started_at", "startedAt")
         )
         action_time = started_at or scheduled_at
         if (
@@ -266,6 +269,7 @@ def _latest_schedule_trigger_result(
             )
     return ScheduleTriggerResult()
 
+
 async def get_temporal_client(address: str, namespace: str) -> Client:
     """Connect to and return a Temporal client."""
 
@@ -275,6 +279,7 @@ async def get_temporal_client(address: str, namespace: str) -> Client:
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
 
+
 async def fetch_workflow_execution(
     client: Client, workflow_id: str
 ) -> WorkflowExecutionDescription:
@@ -282,6 +287,7 @@ async def fetch_workflow_execution(
 
     handle = client.get_workflow_handle(workflow_id)
     return await handle.describe()
+
 
 async def query_workflow(
     client: Client,
@@ -295,6 +301,7 @@ async def query_workflow(
     if arg is None:
         return await handle.query(query_name)
     return await handle.query(query_name, arg)
+
 
 class TemporalClientAdapter:
     """Adapter for communicating with the Temporal server."""
@@ -389,7 +396,9 @@ class TemporalClientAdapter:
         if not formatted_search_attributes:
             formatted_search_attributes = None
 
-        search_attributes_typed = _build_typed_search_attributes(formatted_search_attributes)
+        search_attributes_typed = _build_typed_search_attributes(
+            formatted_search_attributes
+        )
 
         start_kwargs: dict[str, Any] = {
             "id": workflow_id,
@@ -414,6 +423,21 @@ class TemporalClientAdapter:
                 workflow_id=err.workflow_id,
                 run_id=err.run_id,
             )
+
+    async def start_container_job(
+        self, request: ContainerJobInput | Mapping[str, Any]
+    ) -> WorkflowStartResult:
+        """Submit or attach to one asynchronous ``MoonMind.ContainerJob`` execution."""
+        model = (
+            request
+            if isinstance(request, ContainerJobInput)
+            else ContainerJobInput.model_validate(request)
+        )
+        return await self.start_workflow(
+            workflow_type="MoonMind.ContainerJob",
+            workflow_id=container_job_workflow_id(model.job_id),
+            input_args=model.model_dump(mode="json", by_alias=True),
+        )
 
     async def get_workflow_handle(self, workflow_id: str) -> Any:
         """Get a handle to an existing workflow execution."""
@@ -440,7 +464,9 @@ class TemporalClientAdapter:
         else:
             await handle.signal(signal_name)
 
-    async def send_reschedule_signal(self, workflow_id: str, scheduled_for: datetime) -> None:
+    async def send_reschedule_signal(
+        self, workflow_id: str, scheduled_for: datetime
+    ) -> None:
         """Send a reschedule signal to a delayed workflow."""
         handle = await self.get_workflow_handle(workflow_id)
         await handle.signal("reschedule", scheduled_for.isoformat())
@@ -634,15 +660,17 @@ class TemporalClientAdapter:
         )
         try:
             handle = client.get_schedule_handle(MANAGED_SESSION_RECONCILE_SCHEDULE_ID)
+
             async def _replace_schedule(_: Any) -> ScheduleUpdate:
                 return ScheduleUpdate(schedule=schedule)
 
             await handle.update(_replace_schedule)
             return MANAGED_SESSION_RECONCILE_SCHEDULE_ID
         except Exception as update_exc:
-            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
-                update_exc
-            ).lower():
+            if (
+                not _is_rpc_status(update_exc, "NOT_FOUND")
+                and "not found" not in str(update_exc).lower()
+            ):
                 raise ScheduleOperationError(
                     "Failed to update managed session reconcile schedule: "
                     f"{update_exc}"
@@ -655,8 +683,7 @@ class TemporalClientAdapter:
             return handle.id
         except Exception as create_exc:
             raise ScheduleOperationError(
-                "Failed to create managed session reconcile schedule: "
-                f"{create_exc}"
+                "Failed to create managed session reconcile schedule: " f"{create_exc}"
             ) from create_exc
 
     async def ensure_managed_runtime_workspace_cleanup_schedule(
@@ -682,6 +709,7 @@ class TemporalClientAdapter:
         )
 
         client = await self.get_client()
+
         def _build_schedule(*, schedule_enabled: bool) -> Schedule:
             return Schedule(
                 action=ScheduleActionStartWorkflow(
@@ -730,9 +758,10 @@ class TemporalClientAdapter:
             await handle.update(_replace_schedule)
             return MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
         except Exception as update_exc:
-            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
-                update_exc
-            ).lower():
+            if (
+                not _is_rpc_status(update_exc, "NOT_FOUND")
+                and "not found" not in str(update_exc).lower()
+            ):
                 raise ScheduleOperationError(
                     "Failed to update managed runtime workspace cleanup schedule: "
                     f"{update_exc}"
@@ -758,7 +787,11 @@ class TemporalClientAdapter:
     ) -> str:
         """Create or replace the profile-bound OAuth host janitor schedule."""
 
-        from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleUpdate
+        from temporalio.client import (
+            Schedule,
+            ScheduleActionStartWorkflow,
+            ScheduleUpdate,
+        )
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
         from moonmind.workflows.temporal.schedule_mapping import (
             build_schedule_policy,
@@ -800,9 +833,10 @@ class TemporalClientAdapter:
             await handle.update(_replace)
             return OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID
         except Exception as update_exc:
-            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
-                update_exc
-            ).lower():
+            if (
+                not _is_rpc_status(update_exc, "NOT_FOUND")
+                and "not found" not in str(update_exc).lower()
+            ):
                 raise ScheduleOperationError(
                     f"Failed to update Omnigent OAuth host janitor schedule: {update_exc}"
                 ) from update_exc
@@ -1006,19 +1040,31 @@ class TemporalClientAdapter:
         async def _do_update(input: Any) -> Any:  # noqa: A002
             schedule = input.description.schedule
 
-            if cron_expression is not None or timezone is not None or jitter_seconds is not None:
+            if (
+                cron_expression is not None
+                or timezone is not None
+                or jitter_seconds is not None
+            ):
                 current_cron = (
                     schedule.spec.cron_expressions[0]
                     if schedule.spec.cron_expressions
                     else "0 0 * * *"
                 )
                 current_tz = schedule.spec.time_zone_name or "UTC"
-                current_jitter = int(schedule.spec.jitter.total_seconds()) if schedule.spec.jitter else 0
+                current_jitter = (
+                    int(schedule.spec.jitter.total_seconds())
+                    if schedule.spec.jitter
+                    else 0
+                )
 
                 schedule.spec = build_schedule_spec(
-                    cron=cron_expression if cron_expression is not None else current_cron,
+                    cron=(
+                        cron_expression if cron_expression is not None else current_cron
+                    ),
                     timezone=timezone if timezone is not None else current_tz,
-                    jitter_seconds=jitter_seconds if jitter_seconds is not None else current_jitter,
+                    jitter_seconds=(
+                        jitter_seconds if jitter_seconds is not None else current_jitter
+                    ),
                 )
 
             if overlap_mode is not None or catchup_mode is not None:
@@ -1042,8 +1088,14 @@ class TemporalClientAdapter:
                     current_catchup_mode = "all"
 
                 schedule.policy = build_schedule_policy(
-                    overlap_mode=overlap_mode if overlap_mode is not None else current_overlap,
-                    catchup_mode=catchup_mode if catchup_mode is not None else current_catchup_mode,
+                    overlap_mode=(
+                        overlap_mode if overlap_mode is not None else current_overlap
+                    ),
+                    catchup_mode=(
+                        catchup_mode
+                        if catchup_mode is not None
+                        else current_catchup_mode
+                    ),
                 )
 
             if enabled is not None or note is not None:
@@ -1074,9 +1126,7 @@ class TemporalClientAdapter:
         try:
             await handle.update(_do_update)
         except Exception as exc:
-            raise ScheduleOperationError(
-                f"Failed to update schedule: {exc}"
-            ) from exc
+            raise ScheduleOperationError(f"Failed to update schedule: {exc}") from exc
 
     async def pause_schedule(self, *, definition_id: Any) -> None:
         """Pause a Temporal Schedule (no new runs until unpaused).
@@ -1091,9 +1141,7 @@ class TemporalClientAdapter:
         try:
             await handle.pause()
         except Exception as exc:
-            raise ScheduleOperationError(
-                f"Failed to pause schedule: {exc}"
-            ) from exc
+            raise ScheduleOperationError(f"Failed to pause schedule: {exc}") from exc
 
     async def unpause_schedule(self, *, definition_id: Any) -> None:
         """Unpause a Temporal Schedule.
@@ -1108,9 +1156,7 @@ class TemporalClientAdapter:
         try:
             await handle.unpause()
         except Exception as exc:
-            raise ScheduleOperationError(
-                f"Failed to unpause schedule: {exc}"
-            ) from exc
+            raise ScheduleOperationError(f"Failed to unpause schedule: {exc}") from exc
 
     async def trigger_schedule(self, *, definition_id: Any) -> ScheduleTriggerResult:
         """Trigger an immediate run of the schedule.
@@ -1126,9 +1172,7 @@ class TemporalClientAdapter:
             triggered_after = datetime.now(timezone.utc)
             await handle.trigger()
         except Exception as exc:
-            raise ScheduleOperationError(
-                f"Failed to trigger schedule: {exc}"
-            ) from exc
+            raise ScheduleOperationError(f"Failed to trigger schedule: {exc}") from exc
         try:
             description = await handle.describe()
         except Exception:
@@ -1155,9 +1199,8 @@ class TemporalClientAdapter:
         try:
             await handle.delete()
         except Exception as exc:
-            raise ScheduleOperationError(
-                f"Failed to delete schedule: {exc}"
-            ) from exc
+            raise ScheduleOperationError(f"Failed to delete schedule: {exc}") from exc
+
 
 class TemporalExecutionCreatorProtocol(Protocol):
     """Protocol for the execution service used by manifest child scheduling."""
@@ -1180,6 +1223,7 @@ class TemporalExecutionCreatorProtocol(Protocol):
     ) -> TemporalExecutionRecord:
         pass
 
+
 @dataclass(frozen=True, slots=True)
 class ManifestChildWorkflowStart:
     """Child workflow metadata captured for one scheduled manifest node."""
@@ -1189,6 +1233,7 @@ class ManifestChildWorkflowStart:
     run_id: str
     workflow_type: str
     parent_close_policy: str = MANIFEST_CHILD_PARENT_CLOSE_POLICY
+
 
 def build_manifest_child_parameters(
     *,
@@ -1211,6 +1256,7 @@ def build_manifest_child_parameters(
         },
         "parentClosePolicy": MANIFEST_CHILD_PARENT_CLOSE_POLICY,
     }
+
 
 async def start_manifest_child_runs(
     *,

@@ -24,7 +24,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Protocol,
+    Sequence,
+    TypeVar,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -115,11 +125,20 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     build_managed_profile_launch_context,
     managed_run_status_metadata,
 )
-from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.logging import (
+    SecretRedactor,
+    redact_sensitive_payload,
+    redact_sensitive_text,
+)
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
-from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
-from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
+from moonmind.workflows.adapters.codex_cloud_client import (
+    CodexCloudClient as CodexCloudHttpClient,
+)
+from moonmind.codex_cloud.settings import (
+    build_codex_cloud_gate,
+    CODEX_CLOUD_DISABLED_MESSAGE,
+)
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.schemas.agent_skill_models import (
@@ -242,13 +261,15 @@ from moonmind.workflows.temporal.step_checkpoints import (
     validate_step_checkpoint_payload,
 )
 
+
 class CmdRes:
     def __init__(self, stdout_bytes: bytes):
         self._stdout_bytes = stdout_bytes
 
     @property
     def stdout(self) -> str:
-        return self._stdout_bytes.decode('utf-8', errors='replace')
+        return self._stdout_bytes.decode("utf-8", errors="replace")
+
 
 async def _run_command(cmd, **kwargs):
     check = kwargs.pop("check", True)
@@ -257,8 +278,11 @@ async def _run_command(cmd, **kwargs):
     proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
     stdout, stderr = await proc.communicate()
     if check and proc.returncode != 0:
-        raise RuntimeError(f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}")
+        raise RuntimeError(
+            f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}"
+        )
     return CmdRes(stdout)
+
 
 logger = getLogger(__name__)
 
@@ -339,9 +363,7 @@ class TemporalPentestProviderLeaseManager:
                 task_queue=get_workflow_task_queue(),
             )
         except WorkflowAlreadyStartedError:
-            logger.debug(
-                "Provider profile manager %s is already running", workflow_id
-            )
+            logger.debug("Provider profile manager %s is already running", workflow_id)
         return workflow_id
 
     async def _assert_profile_known(
@@ -384,7 +406,9 @@ class TemporalPentestProviderLeaseManager:
     ) -> str:
         update_workflow = getattr(self._client_adapter, "update_workflow", None)
         if update_workflow is None:
-            raise RuntimeError("Temporal client adapter does not support workflow updates")
+            raise RuntimeError(
+                "Temporal client adapter does not support workflow updates"
+            )
         workflow_id = await self._ensure_manager_started(runtime_id)
         await self._assert_profile_known(
             workflow_id=workflow_id,
@@ -474,6 +498,7 @@ def _pentest_provider_lease_safe_metadata(
         "runner_profile": request.runner_profile_id,
     }
 
+
 def emit_pentest_activity_heartbeat(
     *,
     phase: str,
@@ -533,6 +558,7 @@ def emit_pentest_activity_heartbeat(
         pass
     return payload
 
+
 async def _await_pentest_workload_with_activity_heartbeats(
     workload_awaitable: Awaitable[Any],
     *,
@@ -570,6 +596,7 @@ async def _await_pentest_workload_with_activity_heartbeats(
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         raise
+
 
 async def _supervise_pentest_workload_with_activity_heartbeats(
     launcher: Any,
@@ -688,6 +715,7 @@ async def _supervise_pentest_workload_with_activity_heartbeats(
         await _stop_and_remove(terminal_reason="failure")
         raise
 
+
 async def cleanup_pentest_orphan_containers(
     janitor: Any,
     *,
@@ -718,6 +746,7 @@ async def cleanup_pentest_orphan_containers(
         "removed_container_ids": removed,
         "cleanup_errors": errors,
     }
+
 
 _GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
@@ -797,6 +826,8 @@ _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
 _GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+"
 )
+
+
 def build_git_push_with_lease_args(
     *,
     branch: str,
@@ -911,6 +942,7 @@ def _managed_session_telemetry_context(
             context[key] = value.strip()
     return context
 
+
 def _log_managed_session_activity(
     activity_type: str,
     payload: Mapping[str, Any] | BaseModel | None,
@@ -925,6 +957,7 @@ def _log_managed_session_activity(
         "managed session activity",
         extra={"managed_session": context},
     )
+
 
 def _artifact_ref_for_pentest_name(
     publication: Mapping[str, Any],
@@ -945,12 +978,15 @@ def _artifact_ref_for_pentest_name(
             ref = artifact.get("artifact_ref")
             return str(ref).strip() if ref else None
     return None
+
+
 _OPERATOR_SUMMARY_TAIL_BYTES = 64 * 1024
 _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "CLAUDE.md",
     "live_streams.spool",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
+
 
 class ManagedSessionController(Protocol):
     """Remote control surface for managed session containers."""
@@ -1012,7 +1048,9 @@ class ManagedSessionController(Protocol):
     ) -> CodexManagedSessionArtifactsPublication | Mapping[str, Any]:
         pass
 
-    async def reconcile(self) -> Sequence[CodexManagedSessionRecord | Mapping[str, Any]]:
+    async def reconcile(
+        self,
+    ) -> Sequence[CodexManagedSessionRecord | Mapping[str, Any]]:
         pass
 
     async def reap_orphan_session_containers(self) -> Any:
@@ -1021,11 +1059,14 @@ class ManagedSessionController(Protocol):
     async def collect_managed_runtime_cleanup_docker_references(self) -> Any:
         pass
 
+
 def _managed_runtime_artifact_root() -> Path:
     return managed_runtime_artifact_root()
 
+
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
+
 
 def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
@@ -1034,12 +1075,16 @@ def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError
         non_retryable=True,
     )
 
-def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_name: str) -> temporal_exceptions.ApplicationError:
+
+def _docker_workflow_mode_forbidden_failure(
+    *, workflow_docker_mode: str, tool_name: str
+) -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
         f"policy_denied: docker_workflow_mode_forbidden ({tool_name} requires unrestricted; current mode={workflow_docker_mode})",
         type="docker_workflow_mode_forbidden",
         non_retryable=True,
     )
+
 
 CODEX_TRANSIENT_TURN_ERROR_TYPE = "CodexTransientTurnError"
 CODEX_PERMANENT_TURN_ERROR_TYPE = "CodexPermanentTurnError"
@@ -1063,10 +1108,8 @@ def _is_empty_assistant_recovery_failure(
         return True
     retry_action = str(metadata.get("retryRecommendedAction") or "").strip()
     reason = str(metadata.get("reason") or "").strip()
-    return (
-        retry_action == "clear_session"
-        and "produced no assistant output" in reason
-    )
+    return retry_action == "clear_session" and "produced no assistant output" in reason
+
 
 def _codex_transient_turn_failure(
     reason: str,
@@ -1081,6 +1124,7 @@ def _codex_transient_turn_failure(
         non_retryable=_is_empty_assistant_recovery_failure(metadata_payload),
     )
 
+
 def _codex_permanent_turn_failure(
     reason: str,
     *,
@@ -1093,6 +1137,7 @@ def _codex_permanent_turn_failure(
         non_retryable=True,
     )
 
+
 @dataclass(frozen=True, slots=True)
 class ArtifactCreateActivityResult:
     """Result from ``artifact.create``."""
@@ -1100,11 +1145,13 @@ class ArtifactCreateActivityResult:
     artifact_ref: ArtifactRef
     upload_descriptor: ArtifactUploadDescriptor
 
+
 @dataclass(frozen=True, slots=True)
 class PlanGenerateActivityResult:
     """Result from ``plan.generate``."""
 
     plan_ref: ArtifactRef
+
 
 @dataclass(frozen=True, slots=True)
 class ManifestCompileActivityResult:
@@ -1112,6 +1159,7 @@ class ManifestCompileActivityResult:
 
     plan_ref: ArtifactRef
     manifest_digest: str
+
 
 @dataclass(frozen=True, slots=True)
 class SandboxCommandResult:
@@ -1124,6 +1172,7 @@ class SandboxCommandResult:
     stderr_tail: str
     diagnostics_ref: ArtifactRef | None
 
+
 @dataclass(frozen=True, slots=True)
 class _SandboxFileSnapshotEntry:
     """Compact file state used to detect sandbox write-policy violations."""
@@ -1133,6 +1182,7 @@ class _SandboxFileSnapshotEntry:
     mtime_ns: int
     digest: str
     backup_path: Path | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class IntegrationStartResult:
@@ -1150,6 +1200,7 @@ class IntegrationStartResult:
     def external_url(self) -> str | None:
         return self.url
 
+
 @dataclass(frozen=True, slots=True)
 class IntegrationStatusResult:
     """Structured result from ``integration.jules.status``."""
@@ -1166,6 +1217,7 @@ class IntegrationStatusResult:
     def external_url(self) -> str | None:
         return self.url
 
+
 @dataclass(frozen=True, slots=True)
 class TemporalActivityBinding:
     """Resolved runtime binding of one activity type to a handler."""
@@ -1174,6 +1226,7 @@ class TemporalActivityBinding:
     task_queue: str
     fleet: str
     handler: Callable[..., Any]
+
 
 _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.create": ("artifacts", "artifact_create"),
@@ -1231,17 +1284,35 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_pending_request_order",
     ),
-    "oauth_session.prepare_credential_maintenance": ("agent_runtime", "oauth_session_prepare_credential_maintenance"),
-    "oauth_session.revalidate_bound_host": ("agent_runtime", "oauth_session_revalidate_bound_host"),
+    "oauth_session.prepare_credential_maintenance": (
+        "agent_runtime",
+        "oauth_session_prepare_credential_maintenance",
+    ),
+    "oauth_session.revalidate_bound_host": (
+        "agent_runtime",
+        "oauth_session_revalidate_bound_host",
+    ),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
-    "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
-    "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
-    "oauth_session.stop_auth_runner": ("agent_runtime", "oauth_session_stop_auth_runner"),
+    "oauth_session.start_auth_runner": (
+        "agent_runtime",
+        "oauth_session_start_auth_runner",
+    ),
+    "oauth_session.update_terminal_session": (
+        "artifacts",
+        "oauth_session_update_terminal_session",
+    ),
+    "oauth_session.stop_auth_runner": (
+        "agent_runtime",
+        "oauth_session_stop_auth_runner",
+    ),
     "oauth_session.update_status": ("artifacts", "oauth_session_update_status"),
     "oauth_session.mark_failed": ("artifacts", "oauth_session_mark_failed"),
     "oauth_session.cleanup_stale": ("artifacts", "oauth_session_cleanup_stale"),
     "oauth_session.verify_volume": ("agent_runtime", "oauth_session_verify_volume"),
-    "oauth_session.verify_cli_fingerprint": ("agent_runtime", "oauth_session_verify_cli_fingerprint"),
+    "oauth_session.verify_cli_fingerprint": (
+        "agent_runtime",
+        "oauth_session_verify_cli_fingerprint",
+    ),
     "oauth_session.register_profile": ("artifacts", "oauth_session_register_profile"),
     "integration.jules.start": ("integrations", "integration_jules_start"),
     "integration.jules.status": ("integrations", "integration_jules_status"),
@@ -1250,10 +1321,22 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_jules_fetch_result",
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
-    "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
-    "integration.jules.list_activities": ("integrations", "integration_jules_list_activities"),
-    "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
-    "integration.jules.get_auto_answer_config": ("integrations", "integration_jules_get_auto_answer_config"),
+    "integration.jules.send_message": (
+        "integrations",
+        "integration_jules_send_message",
+    ),
+    "integration.jules.list_activities": (
+        "integrations",
+        "integration_jules_list_activities",
+    ),
+    "integration.jules.answer_question": (
+        "integrations",
+        "integration_jules_answer_question",
+    ),
+    "integration.jules.get_auto_answer_config": (
+        "integrations",
+        "integration_jules_get_auto_answer_config",
+    ),
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
@@ -1302,16 +1385,28 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime_load_session_snapshot",
     ),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
-    "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
+    "integration.codex_cloud.status": (
+        "integrations",
+        "integration_codex_cloud_status",
+    ),
     "integration.codex_cloud.fetch_result": (
         "integrations",
         "integration_codex_cloud_fetch_result",
     ),
-    "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
+    "integration.codex_cloud.cancel": (
+        "integrations",
+        "integration_codex_cloud_cancel",
+    ),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
     "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
-    "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
-    "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
+    "integration.omnigent.profile_bound_execute": (
+        "agent_runtime",
+        "integration_omnigent_profile_bound_execute",
+    ),
+    "integration.omnigent.oauth_host_janitor": (
+        "agent_runtime",
+        "integration_omnigent_oauth_host_janitor",
+    ),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -1374,6 +1469,20 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
+    **{
+        f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
+        for name in (
+            "resolve_workspace",
+            "acquire_image",
+            "create_container",
+            "start_container",
+            "observe_container",
+            "stop_container",
+            "publish_evidence",
+            "project_status",
+            "cleanup",
+        )
+    },
     "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
@@ -1462,6 +1571,7 @@ def _derive_integration_title(
                     return first_line
     return original_title or "MoonMind Integration Task"
 
+
 def _artifact_locator(value: ArtifactRef | str | None) -> str | None:
     if value is None:
         return None
@@ -1469,6 +1579,7 @@ def _artifact_locator(value: ArtifactRef | str | None) -> str | None:
         return value.artifact_id
     normalized = str(value).strip()
     return normalized or None
+
 
 def _temporal_snapshot_from_payload(
     payload: Mapping[str, Any],
@@ -1500,6 +1611,7 @@ def _temporal_snapshot_from_payload(
         skills=skills,
     )
 
+
 async def _read_json_artifact(
     service: TemporalArtifactService,
     *,
@@ -1512,6 +1624,7 @@ async def _read_json_artifact(
         allow_restricted_raw=True,
     )
     return json.loads(payload.decode("utf-8"))
+
 
 def build_activity_invocation_envelope(
     *,
@@ -1535,6 +1648,7 @@ def build_activity_invocation_envelope(
         side_effecting=side_effecting,
     )
 
+
 def build_compact_activity_result(
     *,
     output_refs: Sequence[ArtifactRef | str] = (),
@@ -1555,6 +1669,7 @@ def build_compact_activity_result(
         diagnostics_ref=_artifact_locator(diagnostics_ref),
     )
 
+
 def build_activity_execution_context(
     *,
     workflow_id: str,
@@ -1572,6 +1687,7 @@ def build_activity_execution_context(
         attempt=attempt,
         task_queue=task_queue,
     )
+
 
 def build_observability_summary(
     *,
@@ -1600,6 +1716,7 @@ def build_observability_summary(
         metrics_dimensions=dict(metrics_dimensions or {}),
     )
 
+
 async def _write_json_artifact(
     service: TemporalArtifactService,
     *,
@@ -1622,9 +1739,11 @@ async def _write_json_artifact(
     )
     return build_artifact_ref(completed)
 
+
 def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
     return text[-max_chars:]
+
 
 def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if is_dood_tool(name):
@@ -2209,6 +2328,7 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
         },
     }
 
+
 def _iter_requested_registry_tools(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[str, ...]:
@@ -2258,6 +2378,7 @@ def _iter_requested_registry_tools(
 
     return tuple(selected)
 
+
 def _default_skill_registry_payload(
     *,
     parameters: Mapping[str, Any] | None = None,
@@ -2273,11 +2394,9 @@ def _default_skill_registry_payload(
             requested.append(name)
 
     return {
-        "skills": [
-            _default_registry_skill_payload(name=name)
-            for name in requested
-        ]
+        "skills": [_default_registry_skill_payload(name=name) for name in requested]
     }
+
 
 def _contains_placeholder_refs(value: Any) -> bool:
     if isinstance(value, str):
@@ -2287,6 +2406,7 @@ def _contains_placeholder_refs(value: Any) -> bool:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_placeholder_refs(item) for item in value)
     return False
+
 
 def _coerce_activity_request(
     request: Mapping[str, Any] | None,
@@ -2301,6 +2421,7 @@ def _coerce_activity_request(
         )
     return dict(request)
 
+
 def _coerce_activity_payload_input(
     request: Any,
     *,
@@ -2312,6 +2433,7 @@ def _coerce_activity_payload_input(
     elif request is None:
         request = kwargs
     return _coerce_activity_request(request, activity_type=activity_type)
+
 
 def _provider_profile_prefers_proxy_first(profile: Mapping[str, Any]) -> bool:
     tags = {str(tag).strip().lower() for tag in profile.get("tags") or []}
@@ -2337,17 +2459,21 @@ def _provider_profile_prefers_proxy_first(profile: Mapping[str, Any]) -> bool:
     credential_source_raw = (
         profile.get("credential_source") or profile.get("credentialSource") or ""
     )
-    credential_source = str(
-        getattr(credential_source_raw, "value", credential_source_raw)
-    ).strip().lower()
+    credential_source = (
+        str(getattr(credential_source_raw, "value", credential_source_raw))
+        .strip()
+        .lower()
+    )
     materialization_mode_raw = (
         profile.get("runtime_materialization_mode")
         or profile.get("runtimeMaterializationMode")
         or ""
     )
-    materialization_mode = str(
-        getattr(materialization_mode_raw, "value", materialization_mode_raw)
-    ).strip().lower()
+    materialization_mode = (
+        str(getattr(materialization_mode_raw, "value", materialization_mode_raw))
+        .strip()
+        .lower()
+    )
     if provider == "minimax":
         return False
     return (
@@ -2355,6 +2481,7 @@ def _provider_profile_prefers_proxy_first(profile: Mapping[str, Any]) -> bool:
         and credential_source == "secret_ref"
         and materialization_mode in {"api_key_env", "env_bundle"}
     )
+
 
 def _redacted_webhook_target(webhook_url: str) -> str:
     if not webhook_url:
@@ -2388,7 +2515,9 @@ def _build_execution_notification_payload(
     if isinstance(result_payload, BaseModel):
         result_payload = result_payload.model_dump(mode="json", by_alias=True)
     result = result_payload if isinstance(result_payload, Mapping) else {}
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
+    metadata = (
+        result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
+    )
     event: dict[str, Any] = {
         "event": "moonmind.execution.completed",
         "workflowId": str(payload.get("workflowId") or ""),
@@ -2498,6 +2627,7 @@ def _send_execution_notification_email(
             client.login(smtp_username, smtp_password or "")
         client.send_message(message)
 
+
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
     """Validate external activity input, including scalar legacy histories."""
 
@@ -2510,6 +2640,7 @@ def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
             f"external agent run payload is invalid: {exc}"
         ) from exc
 
+
 def _validate_agent_runtime_status_input(payload: Any) -> AgentRuntimeStatusInput:
     if isinstance(payload, AgentRuntimeStatusInput):
         return payload
@@ -2519,6 +2650,7 @@ def _validate_agent_runtime_status_input(payload: Any) -> AgentRuntimeStatusInpu
         raise TemporalActivityRuntimeError(
             f"agent_runtime.status payload is invalid: {exc}"
         ) from exc
+
 
 def _validate_agent_runtime_fetch_result_input(
     payload: Any,
@@ -2537,6 +2669,7 @@ def _validate_agent_runtime_fetch_result_input(
             f"agent_runtime.fetch_result payload is invalid: {exc}"
         ) from exc
 
+
 def _validate_agent_runtime_terminal_checkpoint_input(
     payload: Any,
 ) -> AgentRuntimeTerminalCheckpointInput:
@@ -2549,6 +2682,7 @@ def _validate_agent_runtime_terminal_checkpoint_input(
             f"agent_runtime.publish_terminal_checkpoint payload is invalid: {exc}"
         ) from exc
 
+
 def _validate_agent_runtime_cancel_input(payload: Any) -> AgentRuntimeCancelInput:
     if isinstance(payload, AgentRuntimeCancelInput):
         return payload
@@ -2559,6 +2693,7 @@ def _validate_agent_runtime_cancel_input(payload: Any) -> AgentRuntimeCancelInpu
             f"agent_runtime.cancel payload is invalid: {exc}"
         ) from exc
 
+
 async def _maybe_call_heartbeat(
     callback: HeartbeatCallback | None,
     payload: Mapping[str, Any],
@@ -2568,6 +2703,7 @@ async def _maybe_call_heartbeat(
     result = callback(payload)
     if inspect.isawaitable(result):
         await result
+
 
 async def _await_with_activity_heartbeats(
     awaitable: Awaitable[Any],
@@ -2598,6 +2734,7 @@ async def _await_with_activity_heartbeats(
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
+
 class TemporalPlanActivities:
     """Implementation helpers for ``plan.*`` activities."""
 
@@ -2626,11 +2763,20 @@ class TemporalPlanActivities:
             if principal is None:
                 principal = request.principal
             if inputs_ref is None and request.inputs_ref is not None:
-                inputs_ref = getattr(request.inputs_ref, "artifact_id", request.inputs_ref)
+                inputs_ref = getattr(
+                    request.inputs_ref, "artifact_id", request.inputs_ref
+                )
             if parameters is None:
                 parameters = request.parameters
-            if registry_snapshot_ref is None and request.registry_snapshot_ref is not None:
-                registry_snapshot_ref = getattr(request.registry_snapshot_ref, "artifact_id", request.registry_snapshot_ref)
+            if (
+                registry_snapshot_ref is None
+                and request.registry_snapshot_ref is not None
+            ):
+                registry_snapshot_ref = getattr(
+                    request.registry_snapshot_ref,
+                    "artifact_id",
+                    request.registry_snapshot_ref,
+                )
             if execution_ref is None:
                 execution_ref = request.execution_ref
         else:
@@ -2644,15 +2790,27 @@ class TemporalPlanActivities:
                     if principal is None:
                         principal = model.principal
                     if inputs_ref is None and model.inputs_ref is not None:
-                        inputs_ref = getattr(model.inputs_ref, "artifact_id", model.inputs_ref)
+                        inputs_ref = getattr(
+                            model.inputs_ref, "artifact_id", model.inputs_ref
+                        )
                     if parameters is None:
                         parameters = model.parameters
-                    if registry_snapshot_ref is None and model.registry_snapshot_ref is not None:
-                        registry_snapshot_ref = getattr(model.registry_snapshot_ref, "artifact_id", model.registry_snapshot_ref)
+                    if (
+                        registry_snapshot_ref is None
+                        and model.registry_snapshot_ref is not None
+                    ):
+                        registry_snapshot_ref = getattr(
+                            model.registry_snapshot_ref,
+                            "artifact_id",
+                            model.registry_snapshot_ref,
+                        )
                     if execution_ref is None:
                         execution_ref = model.execution_ref
                 except Exception as e:
-                    logger.warning("Failed to parse plan.generate legacy payload as PlanGenerateInput: %s", e)
+                    logger.warning(
+                        "Failed to parse plan.generate legacy payload as PlanGenerateInput: %s",
+                        e,
+                    )
                     if principal is None:
                         principal = request_payload.get("principal")
                     if inputs_ref is None:
@@ -2660,7 +2818,9 @@ class TemporalPlanActivities:
                     if parameters is None:
                         parameters = request_payload.get("parameters")
                     if registry_snapshot_ref is None:
-                        registry_snapshot_ref = request_payload.get("registry_snapshot_ref")
+                        registry_snapshot_ref = request_payload.get(
+                            "registry_snapshot_ref"
+                        )
                     if execution_ref is None:
                         execution_ref = request_payload.get("execution_ref")
 
@@ -2814,6 +2974,7 @@ class TemporalPlanActivities:
                 "labels": ["plan", "validated"],
             },
         )
+
 
 class TemporalSkillActivities:
     """Implementation helper for ``mm.skill.execute``."""
@@ -3115,6 +3276,7 @@ class TemporalManifestActivities:
         )
         return [node.model_dump(by_alias=True, mode="json") for node in runtime_nodes]
 
+
 class TemporalSandboxActivities:
     """Implementation helper for ``sandbox.run_command``."""
 
@@ -3302,7 +3464,9 @@ class TemporalSandboxActivities:
             return result.model_dump(by_alias=True, mode="json")
 
         try:
-            workspace_evidence = await self._capture_workspace_evidence(model, workspace)
+            workspace_evidence = await self._capture_workspace_evidence(
+                model, workspace
+            )
         except TemporalActivityRuntimeError:
             raise
         except Exception as exc:
@@ -3319,9 +3483,11 @@ class TemporalSandboxActivities:
             status="captured",
             workspace=workspace_evidence,
             summary=f"{model.kind} checkpoint captured",
-            diagnosticRefs=[workspace_evidence.manifest_ref]
-            if workspace_evidence.manifest_ref
-            else [],
+            diagnosticRefs=(
+                [workspace_evidence.manifest_ref]
+                if workspace_evidence.manifest_ref
+                else []
+            ),
             pullAuth=pull_auth,
             providerLeaseRefs=provider_refs,
         )
@@ -3591,10 +3757,7 @@ class TemporalSandboxActivities:
             return self._resolve_workspace(model.target_workspace_ref, must_exist=False)
         digest = hashlib.sha256(model.idempotency_key.encode("utf-8")).hexdigest()[:16]
         target = (
-            self._workspace_root
-            / "temporal_sandbox"
-            / "policy-workspaces"
-            / digest
+            self._workspace_root / "temporal_sandbox" / "policy-workspaces" / digest
         )
         return self._resolve_workspace(target, must_exist=False)
 
@@ -3610,11 +3773,14 @@ class TemporalSandboxActivities:
                     "external_state_ref restoration is unsupported without an "
                     "external provider restore bridge"
                 )
-            if workspace_payload.get("kind") == "ephemeral_workspace_ref" and str(
-                workspace_payload.get("workspaceArtifactRef")
-                or workspace_payload.get("workspace_artifact_ref")
-                or ""
-            ).strip():
+            if (
+                workspace_payload.get("kind") == "ephemeral_workspace_ref"
+                and str(
+                    workspace_payload.get("workspaceArtifactRef")
+                    or workspace_payload.get("workspace_artifact_ref")
+                    or ""
+                ).strip()
+            ):
                 raise TemporalActivityRuntimeError(
                     "artifact-backed ephemeral workspace evidence cannot be "
                     "restored as a local sandbox path"
@@ -3770,9 +3936,7 @@ class TemporalSandboxActivities:
                 cwd=str(target),
             )
         except RuntimeError as exc:
-            raise TemporalActivityRuntimeError(
-                f"git checkout failed: {exc}"
-            ) from exc
+            raise TemporalActivityRuntimeError(f"git checkout failed: {exc}") from exc
 
     async def _apply_patch_artifact(
         self,
@@ -3889,20 +4053,17 @@ class TemporalSandboxActivities:
         if not isinstance(workspace, Mapping):
             workspace = {}
         checkpoint_kind = workspace.get("kind")
-        external_state_ref = (
-            workspace.get("externalStateRef") or workspace.get("external_state_ref")
+        external_state_ref = workspace.get("externalStateRef") or workspace.get(
+            "external_state_ref"
         )
-        workspace_artifact_ref = (
-            workspace.get("workspaceArtifactRef")
-            or workspace.get("workspace_artifact_ref")
+        workspace_artifact_ref = workspace.get("workspaceArtifactRef") or workspace.get(
+            "workspace_artifact_ref"
         )
-        omnigent_session_id = (
-            workspace.get("omnigentSessionId")
-            or workspace.get("omnigent_session_id")
+        omnigent_session_id = workspace.get("omnigentSessionId") or workspace.get(
+            "omnigent_session_id"
         )
-        provider_session_ref = (
-            workspace.get("providerSessionRef")
-            or workspace.get("provider_session_ref")
+        provider_session_ref = workspace.get("providerSessionRef") or workspace.get(
+            "provider_session_ref"
         )
         safe_correlation = {
             "externalStateRef": external_state_ref,
@@ -3945,7 +4106,11 @@ class TemporalSandboxActivities:
             request, activity_type="workspace.classify_git_effect"
         )
         raw_locator = payload.get("workspaceLocator")
-        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_locator) if raw_locator else None
+        locator = (
+            WORKSPACE_LOCATOR_ADAPTER.validate_python(raw_locator)
+            if raw_locator
+            else None
+        )
         if isinstance(locator, ManagedWorkspaceLocator):
             raise WorkspaceLocatorResolutionError(
                 WORKSPACE_AUTHORITY_MISMATCH,
@@ -4003,15 +4168,19 @@ class TemporalSandboxActivities:
         workspace_root = (sandbox_root / locator.workspace_id).resolve()
         if workspace_root.parent != sandbox_root:
             raise WorkspaceLocatorResolutionError(
-                WORKSPACE_AUTHORITY_MISMATCH, "sandbox workspace identity escapes its authority"
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace identity escapes its authority",
             )
         workspace = (workspace_root / locator.relative_path).resolve()
         if not workspace.is_relative_to(workspace_root):
             raise WorkspaceLocatorResolutionError(
-                WORKSPACE_AUTHORITY_MISMATCH, "sandbox relative path escapes its workspace"
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox relative path escapes its workspace",
             )
         if must_exist and not workspace.exists():
-            raise TemporalActivityRuntimeError("workspace locator does not resolve to an existing workspace")
+            raise TemporalActivityRuntimeError(
+                "workspace locator does not resolve to an existing workspace"
+            )
         return workspace
 
     def _normalize_allowed_file_paths(
@@ -4171,8 +4340,7 @@ class TemporalSandboxActivities:
         preview = ", ".join(disallowed[:10])
         extra = "" if len(disallowed) <= 10 else f", ... ({len(disallowed)} total)"
         raise TemporalActivityRuntimeError(
-            "sandbox command modified files outside the allowlist: "
-            f"{preview}{extra}"
+            "sandbox command modified files outside the allowlist: " f"{preview}{extra}"
         )
 
     def _restore_disallowed_sandbox_changes(
@@ -4207,7 +4375,9 @@ class TemporalSandboxActivities:
     def _resolve_checkout_source(self, repo_ref: str | Path) -> tuple[str, str | Path]:
         normalized = str(repo_ref).strip()
         if not normalized:
-            raise TemporalActivityRuntimeError("sandbox.checkout_repo repo_ref is required")
+            raise TemporalActivityRuntimeError(
+                "sandbox.checkout_repo repo_ref is required"
+            )
 
         if normalized.startswith(("http://", "https://", "git@", "file://")):
             return ("remote", normalized)
@@ -4330,9 +4500,11 @@ class TemporalSandboxActivities:
                     "workspace_ref": str(cwd),
                     "cmd": list(command),
                     "principal": principal,
-                    "allowed_file_paths": list(allowed_file_paths)
-                    if allowed_file_paths is not None
-                    else None,
+                    "allowed_file_paths": (
+                        list(allowed_file_paths)
+                        if allowed_file_paths is not None
+                        else None
+                    ),
                     "timeout_seconds": timeout_seconds,
                 },
                 heartbeat=heartbeat,
@@ -4591,6 +4763,7 @@ class TemporalSandboxActivities:
             },
         )
 
+
 class TemporalIntegrationActivities:
     """Implementation helpers for ``integration.jules.*``."""
 
@@ -4616,9 +4789,7 @@ class TemporalIntegrationActivities:
         self._codex_cloud_adapter = (
             codex_cloud_adapter_factory()
             if codex_cloud_adapter_factory is not None
-            else CodexCloudAgentAdapter(
-                client_factory=self._codex_cloud_client_factory
-            )
+            else CodexCloudAgentAdapter(client_factory=self._codex_cloud_client_factory)
         )
 
     async def memory_evaluate_proposals(
@@ -4696,7 +4867,14 @@ class TemporalIntegrationActivities:
         token = str(normalized_hint or "").strip().lower()
         if token == "cancelled":
             token = "canceled"
-        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown"}:
+        if token not in {
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "canceled",
+            "unknown",
+        }:
             return snapshot
 
         terminal = token in {"completed", "failed", "canceled"}
@@ -4743,30 +4921,48 @@ class TemporalIntegrationActivities:
         )
 
     async def integration_jules_start(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_start_activity,
+        )
+
         return await jules_start_activity(request)
 
     async def integration_jules_status(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_status_activity,
+        )
+
         request = _validate_external_agent_run_input(payload)
         return await jules_status_activity(request.run_id)
 
     async def integration_jules_fetch_result(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_fetch_result_activity,
+        )
+
         request = _validate_external_agent_run_input(payload)
         return await jules_fetch_result_activity(request.run_id)
 
     async def integration_jules_cancel(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_cancel_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_cancel_activity,
+        )
+
         request = _validate_external_agent_run_input(payload)
         return await jules_cancel_activity(request.run_id)
 
     async def repo_create_pr(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            repo_create_pr_activity,
+        )
+
         return await repo_create_pr_activity(payload)
 
     async def repo_merge_pr(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            repo_merge_pr_activity,
+        )
+
         return await repo_merge_pr_activity(payload)
 
     async def worker_verify_workflow_capability(self, payload, /, **kwargs):
@@ -4796,9 +4992,7 @@ class TemporalIntegrationActivities:
             }
         if not isinstance(readiness, Mapping):
             readiness = {}
-        workflow_types = {
-            str(item) for item in (readiness.get("workflowTypes") or [])
-        }
+        workflow_types = {str(item) for item in (readiness.get("workflowTypes") or [])}
         task_queues = {str(item) for item in (readiness.get("taskQueues") or [])}
         available = (
             readiness.get("ready") is True
@@ -4821,7 +5015,11 @@ class TemporalIntegrationActivities:
             in {str(value) for value in (item.get("workflowTypes") or [])}
             and task_queue in {str(value) for value in (item.get("taskQueues") or [])}
         ]
-        if not children and workflow_type in workflow_types and task_queue in task_queues:
+        if (
+            not children
+            and workflow_type in workflow_types
+            and task_queue in task_queues
+        ):
             children = [readiness]
 
         def _single_value(key: str) -> str | None:
@@ -4877,7 +5075,7 @@ class TemporalIntegrationActivities:
                 "blockers": [
                     {
                         "kind": "external_state_unavailable",
-                    "summary": "Merge automation readiness payload is invalid.",
+                        "summary": "Merge automation readiness payload is invalid.",
                         "retryable": False,
                         "source": "policy",
                     }
@@ -4975,7 +5173,9 @@ class TemporalIntegrationActivities:
         return decision.model_dump(by_alias=True, mode="json")
 
     async def merge_automation_complete_post_merge_github(self, payload, /, **kwargs):
-        config = payload.get("postMergeGithub") if isinstance(payload, Mapping) else None
+        config = (
+            payload.get("postMergeGithub") if isinstance(payload, Mapping) else None
+        )
         if not isinstance(config, Mapping):
             return {
                 "status": "blocked",
@@ -4999,8 +5199,7 @@ class TemporalIntegrationActivities:
         )
         outputs = dict(result.outputs)
         succeeded = (
-            result.status == "COMPLETED"
-            and outputs.get("confirmedState") == "closed"
+            result.status == "COMPLETED" and outputs.get("confirmedState") == "closed"
         )
         return {
             "status": "succeeded" if succeeded else "failed",
@@ -5041,7 +5240,9 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.adapters.github_service import GitHubService
 
         if not isinstance(payload, Mapping):
-            raise TemporalActivityRuntimeError("pr_resolver.read_snapshot requires an object")
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.read_snapshot requires an object"
+            )
         repository = str(payload.get("repository") or "").strip()
         pr_number = int(payload.get("prNumber") or 0)
         if not repository or pr_number <= 0:
@@ -5067,7 +5268,9 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.adapters.github_service import GitHubService
 
         if not isinstance(payload, Mapping):
-            raise TemporalActivityRuntimeError("pr_resolver.finalize_merge requires an object")
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.finalize_merge requires an object"
+            )
         service = GitHubService()
         repository = str(payload.get("repository") or "").strip()
         pr_number = int(payload.get("prNumber") or 0)
@@ -5117,7 +5320,9 @@ class TemporalIntegrationActivities:
         )
 
         if not isinstance(payload, Mapping):
-            raise TemporalActivityRuntimeError("pr_resolver.classify_gate requires an object")
+            raise TemporalActivityRuntimeError(
+                "pr_resolver.classify_gate requires an object"
+            )
         snapshot = payload.get("snapshot")
         if not isinstance(snapshot, Mapping):
             raise TemporalActivityRuntimeError(
@@ -5190,24 +5395,38 @@ class TemporalIntegrationActivities:
         )
 
     async def integration_jules_send_message(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_send_message_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_send_message_activity,
+        )
+
         return await jules_send_message_activity(payload)
 
     async def integration_jules_list_activities(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_list_activities_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_list_activities_activity,
+        )
+
         session_id = payload
         if isinstance(payload, Mapping):
             session_id = payload.get("session_id") or payload.get("sessionId")
         if not session_id or not isinstance(session_id, str):
-            raise TemporalActivityRuntimeError("integration.jules.list_activities requires a non-empty session_id string")
+            raise TemporalActivityRuntimeError(
+                "integration.jules.list_activities requires a non-empty session_id string"
+            )
         return await jules_list_activities_activity(session_id.strip())
 
     async def integration_jules_answer_question(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_answer_question_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_answer_question_activity,
+        )
+
         return await jules_answer_question_activity(payload)
 
     async def integration_jules_get_auto_answer_config(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_get_auto_answer_config_activity
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            jules_get_auto_answer_config_activity,
+        )
+
         return await jules_get_auto_answer_config_activity(payload)
 
     @staticmethod
@@ -5224,55 +5443,84 @@ class TemporalIntegrationActivities:
         return CodexCloudHttpClient(base_url=cloud_url, api_key=cloud_key)
 
     async def integration_codex_cloud_start(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_start_activity
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import (
+            codex_cloud_start_activity,
+        )
+
         return await codex_cloud_start_activity(request)
 
     async def integration_codex_cloud_status(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_status_activity
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import (
+            codex_cloud_status_activity,
+        )
+
         request = _validate_external_agent_run_input(payload)
         return await codex_cloud_status_activity(request.run_id)
 
     async def integration_codex_cloud_fetch_result(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_fetch_result_activity
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import (
+            codex_cloud_fetch_result_activity,
+        )
+
         request = _validate_external_agent_run_input(payload)
         return await codex_cloud_fetch_result_activity(request.run_id)
 
     async def integration_codex_cloud_cancel(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_cancel_activity
+        from moonmind.workflows.temporal.activities.codex_cloud_activities import (
+            codex_cloud_cancel_activity,
+        )
+
         request = _validate_external_agent_run_input(payload)
         return await codex_cloud_cancel_activity(request.run_id)
 
     async def integration_openclaw_execute(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
+        from moonmind.workflows.temporal.activities.openclaw_activities import (
+            openclaw_execute_activity,
+        )
         from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
         if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(request, activity_type="integration.openclaw.execute")
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.openclaw.execute"
+            )
             if not request_payload:
-                raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
+                raise TemporalActivityRuntimeError(
+                    "integration.openclaw.execute requires AgentExecutionRequest payload"
+                )
             req = AgentExecutionRequest.model_validate(request_payload)
         elif isinstance(request, AgentExecutionRequest):
             req = request
         else:
-            raise TemporalActivityRuntimeError("integration.openclaw.execute requires AgentExecutionRequest payload")
-            
+            raise TemporalActivityRuntimeError(
+                "integration.openclaw.execute requires AgentExecutionRequest payload"
+            )
+
         return await openclaw_execute_activity(req)
 
     async def integration_omnigent_execute(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.omnigent_activities import omnigent_execute_activity
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_execute_activity,
+        )
         from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
         if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(request, activity_type="integration.omnigent.execute")
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.omnigent.execute"
+            )
             if not request_payload:
-                raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
+                raise TemporalActivityRuntimeError(
+                    "integration.omnigent.execute requires AgentExecutionRequest payload"
+                )
             req = AgentExecutionRequest.model_validate(request_payload)
         elif isinstance(request, AgentExecutionRequest):
             req = request
         else:
-            raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
+            raise TemporalActivityRuntimeError(
+                "integration.omnigent.execute requires AgentExecutionRequest payload"
+            )
 
         return await omnigent_execute_activity(req)
+
 
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""
@@ -5389,7 +5637,9 @@ class TemporalProposalActivities:
         return ""
 
     @classmethod
-    def _build_follow_up_instructions(cls, proposal_idea: str, instructions: str) -> str:
+    def _build_follow_up_instructions(
+        cls, proposal_idea: str, instructions: str
+    ) -> str:
         normalized_idea = cls._normalize_proposal_text(proposal_idea)
         normalized_instructions = cls._normalize_proposal_text(instructions)
         if not normalized_instructions:
@@ -5732,13 +5982,15 @@ class TemporalProposalActivities:
             if int(max_attempts) < 1:
                 raise ValueError("maxAttempts must be >= 1")
         except (TypeError, ValueError) as exc:
-            raise ValueError("workflowCreateRequest.maxAttempts must be an integer >= 1") from exc
+            raise ValueError(
+                "workflowCreateRequest.maxAttempts must be an integer >= 1"
+            ) from exc
 
         payload_node = stamped_request.get("payload")
         if not isinstance(payload_node, Mapping):
             raise ValueError("workflowCreateRequest.payload must be an object")
-        normalized_payload = WorkflowProposalService._normalize_proposal_runtime_payload(
-            payload_node
+        normalized_payload = (
+            WorkflowProposalService._normalize_proposal_runtime_payload(payload_node)
         )
         validation_payload = deepcopy(normalized_payload)
         task_node = validation_payload.get("workflow")
@@ -6025,14 +6277,18 @@ class TemporalProposalActivities:
             or not parsed_policy.delivery.provider
             or parsed_policy.delivery.provider == "auto"
         ):
-            delivery_provider = str(
-                getattr(
-                    settings.workflow_proposals,
-                    "proposal_delivery_provider_default",
-                    "github",
+            delivery_provider = (
+                str(
+                    getattr(
+                        settings.workflow_proposals,
+                        "proposal_delivery_provider_default",
+                        "github",
+                    )
+                    or "github"
                 )
-                or "github"
-            ).strip().lower()
+                .strip()
+                .lower()
+            )
         provider_payload = {
             key: value
             for key, value in provider_metadata.items()
@@ -6054,9 +6310,11 @@ class TemporalProposalActivities:
             ):
                 if source_key in github_policy:
                     delivery_policy_constraints[target_key] = github_policy[source_key]
-            policy_allowed_actors = self._proposal_allowed_actors_from_provider_metadata(
-                provider_payload=provider_payload,
-                delivery_provider=delivery_provider,
+            policy_allowed_actors = (
+                self._proposal_allowed_actors_from_provider_metadata(
+                    provider_payload=provider_payload,
+                    delivery_provider=delivery_provider,
+                )
             )
             if policy_allowed_actors:
                 delivery_policy_constraints["allowedActors"] = policy_allowed_actors
@@ -6101,17 +6359,22 @@ class TemporalProposalActivities:
                 }
 
         import contextlib
+
         if hasattr(service_or_ctx, "__aenter__"):
             ctx = service_or_ctx
         else:
+
             @contextlib.asynccontextmanager
             async def _wrap():
                 yield service_or_ctx
+
             ctx = _wrap()
 
         async with ctx as service:
             if origin and not workflow_id:
-                error = "origin.workflow_id is required for workflow proposal submission"
+                error = (
+                    "origin.workflow_id is required for workflow proposal submission"
+                )
                 return {
                     "generated_count": generated_count,
                     "submitted_count": 0,
@@ -6187,7 +6450,9 @@ class TemporalProposalActivities:
                     stamped_request = self._validate_candidate_workflow_create_request(
                         request_for_validation,
                         default_runtime=(
-                            default_runtime if isinstance(default_runtime, str) else None
+                            default_runtime
+                            if isinstance(default_runtime, str)
+                            else None
                         ),
                     )
                 except Exception as exc:
@@ -6518,9 +6783,7 @@ class TemporalProposalActivities:
                             decision["externalKey"] = external_key
                         if external_url:
                             decision["externalUrl"] = external_url
-                        delivery_metadata = getattr(
-                            proposal, "provider_metadata", {}
-                        )
+                        delivery_metadata = getattr(proposal, "provider_metadata", {})
                         if isinstance(delivery_metadata, Mapping):
                             delivery_node = delivery_metadata.get("delivery")
                             if isinstance(delivery_node, Mapping):
@@ -6677,6 +6940,7 @@ class TemporalProposalActivities:
             "observabilityEvents": observability_events,
         }
 
+
 class TemporalAgentRuntimeActivities:
     """Implementation helpers for ``agent_runtime.*`` activities."""
 
@@ -6691,6 +6955,7 @@ class TemporalAgentRuntimeActivities:
         session_store: "ManagedSessionStore | None" = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        container_job_backend: Any | None = None,
         workflow_docker_mode: str = "profiles",
         client_adapter: Any = None,
         pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
@@ -6703,7 +6968,10 @@ class TemporalAgentRuntimeActivities:
         self._session_store = session_store
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
-        self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
+        self._container_job_backend = container_job_backend
+        self._workflow_docker_mode = normalize_workflow_docker_mode(
+            workflow_docker_mode
+        )
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -7035,6 +7303,7 @@ class TemporalAgentRuntimeActivities:
             return
 
         import uuid
+
         try:
             uuid.UUID(run_id)
         except ValueError:
@@ -7166,7 +7435,7 @@ class TemporalAgentRuntimeActivities:
         /,
     ) -> dict[str, Any]:
         """Launch a managed agent and start background supervision.
-        
+
         Payload must contain:
         - run_id: str
         - workflow_id: str | None
@@ -7175,14 +7444,18 @@ class TemporalAgentRuntimeActivities:
         - workspace_path: str | None
         """
         if self._run_launcher is None or self._run_supervisor is None:
-            raise TemporalActivityRuntimeError("launcher and supervisor are required for agent_runtime_launch")
+            raise TemporalActivityRuntimeError(
+                "launcher and supervisor are required for agent_runtime_launch"
+            )
 
         run_id = payload.get("run_id")
         workflow_id = str(payload.get("workflow_id") or "").strip()
         request_data = payload.get("request")
         profile_data = payload.get("profile")
         if not run_id or request_data is None or profile_data is None:
-            raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
+            raise TemporalActivityRuntimeError(
+                "Payload must contain 'run_id', 'request', and 'profile'"
+            )
 
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
@@ -7196,12 +7469,14 @@ class TemporalAgentRuntimeActivities:
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 
         # Idempotency check handled in launcher
-        record, process, cleanup_paths, deferred_cleanup_paths = await self._run_launcher.launch(
-            run_id=run_id,
-            workflow_id=workflow_id or None,
-            request=request,
-            profile=profile,
-            workspace_path=workspace_path,
+        record, process, cleanup_paths, deferred_cleanup_paths = (
+            await self._run_launcher.launch(
+                run_id=run_id,
+                workflow_id=workflow_id or None,
+                request=request,
+                profile=profile,
+                workspace_path=workspace_path,
+            )
         )
 
         if workflow_id:
@@ -7293,6 +7568,70 @@ class TemporalAgentRuntimeActivities:
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
 
+    async def _container_job_call(
+        self, operation: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Invoke the trusted backend boundary; backend implementation is tracked separately."""
+        if self._container_job_backend is None:
+            raise TemporalActivityRuntimeError(
+                f"container-job backend is required for container_job.{operation}"
+            )
+        from moonmind.schemas.container_job_models import (
+            ContainerJobActivityRequest,
+            ContainerJobActivityResult,
+        )
+
+        request = ContainerJobActivityRequest.model_validate(payload)
+        result = await getattr(self._container_job_backend, operation)(request)
+        return ContainerJobActivityResult.model_validate(result).model_dump(
+            mode="json", by_alias=True
+        )
+
+    async def container_job_resolve_workspace(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("resolve_workspace", payload)
+
+    async def container_job_acquire_image(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("acquire_image", payload)
+
+    async def container_job_create_container(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("create_container", payload)
+
+    async def container_job_start_container(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("start_container", payload)
+
+    async def container_job_observe_container(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("observe_container", payload)
+
+    async def container_job_stop_container(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("stop_container", payload)
+
+    async def container_job_publish_evidence(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("publish_evidence", payload)
+
+    async def container_job_project_status(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("project_status", payload)
+
+    async def container_job_cleanup(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("cleanup", payload)
+
     async def security_pentest_execute(
         self,
         payload: Mapping[str, Any],
@@ -7322,8 +7661,10 @@ class TemporalAgentRuntimeActivities:
         code can call it.
         """
 
-        return await self._pentest_activities._security_pentest_execute_trusted_internal(
-            payload
+        return (
+            await self._pentest_activities._security_pentest_execute_trusted_internal(
+                payload
+            )
         )
 
     async def agent_runtime_publish_artifacts(
@@ -7814,8 +8155,7 @@ class TemporalAgentRuntimeActivities:
                     break
 
             validated_refs = _text_mapping(
-                gate_payload.get("validatedRefs")
-                or gate_payload.get("validated_refs")
+                gate_payload.get("validatedRefs") or gate_payload.get("validated_refs")
             )
             if validated_refs:
                 compact["validatedRefs"] = validated_refs
@@ -8043,7 +8383,9 @@ class TemporalAgentRuntimeActivities:
                     "name": attempt_name,
                 },
                 "verdict": verdict,
-                "remainingGaps": remaining_gaps if isinstance(remaining_gaps, list) else [],
+                "remainingGaps": (
+                    remaining_gaps if isinstance(remaining_gaps, list) else []
+                ),
                 "verifierEvidenceRefs": {
                     "moonSpecVerifyArtifactRef": source_verify_ref,
                     "gateResultRef": source_verify_ref,
@@ -8125,8 +8467,7 @@ class TemporalAgentRuntimeActivities:
                 # malformed-but-possibly-approving payload.
                 gate_payload["contractViolations"] = list(contract_violations)
                 logger.warning(
-                    "MoonSpec verify artifact violates the gate contract "
-                    "(%s): %s",
+                    "MoonSpec verify artifact violates the gate contract " "(%s): %s",
                     verify_path,
                     "; ".join(contract_violations),
                 )
@@ -8278,9 +8619,13 @@ class TemporalAgentRuntimeActivities:
         # Build summary payload for the artifact
         summary_payload: dict[str, Any] = {
             "summary": effective_summary,
-            "output_refs": result_dict.get("output_refs") or result_dict.get("outputRefs") or [],
-            "failure_class": result_dict.get("failure_class") or result_dict.get("failureClass"),
-            "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
+            "output_refs": result_dict.get("output_refs")
+            or result_dict.get("outputRefs")
+            or [],
+            "failure_class": result_dict.get("failure_class")
+            or result_dict.get("failureClass"),
+            "provider_error_code": result_dict.get("provider_error_code")
+            or result_dict.get("providerErrorCode"),
             "metrics": result_dict.get("metrics") or {},
         }
         report_output = (
@@ -8347,16 +8692,20 @@ class TemporalAgentRuntimeActivities:
         try:
             published_refs: dict[str, Any] = {}
             if instruction_ref:
-                published_refs["inputInstructionsRef"] = await _write_reference_artifact(
-                    link_type="input.instructions",
-                    artifact_ref_value=instruction_ref,
-                    field_name="instructionRef",
+                published_refs["inputInstructionsRef"] = (
+                    await _write_reference_artifact(
+                        link_type="input.instructions",
+                        artifact_ref_value=instruction_ref,
+                        field_name="instructionRef",
+                    )
                 )
             if resolved_skillset_ref:
-                published_refs["inputSkillSnapshotRef"] = await _write_reference_artifact(
-                    link_type="input.skill_snapshot",
-                    artifact_ref_value=resolved_skillset_ref,
-                    field_name="resolvedSkillsetRef",
+                published_refs["inputSkillSnapshotRef"] = (
+                    await _write_reference_artifact(
+                        link_type="input.skill_snapshot",
+                        artifact_ref_value=resolved_skillset_ref,
+                        field_name="resolvedSkillsetRef",
+                    )
                 )
             story_breakdown_refs = await _publish_story_breakdown_handoff()
             if story_breakdown_refs:
@@ -8445,11 +8794,14 @@ class TemporalAgentRuntimeActivities:
                     report_output.get("primaryPath")
                     or report_output.get("primary_path")
                 )
-                report_type = str(
-                    report_output.get("reportType")
-                    or report_output.get("report_type")
+                report_type = (
+                    str(
+                        report_output.get("reportType")
+                        or report_output.get("report_type")
+                        or "agent_run_report"
+                    ).strip()
                     or "agent_run_report"
-                ).strip() or "agent_run_report"
+                )
                 report_bundle = await self._artifact_service.publish_report_bundle(
                     principal="system:agent_runtime",
                     namespace=namespace,
@@ -8695,11 +9047,9 @@ class TemporalAgentRuntimeActivities:
 
         environment = dict(request.environment)
         if profile is not None:
-            environment = (
-                await TemporalAgentRuntimeActivities._materialize_launch_session_environment(
-                    request=request,
-                    profile=profile,
-                )
+            environment = await TemporalAgentRuntimeActivities._materialize_launch_session_environment(
+                request=request,
+                profile=profile,
             )
         for key in _NON_SECRET_MANAGED_SESSION_ENV_KEYS:
             value = os.environ.get(key)
@@ -8775,9 +9125,7 @@ class TemporalAgentRuntimeActivities:
         controller = self._require_session_controller(
             activity_type="agent_runtime.launch_session"
         )
-        validated, profile = self._coerce_launch_session_request_payload(
-            request
-        )
+        validated, profile = self._coerce_launch_session_request_payload(request)
         validated = await self._shape_launch_session_request(
             validated,
             profile=profile,
@@ -8817,9 +9165,7 @@ class TemporalAgentRuntimeActivities:
                         request=validated,
                         profile=profile,
                         readiness=(
-                            response.status
-                            if response.status != "failed"
-                            else "failed"
+                            response.status if response.status != "failed" else "failed"
                         ),
                     ),
                 }
@@ -8885,9 +9231,11 @@ class TemporalAgentRuntimeActivities:
         )
         skill_materialization_metadata: Mapping[str, Any] | None = None
         if not skip_skill_materialization:
-            skill_materialization_metadata = await self._materialize_selected_agent_skill_for_turn(
-                request=request,
-                workspace_path=workspace_path_raw,
+            skill_materialization_metadata = (
+                await self._materialize_selected_agent_skill_for_turn(
+                    request=request,
+                    workspace_path=workspace_path_raw,
+                )
             )
 
         def _prepared_request_metadata() -> dict[str, Any]:
@@ -9025,10 +9373,7 @@ class TemporalAgentRuntimeActivities:
                 )
             self._validate_resolved_skillset_source_policy(resolved_skillset)
             skills_backing_root = (
-                run_root
-                / "runtime"
-                / "skills_active"
-                / resolved_skillset.snapshot_id
+                run_root / "runtime" / "skills_active" / resolved_skillset.snapshot_id
             )
             skill_source_preservation_root = (
                 run_root / "runtime" / "skill_sources" / "repo_agents_skills"
@@ -9075,7 +9420,8 @@ class TemporalAgentRuntimeActivities:
                 resolved_skillset=resolved_skillset,
             )
             selected_entry = next(
-                entry for entry in resolved_skillset.skills
+                entry
+                for entry in resolved_skillset.skills
                 if entry.skill_name == selected_skill
             )
             if selected_entry.terminal_contract is not None:
@@ -9226,9 +9572,11 @@ class TemporalAgentRuntimeActivities:
     def _managed_session_run_root_for_workspace(workspace: Path) -> Path | None:
         """Return a run root only for MoonMind-managed job workspaces."""
 
-        store_root = Path(
-            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
-        ).expanduser().resolve()
+        store_root = (
+            Path(os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"))
+            .expanduser()
+            .resolve()
+        )
         try:
             relative = workspace.relative_to(store_root)
         except ValueError:
@@ -9357,7 +9705,9 @@ class TemporalAgentRuntimeActivities:
             keys=("mergeStateStatus", "merge_state_status"),
         )
         ci_running = cls._state_value(ci_state, state, keys=("isRunning", "ciRunning"))
-        ci_failures = cls._state_value(ci_state, state, keys=("hasFailures", "ciFailed"))
+        ci_failures = cls._state_value(
+            ci_state, state, keys=("hasFailures", "ciFailed")
+        )
         ci_signal = cls._state_value(
             ci_state,
             state,
@@ -9578,7 +9928,9 @@ class TemporalAgentRuntimeActivities:
             return instructions
         if "Active MoonMind skill snapshot:" in instructions:
             return instructions
-        visible_path = str(skill_materialization_metadata.get("visiblePath") or "").strip()
+        visible_path = str(
+            skill_materialization_metadata.get("visiblePath") or ""
+        ).strip()
         skill_doc = f"{visible_path}/{selected_skill}/SKILL.md" if visible_path else ""
         alias_available = bool(
             skill_materialization_metadata.get("canonicalAliasAvailable")
@@ -9678,9 +10030,9 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_interrupt_turn(
         self,
-        request: Mapping[str, Any]
-        | InterruptCodexManagedSessionTurnRequest
-        | None = None,
+        request: (
+            Mapping[str, Any] | InterruptCodexManagedSessionTurnRequest | None
+        ) = None,
         /,
     ) -> CodexManagedSessionTurnResponse:
         controller = self._require_session_controller(
@@ -9737,9 +10089,9 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_ensure_docker_sidecar(
         self,
-        request: Mapping[str, Any]
-        | ManagedSessionEnsureDockerSidecarRequest
-        | None = None,
+        request: (
+            Mapping[str, Any] | ManagedSessionEnsureDockerSidecarRequest | None
+        ) = None,
         /,
     ) -> ManagedSessionEnsureDockerSidecarResponse:
         controller = self._require_session_controller(
@@ -9794,9 +10146,9 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_fetch_session_summary(
         self,
-        request: Mapping[str, Any]
-        | FetchCodexManagedSessionSummaryRequest
-        | None = None,
+        request: (
+            Mapping[str, Any] | FetchCodexManagedSessionSummaryRequest | None
+        ) = None,
         /,
     ) -> CodexManagedSessionSummary:
         controller = self._require_session_controller(
@@ -9816,9 +10168,9 @@ class TemporalAgentRuntimeActivities:
 
     async def agent_runtime_publish_session_artifacts(
         self,
-        request: Mapping[str, Any]
-        | PublishCodexManagedSessionArtifactsRequest
-        | None = None,
+        request: (
+            Mapping[str, Any] | PublishCodexManagedSessionArtifactsRequest | None
+        ) = None,
         /,
     ) -> CodexManagedSessionArtifactsPublication:
         controller = self._require_session_controller(
@@ -9851,7 +10203,9 @@ class TemporalAgentRuntimeActivities:
                 "payload.request is required for agent_runtime.publish_bridge_events"
             )
         request = AgentExecutionRequest.model_validate(dict(request_raw))
-        parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+        parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
         communication = parameters.get("communication")
         if not isinstance(communication, Mapping):
             return {"skipped": True, "reason": "communication_mode_absent"}
@@ -9968,7 +10322,9 @@ class TemporalAgentRuntimeActivities:
                 "payload.terminalStatus must be 'completed' or 'failed'"
             )
         terminal_type = (
-            "response.completed" if terminal_status == "completed" else "response.failed"
+            "response.completed"
+            if terminal_status == "completed"
+            else "response.failed"
         )
         event_payloads.append(
             {
@@ -10068,15 +10424,11 @@ class TemporalAgentRuntimeActivities:
             orphan_reap_skipped_recent = int(
                 getattr(reap_result, "skipped_recent", 0) or 0
             )
-            orphan_reap_forced_stale = int(
-                getattr(reap_result, "forced_stale", 0) or 0
-            )
+            orphan_reap_forced_stale = int(getattr(reap_result, "forced_stale", 0) or 0)
             orphan_volumes_scanned = int(
                 getattr(reap_result, "scanned_volumes", 0) or 0
             )
-            orphan_volumes_reaped = int(
-                getattr(reap_result, "reaped_volumes", 0) or 0
-            )
+            orphan_volumes_reaped = int(getattr(reap_result, "reaped_volumes", 0) or 0)
             orphan_volume_reap_skipped_active = int(
                 getattr(reap_result, "skipped_active_volumes", 0) or 0
             )
@@ -10149,9 +10501,7 @@ class TemporalAgentRuntimeActivities:
                 ),
                 grace=timedelta(
                     seconds=int(
-                        config_payload.get(
-                            "graceSeconds", config.grace.total_seconds()
-                        )
+                        config_payload.get("graceSeconds", config.grace.total_seconds())
                     )
                 ),
                 max_delete_paths=int(
@@ -10166,9 +10516,13 @@ class TemporalAgentRuntimeActivities:
                 runtime_store_root=Path(
                     config_payload.get("runtimeStoreRoot", config.runtime_store_root)
                 ),
-                artifact_root=Path(config_payload.get("artifactRoot", config.artifact_root)),
+                artifact_root=Path(
+                    config_payload.get("artifactRoot", config.artifact_root)
+                ),
             )
-        session_store = ManagedSessionStore(config.runtime_store_root / "managed_sessions")
+        session_store = ManagedSessionStore(
+            config.runtime_store_root / "managed_sessions"
+        )
         docker_state: DockerReferenceState | Mapping[str, object] | None = None
         if self._session_controller is not None and hasattr(
             self._session_controller,
@@ -10193,14 +10547,16 @@ class TemporalAgentRuntimeActivities:
                 None if docker_state is None else lambda: docker_state
             ),
             progress_callback=(
-                lambda progress: temporal_activity.heartbeat(
-                    {
-                        "activityType": "agent_runtime.cleanup_managed_runtime_files",
-                        **dict(progress),
-                    }
+                lambda progress: (
+                    temporal_activity.heartbeat(
+                        {
+                            "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                            **dict(progress),
+                        }
+                    )
+                    if temporal_activity.in_activity()
+                    else None
                 )
-                if temporal_activity.in_activity()
-                else None
             ),
         )
         result_payload = result.to_dict()
@@ -10280,7 +10636,9 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
 
-    async def _cleanup_managed_run_publish_support_best_effort(self, run_id: str) -> None:
+    async def _cleanup_managed_run_publish_support_best_effort(
+        self, run_id: str
+    ) -> None:
         await self._cleanup_run_support_best_effort(run_id)
         self._cleanup_deferred_run_files_best_effort(run_id)
 
@@ -10304,6 +10662,7 @@ class TemporalAgentRuntimeActivities:
         run_id, agent_id = self._agent_runtime_request_identifiers(request)
 
         from temporalio import activity
+
         if activity.in_activity():
             activity.heartbeat(f"Checking status for run_id {run_id}")
 
@@ -10576,9 +10935,7 @@ class TemporalAgentRuntimeActivities:
             if record is not None:
                 if record.workspace_path:
                     self._normalize_workspace_git_alternates(record.workspace_path)
-                    self._recover_orphan_workspace_object_stores(
-                        record.workspace_path
-                    )
+                    self._recover_orphan_workspace_object_stores(record.workspace_path)
                     workspace_github_token = (
                         await self._resolve_workspace_push_github_token(
                             record.workspace_path
@@ -10607,7 +10964,8 @@ class TemporalAgentRuntimeActivities:
                 )
                 if merged_pr is not None:
                     result = self._apply_pr_reverify_override(
-                        result=result, merged_pr=merged_pr,
+                        result=result,
+                        merged_pr=merged_pr,
                     )
 
             # Build merged metadata from the typed result, then enrich with
@@ -10632,7 +10990,9 @@ class TemporalAgentRuntimeActivities:
                 )
                 assistant_text = None
                 if record.status == "completed" and result.failure_class is None:
-                    session_metadata = await self._managed_session_summary_metadata(record)
+                    session_metadata = await self._managed_session_summary_metadata(
+                        record
+                    )
                     if session_metadata:
                         for key in (
                             "lastAssistantText",
@@ -10729,10 +11089,7 @@ class TemporalAgentRuntimeActivities:
                     push_kwargs["allow_target_branch_push"] = True
                 if isinstance(head_branch, str) and head_branch.strip():
                     push_kwargs["head_branch"] = head_branch.strip()
-                if (
-                    isinstance(raw_commit_message, str)
-                    and raw_commit_message.strip()
-                ):
+                if isinstance(raw_commit_message, str) and raw_commit_message.strip():
                     push_kwargs["commit_message"] = raw_commit_message.strip()
                 try:
                     push_info = await self._push_workspace_branch(
@@ -10776,7 +11133,9 @@ class TemporalAgentRuntimeActivities:
 
         workspace_path = str(request.get("workspacePath") or "").strip()
         if not workspace_path:
-            workspace_path = str((result.metadata or {}).get("workspacePath") or "").strip()
+            workspace_path = str(
+                (result.metadata or {}).get("workspacePath") or ""
+            ).strip()
         run_id = str(request.get("runId") or "").strip()
         if not workspace_path and run_id and self._run_store is not None:
             record = self._run_store.load(run_id)
@@ -10842,6 +11201,7 @@ class TemporalAgentRuntimeActivities:
                 "metadata": metadata,
             }
         )
+
     async def _managed_session_summary_metadata(
         self,
         record: ManagedRunRecord,
@@ -11014,7 +11374,9 @@ class TemporalAgentRuntimeActivities:
         try:
             path.relative_to(root)
         except ValueError:
-            logger.warning("Rejected managed runtime artifact ref outside root: %s", ref)
+            logger.warning(
+                "Rejected managed runtime artifact ref outside root: %s", ref
+            )
             return None
         if not path.is_file():
             return None
@@ -11146,7 +11508,9 @@ class TemporalAgentRuntimeActivities:
     @staticmethod
     def _parse_git_status_paths(status_output: bytes) -> tuple[str, ...]:
         """Extract changed paths from `git status --porcelain=v1 -z` output."""
-        records = TemporalAgentRuntimeActivities._parse_git_status_records(status_output)
+        records = TemporalAgentRuntimeActivities._parse_git_status_records(
+            status_output
+        )
         return tuple(path for _status, path in records)
 
     @staticmethod
@@ -11248,7 +11612,9 @@ class TemporalAgentRuntimeActivities:
                     return True
                 for owned_root in [
                     workspace.expanduser().resolve() / "runtime" / "skills_active",
-                    workspace.expanduser().resolve().parent / "runtime" / "skills_active",
+                    workspace.expanduser().resolve().parent
+                    / "runtime"
+                    / "skills_active",
                     workspace.expanduser().resolve() / "skills_active",
                 ]:
                     try:
@@ -11456,9 +11822,7 @@ class TemporalAgentRuntimeActivities:
             try:
                 existing_lines = [
                     line.strip()
-                    for line in alternates_path.read_text(
-                        encoding="utf-8"
-                    ).splitlines()
+                    for line in alternates_path.read_text(encoding="utf-8").splitlines()
                     if line.strip()
                 ]
             except OSError:
@@ -11471,11 +11835,7 @@ class TemporalAgentRuntimeActivities:
 
         registered: set[Path] = set()
         for raw in existing_lines:
-            candidate = (
-                Path(raw)
-                if Path(raw).is_absolute()
-                else (objects_dir / raw)
-            )
+            candidate = Path(raw) if Path(raw).is_absolute() else (objects_dir / raw)
             try:
                 registered.add(candidate.resolve())
             except OSError:
@@ -11678,7 +12038,9 @@ class TemporalAgentRuntimeActivities:
         head_branch: str | None = None,
     ) -> dict[str, Any]:
         """Create one deterministic commit when the workspace is dirty."""
-        command_env = dict(env) if env is not None else self._workspace_command_env(workspace)
+        command_env = (
+            dict(env) if env is not None else self._workspace_command_env(workspace)
+        )
 
         async def _read_status() -> tuple[int, bytes, bytes]:
             status_proc = await asyncio.create_subprocess_exec(
@@ -11694,7 +12056,8 @@ class TemporalAgentRuntimeActivities:
                 env=command_env,
             )
             status_stdout, status_stderr = await asyncio.wait_for(
-                status_proc.communicate(), timeout=15,
+                status_proc.communicate(),
+                timeout=15,
             )
             return status_proc.returncode, status_stdout, status_stderr
 
@@ -11768,14 +12131,19 @@ class TemporalAgentRuntimeActivities:
                 return None
             add_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
-                    workspace, "add", mode, "--", *paths,
+                    workspace,
+                    "add",
+                    mode,
+                    "--",
+                    *paths,
                 ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=command_env,
             )
             add_stdout, add_stderr = await asyncio.wait_for(
-                add_proc.communicate(), timeout=30,
+                add_proc.communicate(),
+                timeout=30,
             )
             if add_proc.returncode != 0:
                 detail = add_stderr.decode("utf-8", errors="replace").strip() or (
@@ -11797,14 +12165,18 @@ class TemporalAgentRuntimeActivities:
 
         staged_proc = await asyncio.create_subprocess_exec(
             *self._workspace_git_command(
-                workspace, "diff", "--cached", "--name-only",
+                workspace,
+                "diff",
+                "--cached",
+                "--name-only",
             ),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=command_env,
         )
         staged_stdout, staged_stderr = await asyncio.wait_for(
-            staged_proc.communicate(), timeout=15,
+            staged_proc.communicate(),
+            timeout=15,
         )
         if staged_proc.returncode != 0:
             detail = staged_stderr.decode("utf-8", errors="replace").strip() or (
@@ -11847,7 +12219,8 @@ class TemporalAgentRuntimeActivities:
             env=command_env,
         )
         commit_stdout, commit_stderr = await asyncio.wait_for(
-            commit_proc.communicate(), timeout=60,
+            commit_proc.communicate(),
+            timeout=60,
         )
         if commit_proc.returncode != 0:
             detail = commit_stderr.decode("utf-8", errors="replace").strip() or (
@@ -11900,15 +12273,15 @@ class TemporalAgentRuntimeActivities:
             env=dict(env),
         )
         fetch_stdout, fetch_stderr = await asyncio.wait_for(
-            fetch_proc.communicate(), timeout=60,
+            fetch_proc.communicate(),
+            timeout=60,
         )
         if fetch_proc.returncode != 0:
             detail = fetch_stderr.decode("utf-8", errors="replace").strip() or (
                 fetch_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
             )
             logger.warning(
-                "Could not repair missing workspace HEAD for run %s "
-                "(branch=%s): %s",
+                "Could not repair missing workspace HEAD for run %s " "(branch=%s): %s",
                 run_id,
                 branch_name,
                 detail,
@@ -11927,7 +12300,8 @@ class TemporalAgentRuntimeActivities:
             env=dict(env),
         )
         _, verify_stderr = await asyncio.wait_for(
-            verify_proc.communicate(), timeout=10,
+            verify_proc.communicate(),
+            timeout=10,
         )
         if verify_proc.returncode == 0:
             logger.info(
@@ -11988,14 +12362,18 @@ class TemporalAgentRuntimeActivities:
             )
             branch_proc = await asyncio.create_subprocess_exec(
                 *self._workspace_git_command(
-                    workspace, "rev-parse", "--abbrev-ref", "HEAD",
+                    workspace,
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
                 ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=command_env,
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                branch_proc.communicate(), timeout=10,
+                branch_proc.communicate(),
+                timeout=10,
             )
             if branch_proc.returncode != 0:
                 return {
@@ -12041,7 +12419,8 @@ class TemporalAgentRuntimeActivities:
                 )
                 try:
                     checkout_stdout, checkout_stderr = await asyncio.wait_for(
-                        checkout_proc.communicate(), timeout=30,
+                        checkout_proc.communicate(),
+                        timeout=30,
                     )
                 except asyncio.TimeoutError:
                     checkout_proc.kill()
@@ -12211,7 +12590,8 @@ class TemporalAgentRuntimeActivities:
             )
             try:
                 push_stdout, push_stderr = await asyncio.wait_for(
-                    push_proc.communicate(), timeout=120,
+                    push_proc.communicate(),
+                    timeout=120,
                 )
             except asyncio.TimeoutError:
                 push_proc.kill()
@@ -12223,8 +12603,7 @@ class TemporalAgentRuntimeActivities:
                     or "(no stderr)"
                 )
                 logger.error(
-                    "Post-agent git push FAILED for run %s "
-                    "(branch=%s, rc=%d): %s",
+                    "Post-agent git push FAILED for run %s " "(branch=%s, rc=%d): %s",
                     run_id,
                     current_branch,
                     push_proc.returncode,
@@ -12243,10 +12622,7 @@ class TemporalAgentRuntimeActivities:
                             workspace,
                             "fetch",
                             "origin",
-                            (
-                                f"+refs/heads/{current_branch}:"
-                                f"{remote_tracking_ref}"
-                            ),
+                            (f"+refs/heads/{current_branch}:" f"{remote_tracking_ref}"),
                         ),
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
@@ -12254,7 +12630,8 @@ class TemporalAgentRuntimeActivities:
                     )
                     try:
                         fetch_stdout, fetch_stderr = await asyncio.wait_for(
-                            fetch_proc.communicate(), timeout=60,
+                            fetch_proc.communicate(),
+                            timeout=60,
                         )
                     except asyncio.TimeoutError:
                         fetch_proc.kill()
@@ -12266,12 +12643,8 @@ class TemporalAgentRuntimeActivities:
                     retry_metadata["fetch_status"] = classified["fetch_status"]
                     if fetch_proc.returncode != 0:
                         classified["fetch_error"] = (
-                            fetch_stderr.decode(
-                                "utf-8", errors="replace"
-                            ).strip()
-                            or fetch_stdout.decode(
-                                "utf-8", errors="replace"
-                            ).strip()
+                            fetch_stderr.decode("utf-8", errors="replace").strip()
+                            or fetch_stdout.decode("utf-8", errors="replace").strip()
                         )
                     else:
                         local_head_after_fetch = await self._resolve_workspace_head_sha(
@@ -12307,7 +12680,9 @@ class TemporalAgentRuntimeActivities:
 
                         rebase_proc = await asyncio.create_subprocess_exec(
                             *self._workspace_git_command(
-                                workspace, "rebase", remote_tracking_ref,
+                                workspace,
+                                "rebase",
+                                remote_tracking_ref,
                             ),
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
@@ -12315,7 +12690,8 @@ class TemporalAgentRuntimeActivities:
                         )
                         try:
                             rebase_stdout, rebase_stderr = await asyncio.wait_for(
-                                rebase_proc.communicate(), timeout=120,
+                                rebase_proc.communicate(),
+                                timeout=120,
                             )
                         except asyncio.TimeoutError:
                             rebase_proc.kill()
@@ -12323,9 +12699,7 @@ class TemporalAgentRuntimeActivities:
                             raise
                         if rebase_proc.returncode != 0:
                             rebase_detail = (
-                                rebase_stderr.decode(
-                                    "utf-8", errors="replace"
-                                ).strip()
+                                rebase_stderr.decode("utf-8", errors="replace").strip()
                                 or rebase_stdout.decode(
                                     "utf-8", errors="replace"
                                 ).strip()
@@ -12339,7 +12713,9 @@ class TemporalAgentRuntimeActivities:
                             )
                             abort_proc = await asyncio.create_subprocess_exec(
                                 *self._workspace_git_command(
-                                    workspace, "rebase", "--abort",
+                                    workspace,
+                                    "rebase",
+                                    "--abort",
                                 ),
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE,
@@ -12347,7 +12723,8 @@ class TemporalAgentRuntimeActivities:
                             )
                             try:
                                 await asyncio.wait_for(
-                                    abort_proc.communicate(), timeout=30,
+                                    abort_proc.communicate(),
+                                    timeout=30,
                                 )
                             except asyncio.TimeoutError:
                                 abort_proc.kill()
@@ -12381,7 +12758,8 @@ class TemporalAgentRuntimeActivities:
                         )
                         try:
                             _, retry_push_stderr = await asyncio.wait_for(
-                                retry_push_proc.communicate(), timeout=120,
+                                retry_push_proc.communicate(),
+                                timeout=120,
                             )
                         except asyncio.TimeoutError:
                             retry_push_proc.kill()
@@ -12393,9 +12771,7 @@ class TemporalAgentRuntimeActivities:
                                 precomputed_commit_count=None,
                             )
                         retry_error_detail = (
-                            retry_push_stderr.decode(
-                                "utf-8", errors="replace"
-                            ).strip()
+                            retry_push_stderr.decode("utf-8", errors="replace").strip()
                             or "(no stderr)"
                         )
                         retry_classified = classify_git_push_failure(
@@ -12462,7 +12838,8 @@ class TemporalAgentRuntimeActivities:
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(), timeout=30,
+                    proc.communicate(),
+                    timeout=30,
                 )
             except asyncio.TimeoutError:
                 proc.kill()
@@ -12508,7 +12885,8 @@ class TemporalAgentRuntimeActivities:
             )
             try:
                 stdout_bytes, _ = await asyncio.wait_for(
-                    proc.communicate(), timeout=10,
+                    proc.communicate(),
+                    timeout=10,
                 )
             except asyncio.TimeoutError:
                 proc.kill()
@@ -12542,7 +12920,8 @@ class TemporalAgentRuntimeActivities:
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(), timeout=10,
+                    proc.communicate(),
+                    timeout=10,
                 )
             except asyncio.TimeoutError:
                 proc.kill()
@@ -12628,16 +13007,12 @@ class TemporalAgentRuntimeActivities:
                 args=("diff", "--name-only", commit_range),
             )
             changed_files = [
-                line.strip()
-                for line in changed_files_text.splitlines()
-                if line.strip()
+                line.strip() for line in changed_files_text.splitlines() if line.strip()
             ][:_GIT_PUSH_SCAN_MAX_CHANGED_FILES]
             bundle: list[OutboundBundleItem] = [
                 OutboundBundleItem(
                     location=f"git.push.commits:{commit_range}",
-                    content=commit_metadata[
-                        :_GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS
-                    ],
+                    content=commit_metadata[:_GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS],
                 )
             ]
             diff_semaphore = asyncio.Semaphore(10)
@@ -12710,7 +13085,8 @@ class TemporalAgentRuntimeActivities:
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout,
+                proc.communicate(),
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
             proc.kill()
@@ -12796,15 +13172,14 @@ class TemporalAgentRuntimeActivities:
                 env=env,
             )
             count_stdout, _ = await asyncio.wait_for(
-                count_proc.communicate(), timeout=10,
+                count_proc.communicate(),
+                timeout=10,
             )
             if count_proc.returncode != 0:
                 raise RuntimeError(
                     f"git rev-list failed with return code {count_proc.returncode}"
                 )
-            return int(
-                count_stdout.decode("utf-8", errors="replace").strip() or "0"
-            )
+            return int(count_stdout.decode("utf-8", errors="replace").strip() or "0")
         except Exception as exc:
             logger.warning(
                 "Failed to count commits for run %s, falling back to "
@@ -12837,7 +13212,10 @@ class TemporalAgentRuntimeActivities:
             # Get the current branch in the workspace
             branch_result = subprocess.run(
                 self._workspace_git_command(
-                    workspace, "rev-parse", "--abbrev-ref", "HEAD",
+                    workspace,
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
                 ),
                 capture_output=True,
                 text=True,
@@ -12853,11 +13231,17 @@ class TemporalAgentRuntimeActivities:
             # Check for an open PR from this branch
             pr_result = subprocess.run(
                 [
-                    "gh", "pr", "list",
-                    "--repo", self._detect_repo_from_workspace(workspace),
-                    "--head", branch,
-                    "--json", "url",
-                    "--limit", "1",
+                    "gh",
+                    "pr",
+                    "list",
+                    "--repo",
+                    self._detect_repo_from_workspace(workspace),
+                    "--head",
+                    branch,
+                    "--json",
+                    "url",
+                    "--limit",
+                    "1",
                 ],
                 capture_output=True,
                 text=True,
@@ -12871,6 +13255,7 @@ class TemporalAgentRuntimeActivities:
             if pr_result.returncode != 0:
                 return None
             import json as _json
+
             prs = _json.loads(pr_result.stdout.strip() or "[]")
             if prs and isinstance(prs, list) and prs[0].get("url"):
                 return str(prs[0]["url"])
@@ -12890,7 +13275,10 @@ class TemporalAgentRuntimeActivities:
 
         result = subprocess.run(
             TemporalAgentRuntimeActivities._workspace_git_command(
-                workspace, "remote", "get-url", "origin",
+                workspace,
+                "remote",
+                "get-url",
+                "origin",
             ),
             capture_output=True,
             text=True,
@@ -12949,18 +13337,30 @@ class TemporalAgentRuntimeActivities:
                 return None
             if pr_number is not None:
                 pr_list_cmd = [
-                    "gh", "pr", "view", str(pr_number),
-                    "--repo", repo,
-                    "--json", "number,state,mergedAt,url,baseRefName,headRefName",
+                    "gh",
+                    "pr",
+                    "view",
+                    str(pr_number),
+                    "--repo",
+                    repo,
+                    "--json",
+                    "number,state,mergedAt,url,baseRefName,headRefName",
                 ]
             else:
                 pr_list_cmd = [
-                    "gh", "pr", "list",
-                    "--repo", repo,
-                    "--head", branch,
-                    "--state", "all",
-                    "--json", "number,state,mergedAt,url,baseRefName,headRefName",
-                    "--limit", "20",
+                    "gh",
+                    "pr",
+                    "list",
+                    "--repo",
+                    repo,
+                    "--head",
+                    branch,
+                    "--state",
+                    "all",
+                    "--json",
+                    "number,state,mergedAt,url,baseRefName,headRefName",
+                    "--limit",
+                    "20",
                 ]
                 if expected_base:
                     pr_list_cmd.extend(["--base", expected_base])
@@ -13080,6 +13480,7 @@ class TemporalAgentRuntimeActivities:
                         )
                     except Exception as exc:
                         import asyncio as _asyncio
+
                         if isinstance(exc, _asyncio.CancelledError):
                             raise
                         logger.warning(
@@ -13131,6 +13532,7 @@ class TemporalAgentRuntimeActivities:
             agentId=str(agent_kind) if str(agent_kind) else "external",
             status="canceled",
         )
+
 
 def _build_activity_wrapper(
     func: Callable[..., Any],
@@ -13193,6 +13595,7 @@ def _build_activity_wrapper(
 
     return _wrapper
 
+
 def _bind_activity_handler(
     implementation: Any,
     *,
@@ -13214,6 +13617,7 @@ def _bind_activity_handler(
     decorated_func = activity.defn(name=activity_type)(_wrapper)
     return decorated_func.__get__(implementation, type(implementation))
 
+
 class TemporalReviewActivities:
     """Implementation helpers for ``step.review`` activities."""
 
@@ -13221,7 +13625,10 @@ class TemporalReviewActivities:
         self,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        from moonmind.workflows.temporal.activities.step_review import step_review_activity
+        from moonmind.workflows.temporal.activities.step_review import (
+            step_review_activity,
+        )
+
         return await step_review_activity(payload)
 
 
@@ -13413,8 +13820,7 @@ class TemporalCheckpointActivities:
                     valid=False,
                     failureCode="artifact_missing",
                     message=(
-                        "checkpoint missing required artifact ref "
-                        f"{missing_refs[0]}"
+                        "checkpoint missing required artifact ref " f"{missing_refs[0]}"
                     ),
                     checkpointId=checkpoint_id,
                     checkpointRef=model.checkpoint_ref,
@@ -13439,6 +13845,7 @@ class TemporalCheckpointActivities:
             **result.model_dump(by_alias=True),
             diagnosticRefs=[],
         ).model_dump(by_alias=True, mode="json")
+
 
 def build_activity_bindings(
     catalog: TemporalActivityCatalog,
@@ -13555,6 +13962,7 @@ def build_activity_bindings(
                 )
 
     return tuple(bindings)
+
 
 __all__ = [
     "ArtifactCreateActivityResult",
