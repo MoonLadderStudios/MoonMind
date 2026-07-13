@@ -3522,9 +3522,38 @@ def test_additional_work_needed_publishes_draft_after_remediation_exhaustion(
     assert mock_run_workflow._publish_context["moonSpecGate"][
         "publicationPolicy"
     ] == "draft_pr_on_additional_work_needed"
-    assert "bounded remediation budget was exhausted" in (
-        mock_run_workflow._moonspec_draft_publication_body_section()
+    mock_run_workflow._publish_context["moonSpecGate"].update(
+        {
+            "gateResultRef": "artifact://gate/result",
+            "remainingWorkRef": "artifact://remaining/work",
+        }
     )
+    body = mock_run_workflow._moonspec_draft_publication_body_section()
+    assert "bounded remediation budget was exhausted" in body
+    assert "Remaining work: artifact://remaining/work" in body
+    assert "Verification gate result: artifact://gate/result" in body
+
+
+@pytest.mark.asyncio
+async def test_moonspec_draft_publication_disables_merge_automation(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._moonspec_draft_publication_reason = (
+        "Additional implementation work remains."
+    )
+
+    await mock_run_workflow._maybe_start_merge_gate(
+        parameters={"mergeAutomation": {"enabled": True}},
+        pull_request_url="https://github.com/org/repo/pull/123",
+    )
+
+    assert (
+        mock_run_workflow._publish_context["mergeAutomationStatus"]
+        == "not_applicable"
+    )
+    assert "disabled" in mock_run_workflow._publish_context[
+        "mergeAutomationSummary"
+    ]
 
 
 def test_additional_work_draft_publish_patch_preserves_old_history_behavior(

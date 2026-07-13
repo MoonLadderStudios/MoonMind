@@ -5929,10 +5929,18 @@ class MoonMindRunWorkflow:
         gate_context = self._publish_context.get("moonSpecGate")
         verdict = None
         diagnostics_ref = None
+        gate_result_ref = None
+        remaining_work_ref = None
         if isinstance(gate_context, Mapping):
             verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
             diagnostics_ref = self._coerce_text(
                 gate_context.get("diagnosticsRef"), max_chars=400
+            )
+            gate_result_ref = self._coerce_text(
+                gate_context.get("gateResultRef"), max_chars=400
+            )
+            remaining_work_ref = self._coerce_text(
+                gate_context.get("remainingWorkRef"), max_chars=400
             )
         draft_context = self._publish_context.get("moonSpecDraftPublication")
         policy = (
@@ -5966,6 +5974,10 @@ class MoonMindRunWorkflow:
             lines.append(f"- Gate outcome: {reason}")
         if diagnostics_ref:
             lines.append(f"- Verification report: {diagnostics_ref}")
+        if remaining_work_ref:
+            lines.append(f"- Remaining work: {remaining_work_ref}")
+        if gate_result_ref and gate_result_ref != diagnostics_ref:
+            lines.append(f"- Verification gate result: {gate_result_ref}")
         lines.append("")
         lines.append(
             "Review the verification evidence before marking this pull "
@@ -9912,7 +9924,10 @@ class MoonMindRunWorkflow:
                     self._get_logger().info(
                         "Skipping native PR creation: publish output not required."
                     )
-                elif push_status == "no_commits":
+                elif (
+                    push_status == "no_commits"
+                    and self._moonspec_draft_publication_reason is None
+                ):
                     self._get_logger().info(
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
@@ -9964,6 +9979,7 @@ class MoonMindRunWorkflow:
                         )
                         pr_url = self._get_from_result(create_result, "url")
                         created = self._get_from_result(create_result, "created")
+                        adopted = self._get_from_result(create_result, "adopted")
                         summary = self._get_from_result(create_result, "summary") or ""
                         created_head_sha = self._coerce_text(
                             self._get_from_result(create_result, "headSha"),
@@ -9971,6 +9987,15 @@ class MoonMindRunWorkflow:
                         )
                         if created_head_sha:
                             self._publish_context["headSha"] = created_head_sha
+                        if (
+                            self._moonspec_draft_publication_reason is not None
+                            and not created
+                            and not adopted
+                        ):
+                            raise ValueError(
+                                "draft PR publication was rejected: "
+                                f"{summary or 'existing pull request is not a draft'}"
+                            )
                         if pr_url:
                             pull_request_url = pr_url
                             self._get_logger().info(
@@ -14223,6 +14248,13 @@ class MoonMindRunWorkflow:
         pull_request_url: str | None,
     ) -> None:
         if not pull_request_url:
+            return
+        if self._moonspec_draft_publication_reason is not None:
+            self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            self._publish_context["mergeAutomationSummary"] = (
+                "Merge automation is disabled for an attention-required "
+                "MoonSpec draft pull request."
+            )
             return
         info = workflow.info()
         payload = self._build_merge_gate_start_payload(
