@@ -2880,6 +2880,23 @@ def test_moonspec_verify_gate_blocks_pr_publish_completion(
     )
 
 
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        "ADDITIONAL_WORK_NEEDED",
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+        "NO_DETERMINATION",
+        "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+    ],
+)
+def test_accepted_verifier_control_evidence_preserves_semantic_verdict(
+    mock_run_workflow: MoonMindRunWorkflow,
+    verdict: str,
+) -> None:
+    assert mock_run_workflow._accepted_verifier_semantic_verdict(verdict) == verdict
+
+
 def test_moonspec_verify_gate_detects_remaining_remediation_budget(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

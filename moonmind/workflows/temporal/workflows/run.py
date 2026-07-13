@@ -5279,6 +5279,11 @@ class MoonMindRunWorkflow:
             return True
         return attempt <= max_attempts
 
+    @staticmethod
+    def _accepted_verifier_semantic_verdict(verdict: str) -> str:
+        """Preserve the verifier-owned semantic result in control evidence."""
+        return verdict
+
     def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
         node_inputs = self._node_inputs_mapping(node)
         if self._moonspec_step_role(node) == "moonspec-remediation":
@@ -9438,7 +9443,14 @@ class MoonMindRunWorkflow:
                                     remediation_successor
                                 )
                             )
-                        accepted_gate_verdict = "ADDITIONAL_WORK_NEEDED"
+                        # The verifier owns the semantic verdict.  Accepting its
+                        # evidence as a completed control operation must not
+                        # rewrite terminal outcomes as remediation work.
+                        accepted_gate_verdict = (
+                            self._accepted_verifier_semantic_verdict(
+                                review_verdict.verdict
+                            )
+                        )
                         accepted_gate_action = (
                             "advance_to_remediation_successor"
                             if remediation_successor is not None
