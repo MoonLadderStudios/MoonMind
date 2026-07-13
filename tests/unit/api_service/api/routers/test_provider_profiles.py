@@ -31,7 +31,25 @@ from api_service.services.provider_profile_service import (
     _manager_profile_payload,
     normalize_runtime_default_profile,
 )
-from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+from api_service.services.provider_profile_readiness import (
+    provider_profile_launch_ready,
+    provider_profile_launch_ready_from_payload,
+)
+from api_service.api.routers.provider_profiles import ProviderProfileCreate
+
+
+def test_codex_oauth_profile_rejects_parallel_capacity_above_one() -> None:
+    with pytest.raises(ValueError, match="require max_parallel_runs=1"):
+        ProviderProfileCreate(
+            profile_id="codex-oauth-invalid-capacity",
+            runtime_id="codex_cli",
+            provider_id="openai",
+            credential_source="oauth_volume",
+            runtime_materialization_mode="oauth_home",
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            max_parallel_runs=2,
+        )
 
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
@@ -63,6 +81,15 @@ def _module_db(tmp_path_factory):
 
 @pytest.fixture
 def client_app(_module_db) -> AsyncClient:
+    async def _maintenance_guard_override():
+        yield object()
+
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+    app.dependency_overrides[
+        provider_profiles_router._credential_disconnect_guard
+    ] = _maintenance_guard_override
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 
@@ -369,6 +396,34 @@ def test_launch_ready_rejects_malformed_secret_refs() -> None:
     profile.secret_refs = {"provider_api_key": 123}
 
     assert provider_profile_launch_ready(profile) is False
+
+
+def test_launch_ready_rejects_nonexclusive_codex_oauth_profile() -> None:
+    profile = _TrackedProfile(
+        profile_id="codex_oauth_legacy_capacity",
+        runtime_id="codex_cli",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        events=[],
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        max_parallel_runs=2,
+    )
+
+    assert provider_profile_launch_ready(profile) is False
+
+    assert provider_profile_launch_ready_from_payload(
+        {
+            "runtimeId": "codex_cli",
+            "credentialSource": "oauth_volume",
+            "runtimeMaterializationMode": "oauth_home",
+            "maxParallelRuns": 2,
+        }
+    ) is False
 
 
 @pytest.mark.asyncio

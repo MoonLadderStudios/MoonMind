@@ -18,14 +18,17 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    event,
     func,
     literal_column,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -35,6 +38,7 @@ from sqlalchemy.orm import (
     Mapped,
     mapped_column,
     relationship,
+    reconstructor,
     validates,
 )
 from sqlalchemy.types import TypeDecorator
@@ -402,6 +406,12 @@ class OmnigentBridgeSession(Base):
     moonmind_agent_run_id: Mapped[str] = mapped_column(String(255), nullable=False)
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    provider_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    provider_lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -2425,6 +2435,15 @@ class ManagedAgentProviderProfile(Base):
             "default_model_tier >= 1",
             name="ck_provider_profiles_default_model_tier_positive",
         ),
+        CheckConstraint(
+            "NOT (runtime_id = 'codex_cli' AND credential_source = 'oauth_volume' "
+            "AND runtime_materialization_mode = 'oauth_home') OR max_parallel_runs = 1",
+            name="ck_provider_profiles_codex_oauth_exclusive_capacity",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_provider_profiles_credential_generation_positive",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2435,6 +2454,9 @@ class ManagedAgentProviderProfile(Base):
     )
 
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    credential_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
     provider_id: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown", server_default=text("'unknown'"))
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -2680,9 +2702,210 @@ class ProviderProfileSlotLease(Base):
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    lease_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    purpose: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="execution_direct", server_default=text("'execution_direct'")
+    )
+    owner_is_workflow: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    oauth_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class OmnigentOAuthHostBindingRecord(Base):
+    """Durable, secret-free configuration for one profile-bound OAuth host."""
+
+    __tablename__ = "omnigent_oauth_host_bindings"
+    __table_args__ = (
+        UniqueConstraint("provider_profile_id", name="uq_omnigent_oauth_binding_profile"),
+        UniqueConstraint(
+            "binding_ref",
+            "provider_profile_id",
+            name="uq_omnigent_oauth_binding_ref_profile",
+        ),
+    )
+
+    binding_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"), nullable=False
+    )
+    endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    harness: Mapped[str] = mapped_column(String(64), nullable=False)
+    credential_mount_template_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    static_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_launch_profile_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.validate_credential_mount_ref()
+
+    @reconstructor
+    def _validate_loaded_credential_mount_ref(self) -> None:
+        self.validate_credential_mount_ref()
+
+    def validate_credential_mount_ref(self) -> None:
+        """Validate the portable mount contract on construction and ORM load."""
+
+        from moonmind.schemas.agent_runtime_models import CredentialMountRef
+
+        mount_ref = CredentialMountRef.model_validate(
+            self.credential_mount_template_json
+        )
+        if mount_ref.auth_volume_ref.provider_profile_id != self.provider_profile_id:
+            raise ValueError(
+                "credential_mount_template_json must belong to provider_profile_id"
+            )
+
+
+class OmnigentOAuthHostLeaseRecord(Base):
+    """Durable lifecycle state for the single host consuming an OAuth profile."""
+
+    __tablename__ = "omnigent_oauth_host_leases"
+    __table_args__ = (
+        UniqueConstraint("provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"),
+        UniqueConstraint("idempotency_key", name="uq_omnigent_oauth_host_idempotency"),
+        CheckConstraint(
+            "status IN ('allocating','starting','ready','assigned','draining','stopped','failed')",
+            name="ck_omnigent_oauth_host_lease_status",
+        ),
+        ForeignKeyConstraint(
+            ["binding_ref", "provider_profile_id"],
+            [
+                "omnigent_oauth_host_bindings.binding_ref",
+                "omnigent_oauth_host_bindings.provider_profile_id",
+            ],
+            name="fk_omnigent_oauth_host_lease_binding_profile",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "credential_generation >= 1",
+            name="ck_omnigent_oauth_host_lease_generation",
+        ),
+        CheckConstraint(
+            "expires_at > acquired_at",
+            name="ck_omnigent_oauth_host_lease_expiry",
+        ),
+        Index(
+            "ux_omnigent_oauth_host_lease_active_profile",
+            "provider_profile_id",
+            unique=True,
+            sqlite_where=text("status IN ('allocating','starting','ready','assigned','draining')"),
+            postgresql_where=text("status IN ('allocating','starting','ready','assigned','draining')"),
+        ),
+        Index("ix_omnigent_oauth_host_lease_profile", "provider_profile_id"),
+        Index("ix_omnigent_oauth_host_lease_workflow", "holder_workflow_id"),
+        Index("ix_omnigent_oauth_host_lease_expiry", "expires_at"),
+    )
+
+    lease_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("managed_agent_provider_profiles.profile_id", ondelete="CASCADE"), nullable=False
+    )
+    provider_lease_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    binding_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    holder_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    lease_purpose: Mapped[str] = mapped_column(String(64), nullable=False)
+    container_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    bridge_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ready_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    draining_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cleanup_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(96), nullable=True)
+    error_summary: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
+    def validate_binding_generation(
+        self,
+        *,
+        binding: OmnigentOAuthHostBindingRecord,
+        profile: ManagedAgentProviderProfile,
+    ) -> None:
+        """Reject a lease that does not match its binding and credential generation."""
+
+        binding.validate_credential_mount_ref()
+        from moonmind.schemas.agent_runtime_models import CredentialMountRef
+
+        mount_ref = CredentialMountRef.model_validate(
+            binding.credential_mount_template_json
+        )
+        mount_generation = mount_ref.auth_volume_ref.credential_generation
+        if (
+            binding.binding_ref != self.binding_ref
+            or binding.provider_profile_id != self.provider_profile_id
+            or profile.profile_id != self.provider_profile_id
+        ):
+            raise ValueError("host lease binding must belong to provider_profile_id")
+        if (
+            self.credential_generation != mount_generation
+            or self.credential_generation != profile.credential_generation
+        ):
+            raise ValueError(
+                "host lease credential_generation must match binding and profile"
+            )
+
+
+@event.listens_for(OmnigentOAuthHostLeaseRecord, "before_insert")
+@event.listens_for(OmnigentOAuthHostLeaseRecord, "before_update")
+def _validate_omnigent_oauth_host_lease_generation(
+    _mapper: Any,
+    connection: Any,
+    target: OmnigentOAuthHostLeaseRecord,
+) -> None:
+    """Fail closed when a host lease carries stale credential identity."""
+
+    binding_table = OmnigentOAuthHostBindingRecord.__table__
+    profile_table = ManagedAgentProviderProfile.__table__
+    binding_row = connection.execute(
+        select(
+            binding_table.c.provider_profile_id,
+            binding_table.c.credential_mount_template_json,
+        ).where(binding_table.c.binding_ref == target.binding_ref)
+    ).mappings().one_or_none()
+    if binding_row is None:
+        raise ValueError("host lease binding_ref does not exist")
+    profile_generation = connection.execute(
+        select(profile_table.c.credential_generation).where(
+            profile_table.c.profile_id == target.provider_profile_id
+        )
+    ).scalar_one_or_none()
+    if profile_generation is None:
+        raise ValueError("host lease provider_profile_id does not exist")
+
+    from moonmind.schemas.agent_runtime_models import CredentialMountRef
+
+    mount_ref = CredentialMountRef.model_validate(
+        binding_row["credential_mount_template_json"]
+    )
+    if (
+        target.credential_generation
+        != mount_ref.auth_volume_ref.credential_generation
+        or target.credential_generation != profile_generation
+    ):
+        raise ValueError(
+            "host lease credential_generation must match binding and profile"
+        )
 
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""

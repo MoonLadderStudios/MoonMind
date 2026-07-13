@@ -1,23 +1,14 @@
 {
   "artifact_type": "remediation.verification",
   "attempt": 1,
-  "remediationAttempt": 1,
-  "verifiesRemediationAttempt": 1,
-  "remediationAttemptArtifact": "reports/remediation_attempt-1.json",
-  "authoritativeVerifierArtifact": "artifacts/jira-implement-verify.json",
+  "issueRef": "MM-1207",
   "verificationTarget": "issue_brief",
-  "issueRef": "MM-1209",
-  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/reports/remediation_attempt-1.json",
+  "verifierResultArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json",
   "verdict": "ADDITIONAL_WORK_NEEDED",
+  "authoritativeVerdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "summary": "Attempt 1 corrected fail-closed failure handling, direct-finalizer timing, and much of the typed ownership envelope. The whole target state remains incomplete because full real-workflow topology coverage, Temporal replay fixtures, complete identity binding, observability/counters, and documentation closeout remain.",
-  "remainingWork": [
-    "Full real MergeAutomation -> UserWorkflow -> AgentRun topology and adverse-variant tests",
-    "Old/new/legacy/rejected Temporal replay fixtures",
-    "Authoritative child run and execution-reference binding",
-    "Complete continuation attempt evidence and counters",
-    "Terminal-contract and managed-runtime documentation closeout"
-  ],
-  "remainingWorkRef": "artifacts/jira-implement-verify.json#/remainingWork"
+  "summary": "Attempt 1 verifies the Settings fixed-capacity sub-gap (56 focused UI tests pass), but the target state remains substantially incomplete across shared leasing, host binding/materialization/preflight/routing, generation and cleanup lifecycle, recovery, diagnostics, and boundary coverage.",
+  "remainingWorkRef": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json#/remainingWork"
 }

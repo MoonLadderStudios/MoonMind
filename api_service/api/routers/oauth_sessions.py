@@ -7,7 +7,14 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -39,6 +46,9 @@ from api_service.db.models import (
     ManagedAgentRateLimitPolicy,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.provider_profiles.oauth_policy import (
+    effective_oauth_capacity_for_finalization,
+)
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
@@ -75,6 +85,7 @@ _FINALIZE_SUPERSEDING_STATUSES = (
 _SUPPORTED_SESSION_TRANSPORTS = {"none", "moonmind_pty_ws", "tmate"}
 _oauth_terminal_pty_adapter_factory = create_docker_exec_pty_adapter
 
+
 def _make_terminal_output_sender(websocket: WebSocket):
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
@@ -85,9 +96,12 @@ def _make_terminal_output_sender(websocket: WebSocket):
 
     return _send_terminal_output
 
+
 def _resolve_session_transport(runtime_id: str, requested_transport: str | None) -> str:
     default_transport = _oauth_default(runtime_id, "session_transport") or "none"
-    raw_transport = requested_transport if requested_transport is not None else default_transport
+    raw_transport = (
+        requested_transport if requested_transport is not None else default_transport
+    )
     session_transport = str(raw_transport).strip() or "none"
     if session_transport not in _SUPPORTED_SESSION_TRANSPORTS:
         raise HTTPException(
@@ -99,6 +113,7 @@ def _resolve_session_transport(runtime_id: str, requested_transport: str | None)
         )
     return session_transport
 
+
 async def _close_for_pty_io_error(
     websocket: WebSocket,
 ) -> tuple[bool, str]:
@@ -108,6 +123,7 @@ async def _close_for_pty_io_error(
     )
     await websocket.close(code=1011)
     return True, "pty_disconnected"
+
 
 async def _handle_oauth_terminal_ws_message(
     message,
@@ -165,6 +181,7 @@ async def _handle_oauth_terminal_ws_message(
         return True, "client_closed"
     return False, None
 
+
 async def _persist_oauth_terminal_close_metadata(
     session_id: str,
     *,
@@ -188,22 +205,31 @@ async def _persist_oauth_terminal_close_metadata(
             session_obj.disconnected_at = _utcnow()
             await db.commit()
 
+
 def _hash_attach_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
 
 def _as_aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
+
 def _oauth_session_is_expired(session: ManagedAgentOAuthSession) -> bool:
-    return session.expires_at is not None and _as_aware_utc(session.expires_at) <= _utcnow()
+    return (
+        session.expires_at is not None
+        and _as_aware_utc(session.expires_at) <= _utcnow()
+    )
+
 
 def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
+
 
 def _provider_profile_summary(
     profile: ManagedAgentProviderProfile | None,
@@ -223,6 +249,7 @@ def _provider_profile_summary(
         rate_limit_policy=profile.rate_limit_policy.value,
     )
 
+
 def _oauth_session_response(
     session: ManagedAgentOAuthSession,
     *,
@@ -241,6 +268,7 @@ def _oauth_session_response(
         created_at=session.created_at,
         profile_summary=_provider_profile_summary(profile),
     )
+
 
 async def _get_profile_for_session(
     db: AsyncSession,
@@ -265,6 +293,7 @@ async def _get_profile_for_session(
     )
     return result.scalars().first()
 
+
 async def _oauth_session_is_superseded(
     db: AsyncSession,
     session: ManagedAgentOAuthSession,
@@ -283,9 +312,8 @@ async def _oauth_session_is_superseded(
     )
     return result.first() is not None
 
-async def _expire_stale_active_sessions(
-    db: AsyncSession, *, profile_id: str
-) -> None:
+
+async def _expire_stale_active_sessions(db: AsyncSession, *, profile_id: str) -> None:
     """Expire stale non-terminal sessions so ghost rows don't block new starts."""
     cutoff = datetime.now(timezone.utc) - timedelta(
         minutes=_STALE_ACTIVE_SESSION_MINUTES
@@ -311,7 +339,10 @@ async def _expire_stale_active_sessions(
             )
     await db.commit()
 
-@router.post("", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_oauth_session(
     request: CreateOAuthSessionRequest,
     db: AsyncSession = Depends(get_async_session),
@@ -358,18 +389,18 @@ async def create_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.profile_id == request.profile_id,
-            ManagedAgentOAuthSession.status.in_(_ACTIVE_SESSION_STATUSES)
+            ManagedAgentOAuthSession.status.in_(_ACTIVE_SESSION_STATUSES),
         )
     )
     existing_session = result.scalars().first()
     if existing_session:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="An active OAuth session already exists for this profile."
+            detail="An active OAuth session already exists for this profile.",
         )
 
     session_id = f"oas_{uuid.uuid4().hex[:12]}"
-    
+
     new_session = ManagedAgentOAuthSession(
         session_id=session_id,
         runtime_id=request.runtime_id,
@@ -389,12 +420,12 @@ async def create_oauth_session(
             "max_parallel_runs": request.max_parallel_runs,
             "cooldown_after_429_seconds": request.cooldown_after_429_seconds,
             "rate_limit_policy": request.rate_limit_policy.value,
-        }
+        },
     )
     db.add(new_session)
     await db.commit()
     await db.refresh(new_session)
-    
+
     from api_service.services.oauth_session_service import start_oauth_session_workflow
 
     try:
@@ -411,6 +442,7 @@ async def create_oauth_session(
 
     return _oauth_session_response(new_session, profile=existing_profile)
 
+
 @router.get("/{session_id}", response_model=OAuthSessionResponse)
 async def get_oauth_session(
     session_id: str,
@@ -420,15 +452,18 @@ async def get_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id)
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session = result.scalars().first()
     if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
+        )
 
     profile = await _get_profile_for_session(db, session, current_user=current_user)
     return _oauth_session_response(session, profile=profile)
+
 
 @router.post("/{session_id}/cancel")
 async def cancel_oauth_session(
@@ -439,30 +474,37 @@ async def cancel_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id)
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session = result.scalars().first()
     if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
+        )
+
     if session.status not in [
         OAuthSessionStatus.PENDING,
         OAuthSessionStatus.STARTING,
         OAuthSessionStatus.BRIDGE_READY,
         OAuthSessionStatus.AWAITING_USER,
-        OAuthSessionStatus.VERIFYING
+        OAuthSessionStatus.VERIFYING,
     ]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session cannot be cancelled in its current state")
-        
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session cannot be cancelled in its current state",
+        )
+
     session.status = OAuthSessionStatus.CANCELLED
     session.cancelled_at = datetime.now(timezone.utc)
     await db.commit()
-    
+
     from api_service.services.oauth_session_service import cancel_oauth_session_workflow
+
     await cancel_oauth_session_workflow(session_id)
-    
+
     return {"status": "cancelled"}
+
 
 @router.post(
     "/{session_id}/terminal/attach",
@@ -514,12 +556,12 @@ async def attach_oauth_terminal(
         terminal_session_id=session_obj.terminal_session_id,
         terminal_bridge_id=session_obj.terminal_bridge_id,
         websocket_url=(
-            f"/api/v1/oauth-sessions/{session_obj.session_id}/terminal/ws"
-            f"?token={token}"
+            f"/api/v1/oauth-sessions/{session_obj.session_id}/terminal/ws?token={token}"
         ),
         attach_token=token,
         expires_at=session_obj.expires_at,
     )
+
 
 @router.websocket("/{session_id}/terminal/ws")
 async def oauth_terminal_websocket(
@@ -533,9 +575,9 @@ async def oauth_terminal_websocket(
     close_reason = "client_disconnected"
     async with get_async_session_context() as db:
         result = await db.execute(
-            select(ManagedAgentOAuthSession).where(
-                ManagedAgentOAuthSession.session_id == session_id
-            ).with_for_update()
+            select(ManagedAgentOAuthSession)
+            .where(ManagedAgentOAuthSession.session_id == session_id)
+            .with_for_update()
         )
         session_obj = result.scalars().first()
         metadata = dict(session_obj.metadata_json or {}) if session_obj else {}
@@ -601,7 +643,10 @@ async def oauth_terminal_websocket(
         )
         while True:
             message = await websocket.receive()
-            should_close, message_close_reason = await _handle_oauth_terminal_ws_message(
+            (
+                should_close,
+                message_close_reason,
+            ) = await _handle_oauth_terminal_ws_message(
                 message,
                 bridge=bridge,
                 pty_adapter=pty_adapter,
@@ -634,6 +679,36 @@ async def oauth_terminal_websocket(
             bridge=bridge,
         )
 
+
+async def _reconcile_registered_credential_generation(
+    db: AsyncSession,
+    *,
+    session_obj: ManagedAgentOAuthSession,
+    profile_obj: ManagedAgentProviderProfile,
+) -> None:
+    """Finish host-generation side effects after the profile commit.
+
+    The session metadata is the retry marker: a crash after committing the
+    profile row can safely resume this reconciliation from REGISTERING_PROFILE.
+    """
+
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    metadata = dict(session_obj.metadata_json or {})
+    repository = OmnigentOAuthHostRepository(get_async_session_context)
+    await repository.refresh_binding_generation(profile_obj.profile_id)
+    if metadata.get("credential_generation_changed") is True and not metadata.get(
+        "credential_generation_reconciled"
+    ):
+        await repository.mark_generation_stale(
+            profile_id=profile_obj.profile_id,
+            credential_generation=profile_obj.credential_generation,
+        )
+        metadata["credential_generation_reconciled"] = True
+        session_obj.metadata_json = metadata
+        await db.commit()
+
+
 @router.post("/{session_id}/finalize", response_model=OAuthSessionResponse)
 async def finalize_oauth_session(
     session_id: str,
@@ -643,14 +718,19 @@ async def finalize_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id)
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session_obj = result.scalars().first()
     if not session_obj:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
+        )
 
-    if _oauth_session_is_expired(session_obj) and session_obj.status != OAuthSessionStatus.SUCCEEDED:
+    if (
+        _oauth_session_is_expired(session_obj)
+        and session_obj.status != OAuthSessionStatus.SUCCEEDED
+    ):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="OAuth session has expired.",
@@ -677,6 +757,11 @@ async def finalize_oauth_session(
             db, session_obj, current_user=current_user
         )
         if profile is not None:
+            await _reconcile_registered_credential_generation(
+                db,
+                session_obj=session_obj,
+                profile_obj=profile,
+            )
             session_obj.status = OAuthSessionStatus.SUCCEEDED
             session_obj.completed_at = datetime.now(timezone.utc)
             await db.commit()
@@ -689,7 +774,10 @@ async def finalize_oauth_session(
         OAuthSessionStatus.VERIFYING,
         OAuthSessionStatus.REGISTERING_PROFILE,
     ]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot finalize session in {session_obj.status.name} state",
+        )
 
     if not skip_verification:
         session_obj.status = OAuthSessionStatus.VERIFYING
@@ -756,15 +844,17 @@ async def finalize_oauth_session(
     )
     existing_profile = profile_result.scalars().first()
 
-    metadata = session_obj.metadata_json or {}
-    policy_str = metadata.get("rate_limit_policy", ManagedAgentRateLimitPolicy.BACKOFF.value)
-    
+    metadata = dict(session_obj.metadata_json or {})
+    policy_str = metadata.get(
+        "rate_limit_policy", ManagedAgentRateLimitPolicy.BACKOFF.value
+    )
+
     try:
         policy_enum = ManagedAgentRateLimitPolicy(policy_str)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported rate_limit_policy: {policy_str}"
+            detail=f"Unsupported rate_limit_policy: {policy_str}",
         )
 
     if (
@@ -778,6 +868,16 @@ async def finalize_oauth_session(
         )
 
     connected_at = datetime.now(timezone.utc)
+    try:
+        effective_max_parallel_runs = effective_oauth_capacity_for_finalization(
+            runtime_id=session_obj.runtime_id,
+            requested_capacity=metadata.get("max_parallel_runs", 1),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     profile_data = {
         "runtime_id": session_obj.runtime_id,
         "provider_id": metadata.get("provider_id")
@@ -790,7 +890,7 @@ async def finalize_oauth_session(
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,
-        "max_parallel_runs": metadata.get("max_parallel_runs", 1),
+        "max_parallel_runs": effective_max_parallel_runs,
         "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
         "rate_limit_policy": policy_enum,
         "enabled": True,
@@ -802,6 +902,10 @@ async def finalize_oauth_session(
         "last_validated_at": connected_at,
         "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
     }
+    if metadata.get("max_parallel_runs", 1) != effective_max_parallel_runs:
+        metadata["max_parallel_runs"] = effective_max_parallel_runs
+        metadata["capacity_normalized_to_exclusive"] = True
+        session_obj.metadata_json = metadata
     try:
         validate_codex_oauth_profile_refs(
             runtime_id=session_obj.runtime_id,
@@ -809,6 +913,7 @@ async def finalize_oauth_session(
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME.value,
             volume_ref=session_obj.volume_ref,
             volume_mount_path=session_obj.volume_mount_path,
+            max_parallel_runs=effective_max_parallel_runs,
             volume_ref_field_name="volume_ref",
             volume_mount_path_field_name="volume_mount_path",
         )
@@ -830,17 +935,33 @@ async def finalize_oauth_session(
 
     profile_obj: ManagedAgentProviderProfile
     if existing_profile:
+        reconnecting = bool(
+            metadata.get("registered_credential_generation") is None
+            and existing_profile.first_authenticated_at
+            and existing_profile.last_auth_method
+            == ProviderProfileAuthMethod.OAUTH_VOLUME
+        )
         for key, value in profile_data.items():
             setattr(existing_profile, key, value)
+        if reconnecting:
+            existing_profile.credential_generation += 1
+        effective_generation = existing_profile.credential_generation
         profile_obj = existing_profile
     else:
         new_profile = ManagedAgentProviderProfile(
             profile_id=session_obj.profile_id,
             owner_user_id=current_user.id,
-            **profile_data
+            **profile_data,
         )
         db.add(new_profile)
         profile_obj = new_profile
+        reconnecting = False
+        effective_generation = 1
+
+    metadata["registered_credential_generation"] = effective_generation
+    if reconnecting:
+        metadata["credential_generation_changed"] = True
+    session_obj.metadata_json = metadata
 
     # Stamp the documented OAuth-after-setup metadata (home_path_overrides and
     # connected credential-method readiness) for first-party Claude/Codex
@@ -855,6 +976,12 @@ async def finalize_oauth_session(
 
     await db.commit()
 
+    await _reconcile_registered_credential_generation(
+        db,
+        session_obj=session_obj,
+        profile_obj=profile_obj,
+    )
+
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
 
     session_obj.status = OAuthSessionStatus.SUCCEEDED
@@ -866,6 +993,7 @@ async def finalize_oauth_session(
     await _complete_oauth_session_workflow(session_obj.session_id)
 
     return _oauth_session_response(session_obj, profile=profile_obj)
+
 
 async def _disable_profile_after_failed_verification(
     db: AsyncSession,
@@ -888,9 +1016,8 @@ async def _disable_profile_after_failed_verification(
     profile = await db.get(ManagedAgentProviderProfile, session_obj.profile_id)
     if profile is None:
         return
-    if (
-        profile.owner_user_id is not None
-        and str(profile.owner_user_id) != str(current_user.id)
+    if profile.owner_user_id is not None and str(profile.owner_user_id) != str(
+        current_user.id
     ):
         return
     apply_oauth_validation_failure(
@@ -925,15 +1052,20 @@ async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None
             exc_info=True,
         )
 
+
 async def _complete_oauth_session_workflow(session_id: str) -> None:
-    from api_service.services.oauth_session_service import complete_oauth_session_workflow
+    from api_service.services.oauth_session_service import (
+        complete_oauth_session_workflow,
+    )
 
     await complete_oauth_session_workflow(session_id)
+
 
 async def _fail_oauth_session_workflow(session_id: str, reason: str) -> None:
     from api_service.services.oauth_session_service import fail_oauth_session_workflow
 
     await fail_oauth_session_workflow(session_id, reason)
+
 
 @router.get("/history/{profile_id}")
 async def get_session_history(
@@ -946,10 +1078,13 @@ async def get_session_history(
     from sqlalchemy import desc
 
     result = await db.execute(
-        select(ManagedAgentOAuthSession).where(
+        select(ManagedAgentOAuthSession)
+        .where(
             ManagedAgentOAuthSession.profile_id == profile_id,
             ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
-        ).order_by(desc(ManagedAgentOAuthSession.created_at)).limit(min(limit, 100))
+        )
+        .order_by(desc(ManagedAgentOAuthSession.created_at))
+        .limit(min(limit, 100))
     )
     sessions = result.scalars().all()
 
@@ -966,7 +1101,12 @@ async def get_session_history(
         for s in sessions
     ]
 
-@router.post("/{session_id}/reconnect", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/{session_id}/reconnect",
+    response_model=OAuthSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def reconnect_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
@@ -984,7 +1124,9 @@ async def reconnect_oauth_session(
     )
     old_session = result.scalars().first()
     if not old_session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
+        )
 
     reconnectable_statuses = [
         OAuthSessionStatus.EXPIRED,
@@ -1011,7 +1153,10 @@ async def reconnect_oauth_session(
         requested_by_user_id=str(current_user.id),
         status=OAuthSessionStatus.PENDING,
         created_at=datetime.now(timezone.utc),
-        metadata_json=old_session.metadata_json,
+        metadata_json={
+            **dict(old_session.metadata_json or {}),
+            "maintenance_purpose": "oauth_reconnect",
+        },
     )
     db.add(new_session)
     await db.commit()
@@ -1021,6 +1166,7 @@ async def reconnect_oauth_session(
         from api_service.services.oauth_session_service import (
             start_oauth_session_workflow,
         )
+
         await start_oauth_session_workflow(new_session)
     except Exception:
         logger.exception(

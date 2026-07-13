@@ -602,6 +602,10 @@ function canRetryOAuthStatus(status: OAuthSessionStatus): boolean {
 }
 
 function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePayload {
+  const isCodexOAuth =
+    form.runtimeId.trim() === 'codex_cli' &&
+    form.credentialSource === 'oauth_volume' &&
+    form.runtimeMaterializationMode === 'oauth_home';
   const payload = {
     profile_id: form.profileId.trim(),
     runtime_id: form.runtimeId.trim(),
@@ -614,7 +618,7 @@ function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePa
     secret_refs: parseSecretRefs(form.secretRefsText),
     volume_ref: form.volumeRef.trim() || null,
     volume_mount_path: form.volumeMountPath.trim() || null,
-    max_parallel_runs: Number(form.maxParallelRuns),
+    max_parallel_runs: isCodexOAuth ? 1 : Number(form.maxParallelRuns),
     cooldown_after_429_seconds: Number(form.cooldownAfter429Seconds),
     rate_limit_policy: form.rateLimitPolicy,
     enabled: form.enabled,
@@ -656,6 +660,10 @@ export function ProviderProfilesManager({
   const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
 
   const isEditing = editingProfileId !== null;
+  const isCodexOAuthForm =
+    form.runtimeId.trim() === 'codex_cli' &&
+    form.credentialSource === 'oauth_volume' &&
+    form.runtimeMaterializationMode === 'oauth_home';
   const defaultFormValues = defaultFormState();
 
   const updateClaudeEnrollmentForProfile = (
@@ -2137,8 +2145,9 @@ export function ProviderProfilesManager({
                 <input
                   type="number"
                   min="1"
+                  disabled={isCodexOAuthForm}
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.maxParallelRuns}
+                  value={isCodexOAuthForm ? '1' : form.maxParallelRuns}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,
@@ -2147,7 +2156,9 @@ export function ProviderProfilesManager({
                   }
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">
-                  Default: {defaultFormValues.maxParallelRuns}
+                  {isCodexOAuthForm
+                    ? 'Fixed at 1 because the Codex OAuth home is an exclusive mutable identity.'
+                    : `Default: ${defaultFormValues.maxParallelRuns}`}
                 </p>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">

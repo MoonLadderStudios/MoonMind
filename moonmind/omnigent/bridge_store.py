@@ -153,9 +153,7 @@ class OmnigentBridgeSessionStore:
 
         metadata = dict(target_metadata or {})
         resolved_workflow_id = (workflow_id or "").strip() or _workflow_id(request)
-        resolved_agent_run_id = (
-            agent_run_id or ""
-        ).strip() or _agent_run_id(request)
+        resolved_agent_run_id = (agent_run_id or "").strip() or _agent_run_id(request)
         async with self._session_factory() as session:
             row = await self._get(session, request.idempotency_key)
             if row is None:
@@ -196,6 +194,108 @@ class OmnigentBridgeSessionStore:
             await session.refresh(row)
             return _detached(session, row)
 
+    async def bind_profile_authorization(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        endpoint_ref: str,
+        provider_profile_id: str,
+        provider_lease_id: str,
+        credential_generation: int,
+        host_binding_ref: str,
+        host_lease_ref: str,
+        omnigent_host_id: str | None,
+    ) -> OmnigentBridgeSession:
+        """Persist lease-authorized routing before provider session creation."""
+
+        await self.get_or_create(
+            request=request,
+            endpoint_ref=endpoint_ref,
+            agent_id=None,
+            agent_name=None,
+            target_metadata={
+                "providerProfileId": provider_profile_id,
+                "providerLeaseId": provider_lease_id,
+                "credentialGeneration": credential_generation,
+                "hostBindingRef": host_binding_ref,
+                "hostLeaseRef": host_lease_ref,
+                "omnigentHostId": omnigent_host_id,
+            },
+        )
+        async with self._session_factory() as session:
+            stored = await self._require(session, request.idempotency_key)
+            expected = {
+                "provider_profile_id": provider_profile_id,
+                "provider_lease_id": provider_lease_id,
+                "credential_generation": credential_generation,
+                "host_binding_ref": host_binding_ref,
+                "host_lease_ref": host_lease_ref,
+            }
+            for field, value in expected.items():
+                current = getattr(stored, field)
+                if current is not None and current != value:
+                    raise OmnigentIdempotencyError(
+                        f"bridge authorization field {field} is already bound"
+                    )
+                setattr(stored, field, value)
+            if stored.omnigent_host_id and omnigent_host_id:
+                if stored.omnigent_host_id != omnigent_host_id:
+                    raise OmnigentIdempotencyError(
+                        "bridge authorization is already bound to another host"
+                    )
+            elif omnigent_host_id:
+                stored.omnigent_host_id = omnigent_host_id
+            await session.commit()
+            await session.refresh(stored)
+            return _detached(session, stored)
+
+    async def record_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        code: str | None = None,
+        summary: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> OmnigentBridgeSession:
+        """Append a bounded, secret-safe pre-stream lifecycle event."""
+
+        from moonmind.utils.logging import redact_sensitive_text
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            row_metadata = dict(row.metadata_ or {})
+            journal = list(row_metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
+            entry = {
+                "type": str(event_type)[:96],
+                "sequence": len(journal) + 1,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+            }
+            if code:
+                entry["code"] = str(code)[:96]
+            if summary:
+                entry["summary"] = redact_sensitive_text(summary)[:512]
+            if metadata:
+                entry["metadata"] = {
+                    str(key)[:64]: value
+                    for key, value in metadata.items()
+                    if key
+                    in {
+                        "providerProfileId",
+                        "providerLeaseId",
+                        "credentialGeneration",
+                        "hostBindingRef",
+                        "hostLeaseRef",
+                        "omnigentHostId",
+                    }
+                }
+            journal.append(entry)
+            row_metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal[-100:]
+            row.metadata_ = row_metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
     async def get_binding(self, idempotency_key: str) -> BridgeSessionBinding | None:
         """Return the MoonMind identity already bound to a bridge session.
 
@@ -213,9 +313,7 @@ class OmnigentBridgeSessionStore:
                 agent_run_id=row.moonmind_agent_run_id,
             )
 
-    async def get_existing(
-        self, idempotency_key: str
-    ) -> OmnigentBridgeSession | None:
+    async def get_existing(self, idempotency_key: str) -> OmnigentBridgeSession | None:
         """Return the durable bridge row for an idempotency key, if any.
 
         Read-only lookup so the Session API Facade can inspect an already
@@ -233,9 +331,7 @@ class OmnigentBridgeSessionStore:
                 return None
             return _detached(session, row)
 
-    async def get_session_owner(
-        self, session_id: str
-    ) -> BridgeSessionBinding | None:
+    async def get_session_owner(self, session_id: str) -> BridgeSessionBinding | None:
         """Return the MoonMind identity bound to a provider ``session_id``.
 
         Read-only lookup used to authorize direct session reads at the facade
@@ -365,6 +461,17 @@ class OmnigentBridgeSessionStore:
                     "idempotency key already maps to a different Omnigent session"
                 )
             row.omnigent_session_id = session_id
+            if row.host_lease_ref:
+                from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+                host_lease = await session.get(
+                    OmnigentOAuthHostLeaseRecord, row.host_lease_ref
+                )
+                if host_lease is not None:
+                    host_lease.omnigent_session_id = session_id
+                    host_lease.bridge_session_id = row.bridge_session_id
+                    if row.omnigent_host_id:
+                        host_lease.omnigent_host_id = row.omnigent_host_id
             if row.status == STATUS_DECLARED:
                 row.status = STATUS_CREATING
             await session.commit()
@@ -457,7 +564,9 @@ class OmnigentBridgeSessionStore:
             row.first_message_posted_at = datetime.now(tz=UTC)
             response = response or {}
             row.first_message_pending_id = _string_or_none(response.get("pending_id"))
-            row.first_message_item_id = item_id or _string_or_none(response.get("item_id"))
+            row.first_message_item_id = item_id or _string_or_none(
+                response.get("item_id")
+            )
             if row.status in _LIFECYCLE_STATUSES:
                 row.status = STATUS_ACTIVE
             await session.commit()
@@ -509,7 +618,9 @@ class OmnigentBridgeSessionStore:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSessionEvent)
-                .where(OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id)
+                .where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id
+                )
                 .order_by(OmnigentBridgeSessionEvent.sequence)
             )
             rows = list(result.scalars().all())
@@ -561,11 +672,15 @@ class OmnigentBridgeSessionStore:
                 if normalized is None:
                     continue
                 coalesced = coalesce_bridge_status(normalized)
-                if next_status in _TERMINAL_STATUSES and coalesced not in _TERMINAL_STATUSES:
+                if (
+                    next_status in _TERMINAL_STATUSES
+                    and coalesced not in _TERMINAL_STATUSES
+                ):
                     continue
                 next_status = coalesced
             if next_status is not None and not (
-                row.status in _TERMINAL_STATUSES and next_status not in _TERMINAL_STATUSES
+                row.status in _TERMINAL_STATUSES
+                and next_status not in _TERMINAL_STATUSES
             ):
                 row.status = next_status
             await session.commit()

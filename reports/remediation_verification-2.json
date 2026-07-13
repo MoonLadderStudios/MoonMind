@@ -1,50 +1,14 @@
 {
   "artifact_type": "remediation.verification",
   "attempt": 2,
-  "remediationAttempt": 2,
-  "verifiesRemediationAttempt": 2,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-2.json",
-  "verificationTarget": "MM-1201",
-  "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
+  "issueRef": "MM-1207",
+  "verificationTarget": "issue_brief",
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/reports/remediation_attempt-2.json",
+  "verifierResultArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json",
   "verdict": "ADDITIONAL_WORK_NEEDED",
+  "authoritativeVerdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [
-    {
-      "requirement": "Runtime-neutral capability-aware continuation",
-      "gapType": "implementation",
-      "remainingWork": "Move bounded terminal-contract continuation out of CodexSessionAdapter into replay-safe, capability-aware AgentRun orchestration and cover supported and unsupported runtimes.",
-      "suggestedEvidence": "moonmind/workflows/temporal/workflows/agent_run.py; moonmind/workflows/adapters/codex_session_adapter.py; AgentRun workflow tests",
-      "recoverableInCurrentRuntime": true
-    },
-    {
-      "requirement": "Coherent parent and UI projections",
-      "gapType": "verification",
-      "remainingWork": "Prove finishOutcome, mm_state, closeStatus, ledger, dashboard, diagnostics, queued count, and partial child IDs agree through the parent boundary.",
-      "suggestedEvidence": "tests/unit/workflows/temporal/workflows/test_run_integration.py; frontend dashboard tests",
-      "recoverableInCurrentRuntime": true
-    },
-    {
-      "requirement": "Real reliability replay",
-      "gapType": "verification",
-      "remainingWork": "Drive AgentRun terminal evaluation and parent finalization/projection rather than directly invoking the evaluator.",
-      "suggestedEvidence": "tests/integration/reliability/test_escaped_failure_journeys.py",
-      "recoverableInCurrentRuntime": true
-    }
-  ],
-  "resolvedInAttempt": [
-    {
-      "requirement": "Complete helper failure matrix",
-      "evidence": "tests/unit/test_batch_workflows.py:607-693; targeted unit suite passed 176 tests."
-    }
-  ],
-  "testSummary": {
-    "unit": "PASS (176)",
-    "workflowBoundary": "PASS (150)",
-    "reliability": "PASS (3)"
-  },
-  "environmentNotes": [
-    "The issue brief is complete; no recovery was needed.",
-    "Workspace projection preflight passed."
-  ]
+  "summary": "Attempt 2 verifies by inspection that startup repair for legacy Codex OAuth capacity was added, but its test cannot run because pytest is unavailable. The authoritative whole-target state remains incomplete across shared leasing, host materialization/preflight/routing, generation and cleanup lifecycle, recovery, diagnostics, and boundary coverage.",
+  "remainingWorkRef": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json#/remainingWork"
 }

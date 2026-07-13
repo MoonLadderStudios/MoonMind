@@ -91,6 +91,7 @@ from api_service.auth import (
     fastapi_users,
 )
 from moonmind.config.settings import settings
+from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
@@ -985,6 +986,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             existing_result = await session.execute(
                 select(
                     ManagedAgentProviderProfile.profile_id,
+                    ManagedAgentProviderProfile.runtime_id,
                     ManagedAgentProviderProfile.provider_id,
                     ManagedAgentProviderProfile.provider_label,
                     ManagedAgentProviderProfile.default_model,
@@ -999,11 +1001,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.disabled_reason,
                     ManagedAgentProviderProfile.command_behavior,
                     ManagedAgentProviderProfile.last_auth_method,
+                    ManagedAgentProviderProfile.max_parallel_runs,
                 )
             )
             existing_rows = existing_result.all()
             existing_by_id = {
                 row.profile_id: {
+                    "runtime_id": row.runtime_id,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
                     "default_model": row.default_model,
@@ -1018,6 +1022,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "disabled_reason": row.disabled_reason,
                     "command_behavior": row.command_behavior,
                     "last_auth_method": row.last_auth_method,
+                    "max_parallel_runs": row.max_parallel_runs,
                 }
                 for row in existing_rows
             }
@@ -1056,6 +1061,33 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 profile_def["profile_id"]: profile_def
                 for profile_def in _DEFAULT_PROFILES
             }
+
+            # Codex owns and mutates its OAuth home (including refresh-token
+            # state), so every existing OAuth-backed Codex profile must remain
+            # on the single shared capacity lane.  Reconcile legacy rows at
+            # startup as well as validating new API writes; otherwise an old
+            # max_parallel_runs value can bypass the invariant indefinitely.
+            for profile_id, current in existing_by_id.items():
+                if (
+                    is_codex_oauth_profile(
+                        runtime_id=current.get("runtime_id"),
+                        credential_source=current.get("credential_source"),
+                        materialization_mode=current.get(
+                            "runtime_materialization_mode"
+                        ),
+                    )
+                    and current.get("max_parallel_runs") != 1
+                ):
+                    await session.execute(
+                        update(ManagedAgentProviderProfile)
+                        .where(
+                            ManagedAgentProviderProfile.profile_id == profile_id
+                        )
+                        .values(max_parallel_runs=1)
+                    )
+                    current["max_parallel_runs"] = 1
+                    needs_commit = True
+
             for profile_id, env_key in first_party_env_api_profiles.items():
                 current = existing_by_id.get(profile_id)
                 if current is None:
@@ -1377,6 +1409,22 @@ async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
         config.max_delete_bytes,
     )
 
+
+async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
+    """Best-effort startup install for profile-bound OAuth host cleanup."""
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    try:
+        await TemporalClientAdapter().ensure_omnigent_oauth_host_janitor_schedule(
+            enabled=True
+        )
+    except Exception:
+        # This boundary can surface credential-derived provider errors. Keep
+        # startup best-effort without sending the exception through a log sink.
+        return
+    logger.info("Ensured Omnigent OAuth host janitor schedule")
+
 async def ensure_recurring_workflow_schedules_reconciled() -> None:
     """Best-effort repair for persisted recurring workflow Temporal schedules."""
     from api_service.db.base import get_async_session_context
@@ -1569,6 +1617,7 @@ async def startup_event():
     await ensure_provider_profile_managers_started()
     await ensure_managed_session_reconcile_schedule_started()
     await ensure_managed_runtime_workspace_cleanup_schedule_started()
+    await ensure_omnigent_oauth_host_janitor_schedule_started()
     await ensure_recurring_workflow_schedules_reconciled()
     logger.info("Application startup events completed.")
 

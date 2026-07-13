@@ -61,6 +61,10 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "MoonMindOAuthSessionWorkflow",
     ),
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor",
+        "MoonMindOmnigentOAuthHostJanitorWorkflow",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.merge_automation",
         "MoonMindMergeAutomationWorkflow",
     ),

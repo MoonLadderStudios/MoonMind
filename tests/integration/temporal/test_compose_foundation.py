@@ -53,6 +53,41 @@ def _load_claude_host_compose() -> dict:
     )
 
 
+def _load_codex_host_compose() -> dict:
+    compose_path = REPO_ROOT / "docker-compose.codex-host.yaml"
+    return yaml.load(
+        compose_path.read_text(encoding="utf-8"),
+        Loader=UniqueKeySafeLoader,
+    )
+
+
+def _render_merged_codex_host_compose() -> dict:
+    _require_docker_compose()
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            "/dev/null",
+            "-f",
+            "docker-compose.yaml",
+            "-f",
+            "docker-compose.codex-host.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
 def _require_docker_compose() -> None:
     if shutil.which("docker") is None:
         pytest.skip("docker CLI is not available")
@@ -526,6 +561,81 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     }
     assert _network_names(host_service) == {"local-network"}
     assert host_service["restart"] == "unless-stopped"
+
+
+def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
+    compose = _load_codex_host_compose()
+    host_service = compose["services"]["omnigent-host-codex"]
+
+    assert host_service["profiles"] == ["omnigent-host-codex"]
+    assert host_service["hostname"] == "omnigent-host-codex"
+    assert host_service["user"] == "1000:1000"
+    assert "env_file" not in host_service
+    assert _env_map(host_service["environment"]) == {
+        "HOME": "/home/app",
+        "CODEX_HOME": "/home/app/.codex",
+        "CODEX_CONFIG_HOME": "/home/app/.codex",
+        "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
+        "CODEX_VOLUME_PATH": "/home/app/.codex",
+        "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
+        "OMNIGENT_SERVER_URL": "http://omnigent:8000",
+    }
+    entrypoint = host_service["entrypoint"]
+    assert entrypoint[:2] == ["/usr/bin/env", "-u"]
+    assert set(entrypoint[2::2]) == {
+        "OPENAI_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "OPENAI_BASE_URL",
+        "MINIMAX_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    }
+    assert set(entrypoint[1::2]) == {"-u"}
+    assert set(host_service["volumes"]) == {
+        "omnigent-host-codex-state:/home/app/.omnigent",
+        "codex_auth_volume:/home/app/.codex",
+        "./omnigent_workspaces:/workspaces",
+        (
+            "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
+            "/workspaces/MoonMind:ro"
+        ),
+        "./services/omnigent/scripts:/opt/moonmind:ro",
+    }
+    assert compose["volumes"] == {"omnigent-host-codex-state": None}
+    assert host_service["depends_on"] == {
+        "omnigent": {"condition": "service_started"},
+        "omnigent-host-codex-init": {
+            "condition": "service_completed_successfully"
+        },
+    }
+    init_service = compose["services"]["omnigent-host-codex-init"]
+    assert init_service["user"] == "0:0"
+    assert init_service["depends_on"] == {
+        "codex-auth-init": {"condition": "service_completed_successfully"}
+    }
+    assert init_service["entrypoint"] == [
+        "/opt/moonmind/init-codex-oauth-host.sh"
+    ]
+    assert _network_names(host_service) == {"local-network"}
+
+
+def test_merged_omnigent_codex_host_uses_base_owned_oauth_volume():
+    config = _render_merged_codex_host_compose()
+    host_service = config["services"]["omnigent-host-codex"]
+    mounts = host_service["volumes"]
+    oauth_mount = next(
+        mount for mount in mounts if mount.get("target") == "/home/app/.codex"
+    )
+
+    assert oauth_mount["type"] == "volume"
+    assert oauth_mount["source"] == "codex_auth_volume"
+    assert config["volumes"]["codex_auth_volume"]["name"] == "codex_auth_volume"
+    assert config["volumes"]["codex_auth_volume"].get("external") is not True
+    assert config["volumes"]["omnigent-host-codex-state"].get("name")
 
 
 def test_visibility_schema_rehearsal_service_is_wired():

@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from api_service.db.models import ManagedAgentRateLimitPolicy, OAuthSessionStatus
+from moonmind.provider_profiles.oauth_policy import validate_codex_oauth_capacity
 
 class ProviderProfileSummary(BaseModel):
     profile_id: str
@@ -26,9 +27,19 @@ class CreateOAuthSessionRequest(BaseModel):
     provider_id: Optional[str] = None
     provider_label: Optional[str] = None
     account_label: str
-    max_parallel_runs: int = 1
+    max_parallel_runs: int = Field(default=1, ge=1)
     cooldown_after_429_seconds: int = 900
     rate_limit_policy: ManagedAgentRateLimitPolicy = ManagedAgentRateLimitPolicy.BACKOFF
+
+    @model_validator(mode="after")
+    def _enforce_codex_oauth_exclusivity(self) -> "CreateOAuthSessionRequest":
+        validate_codex_oauth_capacity(
+            runtime_id=self.runtime_id,
+            credential_source="oauth_volume",
+            materialization_mode="oauth_home",
+            max_parallel_runs=self.max_parallel_runs,
+        )
+        return self
 
 class OAuthSessionResponse(BaseModel):
     session_id: str

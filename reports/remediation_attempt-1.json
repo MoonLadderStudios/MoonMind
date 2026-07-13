@@ -1,77 +1,79 @@
 {
   "artifact_type": "remediation.attempt",
   "attempt": 1,
-  "issueRef": "MM-1209",
+  "issueRef": "MM-1207",
   "sourceVerificationArtifact": "artifacts/jira-implement-verify.json",
   "sourceVerdict": "ADDITIONAL_WORK_NEEDED",
-  "status": "partial_remediation",
-  "summary": "Strengthened the parent-owned continuation authority and MergeAutomation handoff validation. The larger topology, replay, and complete observability backlog remains open; pytest is unavailable in this runtime, so focused tests could not collect.",
+  "status": "partial",
+  "summary": "Fixed the reported Settings UI capacity gap for Codex OAuth profiles. The broader profile-bound Omnigent host lifecycle remains unimplemented and is explicitly retained below.",
   "changedFiles": [
-    "moonmind/schemas/agent_runtime_models.py",
-    "moonmind/workflows/temporal/workflows/run.py",
-    "moonmind/workflows/temporal/workflows/agent_run.py",
-    "moonmind/workflows/temporal/workflows/merge_automation.py",
-    "tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py",
-    "tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py",
+    "frontend/src/components/settings/ProviderProfilesManager.tsx",
+    "frontend/src/components/settings/ProviderProfilesManager.test.tsx",
     "reports/remediation_attempt-1.json"
   ],
   "gapStatuses": [
     {
-      "requirement": "Complete continuation authority and identity tuple",
-      "gapType": "implementation",
-      "status": "remediated",
-      "evidence": "Authority now requires owner workflow ID, run ID, and the registered MoonMind.MergeAutomation type; UserWorkflow adds owner and child workflow/run identity to its internally authorized handoff; AgentRun diagnostics retain the owner type."
-    },
-    {
-      "requirement": "Strict typed handoff validation in MergeAutomation",
-      "gapType": "implementation",
-      "status": "remediated_by_code_and_unit_fixture",
-      "evidence": "MergeAutomation now requires completionDisposition=gated_continuation, the typed contract, reason, execution reference, valid matching head SHA, owner ID/run/type, and child ID/run. Missing continuation is rejected; only an otherwise valid legacy untimed envelope uses fallbackPollSeconds."
-    },
-    {
-      "requirement": "Full production Temporal topology regression and adverse variants",
-      "gapType": "verification",
-      "status": "open",
-      "remaining": "Add and run a time-skipping real MergeAutomation -> UserWorkflow -> AgentRun test plus the verifier-listed adverse outcomes."
-    },
-    {
-      "requirement": "Temporal replay evidence",
-      "gapType": "verification",
-      "status": "open",
-      "remaining": "Add old failed, new authorized/timed, legacy untimed, and rejected durable histories and Replayer coverage for both patch branches."
-    },
-    {
-      "requirement": "Continuation observability and attempt evidence",
-      "gapType": "implementation",
+      "requirement": "Codex OAuth max_parallel_runs=1 enforcement",
       "status": "partial",
-      "evidence": "AgentRun accepted-handoff metadata now includes owner workflow type in addition to owner ID/run.",
-      "remaining": "Add normalized continuation/timing/ownership/rejection fields to resolver-attempt artifacts and the requested counters without incrementing failure counters for accepted handoffs."
+      "resolved": "Settings renders capacity as fixed at one, forces one in save payloads, and has focused component coverage. Existing create/update backend row validation rejects other values.",
+      "remaining": "Seed repair/migration readiness, runtime selection, host allocation, reconnect, disconnect, and their lifecycle tests remain missing."
     },
     {
-      "requirement": "Documentation closeout",
-      "gapType": "documentation",
-      "status": "open",
-      "remaining": "Align all issue-named lifecycle and terminal-contract documents after the remaining contracts, topology tests, replay fixtures, and metrics land."
+      "requirement": "Shared capacity lane for direct, Omnigent, and maintenance consumers",
+      "status": "unresolved",
+      "remaining": "Wire all consumers to provider-profile-manager:codex_cli with retry-idempotent acquisition and release-last semantics."
+    },
+    {
+      "requirement": "Safe runtime-neutral auth, mount, binding, generation, and host lease refs",
+      "status": "unresolved",
+      "remaining": "Add the verifier-listed secret-free schemas, persistence, ownership checks, and generation validation."
+    },
+    {
+      "requirement": "Destination OAuth-home materialization and Codex preflight",
+      "status": "unresolved",
+      "remaining": "Mount and prepare only the selected OAuth home, clear competing credentials, and run the redacted destination preflight and generation checks."
+    },
+    {
+      "requirement": "Static and on-demand profile-bound Omnigent hosts",
+      "status": "unresolved",
+      "remaining": "Add the dedicated Compose host and idempotent on-demand launcher using one binding/readiness contract."
+    },
+    {
+      "requirement": "Profile-aware routing and bridge authorization",
+      "status": "unresolved",
+      "remaining": "Resolve executionProfileRef to the exact leased host, validate generation, reject unrelated manual targets, and persist safe routing refs before session use."
+    },
+    {
+      "requirement": "Reconnect, disconnect, cleanup ordering, and reconciliation",
+      "status": "unresolved",
+      "remaining": "Implement drain, generation increment, stale-host invalidation, release-last cleanup, and idempotent recovery for the verifier-listed failure cases."
+    },
+    {
+      "requirement": "Cooldown attribution and lifecycle diagnostics",
+      "status": "unresolved",
+      "remaining": "Attribute failures to the profile, fail closed, drain the host, and publish secret-safe lifecycle and cleanup evidence."
+    },
+    {
+      "requirement": "Checkpoint, reattach, restore, and branch isolation",
+      "status": "unresolved",
+      "remaining": "Persist safe identity refs only and implement generation-aware live reattach, newly leased cold restore, and exclusive branches."
+    },
+    {
+      "requirement": "Required boundary and combined-stack verification",
+      "status": "partial",
+      "resolved": "Focused Settings component coverage passes.",
+      "remaining": "Add the verifier-listed unit, workflow-boundary, hermetic integration, and combined-stack coverage for the still-missing runtime lifecycle."
     }
   ],
   "targetedLocalChecks": [
     {
-      "command": "python -m compileall -q moonmind/schemas/agent_runtime_models.py moonmind/workflows/temporal/workflows/run.py moonmind/workflows/temporal/workflows/agent_run.py moonmind/workflows/temporal/workflows/merge_automation.py",
-      "result": "PASS"
+      "command": "npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx",
+      "result": "PASS",
+      "details": "56 tests passed."
     },
     {
       "command": "git diff --check",
       "result": "PASS"
-    },
-    {
-      "command": "python -m pytest --version",
-      "result": "BLOCKED",
-      "details": "/usr/local/bin/python: No module named pytest"
-    },
-    {
-      "command": "MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py",
-      "result": "NOT RUN",
-      "details": "The required pytest module is absent; the verifier observed the same pre-collection environment failure."
     }
   ]
 }

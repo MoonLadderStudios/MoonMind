@@ -205,6 +205,29 @@ def _new_external_state_evidence(
     }
 
 
+def _profile_authorization_evidence(
+    request: AgentExecutionRequest,
+) -> dict[str, Any]:
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    omnigent = parameters.get("omnigent")
+    if not isinstance(omnigent, dict):
+        return {}
+    payload = omnigent.get("_moonmindProfileAuthorization")
+    if not isinstance(payload, dict):
+        return {}
+    allowed = {
+        "providerProfileId",
+        "credentialGeneration",
+        "providerLeaseRef",
+        "hostBindingRef",
+        "hostLeaseRef",
+        "endpointRef",
+        "omnigentHostId",
+        "bridgeSessionId",
+    }
+    return {key: payload[key] for key in allowed if payload.get(key) is not None}
+
+
 def _snapshot_contains_first_message_marker(
     snapshot: dict[str, Any],
     *,
@@ -468,6 +491,7 @@ async def run_omnigent_execution(
             endpoint_ref=selection.endpoint_ref or "default",
             idempotency_key=request.idempotency_key,
         )
+        external_state.update(_profile_authorization_evidence(request))
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
         )
@@ -520,6 +544,7 @@ async def run_omnigent_execution(
                 bridge_session_id = str(
                     getattr(durable_row, "bridge_session_id", "") or ""
                 )
+                external_state["bridgeSessionId"] = bridge_session_id
                 assert_bridge_session_binding(
                     authorization,
                     BridgeSessionBinding(

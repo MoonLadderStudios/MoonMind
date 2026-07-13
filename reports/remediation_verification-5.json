@@ -3,20 +3,29 @@
   "attempt": 5,
   "remediationAttempt": 5,
   "verifiesRemediationAttempt": 5,
-  "remediationAttemptArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/reports/remediation_attempt-5.json",
-  "verificationReportArtifact": "/work/agent_jobs/mm:b6593fe9-c12e-4008-9848-87c4544b82e2/repo/artifacts/jira-implement-verify.json",
-  "verificationTarget": "MM-1201",
+  "remediationAttemptArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/reports/remediation_attempt-5.json",
+  "verificationReportArtifact": "/work/agent_jobs/mm:5e8af533-9d40-4235-b8d8-9bcacc2504a4/repo/artifacts/jira-implement-verify.json",
+  "verificationTarget": "MM-1207",
   "authoritativeVerdictForTargetState": "ADDITIONAL_WORK_NEEDED",
   "verdict": "ADDITIONAL_WORK_NEEDED",
   "recommendedNextAction": "reattempt_current_step",
   "recoverableInCurrentRuntime": true,
-  "remainingWork": [{
-    "requirement": "Runtime-neutral capability-aware bounded continuation with required unit-test coverage",
-    "gapType": "verification",
-    "remainingWork": "Migrate the six stale CodexSessionAdapter continuation tests to the AgentRun workflow boundary and rerun the complete targeted suite.",
-    "suggestedEvidence": "tests/unit/workflows/adapters/test_codex_session_adapter.py; tests/unit/workflows/temporal/workflows/test_agent_run_codex_session_execution.py; artifacts/jira-implement-verify.json",
-    "recoverableInCurrentRuntime": true
-  }],
-  "testSummary": {"workflowAndReliability": "PASS (157 tests)", "helperEvaluatorActivityAdapter": "FAIL (233 passed, 6 failed)", "workspaceProjectionPreflight": "PASS"},
-  "environmentNotes": ["The issue brief is complete; no recovery was needed.", "Optional RAG enrichment was NOT RUN and does not gate the verdict."]
+  "remainingWork": [
+    {"requirement": "Shared capacity and maintenance lifecycle", "gapType": "implementation", "remainingWork": "Wire all direct, Omnigent, reconnect/disconnect, and credential-mutating consumers through one idempotent release-last ProviderProfileManager lease.", "suggestedEvidence": "AgentRun/OAuth/Omnigent workflow boundary code and contention/cancellation tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Host materialization, exact-host preflight, and routing", "gapType": "implementation", "remainingWork": "Implement a supported profile-bound Codex OAuth host, exact destination preflight, automatic binding resolution, and lease-authorized bridge routing.", "suggestedEvidence": "Compose/host lifecycle, Omnigent adapter/activities/bridge, unit and hermetic integration tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Generation, cleanup, recovery, diagnostics, and checkpoints", "gapType": "implementation", "remainingWork": "Implement generation drain, release-last cleanup, stale-state reconciliation, Workflow Detail evidence, and safe checkpoint recovery semantics.", "suggestedEvidence": "OAuth and Omnigent lifecycle services/activities, projections/checkpoints, restart and recovery tests", "recoverableInCurrentRuntime": true},
+    {"requirement": "Controlling automated coverage", "gapType": "verification", "remainingWork": "Add the required lifecycle boundary and hermetic integration coverage and rerun targeted tests with pytest available.", "suggestedEvidence": "./tools/test_unit.sh; ./tools/test_integration.sh where selected by impact", "recoverableInCurrentRuntime": true}
+  ],
+  "testSummary": {
+    "targetedUnit": "NOT RUN (/usr/local/bin/python: No module named pytest)",
+    "compilation": "PASS",
+    "migrationGraph": "PASS (one head: 337_mm1207_oauth_hosts)",
+    "persistenceMetadataSmoke": "PASS",
+    "workspaceProjectionPreflight": "PASS"
+  },
+  "environmentNotes": [
+    "The issue brief is complete; no recovery was needed.",
+    "Optional retrieval/enrichment was NOT RUN and does not gate the verdict.",
+    "The pre-existing attempt-5 verification artifact targeted MM-1201 and predated remediation attempt 5; this artifact replaces it."
+  ]
 }
