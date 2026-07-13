@@ -1,253 +1,250 @@
 # Codex CLI Managed Sessions
 
-Status: Desired state
-Owners: MoonMind Platform
+Status: Desired state  
+Owners: MoonMind Platform  
 Last updated: 2026-07-13
 Related:
+
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
-- [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
-- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
+- [`docs/ManagedAgents/DockerBackendService.md`](./DockerBackendService.md)
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
+
+---
 
 ## 1. Purpose
 
-This document defines the desired-state architecture contract for the **Codex CLI binding** of the shared managed session plane.
+This document defines the desired-state architecture contract for the **Codex
+CLI binding** of the shared managed session plane.
 
-It freezes the smallest supported session-plane shape before broader implementation work:
+The supported session-plane shape is:
 
-- Codex binding only
-- Docker only
-- one workflow-scoped session container per workflow
-- optional per-session Docker sidecar for ordinary repo Docker commands
-- no cross-workflow session reuse
-- artifact-first logs and continuity
-- no Kubernetes orchestration
-- no Claude Code binding details
-- no generic runtime marketplace
+- Codex binding only;
+- Docker-deployed MoonMind runtime containers;
+- one workflow-scoped session container per workflow;
+- containerized repository work submitted through the Docker Backend Service;
+- no direct Docker socket or Docker API authority in the session;
+- no cross-workflow session reuse;
+- artifact-first logs and continuity;
+- no Kubernetes orchestration in this contract;
+- no Claude Code binding details;
+- no generic runtime marketplace.
 
-This document defines the target contract only. Rollout sequencing and implementation backlog belong in specs or `local-only handoffs`.
+This is a declarative target contract. Implementation sequencing does not belong
+in this canonical document.
+
+---
 
 ## 2. Layering
 
-The Codex managed session plane is split into two layers.
-
-### 2.1 Agent Orchestration Layer
+### 2.1 Agent orchestration layer
 
 MoonMind owns:
 
-- Temporal workflows
-- activities
-- runtime adapters
-- policy evaluation
-- artifact publication
-- observability hooks
-- recovery and cancellation semantics
+- Temporal workflows and Activities;
+- runtime adapters;
+- policy evaluation;
+- artifact publication;
+- observability hooks;
+- recovery and cancellation semantics;
+- provider-profile capacity;
+- container-job submission and evidence.
 
-Temporal remains the control plane for workflow orchestration.
+Temporal remains the durable control plane. Artifacts and bounded workflow
+metadata are operator and audit truth. The `ManagedSessionStore` is an
+operational supervision index, not a second durable source of truth.
 
-In the current near-term production path, durable operator/audit truth comes from:
-
-- artifacts
-- bounded workflow metadata
-
-The JSON-backed `ManagedSessionStore` is also part of the production path, but as an
-operational supervision record for recovery and reconciliation, not as the
-operator-facing source of truth.
-
-### 2.2 Managed Session Plane
+### 2.2 Managed session plane
 
 The managed session plane is the workflow-scoped Codex runtime environment:
 
-- one Docker container per workflow execution
-- Codex App Server running inside that container
-- one active Codex thread per session epoch
-- continuity reused across steps within the same workflow execution only
+- one session container per workflow execution;
+- Codex App Server running inside that container;
+- one active Codex thread per session epoch;
+- continuity reused across ordered steps in the same workflow only.
 
-The session plane is a continuity and performance cache. It is not durable truth.
+The session plane is a continuity and performance cache.
 
-Ordinary repository Docker work that originates from the session uses the
-per-session sidecar runtime described in
-[`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md). The
-session container runs normal Docker commands against its own private daemon and
-does not receive the host socket, a shared daemon, or MoonMind deployment
-credentials.
+### 2.3 Container-job boundary
 
-Control-plane Docker workload tools from
-[`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md) remain
-available for MoonMind admin/update, helper, and deliberately gated exceptional
-workloads. Those workload containers remain outside session identity: they do
-not become `session_id`, `session_epoch`, `container_id`, `thread_id`, or
-`active_turn_id`, and they do not replace the workflow-scoped session container.
+Ordinary repository builds and tests that require a container are submitted to
+[`DockerBackendService.md`](./DockerBackendService.md). The Codex session invokes
+MoonMind's typed asynchronous tools and consumes the returned job status, logs,
+and artifacts.
 
-Codex session containers that need to create additional MoonMind workflow executions must be
-launched on the configured MoonMind Docker network and receive `MOONMIND_URL`
-pointing at the internal API endpoint. This keeps workflow creation on the
-Temporal-aware API path instead of relying on removed queue/DB shortcuts.
+The session does not receive the host socket, `DOCKER_HOST`, or raw Docker API
+authority. Workload containers remain outside session identity: they do not
+become the session's `session_id`, `session_epoch`, `container_id`, `thread_id`,
+or `active_turn_id`.
+
+The deployment-selected daemon may reuse an image across workflows. That image
+cache is backend state, not Codex session state.
+
+### 2.4 MoonMind API reachability
+
+A Codex session that needs to create workflows or submit container jobs joins the
+configured MoonMind application network and receives `MOONMIND_URL` for the
+internal API. Requests stay on authenticated Temporal-aware API and MCP paths.
+
+---
 
 ## 3. Protocol
 
-For the Codex MVP, the session protocol is **Codex App Server**, not PTY scraping and not `codex exec` as the primary session surface.
+The primary session protocol is **Codex App Server**, not PTY scraping and not
+`codex exec` as the long-lived session surface.
 
-MoonMind maps the managed session plane to Codex App Server concepts:
+MoonMind maps the session plane to:
 
-- thread lifecycle
-- turn lifecycle
-- steering and interruption
-- optional approvals and command execution later
+- thread lifecycle;
+- turn lifecycle;
+- steering and interruption;
+- clear/reset boundaries;
+- optional approval and command surfaces.
 
-`codex exec --json` remains a bring-up and smoke-test harness, not the primary long-lived session protocol.
+`codex exec --json` may be used for smoke tests, but it is not the primary
+session protocol.
 
-### 3.1 In-flight Live Output
+### 3.1 In-flight output
 
-During `send_turn`, the container-side Codex runtime mirrors visible Codex rollout
-events into the managed-session artifact spool while the turn is still running.
-The mirrored stream includes assistant messages, tool-call markers, and tool-call
-outputs that Codex records in the rollout transcript. The managed-session
-supervisor tails that spool and publishes normalized `stdout`/`stderr` chunks into
-the run-global Live Logs sequence.
+During `send_turn`, the container-side runtime mirrors visible Codex rollout
+events into the managed-session artifact spool. The supervisor tails that spool
+and publishes normalized stdout/stderr and system events into Live Logs.
 
-The rollout transcript remains a container-local runtime cache. MoonMind does not
-present the raw transcript as durable operator truth; it converts selected visible
-entries into artifact-backed output and observability events.
+The raw rollout transcript is a runtime-local cache. MoonMind publishes selected
+visible content as artifact-backed output and observations.
 
-### 3.2 Turn Instruction Preparation
+### 3.2 Turn instruction preparation
 
-`MoonMind.AgentRun` prepares Codex managed-session turn instructions through
+`MoonMind.AgentRun` prepares managed-session turn instructions through
 `agent_runtime.prepare_turn_instructions` before `agent_runtime.send_turn`.
-Preparation is responsible for producing the final bounded prompt text, applying
-selected skill materialization, and attaching compact durable retrieval metadata
-needed by launch/session artifacts.
+Preparation builds bounded final prompt text, materializes selected skills, and
+attaches compact retrieval metadata.
 
-The preferred command order for new histories is:
+Preferred command order for new histories:
 
-1. perform a metadata-only preparation preflight when launch metadata may need
-   retrieval refs or skill context;
+1. perform metadata-only preparation preflight when launch metadata needs refs;
 2. launch or resume the workflow-scoped session;
-3. prepare the final turn instructions against the launched workspace/session
-   boundary;
-4. submit the turn through `agent_runtime.send_turn`.
+3. prepare final instructions against the launched workspace boundary;
+4. submit the turn.
 
-Workflow changes that move `prepare_turn_instructions` relative to session
-launch/resume or `send_turn` are replay-visible Temporal command-order changes.
-They must be protected by durable patch/version markers or Worker Versioning so
-in-flight `MoonMind.AgentRun` histories continue to replay the command order they
-already recorded. This is the automatic recovery boundary for old histories:
-existing runs replay their recorded preparation order, while new runs use the
-current preferred order.
+Changes to this order are replay-visible and require Temporal patch/version
+markers or Worker Versioning so in-flight histories replay their recorded path.
 
-## 4. Session Identity
+---
 
-The canonical bounded session identity is:
+## 4. Session identity
 
-- `session_id`
-- `session_epoch`
-- `container_id`
-- `thread_id`
-- `active_turn_id`
+The canonical bounded identity is:
+
+- `session_id`;
+- `session_epoch`;
+- `container_id`;
+- `thread_id`;
+- `active_turn_id`.
 
 Rules:
 
-1. `session_id` identifies the MoonMind workflow-scoped managed session.
-2. `session_epoch` identifies one logical continuity interval within that session.
-3. `container_id` identifies the active Docker container for the workflow-scoped session.
-4. `thread_id` identifies the active Codex App Server thread for the current epoch.
-5. `active_turn_id` identifies the in-flight Codex turn when one exists.
+1. `session_id` identifies the workflow-scoped managed session.
+2. `session_epoch` identifies one continuity interval.
+3. `container_id` identifies the active Codex session container.
+4. `thread_id` identifies the active App Server thread.
+5. `active_turn_id` identifies the in-flight turn when present.
 
-The managed-session supervisor reconciles `active_turn_id` from the
-container-written session state file while `send_turn` is still executing. This
-keeps operator-visible summaries and Live Logs headers truthful during long
-Codex turns, before the long-running `send_turn` activity returns a terminal
-response.
+A container job requested by the session has its own `job_id` and workload
+container identifier. Those fields are associations, not additions to session
+identity.
 
-## 5. Control Actions
+The supervisor reconciles active-turn state from the runtime while a turn is
+running so summaries and Live Logs remain truthful before the long-running
+Activity returns.
 
-The canonical Phase 1 control actions are:
+---
 
-- `start_session`
-- `resume_session`
-- `send_turn`
-- `steer_turn`
-- `interrupt_turn`
-- `clear_session`
-- `cancel_session`
-- `terminate_session`
+## 5. Control actions
 
-These actions are the stable MoonMind-side vocabulary for the Codex managed session plane. Runtime-specific transport details stay behind the adapter boundary.
+The stable MoonMind-side vocabulary is:
 
-## 6. Clear / Reset Semantics
+- `start_session`;
+- `resume_session`;
+- `send_turn`;
+- `steer_turn`;
+- `interrupt_turn`;
+- `clear_session`;
+- `cancel_session`;
+- `terminate_session`.
 
-`clear_session` is not a terminal slash-command emulation.
+Runtime-specific transport details stay behind the adapter boundary.
 
-The canonical semantics are:
+Container jobs have separate controls: submit, status, logs, artifacts, and
+cancel. Session-control verbs must not be overloaded to mean “run an arbitrary
+container.”
 
-1. write a `session.control_event` artifact
-2. write a `session.reset_boundary` artifact
-3. increment `session_epoch`
-4. start a new Codex thread inside the same container
-5. clear `active_turn_id`
+---
 
-Rules:
+## 6. Clear and reset semantics
 
-- clear/reset preserves `session_id`
-- clear/reset preserves `container_id`
-- clear/reset requires a new `thread_id`
-- UI and API consumers must present the new epoch boundary explicitly
+`clear_session` is not terminal-command emulation.
 
-## 7. Durable State Rule
+Its canonical semantics are:
 
-The managed session plane has three different truth surfaces.
+1. write a `session.control_event` artifact;
+2. write a `session.reset_boundary` artifact;
+3. increment `session_epoch`;
+4. start a new Codex thread in the same compatible session container;
+5. clear `active_turn_id`.
 
-### 7.1 Operator / Audit Truth
+Clear/reset preserves `session_id` and normally preserves the compatible session
+container. It requires a new thread and an explicit UI/API epoch boundary.
 
-Operator presentation, audit, and continuity review come from:
+Clear/reset does not clear the Docker backend's shared image cache and does not
+redefine container-job identity.
 
-- artifacts
-- bounded workflow metadata
+---
 
-These are the authoritative surfaces operators should inspect.
+## 7. Durable-state rule
 
-### 7.2 Operational Recovery Index
+### 7.1 Operator and audit truth
 
-The JSON-backed `ManagedSessionStore` record is allowed to participate in recovery
-and reconciliation as the operational supervision index. It tracks the currently
-known session/container/thread state and the latest published artifact refs so the
-controller and supervisor can recover or reconcile after restarts.
+Operator presentation and continuity review come from artifacts and bounded
+workflow metadata.
 
-It is not the operator/audit source of truth.
+### 7.2 Operational recovery index
 
-### 7.3 Disposable Cache
+`ManagedSessionStore` may track the latest known session, container, thread,
+active turn, and artifact references for recovery and reconciliation. It is not
+the operator/audit source of truth.
 
-Container-local runtime state is performance and continuity cache only.
+### 7.3 Disposable cache
 
-Operator/audit truth must not depend on:
+Container-local thread databases, runtime homes, in-memory state, terminal
+scrollback, and backend daemon state are disposable caches. Any required output
+must be published as artifacts or compact durable metadata.
 
-- in-memory container state
-- container-local thread databases
-- terminal scrollback
-- runtime home directories as durable truth
+---
 
-Artifact-backed logs and diagnostics remain authoritative even when live streaming exists.
+## 8. Artifact expectations
 
-## 8. Artifact Expectations
+Every managed Codex step remains execution-centric even when one session
+container is reused.
 
-Every managed Codex step must remain execution-centric even when a container is reused across steps.
+At minimum, each step publishes:
 
-At minimum, each step must produce durable evidence through the existing artifact
-system, including step outputs and runtime diagnostics. Session continuity is
-represented with a session summary, session-state checkpoint refs, and
-control/reset-boundary artifacts rather than inferred from container state.
-These refs do not assert that the Codex runtime captured the Step Execution
-workspace as a `git_patch` or `worktree_archive`, and they do not assert that a
-workspace can be restored or materialized later.
+- bounded stdout/stderr or durable log references;
+- runtime diagnostics;
+- declared outputs;
+- relevant session summary/checkpoint references;
+- control and reset-boundary artifacts when applicable;
+- associated container-job references and artifacts when a job was requested.
 
-For the current production path, `managed_session_controller` plus the managed-session
-supervisor are the production artifact publishers for session summary,
-session-state checkpoint, control, and reset-boundary refs and related session
-observability. The transitional in-container
-`fetch_session_summary()` and `publish_session_artifacts()` helpers may still exist as
-fallback or bring-up helpers, but they are not the production publication path while
-they return empty publication refs.
+Session-state checkpoints prove continuity only. They do not imply workspace
+capture or restore. Container-job artifacts likewise do not become session-state
+checkpoints.
+
+The managed-session controller and supervisor are the production publishers for
+session continuity evidence. Bring-up helpers that return empty publication refs
+are not authoritative publication paths.
+
+---
 
 ## 9. OAuth token rotation
 
@@ -270,26 +267,67 @@ token that cannot be refreshed are authentication failures. They terminate with
 the canonical reauthentication recommendation and must not be retried as empty
 assistant turns.
 
-## 10. Rate-limit retry behavior
+---
 
-Codex managed-session turns must surface model-provider rate limits through the
-shared managed-runtime failure taxonomy. The session controller should retry
-rate-limit failures with bounded exponential backoff and jitter, honor provider
-retry hints when available, and keep attempt evidence bounded in summaries and
-diagnostics.
+## 10. Rate-limit behavior
 
-If retries are exhausted, the session summary and diagnostics must explicitly
-state that the turn hit a model-provider rate limit. The terminal result should
-set the same `AgentRunResult` rate-limit metadata used by other managed
-runtimes.
+Codex turns surface provider rate limits through the shared managed-runtime
+failure taxonomy. The controller applies bounded exponential backoff with jitter,
+honors retry hints where available, and keeps attempt evidence bounded.
 
-## 11. Non-goals for This Contract Slice
+If retries are exhausted, summaries and diagnostics explicitly classify the
+rate-limit failure and set the canonical `AgentRunResult` metadata.
+
+---
+
+## 11. Container-job behavior
+
+A Codex session may request a job when repository instructions or verification
+require a containerized environment.
+
+The normal flow is:
+
+1. inspect the repository and choose an image and command;
+2. call `container.submit` with the current logical workspace reference;
+3. poll `container.status` or wait through the tool host;
+4. read bounded `container.logs` when useful;
+5. retrieve `container.artifacts` at completion;
+6. call `container.cancel` when the owning step is canceled.
+
+MoonMind resolves the workspace and constructs the Docker run request. The agent
+cannot provide an arbitrary host source path. A daemon-visible workspace probe
+runs before an expensive missing-image pull.
+
+The same interface supports .NET SDK images, Unreal automation images, Node or
+Java toolchains, integration-test services, and other permitted images. No
+runtime-specific worker pool is part of the Codex contract.
+
+---
+
+## 12. Non-goals
 
 This contract does not define:
 
-- Kubernetes launch semantics
-- cross-workflow session reuse
-- session UIs beyond continuity-aware artifact presentation
-- generalized multi-runtime certification
-- Claude Code binding behavior
-- PTY attach or interactive terminal embedding
+- Kubernetes launch semantics;
+- cross-workflow session reuse;
+- direct Docker CLI use from the Codex session;
+- session UI beyond continuity-aware artifact presentation;
+- generalized multi-runtime certification;
+- Claude Code binding behavior;
+- PTY attach or an embedded interactive terminal;
+- a durable detached arbitrary-service framework.
+
+---
+
+## 13. Stable rules
+
+1. One logical Codex session is workflow-scoped.
+2. Temporal owns orchestration and replay-safe command ordering.
+3. Codex App Server is the session protocol.
+4. Artifacts and bounded metadata are durable truth.
+5. Session state and workload state use separate identities.
+6. Containerized work is requested through the Docker Backend Service.
+7. The session receives neither the Docker socket nor `DOCKER_HOST`.
+8. Images may be reused across workflows by the deployment-selected backend.
+9. Clear/reset changes session continuity, not backend image retention.
+10. Runtime-specific behavior remains behind the Codex adapter/controller.
