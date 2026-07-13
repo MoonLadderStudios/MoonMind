@@ -419,7 +419,11 @@ def test_parent_loop_honors_configured_no_progress_budget(
         "budgets": {"maxConsecutiveNoProgressAttempts": 2}
     }
     workflow._step_terminal_dispositions.update(
-        {"verify-1": "accepted", "verify-2": "accepted"}
+        {
+            "verify-1": "accepted",
+            "verify-2": "accepted",
+            "verify-3": "accepted",
+        }
     )
     ordered_nodes = [
         {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
@@ -432,6 +436,13 @@ def test_parent_loop_honors_configured_no_progress_budget(
         {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
         {
             "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-3", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-3",
             "inputs": {
                 "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
             },
@@ -455,8 +466,17 @@ def test_parent_loop_honors_configured_no_progress_budget(
         ordered_nodes=ordered_nodes,
         current_index=2,
     )
+    third = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-3",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/three",
+        ordered_nodes=ordered_nodes,
+        current_index=4,
+    )
 
     assert second["continueLoop"] is True
+    assert third["continueLoop"] is False
+    assert third["reason"] == "no_progress_attempts_exhausted"
 
 
 def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() -> None:

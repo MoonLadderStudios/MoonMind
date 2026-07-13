@@ -5302,6 +5302,47 @@ class MoonMindRunWorkflow:
             return True
         return attempt <= max_attempts
 
+    def _moonspec_remediation_budget_metadata(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_attempt: int | None,
+        max_attempts: int | None,
+    ) -> dict[str, Any]:
+        """Project remediation consumption from actual active step-ledger rows."""
+        remediation_ids = [
+            str(candidate.get("id") or "")
+            for candidate in ordered_nodes
+            if self._is_moonspec_remediation_step(candidate)
+            and self._moonspec_remediation_attempt_within_budget(candidate)
+        ]
+        attempts_started = sum(
+            1
+            for step_id in remediation_ids
+            if step_id and (self._step_execution_for(step_id) or 0) > 0
+        )
+        attempts_completed = sum(
+            1
+            for step_id in remediation_ids
+            if step_id
+            and str((self._step_ledger_row_for(step_id) or {}).get("status") or "")
+            == "completed"
+        )
+        return {
+            "maxAttempts": max_attempts,
+            "currentAttempt": current_attempt,
+            "attemptsStarted": attempts_started,
+            "attemptsCompleted": attempts_completed,
+            "remainingAttempts": (
+                max(0, max_attempts - attempts_started)
+                if max_attempts is not None
+                else None
+            ),
+            "exhausted": bool(
+                max_attempts is not None and attempts_started >= max_attempts
+            ),
+        }
+
     @staticmethod
     def _accepted_verifier_semantic_verdict(verdict: str) -> str:
         """Preserve the verifier-owned semantic result in control evidence."""
@@ -5411,8 +5452,10 @@ class MoonMindRunWorkflow:
             attempt, max_attempts = self._moonspec_remediation_attempt_metadata(
                 candidate
             )
-            if attempt is None or max_attempts != current_max or attempt > current_max:
+            if attempt is None or max_attempts != current_max:
                 malformed = True
+                continue
+            if attempt > current_max:
                 continue
             identity = (0 if role == "moonspec-remediation" else current_max) + attempt
             if identity in seen_attempts:
@@ -6098,23 +6141,6 @@ class MoonMindRunWorkflow:
         remediation_attempt, remediation_max = (
             self._moonspec_remediation_attempt_metadata(current_node)
         )
-        remediation_ids = [
-            str(candidate.get("id") or "")
-            for candidate in ordered_nodes
-            if self._is_moonspec_remediation_step(candidate)
-            and self._moonspec_remediation_attempt_within_budget(candidate)
-        ]
-        attempts_started = sum(
-            1
-            for step_id in remediation_ids
-            if (self._step_execution_for(step_id) or 0) > 0
-        )
-        attempts_completed = sum(
-            1
-            for step_id in remediation_ids
-            if str((self._step_ledger_row_for(step_id) or {}).get("status") or "")
-            == "completed"
-        )
         review_retries = max(0, (self._step_execution_for(logical_step_id) or 1) - 1)
         persisted_review_budget: Mapping[str, Any] | None = None
         current_row = self._step_ledger_row_for(logical_step_id) or {}
@@ -6137,20 +6163,11 @@ class MoonMindRunWorkflow:
                 "remainingExecutions": 0,
             }
         )
-        payload["remediationBudget"] = {
-            "maxAttempts": remediation_max,
-            "currentAttempt": remediation_attempt,
-            "attemptsStarted": attempts_started,
-            "attemptsCompleted": attempts_completed,
-            "remainingAttempts": (
-                max(0, remediation_max - attempts_started)
-                if remediation_max is not None
-                else None
-            ),
-            "exhausted": bool(
-                remediation_max is not None and attempts_started >= remediation_max
-            ),
-        }
+        payload["remediationBudget"] = self._moonspec_remediation_budget_metadata(
+            ordered_nodes=ordered_nodes,
+            current_attempt=remediation_attempt,
+            max_attempts=remediation_max,
+        )
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
         ] = payload
@@ -9732,24 +9749,13 @@ class MoonMindRunWorkflow:
                                 review_verdict.recommended_next_action
                             ),
                         )
-                        remediation_budget = {
-                            "maxAttempts": current_max,
-                            "currentAttempt": current_attempt,
-                            "attemptsStarted": current_attempt,
-                            "attemptsCompleted": current_attempt,
-                            "remainingAttempts": (
-                                max(0, current_max - current_attempt)
-                                if current_attempt is not None
-                                and current_max is not None
-                                else None
-                            ),
-                            "exhausted": (
-                                current_attempt == current_max
-                                if current_attempt is not None
-                                and current_max is not None
-                                else False
-                            ),
-                        }
+                        remediation_budget = (
+                            self._moonspec_remediation_budget_metadata(
+                                ordered_nodes=ordered_nodes,
+                                current_attempt=current_attempt,
+                                max_attempts=current_max,
+                            )
+                        )
                         accepted_gate_budget = {
                             "reviewGateBudget": review_budget,
                             "remediationBudget": remediation_budget,
@@ -9774,7 +9780,9 @@ class MoonMindRunWorkflow:
                                 "transitionReasonCode": transition.reason_code,
                                 "targetLogicalStepId": next_logical_step_id,
                                 "reviewEvidenceRetriesConsumed": review_retry_count,
-                                "remediationAttemptsConsumed": current_attempt,
+                                "remediationAttemptsConsumed": remediation_budget[
+                                    "attemptsStarted"
+                                ],
                                 "remediationAttemptsMaximum": current_max,
                                 "reviewGateBudget": review_budget,
                                 "remediationBudget": remediation_budget,

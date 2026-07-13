@@ -1586,9 +1586,9 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
     maximum = next(iter(maxima))
     if maximum < 1:
         raise PresetValidationError("MoonSpec remediation maximum must be positive.")
-    expected_count = maximum * 2
     active = [item for item in chain if item[2] <= maximum]
-    if len(active) != expected_count or len(chain) != expected_count:
+    expected_count = maximum * 2
+    if len(active) != expected_count:
         raise PresetValidationError(
             "remediation_max_attempts must activate a complete, unambiguous "
             "remediation and verification topology."
@@ -1618,7 +1618,7 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
             )
         if pair[1][4] is not (attempt == maximum):
             raise PresetValidationError(
-                "Only the final MoonSpec verifier may be marked as the final gate."
+                "Only the active final MoonSpec verifier may be marked as the final gate."
             )
 
 

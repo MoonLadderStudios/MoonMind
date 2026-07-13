@@ -1124,6 +1124,28 @@ def test_moonspec_verifier_resolves_only_exact_next_remediation_attempt(
             },
         },
     ]
+    for attempt in range(3, 7):
+        nodes.extend(
+            [
+                {
+                    "id": f"remediate-{attempt}",
+                    "annotations": {
+                        "issueImplementRole": "moonspec-remediation",
+                        "moonSpecRemediationAttempt": attempt,
+                        "moonSpecRemediationMaxAttempts": 2,
+                    },
+                },
+                {
+                    "id": f"verify-{attempt}",
+                    "annotations": {
+                        "issueImplementRole": "moonspec-verification-gate",
+                        "moonSpecRemediationAttempt": attempt,
+                        "moonSpecRemediationMaxAttempts": 2,
+                        "moonSpecFinalRemediationGate": False,
+                    },
+                },
+            ]
+        )
 
     successor, reason = workflow._resolve_next_moonspec_remediation_step(
         ordered_nodes=nodes,
@@ -1158,6 +1180,50 @@ def test_final_moonspec_verifier_has_no_remediation_successor(
         ordered_nodes=[final_verifier],
         current_index=0,
     ) == (None, "remediation_budget_exhausted")
+
+
+def test_moonspec_remediation_budget_uses_actual_active_step_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    nodes = [
+        {
+            "id": f"remediate-{attempt}",
+            "annotations": {
+                "issueImplementRole": "moonspec-remediation",
+                "moonSpecRemediationAttempt": attempt,
+                "moonSpecRemediationMaxAttempts": 2,
+            },
+        }
+        for attempt in range(1, 7)
+    ]
+    workflow._initialize_step_ledger(
+        ordered_nodes=nodes,
+        dependency_map={node["id"]: [] for node in nodes},
+        updated_at=now,
+    )
+    workflow._mark_step_running("remediate-1", updated_at=now, summary="Started")
+    workflow._mark_step_terminal(
+        "remediate-1", status="completed", updated_at=now, summary="Done"
+    )
+    workflow._mark_step_running("remediate-2", updated_at=now, summary="Started")
+
+    budget = workflow._moonspec_remediation_budget_metadata(
+        ordered_nodes=nodes,
+        current_attempt=6,
+        max_attempts=2,
+    )
+
+    assert budget == {
+        "maxAttempts": 2,
+        "currentAttempt": 6,
+        "attemptsStarted": 2,
+        "attemptsCompleted": 1,
+        "remainingAttempts": 0,
+        "exhausted": True,
+    }
 
 
 @pytest.mark.parametrize(

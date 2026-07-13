@@ -1,6 +1,7 @@
 import inspect
 
 import pytest
+from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
@@ -12,6 +13,70 @@ from moonmind.workflows.temporal.workflows.run import (
 from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
     mock_run_environment,
 )
+
+
+@workflow.defn(name="MM3238RemediationReplayFixture")
+class _LegacyRemediationReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        return ["verify-1", "verify-1"]
+
+
+@workflow.defn(name="MM3238RemediationReplayFixture")
+class _CurrentRemediationReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        if not workflow.patched(RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH):
+            return ["verify-1", "verify-1"]
+        nodes = [
+            {
+                "id": "remediate-1",
+                "annotations": {
+                    "issueImplementRole": "moonspec-remediation",
+                    "moonSpecRemediationAttempt": 1,
+                    "moonSpecRemediationMaxAttempts": 2,
+                },
+            },
+            {
+                "id": "verify-1",
+                "annotations": {
+                    "issueImplementRole": "moonspec-verification-gate",
+                    "moonSpecRemediationAttempt": 1,
+                    "moonSpecRemediationMaxAttempts": 2,
+                },
+            },
+            {
+                "id": "remediate-2",
+                "annotations": {
+                    "issueImplementRole": "moonspec-remediation",
+                    "moonSpecRemediationAttempt": 2,
+                    "moonSpecRemediationMaxAttempts": 2,
+                },
+            },
+            {
+                "id": "verify-2",
+                "annotations": {
+                    "issueImplementRole": "moonspec-verification-gate",
+                    "moonSpecRemediationAttempt": 2,
+                    "moonSpecRemediationMaxAttempts": 2,
+                    "moonSpecFinalRemediationGate": True,
+                },
+            },
+        ]
+        decision = MoonMindRunWorkflow()._resolve_gate_transition(
+            verdict=type(
+                "VerifierResult",
+                (),
+                {
+                    "verdict": "ADDITIONAL_WORK_NEEDED",
+                    "recoverable_in_current_runtime": True,
+                },
+            )(),
+            ordered_nodes=nodes,
+            current_index=1,
+        )
+        assert decision.successor is not None
+        return ["verify-1", decision.successor.logical_step_id]
 
 @pytest.mark.asyncio
 async def test_workflow_determinism_replay(mock_run_environment):
@@ -57,3 +122,44 @@ def test_plan_routed_moonspec_patch_is_snapshotted_before_node_execution() -> No
     snapshot_index = source.index(patch_name)
     node_loop_index = source.index("for index, node in enumerate(ordered_nodes")
     assert snapshot_index < node_loop_index
+
+
+@pytest.mark.asyncio
+async def test_moonspec_remediation_pre_and_post_patch_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3238-legacy-replay",
+            workflows=[_LegacyRemediationReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyRemediationReplayFixture.run,
+                id="test-mm3238-legacy-history",
+                task_queue="test-mm3238-legacy-replay",
+            )
+            assert await legacy.result() == ["verify-1", "verify-1"]
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3238-current-replay",
+            workflows=[_CurrentRemediationReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentRemediationReplayFixture.run,
+                id="test-mm3238-current-history",
+                task_queue="test-mm3238-current-replay",
+            )
+            current_commands = await current.result()
+            current_history = await current.fetch_history()
+
+    assert current_commands == ["verify-1", "remediate-2"]
+    assert current_commands.count("verify-1") == 1
+    replayer = Replayer(
+        workflows=[_CurrentRemediationReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
