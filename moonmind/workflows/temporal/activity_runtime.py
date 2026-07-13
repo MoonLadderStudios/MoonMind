@@ -1477,9 +1477,14 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
             "create_container",
             "start_container",
             "observe_container",
+            "reconcile_container",
             "stop_container",
+            "remove_container",
+            "append_logs",
+            "append_artifacts",
             "publish_evidence",
             "project_status",
+            "repair_projection",
             "cleanup",
         )
     },
@@ -7612,10 +7617,30 @@ class TemporalAgentRuntimeActivities:
     ) -> dict[str, Any]:
         return await self._container_job_call("observe_container", payload)
 
+    async def container_job_reconcile_container(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("reconcile_container", payload)
+
     async def container_job_stop_container(
         self, payload: Mapping[str, Any], /
     ) -> dict[str, Any]:
         return await self._container_job_call("stop_container", payload)
+
+    async def container_job_remove_container(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("remove_container", payload)
+
+    async def container_job_append_logs(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("append_logs", payload)
+
+    async def container_job_append_artifacts(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("append_artifacts", payload)
 
     async def container_job_publish_evidence(
         self, payload: Mapping[str, Any], /
@@ -7626,6 +7651,11 @@ class TemporalAgentRuntimeActivities:
         self, payload: Mapping[str, Any], /
     ) -> dict[str, Any]:
         return await self._container_job_call("project_status", payload)
+
+    async def container_job_repair_projection(
+        self, payload: Mapping[str, Any], /
+    ) -> dict[str, Any]:
+        return await self._container_job_call("repair_projection", payload)
 
     async def container_job_cleanup(
         self, payload: Mapping[str, Any], /

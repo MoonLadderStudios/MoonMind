@@ -1344,7 +1344,12 @@ def build_default_activity_catalog(
                     max_attempts=(
                         1
                         if name
-                        in {"create_container", "start_container", "stop_container"}
+                        in {
+                            "create_container",
+                            "start_container",
+                            "stop_container",
+                            "remove_container",
+                        }
                         else 3
                     ),
                     max_interval_seconds=30,
@@ -1357,9 +1362,14 @@ def build_default_activity_catalog(
                 "create_container",
                 "start_container",
                 "observe_container",
+                "reconcile_container",
                 "stop_container",
+                "remove_container",
+                "append_logs",
+                "append_artifacts",
                 "publish_evidence",
                 "project_status",
+                "repair_projection",
                 "cleanup",
             )
         ),

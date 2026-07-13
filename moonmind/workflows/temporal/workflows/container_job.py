@@ -81,12 +81,24 @@ class MoonMindContainerJobWorkflow:
 
     async def _project(self, request: ContainerJobActivityRequest, state: str) -> None:
         self._snapshot.state = state  # type: ignore[assignment,union-attr]
+        self._snapshot.projection_sequence += 1  # type: ignore[union-attr]
         request.state = state  # type: ignore[assignment]
+        request.projection_sequence = self._snapshot.projection_sequence  # type: ignore[union-attr]
         try:
             await self._activity("container_job.project_status", request)
         except Exception:
             # Projection is repairable from workflow state and must not rewrite outcome.
-            pass
+            self._snapshot.projection_repair_required = True  # type: ignore[union-attr]
+
+    async def _repair_projection(self, request: ContainerJobActivityRequest) -> None:
+        if not self._snapshot or not self._snapshot.projection_repair_required:
+            return
+        try:
+            await self._activity("container_job.repair_projection", request)
+            self._snapshot.projection_repair_required = False
+        except Exception:
+            # The terminal snapshot remains the authoritative rebuild source.
+            self._snapshot.publication_diagnostics += ("projection_repair_failed",)
 
     @workflow.run
     async def run(self, raw: dict[str, Any]) -> dict[str, Any]:
@@ -115,12 +127,18 @@ class MoonMindContainerJobWorkflow:
                     req.image_ref = image.image_ref or req.image_ref
                 if not self._cancel_requested:
                     await self._project(req, "starting")
-                    created = await self._activity(
-                        "container_job.create_container", req
+                    reconciled = await self._activity(
+                        "container_job.reconcile_container", req
                     )
-                    req.container_ref = created.container_ref
-                    self._snapshot.container_ref = created.container_ref
-                    await self._activity("container_job.start_container", req)
+                    req.container_ref = reconciled.container_ref
+                    if req.container_ref is None:
+                        created = await self._activity(
+                            "container_job.create_container", req
+                        )
+                        req.container_ref = created.container_ref
+                    self._snapshot.container_ref = req.container_ref
+                    if not reconciled.running:
+                        await self._activity("container_job.start_container", req)
                 while not self._cancel_requested and req.container_ref:
                     await self._project(req, "running")
                     observed = await self._activity(
@@ -148,10 +166,19 @@ class MoonMindContainerJobWorkflow:
             except Exception:
                 self._snapshot.cleanup_diagnostics += ("stop_failed",)
         await self._project(req, "publishing_evidence")
+        req.publication_token = f"{inp.ownership_token}:evidence:v1"
+        for operation, code in (
+            ("append_logs", "log_append_failed"),
+            ("append_artifacts", "artifact_append_failed"),
+        ):
+            try:
+                await self._activity(f"container_job.{operation}", req)
+            except Exception:
+                self._snapshot.publication_diagnostics += (code,)
         try:
             published = await self._activity("container_job.publish_evidence", req)
             self._snapshot.evidence_refs = published.evidence_refs
-            self._snapshot.publication_diagnostics = published.diagnostic_codes
+            self._snapshot.publication_diagnostics += published.diagnostic_codes
         except Exception:
             self._snapshot.publication_diagnostics += ("publication_failed",)
         await self._project(req, "cleaning_up")
@@ -159,5 +186,11 @@ class MoonMindContainerJobWorkflow:
             await self._activity("container_job.cleanup", req)
         except Exception:
             self._snapshot.cleanup_diagnostics += ("cleanup_failed",)
+        if req.container_ref:
+            try:
+                await self._activity("container_job.remove_container", req)
+            except Exception:
+                self._snapshot.cleanup_diagnostics += ("remove_failed",)
         await self._project(req, outcome)
+        await self._repair_projection(req)
         return self._snapshot.model_dump(mode="json", by_alias=True)

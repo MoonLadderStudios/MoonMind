@@ -57,6 +57,8 @@ class ContainerJobActivityRequest(BaseModel):
     container_ref: str | None = Field(None, alias="containerRef", max_length=500)
     state: ContainerJobState | None = None
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
+    projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
+    publication_token: str | None = Field(None, alias="publicationToken", max_length=300)
 
 
 class ContainerJobActivityResult(BaseModel):
@@ -73,6 +75,9 @@ class ContainerJobActivityResult(BaseModel):
     )
     diagnostic_codes: tuple[str, ...] = Field(
         default_factory=tuple, alias="diagnosticCodes", max_length=100
+    )
+    projection_sequence: int | None = Field(
+        None, alias="projectionSequence", ge=0
     )
 
     @model_validator(mode="after")
@@ -99,6 +104,10 @@ class ContainerJobSnapshot(BaseModel):
     )
     cleanup_diagnostics: tuple[str, ...] = Field(
         default_factory=tuple, alias="cleanupDiagnostics"
+    )
+    projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
+    projection_repair_required: bool = Field(
+        False, alias="projectionRepairRequired"
     )
 
 

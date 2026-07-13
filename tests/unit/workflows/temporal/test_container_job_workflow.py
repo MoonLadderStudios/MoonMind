@@ -50,7 +50,7 @@ def test_workflow_and_typed_activities_are_registered_on_existing_fleets() -> No
     assert "MoonMind.ContainerJob" in workflow_fleet_workflow_types(settings.temporal)
     catalog = build_default_activity_catalog()
     activities = [item for item in catalog.activities if item.family == "container_job"]
-    assert len(activities) == 9
+    assert len(activities) == 14
     assert {item.fleet for item in activities} == {AGENT_RUNTIME_FLEET}
     assert (
         catalog.resolve_activity("container_job.create_container").retries.max_attempts
@@ -137,6 +137,70 @@ async def test_lifecycle_preserves_primary_success_through_cleanup_failure(
     assert result["primaryOutcome"] == "succeeded"
     assert result["cleanupDiagnostics"] == ["cleanup_failed"]
     assert calls.count("container_job.create_container") == 1
+    assert calls.count("container_job.append_logs") == 1
+    assert calls.count("container_job.append_artifacts") == 1
+    assert calls.count("container_job.remove_container") == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_reattaches_running_owned_container(monkeypatch) -> None:
+    job = MoonMindContainerJobWorkflow()
+    calls: list[str] = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == "container_job.resolve_workspace":
+            return ContainerJobActivityResult(workspaceRef="resolved:1")
+        if name == "container_job.acquire_image":
+            return ContainerJobActivityResult(imageRef="image:digest")
+        if name == "container_job.reconcile_container":
+            return ContainerJobActivityResult(containerRef="owned:job-3253", running=True)
+        if name == "container_job.observe_container":
+            return ContainerJobActivityResult(terminalState="succeeded")
+        return ContainerJobActivityResult()
+
+    async def project(request, state):
+        job._snapshot.state = state
+
+    monkeypatch.setattr(job, "_activity", activity)
+    monkeypatch.setattr(job, "_project", project)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert result["primaryOutcome"] == "succeeded"
+    assert "container_job.create_container" not in calls
+    assert "container_job.start_container" not in calls
+
+
+@pytest.mark.asyncio
+async def test_projection_is_monotonic_and_repaired_after_write_failure(
+    monkeypatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    sequences: list[int] = []
+    repaired: list[int] = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            sequences.append(request.projection_sequence)
+            if len(sequences) == 1:
+                raise RuntimeError("projection unavailable")
+        if name == "container_job.repair_projection":
+            repaired.append(request.projection_sequence)
+        if name == "container_job.resolve_workspace":
+            return ContainerJobActivityResult(workspaceRef="resolved:1")
+        if name == "container_job.acquire_image":
+            return ContainerJobActivityResult(imageRef="image:digest")
+        if name == "container_job.create_container":
+            return ContainerJobActivityResult(containerRef="owned:job-3253")
+        if name == "container_job.observe_container":
+            return ContainerJobActivityResult(terminalState="succeeded")
+        return ContainerJobActivityResult()
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert sequences == sorted(sequences)
+    assert len(set(sequences)) == len(sequences)
+    assert repaired == [result["projectionSequence"]]
+    assert result["projectionRepairRequired"] is False
 
 
 @pytest.mark.asyncio
