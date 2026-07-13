@@ -679,16 +679,21 @@ def _is_untouched_legacy_setup_profile(profile_id: str, row: dict[str, Any]) -> 
     if spec is None:
         return False
     runtime_id, provider_id, account_label = spec
+
+    def enum_value(key: str) -> Any:
+        value = row.get(key)
+        return getattr(value, "value", value)
+
     return (
         row.get("runtime_id") == runtime_id
         and row.get("provider_id") == provider_id
         and row.get("account_label") == account_label
         and row.get("enabled") is False
         and row.get("is_default") is False
-        and row.get("credential_source") == "none"
-        and row.get("runtime_materialization_mode") == "api_key_env"
-        and row.get("auth_state") == "not_configured"
-        and row.get("disabled_reason") == "missing_credentials"
+        and enum_value("credential_source") == "none"
+        and enum_value("runtime_materialization_mode") == "api_key_env"
+        and enum_value("auth_state") == "not_configured"
+        and enum_value("disabled_reason") == "missing_credentials"
         and not row.get("secret_refs")
         and row.get("volume_ref") is None
         and row.get("volume_mount_path") is None

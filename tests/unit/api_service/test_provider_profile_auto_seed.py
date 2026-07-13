@@ -1,6 +1,7 @@
 """Unit tests for _auto_seed_provider_profiles startup function."""
 
 import asyncio
+from enum import Enum
 
 import pytest
 from sqlalchemy import select, text
@@ -48,6 +49,36 @@ LEGACY_SETUP_PROFILE_SPECS = {
     ),
     "gemini_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
 }
+
+
+def test_legacy_setup_profile_detection_accepts_enum_values() -> None:
+    """Database rows may expose enum objects instead of their stored strings."""
+    from api_service.main import _is_untouched_legacy_setup_profile
+
+    class DatabaseValue(Enum):
+        NONE = "none"
+        API_KEY_ENV = "api_key_env"
+        NOT_CONFIGURED = "not_configured"
+        MISSING_CREDENTIALS = "missing_credentials"
+
+    assert _is_untouched_legacy_setup_profile(
+        "claude_anthropic",
+        {
+            "runtime_id": "claude_code",
+            "provider_id": "anthropic",
+            "account_label": "Claude Code (setup required)",
+            "enabled": False,
+            "is_default": False,
+            "credential_source": DatabaseValue.NONE,
+            "runtime_materialization_mode": DatabaseValue.API_KEY_ENV,
+            "auth_state": DatabaseValue.NOT_CONFIGURED,
+            "disabled_reason": DatabaseValue.MISSING_CREDENTIALS,
+            "secret_refs": None,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "last_auth_method": None,
+        },
+    )
 
 @pytest.fixture()
 def _module_db(tmp_path):
