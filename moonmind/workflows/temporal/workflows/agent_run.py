@@ -1272,6 +1272,28 @@ class MoonMindAgentRun:
         if agent_run_id:
             metadata.setdefault("agentRunId", agent_run_id)
 
+        runtime_id = (
+            request.managed_session.runtime_id
+            if request.managed_session is not None
+            else request.agent_id
+        )
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        metadata["agentKind"] = request.agent_kind
+        metadata["agentId"] = capabilities.runtime_id
+        metadata["runtimeCapabilities"] = capabilities.model_dump(
+            by_alias=True,
+            mode="json",
+        )
+        if capabilities.workspace_authority == "managed_runtime" and agent_run_id:
+            metadata["workspaceLocator"] = {
+                "kind": "managed_runtime",
+                "runtimeId": capabilities.runtime_id,
+                "agentRunId": agent_run_id,
+                "relativePath": "repo",
+            }
+            metadata.pop("workspacePath", None)
+            metadata.pop("workspaceRoot", None)
+
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
         )
