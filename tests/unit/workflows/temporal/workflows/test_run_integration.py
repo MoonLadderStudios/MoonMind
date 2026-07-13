@@ -1470,6 +1470,7 @@ def test_determine_publish_completion_fails_for_no_commit_pr_publish(
 def test_jira_implement_no_commit_pr_handoff_is_not_required(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
     execution_result = {
         "outputs": {
             "push_status": "no_commits",
@@ -1501,9 +1502,11 @@ def test_jira_implement_no_commit_pr_handoff_is_not_required(
     )
 
     assert mock_run_workflow._publish_status == "not_required"
-    assert status == "success"
+    assert status == "no_commit"
     assert "No pull request was required" in message
-    assert "Jira-oriented workflow completed without repository changes" in message
+    assert (
+        "issue implementation workflow completed without repository changes" in message
+    )
     assert "MM-675 was already implemented" in message
     assert "no publishable diff was produced" not in message
     assert publish_failure is False
@@ -1512,6 +1515,7 @@ def test_jira_implement_no_commit_pr_handoff_is_not_required(
 def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
     execution_result = {
         "outputs": {
             "push_status": "no_commits",
@@ -1542,14 +1546,99 @@ def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
     )
 
     assert mock_run_workflow._publish_status == "not_required"
-    assert status == "success"
+    assert status == "no_commit"
     assert "No pull request was required" in message
-    assert "Jira-oriented workflow completed without repository changes" in message
     assert (
-        "no structured agent report confirmed whether the Jira issue was "
+        "issue implementation workflow completed without repository changes" in message
+    )
+    assert (
+        "no structured agent report confirmed whether the issue was "
         "already implemented"
     ) in message
     assert publish_failure is False
+
+
+@pytest.mark.asyncio
+async def test_github_issue_implement_no_commit_closure_finalizes_as_no_commit(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "tool": {"type": "skill", "name": "auto"},
+            "skill": {"name": "auto"},
+            "appliedStepTemplates": [
+                {"slug": "github-issue-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+    no_commit_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+            "operator_summary": "GitHub issue #3144 was already implemented.",
+        }
+    }
+    mock_run_workflow._record_execution_context(
+        node_id="create-pull-request",
+        execution_result=no_commit_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=no_commit_result,
+    )
+    mock_run_workflow._record_execution_context(
+        node_id="finalize-github-issue",
+        execution_result={
+            "outputs": {
+                "summary": (
+                    "Updated GitHub issue MoonLadderStudios/MoonMind#3144 "
+                    "with mode done."
+                ),
+                "sideEffect": {
+                    "effectClass": "external_non_idempotent",
+                    "kind": "github",
+                    "operation": "github.issue.close",
+                    "target": (
+                        "https://github.com/MoonLadderStudios/MoonMind/issues/3144"
+                    ),
+                    "summary": "Closed GitHub issue MoonLadderStudios/MoonMind#3144.",
+                },
+            }
+        },
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters=parameters,
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert status == "no_commit"
+    assert "No pull request was required" in message
+    assert "Jira" not in message
+    assert publish_failure is False
+    assert summary["finishOutcome"]["code"] == "NO_COMMIT"
+    assert summary["publish"]["status"] == "skipped"
+    assert summary["publish"]["reasonCode"] == "no_commit"
+    assert summary["publish"]["commitCreated"] is False
+    assert summary["publish"]["branchPushed"] is False
+    assert summary["publish"]["prUrl"] is None
+    assert summary["sideEffects"] == [
+        {
+            "kind": "github",
+            "status": "completed",
+            "summary": "Closed GitHub issue MoonLadderStudios/MoonMind#3144.",
+        }
+    ]
 
 
 @pytest.mark.asyncio
