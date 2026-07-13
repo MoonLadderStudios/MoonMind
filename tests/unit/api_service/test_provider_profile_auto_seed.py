@@ -28,6 +28,27 @@ FIRST_PARTY_API_PROFILE_IDS = {
     "claude_anthropic_api",
 }
 
+LEGACY_SETUP_PROFILE_SPECS = {
+    "claude_anthropic_default": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "claude_anthropic": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "codex_openai_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "codex_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "gemini_google_default": (
+        "gemini_cli",
+        "google",
+        "Gemini CLI (setup required)",
+    ),
+    "gemini_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
+}
+
 @pytest.fixture()
 def _module_db(tmp_path):
     """Create a single in-memory SQLite engine and schema for the test."""
@@ -456,20 +477,24 @@ async def test_auto_seed_repairs_legacy_codex_oauth_capacity_to_one(
         assert profile.max_parallel_runs == 1
 
 @pytest.mark.asyncio
-async def test_auto_seed_deletes_deprecated_gemini_cli_profiles(
+async def test_auto_seed_deletes_untouched_legacy_setup_profiles(
     _module_db, monkeypatch
 ):
-    """Old Gemini CLI profile rows are removed during startup seeding."""
+    """All generated legacy setup stubs are removed during startup seeding."""
     from api_service.main import _auto_seed_provider_profiles
 
     async with db_base.async_session_maker() as session:
-        for profile_id in ("gemini_google_default", "gemini_default"):
+        for profile_id, (
+            runtime_id,
+            provider_id,
+            account_label,
+        ) in LEGACY_SETUP_PROFILE_SPECS.items():
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id=profile_id,
-                    runtime_id="gemini_cli",
-                    provider_id="google",
-                    provider_label="Google",
+                    runtime_id=runtime_id,
+                    provider_id=provider_id,
+                    account_label=account_label,
                     credential_source=ProviderCredentialSource.NONE,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     enabled=False,
@@ -488,8 +513,41 @@ async def test_auto_seed_deletes_deprecated_gemini_cli_profiles(
             await session.execute(select(ManagedAgentProviderProfile.profile_id))
         ).scalars().all()
 
-    assert "gemini_google_default" not in rows
-    assert "gemini_default" not in rows
+    assert set(rows) == FIRST_PARTY_SETUP_PROFILE_IDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edit_field", ["secret_refs", "volume_ref"])
+async def test_auto_seed_preserves_edited_legacy_setup_profile(
+    _module_db, edit_field
+):
+    """A legacy ID with credential state is user data, not a generated stub."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    values = {
+        "profile_id": "claude_anthropic",
+        "runtime_id": "claude_code",
+        "provider_id": "anthropic",
+        "account_label": "Claude Code (setup required)",
+        "credential_source": ProviderCredentialSource.NONE,
+        "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+        "enabled": False,
+        "is_default": False,
+        "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+        "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+        edit_field: {"anthropic_api_key": "secret://configured"}
+        if edit_field == "secret_refs"
+        else "claude_oauth_volume",
+    }
+    async with db_base.async_session_maker() as session:
+        session.add(ManagedAgentProviderProfile(**values))
+        await session.commit()
+
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        preserved = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
+    assert preserved is not None
 
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
