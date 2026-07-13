@@ -24,7 +24,10 @@ def test_container_jobs_migration_upgrade_and_downgrade(monkeypatch) -> None:
         }
         unique = inspector.get_unique_constraints("container_jobs")
         assert [(item["name"], item["column_names"]) for item in unique] == [
-            ("uq_container_jobs_owner_idempotency", ["owner_id", "idempotency_key"])
+            (
+                "uq_container_jobs_owner_idempotency",
+                ["owner_type", "owner_id", "idempotency_key"],
+            )
         ]
         migration.downgrade()
         assert "container_jobs" not in sa.inspect(connection).get_table_names()
