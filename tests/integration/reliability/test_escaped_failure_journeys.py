@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,11 +14,19 @@ import pytest
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
+from moonmind.provider_profiles.lease_client import (
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
+)
 from moonmind.workflows.adapters.codex_session_adapter import _pr_resolver_terminal_contract
 from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
+)
+from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.runtime.codex_session_runtime import (
+    CodexManagedSessionRuntime,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
@@ -23,6 +34,7 @@ from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
+from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
     _pr_resolver_request,
@@ -40,6 +52,54 @@ pytestmark = [
     pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
+
+
+async def test_oauth_maintenance_lease_replays_through_activity_update_boundary() -> (
+    None
+):
+    manifest = load_replay("oauth-maintenance-external-update", "manifest.json")
+    expected = load_replay(
+        "oauth-maintenance-external-update", "expected-outcome.json"
+    )
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.update_name = ""
+            self.payload: dict[str, object] = {}
+
+        async def get_client(self):
+            return self
+
+        async def start_workflow(self, *_args, **_kwargs):
+            return None
+
+        async def update_workflow(self, _workflow_id, update_name, payload):
+            self.update_name = update_name
+            self.payload = payload
+            return {
+                "profile_id": manifest["profileId"],
+                "lease_id": payload["owner_id"],
+            }
+
+    route = build_default_activity_catalog().resolve_activity(
+        manifest["expectedActivityType"]
+    )
+    adapter = Adapter()
+    lease = await ProviderProfileLeaseClient(adapter).acquire_maintenance_lease(
+        runtime_id=manifest["runtimeId"],
+        profile_id=manifest["profileId"],
+        owner_id=manifest["leaseRequest"]["ownerId"],
+        purpose=CredentialLeasePurpose(manifest["leaseRequest"]["purpose"]),
+        metadata={"oauthSessionId": "oas-replay"},
+        owner_is_workflow=True,
+    )
+
+    assert route.task_queue == manifest["expectedTaskQueue"]
+    assert lease.lease_id == manifest["leaseRequest"]["ownerId"]
+    assert adapter.update_name == expected["acknowledgedBy"]
+    assert adapter.payload["metadata"]["ownerIsWorkflow"] is expected[
+        "ownerIsWorkflow"
+    ]
 
 
 async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
@@ -359,6 +419,82 @@ async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority
     assert parent._step_checkpoint_capture_outcomes["node-1"] == (
         expected["checkpointOutcome"]
     )
+
+
+async def test_codex_system_error_waits_for_delayed_oauth_failure_log(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:32a5549d through the real managed-session runtime boundary."""
+
+    replay_id = "codex-oauth-log-settle-race"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = launch_request(tmp_path)
+    transcript_path = Path(request.codex_home_path) / manifest["rolloutRelativePath"]
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        omit_turns_on_read=True,
+        thread_status_type=manifest["threadStatusType"],
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[manifest["terminalRolloutEvent"]],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    log_path = Path(request.codex_home_path) / "logs_1.sqlite"
+    with sqlite3.connect(log_path) as connection:
+        connection.execute(
+            "CREATE TABLE logs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts INTEGER, "
+            "feedback_log_body TEXT"
+            ")"
+        )
+
+    def commit_provider_failure_after_terminal_event() -> None:
+        time.sleep(manifest["providerLogDelaySeconds"])
+        with sqlite3.connect(log_path) as connection:
+            connection.execute(
+                "INSERT INTO logs (ts, feedback_log_body) VALUES (?, ?)",
+                (int(time.time()), manifest["providerLog"]),
+            )
+
+    writer = threading.Thread(
+        target=commit_provider_failure_after_terminal_event,
+        daemon=True,
+    )
+    writer.start()
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+    writer.join(timeout=2)
+
+    assert not writer.is_alive()
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == expected["runtimeFailureClass"]
+    assert response.metadata["reason"] == expected["reason"]
+    assert "retryRecommendedAction" not in response.metadata
+    classified = classify_provider_failure(response.metadata["reason"])
+    assert classified is not None
+    assert classified.failure_class == expected["failureClass"]
+    assert classified.provider_error_code == expected["providerErrorCode"]
+    assert classified.retry_recommendation == expected["retryRecommendation"]
 
 
 async def test_checkpoint_finalization_fault_is_retryable(

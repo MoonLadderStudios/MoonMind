@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio import exceptions
+from temporalio import activity as temporal_activity
 
 from api_service.db.models import (
     Base,
@@ -32,6 +35,11 @@ from moonmind.workflows.temporal.activity_catalog import AGENT_RUNTIME_FLEET
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET
 from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
 from moonmind.workflows.temporal.workers import list_registered_workflow_types
+from moonmind.provider_profiles.lease_client import (
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
+)
+from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
 @pytest_asyncio.fixture
 async def _oauth_activity_session_factory(tmp_path):
@@ -65,6 +73,18 @@ class TestOAuthSessionCatalogRegistration:
         route = catalog.resolve_activity("oauth_session.update_status")
         assert route.activity_type == "oauth_session.update_status"
         assert route.fleet == ARTIFACTS_FLEET
+
+    def test_maintenance_lease_acquisition_routes_to_artifacts(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity(
+            "provider_profile.acquire_credential_maintenance_lease"
+        )
+        assert route.fleet == ARTIFACTS_FLEET
+        assert route.task_queue == "mm.activity.artifacts"
+        assert route.timeouts.start_to_close_seconds == 1800
+        assert route.timeouts.heartbeat_timeout_seconds == 30
+        assert route.retries.max_attempts == 3
+        assert route.heartbeat_required is True
 
     def test_mark_failed_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
@@ -107,6 +127,62 @@ class TestOAuthSessionCatalogRegistration:
         assert route.fleet == "artifacts"
         assert route.timeouts.start_to_close_seconds == 30
         assert route.timeouts.schedule_to_close_seconds == 60
+
+
+@pytest.mark.asyncio
+async def test_maintenance_lease_activity_heartbeats_while_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease_ready = asyncio.Event()
+    heartbeat_details: list[dict] = []
+    original_wait = asyncio.wait
+    wait_calls = 0
+
+    async def acquire_maintenance_lease(_self, **_kwargs):
+        await lease_ready.wait()
+        return SimpleNamespace(
+            profile_id="codex_openai_oauth",
+            runtime_id="codex_cli",
+            lease_id="oauth-session:oas-heartbeat",
+            owner_id="oauth-session:oas-heartbeat",
+            purpose=CredentialLeasePurpose.OAUTH_RECONNECT,
+            already_held=False,
+        )
+
+    async def controlled_wait(tasks, *, timeout):
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 1:
+            lease_ready.set()
+            return set(), set(tasks)
+        return await original_wait(tasks, timeout=timeout)
+
+    monkeypatch.setattr(
+        ProviderProfileLeaseClient,
+        "acquire_maintenance_lease",
+        acquire_maintenance_lease,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.asyncio.wait",
+        controlled_wait,
+    )
+    monkeypatch.setattr(
+        temporal_activity,
+        "heartbeat",
+        lambda details: heartbeat_details.append(details),
+    )
+
+    result = await TemporalArtifactActivities(
+        None  # type: ignore[arg-type]
+    ).provider_profile_acquire_credential_maintenance_lease(
+        runtime_id="codex_cli",
+        profile_id="codex_openai_oauth",
+        owner_id="oauth-session:oas-heartbeat",
+        purpose="oauth_reconnect",
+    )
+
+    assert result["lease_id"] == "oauth-session:oas-heartbeat"
+    assert heartbeat_details == [{"phase": "waiting_for_maintenance_lease"}]
 
 class TestOAuthSessionWorkflowRegistration:
     """Verify the OAuth session workflow is registered."""

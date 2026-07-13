@@ -69,6 +69,8 @@ _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_PROVIDER_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
+_PROVIDER_LOG_SETTLE_GRACE_SECONDS = 1.0
+_PROVIDER_LOG_SETTLE_RETRY_SECONDS = 0.1
 _LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = provider_failure_search_markers()
 EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
 _EMPTY_ASSISTANT_FAILURE_REASONS: tuple[str, ...] = (
@@ -1684,6 +1686,27 @@ class CodexManagedSessionRuntime:
                 break
         return None
 
+    def _settled_turn_error_from_logs(
+        self,
+        vendor_turn_id: str,
+        *,
+        turn_started_at: float | None = None,
+    ) -> str | None:
+        """Allow Codex's asynchronous SQLite logger to commit terminal errors."""
+
+        deadline = time.monotonic() + _PROVIDER_LOG_SETTLE_GRACE_SECONDS
+        while True:
+            recovered = self._extract_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=turn_started_at,
+            )
+            if recovered:
+                return recovered
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(_PROVIDER_LOG_SETTLE_RETRY_SECONDS, remaining))
+
     def _recent_runtime_log_excerpts(
         self,
         *,
@@ -2266,9 +2289,14 @@ class CodexManagedSessionRuntime:
         vendor_turn_id: str,
         rollout_scan: _RolloutTurnScan | None = None,
     ) -> _TurnTerminalOutcome | None:
+        failed_thread_outcome = self._failed_thread_terminal_outcome(
+            state=state,
+            thread_payload=thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if failed_thread_outcome is not None:
+            return failed_thread_outcome
         thread_outcome = self._terminal_thread_outcome(thread_payload)
-        if thread_outcome is not None and thread_outcome.status != "completed":
-            return thread_outcome
 
         if rollout_scan is None:
             vendor_thread_path = self._resolved_rollout_path(
@@ -2296,6 +2324,29 @@ class CodexManagedSessionRuntime:
         if thread_outcome is not None and not rollout_scan.references_turn:
             return thread_outcome
         return None
+
+    def _failed_thread_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> _TurnTerminalOutcome | None:
+        thread_outcome = self._terminal_thread_outcome(thread_payload)
+        if thread_outcome is None or thread_outcome.status == "completed":
+            return None
+        if self._thread_status_type(thread_payload) == "systemerror":
+            recovered_error = self._settled_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            )
+            if recovered_error:
+                return _TurnTerminalOutcome(
+                    status="failed",
+                    error_text=recovered_error,
+                    failure_class="permanent",
+                )
+        return thread_outcome
 
     def _wait_for_turn_completion(
         self,
@@ -2355,6 +2406,13 @@ class CodexManagedSessionRuntime:
             if isinstance(turn_payload, Mapping):
                 missing_turn_first_seen_at = None
                 outcome = self._terminal_turn_outcome(turn_payload)
+                if outcome is not None:
+                    return thread_payload, outcome
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                )
                 if outcome is not None:
                     return thread_payload, outcome
             else:
@@ -2586,10 +2644,10 @@ class CodexManagedSessionRuntime:
         status_type = cls._thread_status_type(thread_payload)
         if status_type == "idle":
             return _TurnTerminalOutcome(status="completed")
-        if status_type in {"failed", "error"}:
+        if status_type in {"failed", "error", "systemerror"}:
             return _TurnTerminalOutcome(
                 status="failed",
-                error_text=cls._thread_status_reason(thread_payload),
+                error_text=cls._thread_status_reason(thread_payload) or status_type,
                 failure_class="permanent",
             )
         if status_type in {"interrupted", "cancelled", "canceled"}:
