@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 OAUTH_CREDENTIAL_MAINTENANCE_LEASE_PATCH = (
     "oauth-session-credential-maintenance-lease-v1"
 )
+OAUTH_CREDENTIAL_MAINTENANCE_ACTIVITY_PATCH = (
+    "oauth-session-credential-maintenance-activity-v1"
+)
 
 # ---------------------------------------------------------------------------
 # Input / Output types
@@ -453,34 +456,56 @@ class MoonMindOAuthSessionWorkflow:
                 "profile_id is required for OAuth credential maintenance",
                 non_retryable=True,
             )
-        await workflow.execute_activity(
-            "provider_profile.ensure_manager",
-            {"runtime_id": runtime_id},
-            task_queue=ACTIVITY_TASK_QUEUE,
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=1), maximum_attempts=3
-            ),
-        )
         owner_id = f"oauth-session:{self._session_id}"
-        manager = workflow.get_external_workflow_handle(
-            f"provider-profile-manager:{runtime_id}"
-        )
-        result = await manager.execute_update(
-            "AcquireCredentialMaintenanceLease",
-            {
-                "requester_workflow_id": owner_id,
-                "owner_id": owner_id,
-                "runtime_id": runtime_id,
-                "execution_profile_ref": profile_id,
-                "purpose": purpose,
-                "metadata": {
-                    "workflowId": workflow.info().workflow_id,
-                    "oauthSessionId": self._session_id,
-                    "ownerIsWorkflow": True,
-                },
+        payload = {
+            "runtime_id": runtime_id,
+            "profile_id": profile_id,
+            "owner_id": owner_id,
+            "purpose": purpose,
+            "metadata": {
+                "workflowId": workflow.info().workflow_id,
+                "oauthSessionId": self._session_id,
+                "ownerIsWorkflow": True,
             },
-        )
+        }
+        if workflow.patched(OAUTH_CREDENTIAL_MAINTENANCE_ACTIVITY_PATCH):
+            result = await workflow.execute_activity(
+                "provider_profile.acquire_credential_maintenance_lease",
+                payload,
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=1800),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+        else:
+            # Replay-only path for histories recorded before workflow-context
+            # ExternalWorkflowHandle Updates were moved to an Activity boundary.
+            await workflow.execute_activity(
+                "provider_profile.ensure_manager",
+                {"runtime_id": runtime_id},
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1), maximum_attempts=3
+                ),
+            )
+            manager = workflow.get_external_workflow_handle(
+                f"provider-profile-manager:{runtime_id}"
+            )
+            result = await manager.execute_update(
+                "AcquireCredentialMaintenanceLease",
+                {
+                    "requester_workflow_id": owner_id,
+                    "owner_id": owner_id,
+                    "runtime_id": runtime_id,
+                    "execution_profile_ref": profile_id,
+                    "purpose": purpose,
+                    "metadata": {
+                        "workflowId": workflow.info().workflow_id,
+                        "oauthSessionId": self._session_id,
+                        "ownerIsWorkflow": True,
+                    },
+                },
+            )
         self._maintenance_lease_acquired = True
         self._maintenance_profile_id = profile_id
         self._maintenance_runtime_id = runtime_id

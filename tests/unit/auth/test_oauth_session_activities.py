@@ -66,6 +66,16 @@ class TestOAuthSessionCatalogRegistration:
         assert route.activity_type == "oauth_session.update_status"
         assert route.fleet == ARTIFACTS_FLEET
 
+    def test_maintenance_lease_acquisition_routes_to_artifacts(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity(
+            "provider_profile.acquire_credential_maintenance_lease"
+        )
+        assert route.fleet == ARTIFACTS_FLEET
+        assert route.task_queue == "mm.activity.artifacts"
+        assert route.timeouts.start_to_close_seconds == 1800
+        assert route.retries.max_attempts == 1
+
     def test_mark_failed_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
         route = catalog.resolve_activity("oauth_session.mark_failed")

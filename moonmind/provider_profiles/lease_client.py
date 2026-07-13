@@ -115,12 +115,15 @@ class ProviderProfileLeaseClient:
         owner_id: str,
         purpose: CredentialLeasePurpose,
         metadata: Mapping[str, Any] | None,
+        owner_is_workflow: bool,
     ) -> CredentialLease:
         workflow_id = await self._ensure_manager(runtime_id)
         safe_metadata = dict(metadata or {})
-        # This client runs at an Activity/HTTP boundary. Its deterministic
-        # owner is an idempotency identity, not a Temporal workflow ID.
-        safe_metadata["ownerIsWorkflow"] = False
+        # Most callers use an activity idempotency identity. A workflow may
+        # delegate an acknowledged Update through an Activity when the
+        # workflow-context ExternalWorkflowHandle cannot execute Updates; in
+        # that case the stable owner really is the delegating workflow ID.
+        safe_metadata["ownerIsWorkflow"] = owner_is_workflow
         result = await self._adapter.update_workflow(
             workflow_id,
             (
@@ -154,6 +157,7 @@ class ProviderProfileLeaseClient:
         owner_id: str,
         purpose: CredentialLeasePurpose = CredentialLeasePurpose.EXECUTION_DIRECT,
         metadata: Mapping[str, Any] | None = None,
+        owner_is_workflow: bool = False,
     ) -> CredentialLease:
         if purpose.is_maintenance:
             raise ValueError("execution lease requires an execution purpose")
@@ -163,6 +167,7 @@ class ProviderProfileLeaseClient:
             owner_id=owner_id,
             purpose=purpose,
             metadata=metadata,
+            owner_is_workflow=owner_is_workflow,
         )
 
     async def acquire_maintenance_lease(
@@ -173,6 +178,7 @@ class ProviderProfileLeaseClient:
         owner_id: str,
         purpose: CredentialLeasePurpose,
         metadata: Mapping[str, Any] | None = None,
+        owner_is_workflow: bool = False,
     ) -> CredentialLease:
         if not purpose.is_maintenance:
             raise ValueError("maintenance lease requires a maintenance purpose")
@@ -182,6 +188,7 @@ class ProviderProfileLeaseClient:
             owner_id=owner_id,
             purpose=purpose,
             metadata=metadata,
+            owner_is_workflow=owner_is_workflow,
         )
 
     async def release_lease(self, lease: CredentialLease) -> None:

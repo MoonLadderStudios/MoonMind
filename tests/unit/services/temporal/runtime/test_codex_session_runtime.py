@@ -1438,6 +1438,89 @@ def test_runtime_send_turn_recovers_auth_failure_from_recent_log_for_empty_task_
     }
 
 
+def test_runtime_send_turn_waits_for_auth_log_after_system_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "07"
+        / "13"
+        / "rollout-2026-07-13T16-58-45-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        omit_turns_on_read=True,
+        thread_status_type="systemError",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-07-13T16:58:47.056Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    recovery_attempts = iter((None, auth_summary))
+    monkeypatch.setattr(
+        runtime,
+        "_extract_turn_error_from_logs",
+        lambda *_args, **_kwargs: next(recovery_attempts),
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+    assert "retryRecommendedAction" not in response.metadata
+
+
+def test_system_error_thread_status_is_terminal_failure() -> None:
+    outcome = CodexManagedSessionRuntime._terminal_thread_outcome(
+        {"thread": {"status": {"type": "systemError"}}}
+    )
+
+    assert outcome is not None
+    assert outcome.status == "failed"
+    assert outcome.error_text == "systemerror"
+    assert outcome.failure_class == "permanent"
+
+
 def _spool_skill_outcome_path(request: LaunchCodexManagedSessionRequest) -> Path:
     return Path(request.artifact_spool_path) / "skill_outcome.json"
 

@@ -3322,6 +3322,42 @@ class TemporalArtifactActivities:
             )
             return {"started": False, "workflow_id": workflow_id}
 
+    async def provider_profile_acquire_credential_maintenance_lease(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner_id: str,
+        purpose: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Acquire an acknowledged maintenance lease for a workflow owner."""
+
+        from moonmind.provider_profiles.lease_client import (
+            CredentialLeasePurpose,
+            ProviderProfileLeaseClient,
+        )
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+        lease = await ProviderProfileLeaseClient(
+            TemporalClientAdapter()
+        ).acquire_maintenance_lease(
+            runtime_id=runtime_id,
+            profile_id=profile_id,
+            owner_id=owner_id,
+            purpose=CredentialLeasePurpose(purpose),
+            metadata=metadata,
+            owner_is_workflow=True,
+        )
+        return {
+            "profile_id": lease.profile_id,
+            "runtime_id": lease.runtime_id,
+            "lease_id": lease.lease_id,
+            "owner_id": lease.owner_id,
+            "purpose": lease.purpose.value,
+            "already_held": lease.already_held,
+        }
+
     async def provider_profile_reset_manager(
         self,
         *,

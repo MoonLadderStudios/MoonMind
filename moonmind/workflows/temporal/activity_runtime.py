@@ -1213,6 +1213,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "workspace.classify_git_effect": ("sandbox", "workspace_classify_git_effect"),
     "provider_profile.list": ("artifacts", "provider_profile_list"),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
+    "provider_profile.acquire_credential_maintenance_lease": (
+        "artifacts",
+        "provider_profile_acquire_credential_maintenance_lease",
+    ),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
     "provider_profile.manager_state": ("artifacts", "provider_profile_manager_state"),
     "provider_profile.verify_lease_holders": (
