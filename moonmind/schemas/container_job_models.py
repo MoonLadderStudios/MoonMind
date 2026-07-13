@@ -25,8 +25,29 @@ _FORBIDDEN_KEYS = {
 }
 
 
+def _validate_job_id(value: str) -> str:
+    if not _JOB_ID.fullmatch(value):
+        raise ValueError("jobId must be a container-job identifier")
+    return value
+
+
 class ContractModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid", use_enum_values=True)
+
+
+class TemporalContractModel(ContractModel):
+    """Compact public or worker contract permitted to cross workflow history."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_sensitive_or_authority_fields(cls, value: Any) -> Any:
+        _reject_forbidden(value)
+        return value
+
+    @model_validator(mode="after")
+    def temporal_size(self) -> "TemporalContractModel":
+        ensure_temporal_safe(self)
+        return self
 
 
 class ContainerJobState(StrEnum):
@@ -150,25 +171,14 @@ class ContainerJobSpec(ContractModel):
         return value
 
 
-class ContainerJobSubmitRequest(ContractModel):
+class ContainerJobSubmitRequest(TemporalContractModel):
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=255)
     source: SourceCorrelation
     spec: ContainerJobSpec
 
-    @model_validator(mode="before")
-    @classmethod
-    def reject_sensitive_or_authority_fields(cls, value: Any) -> Any:
-        _reject_forbidden(value)
-        return value
 
-    @model_validator(mode="after")
-    def temporal_size(self) -> "ContainerJobSubmitRequest":
-        ensure_temporal_safe(self)
-        return self
-
-
-class ContainerJobAccepted(ContractModel):
+class ContainerJobAccepted(TemporalContractModel):
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     job_id: str = Field(alias="jobId")
     state: Literal["queued"] = "queued"
@@ -178,9 +188,7 @@ class ContainerJobAccepted(ContractModel):
     @field_validator("job_id")
     @classmethod
     def valid_id(cls, value: str) -> str:
-        if not _JOB_ID.fullmatch(value):
-            raise ValueError("jobId must be a container-job identifier")
-        return value
+        return _validate_job_id(value)
 
 
 class ImageObservation(ContractModel):
@@ -203,7 +211,7 @@ class AuxiliaryOutcome(ContractModel):
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef", max_length=1024)
 
 
-class ContainerJobStatus(ContractModel):
+class ContainerJobStatus(TemporalContractModel):
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     job_id: str = Field(alias="jobId")
     state: ContainerJobState
@@ -216,6 +224,8 @@ class ContainerJobStatus(ContractModel):
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     updated_at: datetime = Field(alias="updatedAt")
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
 
 
 class ContainerJobLogQuery(ContractModel):
@@ -235,6 +245,8 @@ class ContainerJobLogPage(ContractModel):
     entries: list[ContainerJobLogEntry] = Field(max_length=MAX_LOG_PAGE_ENTRIES)
     next_cursor: str | None = Field(None, alias="nextCursor", max_length=512)
 
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
+
 
 class ContainerJobArtifact(ContractModel):
     name: str = Field(max_length=255)
@@ -249,20 +261,24 @@ class ContainerJobArtifactPage(ContractModel):
     next_cursor: str | None = Field(None, alias="nextCursor", max_length=512)
     publication: AuxiliaryOutcome
 
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
 
-class ContainerJobCancelRequest(ContractModel):
+
+class ContainerJobCancelRequest(TemporalContractModel):
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=255)
     reason: str | None = Field(None, max_length=512)
 
 
-class ContainerJobCancelResult(ContractModel):
+class ContainerJobCancelResult(TemporalContractModel):
     job_id: str = Field(alias="jobId")
     state: ContainerJobState
     accepted: bool
     replayed: bool = False
 
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
 
-class ResolvedContainerLaunchPlan(ContractModel):
+
+class ResolvedContainerLaunchPlan(TemporalContractModel):
     """Trusted-worker-only plan; backendRef is selected by deployment code."""
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     job_id: str = Field(alias="jobId")
@@ -270,6 +286,8 @@ class ResolvedContainerLaunchPlan(ContractModel):
     backend_ref: str = Field(alias="backendRef", max_length=255)
     resolved_workspace_ref: str = Field(alias="resolvedWorkspaceRef", max_length=1024)
     spec: ContainerJobSpec
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
 
 
 def _reject_forbidden(value: Any, path: str = "request") -> None:
