@@ -35,8 +35,8 @@ def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmit
         idempotencyKey=key,
         source={"source": "mcp", "callerRequestId": "r"},
         spec={
-            "image": {"reference": image},
-            "workspace": {"kind": "managed_runtime", "runtimeId": "codex", "agentRunId": "run"},
+            "image": image,
+            "workspaceRef": {"kind": "moonmind-session", "sessionId": "run"},
             "resources": {"cpuMillis": 100, "memoryMiB": 64},
         },
     )
@@ -52,9 +52,22 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory)
         assert first.job_id == second.job_id and second.replayed
         with pytest.raises(ContainerJobIdempotencyConflictError):
             await service.submit(owner=owner, request=submission(image="busybox"))
-        assert (await service.status(owner_id="user-1", job_id=first.job_id)).state == "queued"
+        assert (await service.status(owner=owner, job_id=first.job_id)).state == "queued"
         with pytest.raises(ContainerJobNotFoundError):
-            await service.status(owner_id="user-2", job_id=first.job_id)
+            await service.status(owner=OwnerIdentity(principalId="user-2", principalType="user"), job_id=first.job_id)
+
+
+@pytest.mark.asyncio
+async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_factory) -> None:
+    async with session_factory() as session:
+        service = ContainerJobService(session)
+        user = OwnerIdentity(principalId="shared", principalType="user")
+        system = OwnerIdentity(principalId="shared", principalType="system")
+        user_job = await service.submit(owner=user, request=submission())
+        system_job = await service.submit(owner=system, request=submission())
+        assert user_job.job_id != system_job.job_id
+        with pytest.raises(ContainerJobNotFoundError):
+            await service.status(owner=system, job_id=user_job.job_id)
 
 
 @pytest.mark.asyncio
@@ -80,7 +93,7 @@ async def test_terminal_observations_and_auxiliary_failures_project_independentl
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
         await service.repository.record_observation(
-            owner_id="u", job_id=accepted.job_id, state=ContainerJobState.FAILED,
+            owner=OwnerIdentity(principalId="u", principalType="user"), job_id=accepted.job_id, state=ContainerJobState.FAILED,
             backend_kind="docker", backend_ref="configured-backend",
             image=ImageObservation(requestedReference="alpine", cachePresent=True),
             terminal=TerminalOutcome(exitCode=2, failureClass="execution", message="failed"),
@@ -88,11 +101,19 @@ async def test_terminal_observations_and_auxiliary_failures_project_independentl
             cleanup=AuxiliaryOutcome(state="succeeded"),
             logs_ref="artifact://logs", artifacts_ref="artifact://outputs",
         )
-        status = await service.status(owner_id="u", job_id=accepted.job_id)
+        status = await service.status(owner=OwnerIdentity(principalId="u", principalType="user"), job_id=accepted.job_id)
         assert status.terminal.exit_code == 2
         assert status.publication.state == "failed"
         assert status.cleanup.state == "succeeded"
         assert status.logs_ref == "artifact://logs"
+        await service.repository.record_observation(
+            owner=OwnerIdentity(principalId="u", principalType="user"),
+            job_id=accepted.job_id,
+            state=ContainerJobState.FAILED,
+        )
+        preserved = await service.status(owner=OwnerIdentity(principalId="u", principalType="user"), job_id=accepted.job_id)
+        assert preserved.backend_kind == "docker"
+        assert preserved.backend_ref == "configured-backend"
 
 
 @pytest.mark.asyncio
@@ -103,16 +124,17 @@ async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory) -> N
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
         request = ContainerJobCancelRequest(idempotencyKey="cancel-1")
-        first = await service.cancel(owner_id="u", job_id=accepted.job_id, request=request)
-        second = await service.cancel(owner_id="u", job_id=accepted.job_id, request=request)
+        owner = OwnerIdentity(principalId="u", principalType="user")
+        first = await service.cancel(owner=owner, job_id=accepted.job_id, request=request)
+        second = await service.cancel(owner=owner, job_id=accepted.job_id, request=request)
         assert first.accepted and second.replayed and second.state == "canceling"
         await service.repository.record_observation(
-            owner_id="u", job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED
+            owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED
         )
         terminal = await service.cancel(
-            owner_id="u", job_id=accepted.job_id,
+            owner=owner, job_id=accepted.job_id,
             request=ContainerJobCancelRequest(idempotencyKey="cancel-2"),
         )
         assert not terminal.accepted and terminal.state == "succeeded"
         with pytest.raises(ContainerJobNotFoundError):
-            await service.cancel(owner_id="other", job_id=accepted.job_id, request=request)
+            await service.cancel(owner=OwnerIdentity(principalId="other", principalType="user"), job_id=accepted.job_id, request=request)

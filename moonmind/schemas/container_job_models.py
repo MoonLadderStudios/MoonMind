@@ -6,11 +6,9 @@ import json
 import re
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from moonmind.schemas.workspace_locator_models import WorkspaceLocator
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
@@ -83,7 +81,7 @@ class AuxiliaryOutcomeState(StrEnum):
 
 class OwnerIdentity(ContractModel):
     principal_id: str = Field(alias="principalId", min_length=1, max_length=255)
-    principal_type: Literal["user", "service"] = Field(alias="principalType")
+    principal_type: Literal["user", "service", "system"] = Field(alias="principalType")
 
 
 class SourceCorrelation(ContractModel):
@@ -98,22 +96,18 @@ class SourceCorrelation(ContractModel):
     omnigent_conversation_id: str | None = Field(None, alias="omnigentConversationId", max_length=255)
 
 
-class ImageRequest(ContractModel):
-    reference: str = Field(min_length=1, max_length=512)
-    credential_ref: str | None = Field(None, alias="credentialRef", max_length=1024)
-
-    @field_validator("credential_ref")
-    @classmethod
-    def credential_is_reference(cls, value: str | None) -> str | None:
-        if value is not None and "://" not in value:
-            raise ValueError("credentialRef must be an opaque secret reference")
-        return value
+def _opaque_secret_reference(value: str | None) -> str | None:
+    if value is not None and "://" not in value:
+        raise ValueError("secret references must use an opaque reference URI")
+    return value
 
 
 class EnvironmentOverride(ContractModel):
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
     value: str | None = Field(None, max_length=4096)
     secret_ref: str | None = Field(None, alias="secretRef", max_length=1024)
+
+    _validate_secret_ref = field_validator("secret_ref")(_opaque_secret_reference)
 
     @model_validator(mode="after")
     def exactly_one_value(self) -> "EnvironmentOverride":
@@ -150,18 +144,42 @@ class OutputDeclaration(ContractModel):
 
 
 class ContainerJobSpec(ContractModel):
-    image: ImageRequest
-    workspace: WorkspaceLocator
+    image: str = Field(min_length=1, max_length=512)
+    workspace_ref: dict[str, Any] = Field(alias="workspaceRef")
     command: list[str] = Field(default_factory=list, max_length=128)
     entrypoint: list[str] = Field(default_factory=list, max_length=32)
     workdir: str = Field("/workspace", pattern=r"^/workspace(?:/[^/]+)*$", max_length=512)
     environment: list[EnvironmentOverride] = Field(default_factory=list, max_length=128)
     caches: list[CacheMount] = Field(default_factory=list, max_length=32)
-    network_mode: Literal["none", "restricted", "standard"] = Field("restricted", alias="networkMode")
+    network_mode: Literal["none", "bridge"] = Field("none", alias="networkMode")
     resources: ResourceLimits
     timeout_seconds: int = Field(1800, alias="timeoutSeconds", ge=1, le=86400)
-    pull_policy: Literal["if_not_present", "always", "never"] = Field("if_not_present", alias="pullPolicy")
+    pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
+    registry_credential_ref: str | None = Field(None, alias="registryCredentialRef", max_length=1024)
     outputs: list[OutputDeclaration] = Field(default_factory=list, max_length=64)
+
+    _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
+
+    @field_validator("workspace_ref")
+    @classmethod
+    def valid_workspace_ref(cls, value: dict[str, Any]) -> dict[str, Any]:
+        kind = value.get("kind")
+        identity_fields = {
+            "omnigent-session": "sessionId",
+            "moonmind-session": "sessionId",
+            "artifact-workspace": "artifactRef",
+        }
+        identity = identity_fields.get(str(kind))
+        if identity is None or not isinstance(value.get(identity), str) or not value[identity].strip():
+            raise ValueError("workspaceRef must contain a supported kind and identity")
+        return value
+
+    @field_validator("workdir")
+    @classmethod
+    def normalized_workdir(cls, value: str) -> str:
+        if any(part in {".", ".."} for part in value.split("/")):
+            raise ValueError("workdir must remain within /workspace")
+        return value
 
     @field_validator("command", "entrypoint")
     @classmethod

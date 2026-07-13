@@ -32,9 +32,9 @@ def upgrade() -> None:
         sa.Column("cancel_idempotency_key", sa.String(255)),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.UniqueConstraint("owner_id", "idempotency_key", name="uq_container_jobs_owner_idempotency"),
+        sa.UniqueConstraint("owner_type", "owner_id", "idempotency_key", name="uq_container_jobs_owner_idempotency"),
     )
-    op.create_index("ix_container_jobs_owner_created", "container_jobs", ["owner_id", "created_at"])
+    op.create_index("ix_container_jobs_owner_created", "container_jobs", ["owner_type", "owner_id", "created_at"])
 
 def downgrade() -> None:
     op.drop_index("ix_container_jobs_owner_created", table_name="container_jobs")

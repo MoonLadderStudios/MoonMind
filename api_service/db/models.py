@@ -3018,13 +3018,19 @@ class SkillSetEntry(Base):
         return self.skill.slug
 
 
+def _default_container_job_auxiliary_outcome() -> dict[str, str]:
+    from moonmind.schemas.container_job_models import AuxiliaryOutcomeState
+
+    return {"state": AuxiliaryOutcomeState.NOT_ATTEMPTED.value}
+
+
 class ContainerJobRecord(Base):
     """API-owned durable container-job identity and compact observations."""
 
     __tablename__ = "container_jobs"
     __table_args__ = (
-        UniqueConstraint("owner_id", "idempotency_key", name="uq_container_jobs_owner_idempotency"),
-        Index("ix_container_jobs_owner_created", "owner_id", "created_at"),
+        UniqueConstraint("owner_type", "owner_id", "idempotency_key", name="uq_container_jobs_owner_idempotency"),
+        Index("ix_container_jobs_owner_created", "owner_type", "owner_id", "created_at"),
     )
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -3039,8 +3045,8 @@ class ContainerJobRecord(Base):
     backend_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     image_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
     terminal_outcome_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
-    publication_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
-    cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=dict)
+    publication_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
+    cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
     logs_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     artifacts_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     cancel_idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
