@@ -103,6 +103,7 @@ class ProviderProfileLeaseClient:
                 task_queue=get_workflow_task_queue(),
             )
         except WorkflowAlreadyStartedError:
+            # A concurrent caller already established the shared manager.
             pass
         return workflow_id
 

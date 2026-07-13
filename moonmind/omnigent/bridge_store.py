@@ -208,7 +208,7 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession:
         """Persist lease-authorized routing before provider session creation."""
 
-        row = await self.get_or_create(
+        await self.get_or_create(
             request=request,
             endpoint_ref=endpoint_ref,
             agent_id=None,

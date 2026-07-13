@@ -304,6 +304,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                             summary=str(cleanup_exc),
                         )
                     except Exception:
+                        # Preserve the primary cleanup failure when best-effort
+                        # persistence of that failure also becomes unavailable.
                         pass
                     if bridge_ready:
                         await self._run_store.record_lifecycle_event(

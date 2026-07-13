@@ -56,8 +56,15 @@ class OmnigentOAuthHostJanitor:
                     await self._client.get_session(lease.omnigent_session_id)
                     await self._client.interrupt(lease.omnigent_session_id)
                     await self._client.stop_session(lease.omnigent_session_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    actions.append(
+                        {
+                            "hostLeaseRef": lease.lease_id,
+                            "omnigentSessionRef": lease.omnigent_session_id,
+                            "action": "session_cleanup_failed",
+                            "errorCode": type(exc).__name__,
+                        }
+                    )
             if not missing:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
             await self._repository.mark_host_lease_stopped(lease.lease_id)
