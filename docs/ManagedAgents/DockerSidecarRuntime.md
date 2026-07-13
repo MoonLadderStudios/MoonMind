@@ -1,18 +1,18 @@
-# Managed Agent Docker Sidecar Runtime — Superseded
+# Managed Agent Docker Sidecar Runtime — Removed
 
-- **Status:** Superseded
-- **Superseded by:** [`DockerBackendService.md`](./DockerBackendService.md)
+- **Status:** Removed from desired state
+- **Canonical replacement:** [`DockerBackendService.md`](./DockerBackendService.md)
 - **Last updated:** 2026-07-13
 
-The per-session Docker-in-Docker sidecar design is no longer the MoonMind desired
-state. Its private session graph prevented arbitrary large images from being
-reused across workflows.
+The per-session Docker-in-Docker design is not a supported MoonMind desired state
+or compatibility path. Its session-owned graph prevented arbitrary large images
+from being reused across workflows.
 
-The canonical design is now the API-owned
-[`Docker Backend Service`](./DockerBackendService.md): Omnigent and managed-agent
-sessions submit governed asynchronous container jobs through MoonMind MCP or
-HTTP tools; one deployment-selected Docker daemon executes those jobs and keeps
-its image cache across workflow and session boundaries.
+Agent-originated container work uses the API-owned
+[`Docker Backend Service`](./DockerBackendService.md). Omnigent and managed-agent
+sessions submit governed asynchronous jobs through MoonMind MCP or HTTP; the
+configured deployment Docker daemon executes those jobs and retains its image
+cache across workflow and session boundaries.
 
-Existing sidecar implementation paths may remain temporarily during migration,
-but new architecture and product work should target `DockerBackendService`.
+This file is only a tombstone for old links. It does not define a runtime mode,
+rollout lane, or supported implementation alternative.
