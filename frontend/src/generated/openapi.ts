@@ -6619,6 +6619,8 @@ export interface components {
             startingBranch?: string | null;
             /** Targetbranch */
             targetBranch?: string | null;
+            /** @description Remotely verified branch produced by publication. */
+            outputBranch?: components["schemas"]["ExecutionOutputBranchModel"] | null;
             /** Repository */
             repository?: string | null;
             /**
@@ -6768,6 +6770,30 @@ export interface components {
             staleState: boolean;
             /** Refreshedat */
             refreshedAt?: string | null;
+        };
+        /**
+         * ExecutionOutputBranchModel
+         * @description Verified repository output evidence, distinct from authored inputs.
+         */
+        ExecutionOutputBranchModel: {
+            /** Name */
+            name: string;
+            /** Url */
+            url?: string | null;
+            /** Headsha */
+            headSha?: string | null;
+            /** Basebranch */
+            baseBranch?: string | null;
+            /**
+             * Intent
+             * @default normal
+             * @enum {string}
+             */
+            intent: "normal" | "terminal_checkpoint";
+            /** Status */
+            status: string;
+            /** Evidenceref */
+            evidenceRef?: string | null;
         };
         /**
          * ExecutionProgressModel
