@@ -1715,15 +1715,19 @@ class TemporalExecutionService:
             canonical_workflow_id,
         )
         if record is None:
-            if not include_orphaned:
-                raise TemporalExecutionNotFoundError(
-                    f"Workflow execution {canonical_workflow_id} was not found"
-                )
             projection = await self._load_projection_execution(
                 canonical_workflow_id,
-                include_orphaned=True,
+                include_orphaned=include_orphaned,
             )
-            if projection is not None:
+            if projection is not None and (
+                include_orphaned
+                or projection.source_mode
+                is TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+            ):
+                # Temporal Schedules start UserWorkflow executions directly, so
+                # those runs have no API-created canonical source row. Their
+                # Temporal-authoritative projection is the durable control-plane
+                # record used for ownership and parent-runtime inheritance.
                 return projection
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
