@@ -140,6 +140,28 @@ describe('collection sidebar rail separator and height', () => {
     expect(getComputedStyle(long.sidebar).borderRightWidth).toBe('1px');
   });
 
+  it('keeps the sticky header at its natural height instead of stretching it to fill the rail', () => {
+    // The rail owns a full-height block size and the table fills it, so a short
+    // list leaves free vertical space. A grid without `align-content: start`
+    // defaults to `stretch` and balloons the auto header row to absorb the
+    // slack. The header height must not depend on how much slack there is: a
+    // three-row list (lots of free space) and a thirty-row list (none) must
+    // render the same header height.
+    const short = render(3, 600);
+    const shortHeader = short.list.querySelector<HTMLElement>('.workflow-workspace-sidebar-header')!;
+    const shortHeaderHeight = shortHeader.getBoundingClientRect().height;
+
+    const long = render(30, 600);
+    const longHeader = long.list.querySelector<HTMLElement>('.workflow-workspace-sidebar-header')!;
+    const longHeaderHeight = longHeader.getBoundingClientRect().height;
+
+    // Same natural height regardless of list length...
+    expect(Math.round(shortHeaderHeight)).toBe(Math.round(longHeaderHeight));
+    // ...and nowhere near the full rail height (a stretched header would be
+    // hundreds of px tall; the natural header row is ~44px + padding).
+    expect(shortHeaderHeight).toBeLessThan(80);
+  });
+
   it('does not move the separator or shrink the rail when the list is filtered down', () => {
     // Begin overflowing, then filter to a single entry (scrollbar disappears).
     const before = render(30, 600);

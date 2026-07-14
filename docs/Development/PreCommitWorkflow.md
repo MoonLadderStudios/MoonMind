@@ -53,7 +53,7 @@ The GitHub unit-test workflow uses impact-aware backend suite selection for pull
 - `reliability_journey`
 - `full_backend`
 
-Branch protection should require the always-running `ci-required` summary job instead of the conditional backend suite jobs. `ci-required` fails when any suite selected by the selector is skipped, cancelled, or unsuccessful.
+Branch protection should require the always-running `ci-required` summary job instead of the conditional backend suite jobs, plus the standalone `migration-gate` check. `ci-required` fails when any suite selected by the selector is skipped, cancelled, or unsuccessful; `migration-gate` independently blocks migration-graph and clean-database upgrade failures.
 
 Routine backend pull requests run the cheap unit safety net first. API/router/auth/db/service changes also run the component suite. Temporal workflow, runtime, activity-boundary, signal/update, replay, or Temporal schema changes run the Temporal boundary suite. Changes under workflow adapters, Temporal workflows, checked-in `.agents/skills` bundles, Docker runtime paths, checkpoint schemas, and reliability replay fixtures run the hermetic reliability journey suite. Docker, integration, database, compose, migration, dependency, or test-runner changes run hermetic `integration_ci` as needed.
 

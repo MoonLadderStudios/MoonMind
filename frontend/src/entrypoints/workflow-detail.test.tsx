@@ -8981,7 +8981,7 @@ describe('Workflow Detail Entrypoint', () => {
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         const action = JSON.parse(String(init?.body || '{}')).action;
-        if (action === 'send_follow_up') {
+        if (action === 'continue_same_session') {
           return new Promise((resolve) => {
             resolveFollowUpControl = resolve;
           });
@@ -9044,7 +9044,7 @@ describe('Workflow Detail Entrypoint', () => {
     const summaryCallsBeforeControl = fetchSpy.mock.calls.filter(([input]) =>
       String(input).includes('/observability-summary'),
     ).length;
-    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue session' }));
 
     const pendingMessages = await screen.findByLabelText('Pending session messages');
     const optimisticBubble = within(pendingMessages).getByText('Continue with the existing session.');
@@ -9060,7 +9060,7 @@ describe('Workflow Detail Entrypoint', () => {
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            action: 'send_follow_up',
+            action: 'continue_same_session',
             message: 'Continue with the existing session.',
           }),
         }),
@@ -9072,7 +9072,7 @@ describe('Workflow Detail Entrypoint', () => {
       resolveFollowUpControl?.({
         ok: true,
         json: async () => ({
-          action: 'send_follow_up',
+          action: 'continue_same_session',
           projection: {
             agent_run_id: 'wf-task-1',
             session_id: 'sess:wf-task-1:codex_cli',
@@ -9204,7 +9204,7 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Try the next turn.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue session' }));
 
     const pendingMessages = await screen.findByLabelText('Pending session messages');
     expect(within(pendingMessages).getByText('Try the next turn.')).toBeTruthy();
@@ -9455,7 +9455,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
     const followUp = await screen.findByLabelText('Follow-up message');
-    expect((screen.getByRole('button', { name: 'Send follow-up' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Continue session' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
     expect((screen.getByRole('button', { name: 'Clear / Reset' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Clear / Reset is not supported for this session.')).toBeTruthy();
@@ -10867,7 +10867,7 @@ describe('LiveLogsPanel', () => {
       }
       if (url.includes('/artifact-sessions/') && url.includes('/control')) {
         const action = JSON.parse(String(init?.body || '{}')).action;
-        if (action === 'send_follow_up') {
+        if (action === 'continue_same_session') {
           return new Promise((resolve) => {
             resolveFollowUpControl = resolve;
           });
@@ -10960,7 +10960,7 @@ describe('LiveLogsPanel', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Continue with the MM-1032 session.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue session' }));
     await waitFor(() => {
       expect(
         within(screen.getByLabelText('Pending session messages')).getByText(
@@ -10972,7 +10972,7 @@ describe('LiveLogsPanel', () => {
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            action: 'send_follow_up',
+            action: 'continue_same_session',
             message: 'Continue with the MM-1032 session.',
           }),
         }),
@@ -10982,7 +10982,7 @@ describe('LiveLogsPanel', () => {
       resolveFollowUpControl?.({
         ok: true,
         json: async () => ({
-          action: 'send_follow_up',
+          action: 'continue_same_session',
           projection: {
             agent_run_id: 'agent-run-mm-1032',
             session_id: sessionId,
