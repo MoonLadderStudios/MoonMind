@@ -118,7 +118,9 @@ async def test_production_backend_makes_every_registered_activity_callable(
         if args[:2] == ("image", "inspect"):
             return 0, b"sha256:" + b"a" * 64, b""
         if args[:2] == ("inspect", "--format"):
-            if "json" in args[2]:
+            if args[2] == "{{json .Config.Labels}}":
+                return 1, b"", b"missing"
+            if args[2] == "{{json .State}}":
                 return 0, b'{"Running":false,"ExitCode":0}', b""
             return 1, b"", b"missing"
         if args[0] == "logs":
@@ -144,9 +146,9 @@ async def test_production_backend_makes_every_registered_activity_callable(
     payload["resolvedWorkspaceRef"] = resolved["resolvedWorkspaceRef"]
     image = await activities.container_job_acquire_image(payload)
     payload["resolvedImageRef"] = image["resolvedImageRef"]
-    assert not (await activities.container_job_reconcile_container(payload)).get(
-        "containerRef"
-    )
+    reconciliation = await activities.container_job_reconcile_container(payload)
+    assert reconciliation["containerRef"].startswith("moonmind-container-job-")
+    assert reconciliation["running"] is False
     created = await activities.container_job_create_container(payload)
     payload["containerRef"] = created["containerRef"]
     await activities.container_job_start_container(payload)
