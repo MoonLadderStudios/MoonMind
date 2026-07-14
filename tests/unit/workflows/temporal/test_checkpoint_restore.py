@@ -132,7 +132,8 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
         "workspace": capture["workspace"],
     }
     checkpoint_ref = store.put_bytes(
-        json.dumps(checkpoint).encode(), content_type="application/json"
+        json.dumps(checkpoint).encode(),
+        content_type="application/vnd.moonmind.step-execution-checkpoint+json;version=1",
     ).artifact_ref
     request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base=base)
     source.rename(tmp_path / "source-destroyed")
@@ -238,6 +239,50 @@ def test_secure_extractor_rejects_traversal_special_files_and_unsafe_symlink(
             )
 
 
+def test_secure_extractor_enforces_limits_and_stable_failure_envelope(
+    tmp_path: Path,
+) -> None:
+    service = ManagedCheckpointRestoreService(
+        authority_root=tmp_path, artifact_store=InMemoryArtifactStore()
+    )
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        info = tarfile.TarInfo("large.bin")
+        info.size = 4
+        info.mode = 0o644
+        archive.addfile(info, io.BytesIO(b"data"))
+    manifest = {
+        "entries": [{
+            "path": "large.bin", "type": "file", "digest": _sha(b"data"),
+            "mode": "0644", "bytes": 4,
+        }]
+    }
+    with pytest.raises(CheckpointRestoreError) as raised:
+        service._extract(
+            output.getvalue(), tmp_path / "stage-limit", manifest,
+            max_entries=1, max_bytes=3,
+        )
+    assert raised.value.code == "CHECKPOINT_RESTORE_LIMIT_EXCEEDED"
+    assert raised.value.failure_envelope["failureClass"] == "recovery_restoration"
+    assert raised.value.failure_envelope["retryRecommendation"] == "do_not_retry"
+
+
+@pytest.mark.asyncio
+async def test_restore_rejects_incompatible_artifact_content_type(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    checkpoint_ref = store.put_bytes(b"{}", content_type="application/json").artifact_ref
+    service = ManagedCheckpointRestoreService(
+        authority_root=tmp_path / "authority", artifact_store=store
+    )
+    capture = {"workspace": {
+        "archiveRef": "artifact://archive", "archiveDigest": "sha256:" + "0" * 64,
+        "manifestRef": "artifact://manifest", "manifestDigest": "sha256:" + "0" * 64,
+    }}
+    with pytest.raises(CheckpointRestoreError) as raised:
+        await service.restore(_request(checkpoint_ref=checkpoint_ref, capture=capture, base="a"))
+    assert raised.value.code == "CHECKPOINT_ARTIFACT_CONTENT_TYPE_MISMATCH"
+
+
 @pytest.mark.asyncio
 async def test_restore_rejects_digest_mismatch_and_idempotency_drift(
     tmp_path: Path,
@@ -247,7 +292,7 @@ async def test_restore_rejects_digest_mismatch_and_idempotency_drift(
         authority_root=tmp_path / "authority", artifact_store=store
     )
     archive = store.put_bytes(
-        b"bad", content_type="application/octet-stream"
+        b"bad", content_type="application/vnd.moonmind.worktree-archive"
     ).artifact_ref
     manifest = store.put_bytes(b"{}", content_type="application/json").artifact_ref
     capture = {
@@ -261,6 +306,7 @@ async def test_restore_rejects_digest_mismatch_and_idempotency_drift(
     checkpoint_ref = store.put_bytes(
         json.dumps(
             {
+                "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
                 "source": {
                     "workflowId": "source",
                     "runId": "source-run",
@@ -268,10 +314,14 @@ async def test_restore_rejects_digest_mismatch_and_idempotency_drift(
                     "executionOrdinal": 1,
                 },
                 "boundary": "before_execution",
-                "workspace": capture["workspace"],
+                "workspace": {
+                    **capture["workspace"],
+                    "kind": "worktree_archive",
+                    "baseCommit": "deadbeef",
+                },
             }
         ).encode(),
-        content_type="application/json",
+        content_type="application/vnd.moonmind.step-execution-checkpoint+json;version=1",
     ).artifact_ref
     request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base="deadbeef")
     with pytest.raises(CheckpointRestoreError, match="CHECKPOINT_ARCHIVE_CORRUPTED"):
