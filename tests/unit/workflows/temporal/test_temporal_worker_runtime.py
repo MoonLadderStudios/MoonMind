@@ -4220,6 +4220,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
         workflow_docker_mode="profiles",
+        raw_docker_cli_enabled=False,
         container_job_backend=ANY,
     )
     mock_build_bindings.assert_called_once_with(

@@ -26,7 +26,7 @@ import json
 import os
 import re
 import tarfile
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
@@ -89,55 +89,55 @@ _FORBIDDEN_MOUNT_SOURCES = (
 class ContainerJobBackend(Protocol):
     """Narrow adapter the container-job Activities depend on."""
 
-    async def check_readiness(self) -> ContainerJobActivityResult: ...
+    async def check_readiness(self) -> ContainerJobActivityResult: pass
 
     async def resolve_workspace(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def acquire_image(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def reconcile_container(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def create_container(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def start_container(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def observe_container(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def stop_container(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def remove_container(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def publish_evidence(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def project_status(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def repair_projection(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
     async def cleanup(
         self, request: ContainerJobActivityRequest
-    ) -> ContainerJobActivityResult: ...
+    ) -> ContainerJobActivityResult: pass
 
 
 class DockerContainerJobBackend:
@@ -204,16 +204,15 @@ class DockerContainerJobBackend:
         """
 
         code, stdout, _ = await self._runner(
-            (
-                "inspect",
-                "--format",
-                f'{{{{index .Config.Labels "{LABEL_OWNERSHIP}"}}}}',
-                name,
-            )
+            ("inspect", "--format", "{{json .Config.Labels}}", name)
         )
         if code:
             return None
-        return stdout.decode(errors="replace").strip()
+        try:
+            labels = json.loads(stdout.decode(errors="replace").strip())
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        return str(labels.get(LABEL_OWNERSHIP, "")) if isinstance(labels, dict) else ""
 
     async def _reject_ownership_collision(
         self, request: ContainerJobActivityRequest, name: str
@@ -241,7 +240,7 @@ class DockerContainerJobBackend:
 
     def _expiry_label(self, request: ContainerJobActivityRequest) -> str:
         ttl = request.request.spec.timeout_seconds + _EXPIRY_GRACE_SECONDS
-        expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
         return expires_at.isoformat().replace("+00:00", "Z")
 
     def _enforce_resource_ceilings(
@@ -335,7 +334,7 @@ class DockerContainerJobBackend:
         name = self._name(request)
         ownership = await self._reject_ownership_collision(request, name)
         if ownership is None:
-            return ContainerJobActivityResult()
+            return ContainerJobActivityResult(containerRef=name, running=False)
         code, stdout, _ = await self._runner(
             ("inspect", "--format", "{{.State.Running}}", name)
         )
@@ -358,13 +357,10 @@ class DockerContainerJobBackend:
         args: list[str] = []
         for item in request.request.spec.environment:
             if item.secret_ref is not None:
-                if self._resolve_secret is None:
-                    raise RuntimeError(
-                        "an execution-time secret was requested but no secret "
-                        "resolver is configured on this worker"
-                    )
-                value = await self._resolve_secret(item.secret_ref)
-                args.extend(("--env", f"{item.name}={value}"))
+                raise RuntimeError(
+                    "secretRef is unsupported until container-job authority can "
+                    "authorize each requested secret"
+                )
             else:
                 args.extend(("--env", f"{item.name}={item.value}"))
         return args
@@ -406,21 +402,18 @@ class DockerContainerJobBackend:
             "--mount",
             f"type=bind,src={request.resolved_workspace_ref},dst=/workspace",
         ]
-        for cache in spec.caches:
-            suffix = ",readonly" if cache.read_only else ""
-            args.extend(
-                (
-                    "--mount",
-                    f"type=volume,src={cache.cache_ref},dst={cache.target}{suffix}",
-                )
+        if spec.caches:
+            raise RuntimeError(
+                "cacheRef is unsupported until container-job authority can "
+                "resolve it to an approved volume"
             )
         args.extend(await self._materialized_env(request))
         if spec.entrypoint:
             args.extend(("--entrypoint", spec.entrypoint[0]))
+        self._reject_forbidden_launch_args(args)
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
-        self._reject_forbidden_launch_args(args)
         await self._checked(*args)
         return ContainerJobActivityResult(containerRef=name)
 

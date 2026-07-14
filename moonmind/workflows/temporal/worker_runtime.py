@@ -2652,6 +2652,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
+            else:
+                container_job_backend = None
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2662,6 +2664,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 workload_registry=workload_registry,
                 workload_launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
+                raw_docker_cli_enabled=container_backend_settings.raw_cli_enabled,
                 container_job_backend=container_job_backend,
             )
             register_workload_tool_handlers(
