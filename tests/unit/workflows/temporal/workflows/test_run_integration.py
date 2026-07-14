@@ -3762,13 +3762,15 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
     # Simulate the state the run loop records after native draft-PR creation.
     mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/7"
     mock_run_workflow._publish_status = "published"
+    mock_run_workflow._authoritative_publish_outcome_enabled = True
     status, _message, publish_failure = (
         mock_run_workflow._determine_publish_completion(
             parameters={"publishMode": "pr"}
         )
     )
-    assert publish_failure is False
-    assert status != "failed"
+    assert publish_failure is True
+    assert status == "failed"
+    assert "preserved in draft pull request" in _message
 
     assert mock_run_workflow._attention_required is True
     draft_context = mock_run_workflow._publish_context["moonSpecDraftPublication"]
@@ -3781,6 +3783,73 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
     assert "MoonSpec verification incomplete" in body_section
     assert "BLOCKED" in body_section
     assert "art_verify_blocked" in body_section
+
+
+def test_pushed_commits_supersede_stale_no_commit_before_draft_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._authoritative_publish_outcome_enabled = True
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+    assert mock_run_workflow._publish_status == "skipped"
+    assert mock_run_workflow._publish_context["noCommitPublish"] == {
+        "status": "no_commits"
+    }
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "pushed",
+                "push_branch": "workflow-branch",
+                "push_commit_count": 2,
+                "push_head_sha": "abc123",
+            }
+        },
+    )
+
+    assert mock_run_workflow._publish_status is None
+    assert mock_run_workflow._publish_reason is None
+    assert "noCommitPublish" not in mock_run_workflow._publish_context
+
+    mock_run_workflow._moonspec_draft_publication_reason = (
+        "MoonSpec verdict ADDITIONAL_WORK_NEEDED."
+    )
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/8"
+    mock_run_workflow._publish_status = "published"
+
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+
+    assert status == "failed"
+    assert publish_failure is True
+    assert "https://github.com/org/repo/pull/8" in message
+
+
+def test_authoritative_publish_outcome_patch_preserves_legacy_draft_completion(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._moonspec_draft_publication_reason = (
+        "MoonSpec verdict ADDITIONAL_WORK_NEEDED."
+    )
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/9"
+    mock_run_workflow._publish_status = "published"
+
+    status, _message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+
+    assert mock_run_workflow._authoritative_publish_outcome_enabled is False
+    assert status == "success"
+    assert publish_failure is False
 
 
 def test_moonspec_blocking_gate_unchanged_without_draft_activation(
