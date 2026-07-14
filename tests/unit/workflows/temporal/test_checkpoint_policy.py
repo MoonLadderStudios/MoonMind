@@ -113,7 +113,7 @@ def test_resolve_checkpoint_policy_assigns_managed_runtime_authority() -> None:
 
     assert policy.capture_authority == "managed_runtime"
     assert policy.checkpoint_kind == "worktree_archive"
-    assert policy.resumable is False
+    assert policy.resumable is True
     assert policy.required_evidence == ("archiveRef", "manifestRef")
 
 

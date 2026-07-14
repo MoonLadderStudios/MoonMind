@@ -494,6 +494,7 @@ RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = (
     "run-update-inputs-visibility-refresh-v1"
 )
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
+RUN_MEMO_RUNTIME_INHERITANCE_PATCH = "run-memo-runtime-inheritance-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -572,6 +573,9 @@ RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
 )
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
+RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
+    "run-skip-no-publish-prepublication-checkpoint-v1"
+)
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
 FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
 FINALIZATION_RETRY_EXHAUSTED = "FINALIZATION_RETRY_EXHAUSTED"
@@ -1151,6 +1155,7 @@ class MoonMindRunWorkflow:
         self._integration: Optional[str] = None
         self._target_runtime: Optional[str] = None
         self._target_skill: Optional[str] = None
+        self._runtime_inheritance_parameters: dict[str, Any] = {}
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
         self._summary: str = "Execution initialized."
@@ -3366,14 +3371,48 @@ class MoonMindRunWorkflow:
             "restoreIdempotencyKey": idempotency_key,
         })
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
+        workspace = dict(self._recovery_workspace)
+        source_locator = workspace.get("sourceWorkspaceLocator") or workspace.get(
+            "workspaceLocator"
+        )
+        checkpoint = workspace.get("workspace") or workspace.get("checkpoint") or workspace
         result = await workflow.execute_activity(
             route.activity_type,
             {
-                "checkpointRef": contract.source_checkpoint_ref,
-                "checkpointKind": contract.source_checkpoint_kind,
+                "schemaVersion": "v1",
+                "recoveryIdentity": {
+                    "workflowId": workflow.info().workflow_id,
+                    "runId": workflow.info().run_id,
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal + 1,
+                },
+                "source": {
+                    "workflowId": self._recovery_source_text(self._recovery_source or {}, "sourceWorkflowId", "source_workflow_id"),
+                    "runId": self._recovery_source_text(self._recovery_source or {}, "sourceRunId", "source_run_id"),
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal,
+                    "checkpointRef": contract.source_checkpoint_ref,
+                    "checkpointBoundary": contract.source_checkpoint_boundary,
+                    **({"sourceWorkspaceLocator": dict(source_locator)} if isinstance(source_locator, Mapping) else {}),
+                },
+                "checkpoint": {
+                    "kind": contract.source_checkpoint_kind,
+                    "baseCommit": checkpoint.get("baseCommit"),
+                    "archiveRef": checkpoint.get("archiveRef"),
+                    "archiveDigest": checkpoint.get("archiveDigest"),
+                    "manifestRef": checkpoint.get("manifestRef"),
+                    "manifestDigest": checkpoint.get("manifestDigest"),
+                },
+                "destination": {
+                    "runtimeId": contract.capabilities.runtime_id,
+                    "agentRunId": destination_id,
+                    "repository": self._repo,
+                    "relativePath": "repo",
+                },
                 "workspacePolicy": contract.workspace_policy,
-                "targetRuntimeId": contract.capabilities.runtime_id,
-                "destinationAgentRunId": destination_id,
+                "resumePhase": contract.resume_phase,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
                 "idempotencyKey": idempotency_key,
             },
             **self._execute_kwargs_for_route(route),
@@ -5394,6 +5433,50 @@ class MoonMindRunWorkflow:
         self._summary = "Execution succeeded; finalization failed during publication."
         self._attention_required = True
         self._update_memo()
+
+    async def _record_prepublication_checkpoint(
+        self,
+        logical_step_id: str,
+        *,
+        publish_mode: str,
+        updated_at: datetime,
+    ) -> bool:
+        """Return whether a required pre-publication checkpoint failed."""
+
+        if (
+            workflow.patched(RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH)
+            and publish_mode == "none"
+        ):
+            return False
+        try:
+            await self._record_canonical_step_checkpoint(
+                logical_step_id,
+                boundary="before_publication",
+                updated_at=updated_at,
+            )
+        except Exception as exc:
+            if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                raise
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, dict):
+                row["finalizationOutcome"] = {
+                    "status": "failed",
+                    "phase": "before_publication_checkpoint",
+                    "criticality": "required",
+                    "failureCode": FINALIZATION_CHECKPOINT_FAILED,
+                    "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+                    "retryCount": 1,
+                    "message": self._coerce_text(exc, max_chars=500),
+                    "updatedAt": workflow.now().isoformat(),
+                }
+            self._summary = (
+                "Execution succeeded; finalization failed during the "
+                "pre-publication checkpoint."
+            )
+            self._attention_required = True
+            self._update_memo()
+            return True
+        return False
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
@@ -8328,6 +8411,9 @@ class MoonMindRunWorkflow:
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)
+        self._runtime_inheritance_parameters = (
+            self._runtime_inheritance_parameters_from_parameters(parameters)
+        )
         task_parameters = self._mapping_value(parameters, "workflow")
         if not task_parameters:
             task_parameters = self._mapping_value(parameters, "task")
@@ -8509,6 +8595,50 @@ class MoonMindRunWorkflow:
                 authored_runtime_payload.get("target_runtime"), max_chars=80
             )
         )
+
+    def _runtime_inheritance_parameters_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        task_payload = (
+            self._mapping_value(parameters, "workflow")
+            or self._mapping_value(parameters, "task")
+            or {}
+        )
+        task_runtime = self._mapping_value(task_payload, "runtime") or {}
+        runtime_payload = self._mapping_value(parameters, "runtime") or {}
+        authored_payload = self._mapping_value(parameters, "authoredTaskInput") or {}
+        authored_runtime = self._mapping_value(authored_payload, "runtime") or {}
+
+        selection: dict[str, Any] = {}
+        for source in (
+            parameters,
+            task_payload,
+            task_runtime,
+            runtime_payload,
+            authored_runtime,
+        ):
+            for key, value in self._runtime_selection_from_source(source).items():
+                selection.setdefault(key, value)
+        if self._target_runtime:
+            selection.setdefault("targetRuntime", self._target_runtime)
+
+        compact: dict[str, Any] = {}
+        runtime: dict[str, Any] = {}
+        for selection_key, parameter_key, runtime_key in (
+            ("targetRuntime", "targetRuntime", "mode"),
+            ("model", "model", "model"),
+            ("effort", "effort", "effort"),
+            ("executionProfileRef", "profileId", "executionProfileRef"),
+        ):
+            value = selection.get(selection_key)
+            if value is None:
+                continue
+            compact[parameter_key] = value
+            runtime[runtime_key] = value
+        if runtime:
+            compact["workflow"] = {"runtime": runtime}
+        return compact
 
     def _skill_visibility_from_parameters(
         self,
@@ -9244,6 +9374,9 @@ class MoonMindRunWorkflow:
                                     self._checkpoint_recovery_state[
                                         "sourceCheckpointRef"
                                     ]
+                                )
+                                recovered_workspace["capabilityDigest"] = (
+                                    self._checkpoint_recovery_state["capabilityDigest"]
                                 )
                                 request = request.model_copy(
                                     update={"workspace_spec": recovered_workspace}
@@ -10414,35 +10547,13 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            prepublication_checkpoint_failed = False
-            try:
-                await self._record_canonical_step_checkpoint(
+            prepublication_checkpoint_failed = (
+                await self._record_prepublication_checkpoint(
                     node_id,
-                    boundary="before_publication",
+                    publish_mode=publish_mode,
                     updated_at=workflow.now(),
                 )
-            except Exception as exc:
-                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
-                    raise
-                row = self._step_ledger_row_for(node_id)
-                if isinstance(row, dict):
-                    row["finalizationOutcome"] = {
-                        "status": "failed",
-                        "phase": "before_publication_checkpoint",
-                        "criticality": "required",
-                        "failureCode": FINALIZATION_CHECKPOINT_FAILED,
-                        "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
-                        "retryCount": 1,
-                        "message": self._coerce_text(exc, max_chars=500),
-                        "updatedAt": workflow.now().isoformat(),
-                    }
-                self._summary = (
-                    "Execution succeeded; finalization failed during the "
-                    "pre-publication checkpoint."
-                )
-                self._attention_required = True
-                self._update_memo()
-                prepublication_checkpoint_failed = True
+            )
             if prepublication_checkpoint_failed:
                 break
             publication_raised = False
@@ -18719,6 +18830,11 @@ class MoonMindRunWorkflow:
                 memo_dict["targetRuntime"] = self._target_runtime
             if self._target_skill:
                 memo_dict["targetSkill"] = self._target_skill
+        if (
+            workflow.patched(RUN_MEMO_RUNTIME_INHERITANCE_PATCH)
+            and self._runtime_inheritance_parameters
+        ):
+            memo_dict["parameters"] = dict(self._runtime_inheritance_parameters)
         if self._input_ref:
             memo_dict["input_artifact_ref"] = self._input_ref
         if self._plan_ref:

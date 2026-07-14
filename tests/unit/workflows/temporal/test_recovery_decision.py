@@ -64,8 +64,6 @@ def test_checkpoint_resume_requires_complete_restore_proof() -> None:
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
-        ({"capabilities": resolve_runtime_execution_capabilities("codex_cli")},
-         "CHECKPOINT_RESTORE_UNSUPPORTED"),
         ({"restore_route_registered": False}, "CHECKPOINT_RESTORE_ROUTE_MISSING"),
         ({"checkpoint_kind": "worktree_archive"}, "CHECKPOINT_KIND_INCOMPATIBLE"),
         ({"checkpoint_boundary": "after_prepare"}, "CHECKPOINT_BOUNDARY_INCOMPATIBLE"),
@@ -79,6 +77,19 @@ def test_checkpoint_resume_fails_closed(overrides, reason) -> None:
     assert decision.eligible is False
     assert decision.default_action == "full_retry"
     assert decision.disabled_reason_code == reason
+
+
+def test_codex_worktree_archive_restore_is_eligible() -> None:
+    decision = _decision(
+        capabilities=resolve_runtime_execution_capabilities("codex_cli"),
+        checkpoint_kind="worktree_archive",
+    )
+
+    assert decision.eligible is True
+    assert (
+        decision.restore_activity
+        == "agent_runtime.restore_workspace_checkpoint"
+    )
 
 
 def test_restore_kinds_without_activity_are_rejected_by_capability_schema() -> None:
