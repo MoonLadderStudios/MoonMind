@@ -8316,6 +8316,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-table {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* Pack the header and list rows at the top. The rail now owns a full
+   * `--mm-collection-workspace-block-size` height and this table fills it
+   * (flex: 1 1 auto), so a short list leaves free vertical space. Without an
+   * explicit `align-content`, a grid defaults to `stretch` and would grow the
+   * auto rows — most visibly ballooning the sticky header — to absorb that
+   * slack. `start` keeps the header and rows at their natural height and lets
+   * the leftover space fall below the list instead. */
+  align-content: start;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
