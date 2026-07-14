@@ -115,6 +115,29 @@ def test_workflow_preflight_rejects_stale_phase() -> None:
         validate_recovery_contract(contract)
 
 
+def test_workflow_preflight_rejects_string_restore_kinds() -> None:
+    decision = _decision().model_dump(by_alias=True, mode="json")
+    contract = {
+        **decision,
+        "recoveryAction": "resume_from_workspace_checkpoint",
+        "selectedCheckpointBoundary": "before_execution",
+        "checkpointRestoreKinds": "external_state_ref",
+        "checkpointRestoreActivity": decision["restoreActivity"],
+        "recoveryCheckpointRef": decision["checkpointRef"],
+        "selectedTargetRuntimeId": decision["targetRuntimeId"],
+        "selectedCapabilityDigest": decision["capabilityDigest"],
+        "registeredRestoreActivity": decision["restoreActivity"],
+        "sourceWorkflowId": "workflow-1",
+        "sourceRunId": "run-1",
+        "checkpointSourceWorkflowId": "workflow-1",
+        "checkpointSourceRunId": "run-1",
+        "sideEffectSafe": True,
+    }
+
+    with pytest.raises(ValueError, match="CHECKPOINT_KIND_INCOMPATIBLE"):
+        validate_recovery_contract(contract)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [

@@ -136,7 +136,9 @@ SameSessionRecoveryDisabledReason = Literal[
     "SAME_SESSION_CONTINUATION_UNSUPPORTED",
 ]
 RecoveryDisabledReason = (
-    CheckpointRecoveryDisabledReason | SameSessionRecoveryDisabledReason
+    CheckpointRecoveryDisabledReason
+    | SameSessionRecoveryDisabledReason
+    | Literal["environment_invalid"]
 )
 RecoveryOperatorGuidance = Literal[
     "continue_same_session",

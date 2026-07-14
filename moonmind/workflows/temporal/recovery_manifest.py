@@ -23,6 +23,7 @@ from typing import Any
 from moonmind.schemas.temporal_models import (
     EvidenceRefStatusModel,
     FailedRunRecoveryManifestModel,
+    RecoveryEligibilityDiagnosticModel,
     RecoveryCheckpointValidationModel,
     RecoverySideEffectDispositionModel,
     RecoveryStepRefModel,
@@ -432,6 +433,19 @@ def build_failed_run_recovery_manifest(
         source_run_id=run_id,
         evidence=checkpoint_evidence,
     )
+    if not eligibility.eligible and failure_category == "system_error":
+        eligibility = RecoveryEligibilityDiagnosticModel(
+            eligible=False,
+            requestedAction="resume_from_workspace_checkpoint",
+            defaultAction="fix_environment",
+            disabledReasonCode="environment_invalid",
+            checkpointBoundary=resume_boundary,
+            checkpointRef=resume_ref,
+            sourceWorkflowId=workflow_id,
+            sourceRunId=run_id,
+            operatorGuidance="fix_environment",
+            evidence=checkpoint_evidence,
+        )
     resume_allowed = eligibility.eligible
 
     if resume_allowed:
@@ -453,9 +467,8 @@ def build_failed_run_recovery_manifest(
             # Checkpoint evidence is valid; resume is blocked solely by a
             # blocked or uncompensated non-idempotent side effect.
             blocked_reason = side_effect_block_reason or "checkpoint_not_validated"
-        # Stable machine code is authoritative; blockedReason remains the
-        # compact legacy projection during the Temporal replay window.
-        blocked_reason = eligibility.disabled_reason_code or blocked_reason
+        # recoveryEligibility carries the stable machine code. Keep the
+        # existing compact blockedReason projection during the replay window.
 
     return FailedRunRecoveryManifestModel(
         workflowId=workflow_id,

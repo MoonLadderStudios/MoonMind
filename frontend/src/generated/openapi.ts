@@ -4197,7 +4197,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "send_follow_up" | "clear_session" | "interrupt_turn" | "cancel_session";
+            action: "continue_same_session" | "clear_session" | "interrupt_turn" | "cancel_session";
             /** Message */
             message?: string | null;
             /** Reason */
@@ -4212,7 +4212,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "send_follow_up" | "clear_session" | "interrupt_turn" | "cancel_session";
+            action: "continue_same_session" | "clear_session" | "interrupt_turn" | "cancel_session";
             projection: components["schemas"]["ArtifactSessionProjectionModel"];
         };
         /**
@@ -9082,7 +9082,7 @@ export interface components {
              */
             defaultAction: "continue_same_session" | "resume_from_workspace_checkpoint" | "full_retry" | "fix_environment" | "manual_intervention";
             /** Disabledreasoncode */
-            disabledReasonCode?: string | null;
+            disabledReasonCode?: (("CHECKPOINT_CAPTURE_UNSUPPORTED" | "CHECKPOINT_RESTORE_UNSUPPORTED" | "CHECKPOINT_RESTORE_ROUTE_MISSING" | "CHECKPOINT_KIND_INCOMPATIBLE" | "CHECKPOINT_BOUNDARY_INCOMPATIBLE" | "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH" | "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING" | "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH" | "CHECKPOINT_ARTIFACT_INVALID" | "CHECKPOINT_SIDE_EFFECT_UNSAFE") | ("SAME_SESSION_UNREACHABLE" | "SAME_SESSION_CONTINUATION_UNSUPPORTED") | "environment_invalid") | null;
             /** Checkpointboundary */
             checkpointBoundary?: string | null;
             /** Resumephase */
@@ -9110,6 +9110,10 @@ export interface components {
             sourceWorkflowId?: string | null;
             /** Sourcerunid */
             sourceRunId?: string | null;
+            /** Livesessionid */
+            liveSessionId?: string | null;
+            /** Supportssamesessioncontinuation */
+            supportsSameSessionContinuation?: boolean | null;
             /**
              * Operatorguidance
              * @enum {string}

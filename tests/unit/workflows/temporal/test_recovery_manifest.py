@@ -192,7 +192,7 @@ def test_environment_failure_routes_to_fix_environment_guidance() -> None:
     )
 
     assert manifest.resume_allowed is False
-    assert manifest.recovery_eligibility.default_action == "environment_fix"
+    assert manifest.recovery_eligibility.default_action == "fix_environment"
     assert manifest.recovery_eligibility.operator_guidance == "fix_environment"
 
 
@@ -268,10 +268,7 @@ def test_uncompensated_side_effect_blocks_resume_despite_valid_checkpoint() -> N
     assert manifest.resume_allowed is False
     assert manifest.blocked_reason == "side_effect_needs_compensation"
     assert manifest.recovery_eligibility.eligible is False
-    assert (
-        manifest.recovery_eligibility.disabled_reason_code
-        == "side_effect_needs_compensation"
-    )
+    assert manifest.recovery_eligibility.disabled_reason_code == "CHECKPOINT_SIDE_EFFECT_UNSAFE"
     assert manifest.recovery_eligibility.default_action == "full_retry"
 
 
@@ -407,7 +404,7 @@ def test_blocked_manifest_requires_blocked_reason() -> None:
     ineligible = RecoveryEligibilityDiagnosticModel(
         eligible=False,
         defaultAction="full_retry",
-        disabledReasonCode="no_checkpoint_evidence",
+        disabledReasonCode="CHECKPOINT_ARTIFACT_INVALID",
         operatorGuidance="full_retry",
     )
     with pytest.raises(ValidationError):

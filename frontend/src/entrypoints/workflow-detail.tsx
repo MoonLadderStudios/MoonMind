@@ -708,7 +708,7 @@ const RecoveryEligibilitySchema = z
     eligible: z.boolean(),
     requestedAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention']).optional(),
     defaultAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume_from_checkpoint', 'environment_fix', 'none']),
-    disabledReasonCode: z.enum(['CHECKPOINT_CAPTURE_UNSUPPORTED', 'CHECKPOINT_RESTORE_UNSUPPORTED', 'CHECKPOINT_RESTORE_ROUTE_MISSING', 'CHECKPOINT_KIND_INCOMPATIBLE', 'CHECKPOINT_BOUNDARY_INCOMPATIBLE', 'CHECKPOINT_DESTINATION_IDENTITY_MISMATCH', 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING', 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH', 'CHECKPOINT_ARTIFACT_INVALID', 'CHECKPOINT_SIDE_EFFECT_UNSAFE', 'SAME_SESSION_UNREACHABLE', 'SAME_SESSION_CONTINUATION_UNSUPPORTED']).nullable().optional(),
+    disabledReasonCode: z.string().nullable().optional(),
     checkpointBoundary: z.string().nullable().optional(),
     requiredBoundary: z.string().nullable().optional(),
     resumePhase: z.enum(['rerun_failed_step', 'continue_to_gate', 'continue_after_gate', 'resume_publication', 'retry_restoration']).nullable().optional(),
@@ -1222,7 +1222,7 @@ const ArtifactSessionProjectionSchema = z.object({
 });
 
 const ArtifactSessionControlResponseSchema = z.object({
-  action: z.enum(['send_follow_up', 'clear_session', 'interrupt_turn', 'cancel_session']),
+  action: z.enum(['continue_same_session', 'clear_session', 'interrupt_turn', 'cancel_session']),
   projection: ArtifactSessionProjectionSchema,
 });
 
@@ -2356,7 +2356,7 @@ function chatSessionMessageEventToControlRequest(
   event: ChatSessionMessageEvent,
 ): ArtifactSessionControlRequest {
   return {
-    action: 'send_follow_up',
+    action: 'continue_same_session',
     message: event.message,
   };
 }
@@ -6136,7 +6136,7 @@ function SessionContinuityPanel({
       );
       void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
       invalidateWorkflowDetail();
-      if (result.action === 'send_follow_up') {
+      if (result.action === 'continue_same_session') {
         setFollowUpMessage('');
       }
     },
@@ -6465,7 +6465,7 @@ function SessionContinuityPanel({
         ) : null}
         <div className="actions chat-session-control-actions">
           {renderControlButton({
-            label: 'Send follow-up',
+            label: 'Continue session',
             className: 'secondary',
             disabledReason: busy || !followUpMessage.trim() || !canSendFollowUp ? sendDisabledReason : null,
             onClick: submitFollowUp,

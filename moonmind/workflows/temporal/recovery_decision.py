@@ -134,7 +134,10 @@ def validate_recovery_contract(contract: Mapping[str, Any]) -> None:
     )
     if any(not contract.get(field) for field in required):
         raise ValueError("CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING")
-    if contract["checkpointKind"] not in contract["checkpointRestoreKinds"]:
+    restore_kinds = contract["checkpointRestoreKinds"]
+    if not isinstance(restore_kinds, (list, tuple)) or (
+        contract["checkpointKind"] not in restore_kinds
+    ):
         raise ValueError("CHECKPOINT_KIND_INCOMPATIBLE")
     if contract.get("targetRuntimeId") != contract.get("selectedTargetRuntimeId"):
         raise ValueError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH")

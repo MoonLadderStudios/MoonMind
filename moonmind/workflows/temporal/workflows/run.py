@@ -17473,7 +17473,8 @@ class MoonMindRunWorkflow:
                     self._recovery_checkpoint_validation_failure
                 ),
                 checkpoint_kind=self._coerce_text(
-                    capture_input.get("checkpointKind"), max_chars=100
+                    capture_input.get("kind") or capture_input.get("checkpointKind"),
+                    max_chars=100,
                 ),
                 runtime_capabilities=capabilities,
                 restore_route_registered=restore_route_registered,
