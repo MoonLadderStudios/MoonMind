@@ -45,7 +45,7 @@ def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmit
         source={"source": "mcp", "callerRequestId": "r"},
         spec={
             "image": image,
-            "workspaceRef": {"kind": "moonmind-session", "sessionId": "run"},
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
             "resources": {"cpuMillis": 100, "memoryMiB": 64},
         },
     )

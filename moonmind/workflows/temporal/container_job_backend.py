@@ -16,6 +16,15 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
 )
+from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+)
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    ManagedRunRecordStore,
+    resolve_managed_workspace_locator,
+)
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
@@ -34,6 +43,7 @@ class DockerContainerJobBackend:
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
         projection_writer: ProjectionWriter | None = None,
+        managed_run_store: ManagedRunRecordStore | None = None,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         self._docker_binary = docker_binary
@@ -41,6 +51,7 @@ class DockerContainerJobBackend:
         self._runner = command_runner or self._run
         self._publish = evidence_publisher
         self._write_projection = projection_writer
+        self._managed_run_store = managed_run_store
 
     async def _run(self, args: Sequence[str]) -> tuple[int, bytes, bytes]:
         env = os.environ.copy()
@@ -69,12 +80,33 @@ class DockerContainerJobBackend:
         return f"moonmind-container-job-{suffix}"
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
-        ref = request.request.spec.workspace_ref
-        identity = ref.get("artifactRef") or ref.get("sessionId")
-        # Logical identifiers never become arbitrary paths: sanitize and contain.
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(identity))
-        workspace = (self._workspace_root / safe).resolve()
-        if self._workspace_root not in workspace.parents or not workspace.is_dir():
+        locator = request.request.spec.workspace_ref
+        if isinstance(locator, ManagedWorkspaceLocator):
+            if self._managed_run_store is None:
+                raise RuntimeError("managed run store is unavailable")
+            workspace = resolve_managed_workspace_locator(
+                locator,
+                store=self._managed_run_store,
+                current_agent_run_id=locator.agent_run_id,
+                current_runtime_id=locator.runtime_id,
+            )
+        elif isinstance(locator, SandboxWorkspaceLocator):
+            sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+            workspace_root = (sandbox_root / locator.workspace_id).resolve()
+            if workspace_root.parent != sandbox_root:
+                raise RuntimeError("container-job sandbox identity escapes its authority")
+            workspace = (workspace_root / locator.relative_path).resolve()
+            if not workspace.is_relative_to(workspace_root):
+                raise RuntimeError("authorized container-job workspace escapes its authority")
+        elif isinstance(locator, ExternalStateLocator):
+            safe = re.sub(r"[^A-Za-z0-9_.-]", "_", locator.artifact_ref)
+            workspace = (self._workspace_root / safe).resolve()
+        else:  # pragma: no cover - discriminated schema prevents this
+            raise RuntimeError("unsupported container-job workspace locator")
+        if (
+            not workspace.is_relative_to(self._workspace_root)
+            or not workspace.is_dir()
+        ):
             raise RuntimeError("authorized container-job workspace is unavailable")
         return ContainerJobActivityResult(resolvedWorkspaceRef=str(workspace))
 
