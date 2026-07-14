@@ -1047,7 +1047,14 @@ class ManagedAgentAdapter:
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = launch_context.profile_id
         
-        run_id = _generate_run_id()
+        workspace_spec = request.workspace_spec or {}
+        workspace_locator = workspace_spec.get("workspaceLocator") or {}
+        restored_run_id = (
+            str(workspace_locator.get("agentRunId") or "").strip()
+            if isinstance(workspace_locator, Mapping)
+            else ""
+        )
+        run_id = restored_run_id or _generate_run_id()
         started_at = _current_time()
 
         # NOTE: Slot acquisition is handled by AgentRun before adapter.start()
@@ -1104,6 +1111,15 @@ class ManagedAgentAdapter:
             
             # The workspace path is usually managed by the worker, but we can pass it if known
             workspace_path = None
+            restoration_requirement = None
+            if restored_run_id:
+                workspace_path = str(
+                    Path("/var/lib/moonmind/managed-runs") / restored_run_id / "repo"
+                )
+                restoration_requirement = {
+                    "checkpointRef": workspace_spec.get("sourceCheckpointRef"),
+                    "capabilityDigest": workspace_spec.get("capabilityDigest"),
+                }
             
             record_dict = await self._run_launcher(
                 payload={
@@ -1112,6 +1128,7 @@ class ManagedAgentAdapter:
                     "request": request.model_dump(mode="json", by_alias=True) if hasattr(request, "model_dump") else request,
                     "profile": profile_obj.model_dump(mode="json", by_alias=True),
                     "workspace_path": workspace_path,
+                    "restoration_requirement": restoration_requirement,
                 }
             )
             terminal_contract = record_dict.get("terminalContract")
