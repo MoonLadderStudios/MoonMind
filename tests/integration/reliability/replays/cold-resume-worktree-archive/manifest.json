@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "incidentRef": "MoonLadderStudios/MoonMind#3276",
+  "runtimeFamily": "moonmind_sandbox",
+  "protocol": "workspace-checkpoint-v1",
+  "sourceWorkflowId": "cold-resume-source",
+  "sourceAgentRunId": "agent-run-source",
+  "destinationAgentRunId": "agent-run-destination",
+  "checkpointId": "checkpoint-before-execution-implement",
+  "checkpointBoundary": "before_execution",
+  "resumePhase": "rerun_failed_step",
+  "captureIdempotencyKey": "cold-resume:capture:implement:1",
+  "restoreIdempotencyKey": "cold-resume:restore:implement:2",
+  "expectedRoute": ["prepare:preserved", "implement:rerun", "verify:run"],
+  "expectedCounts": {
+    "checkpointCapture": 1,
+    "workspaceRestore": 1,
+    "destinationWorkspace": 1
+  },
+  "expectedTerminalClassification": "completed",
+  "notes": "Production archive capture and restore replay. Managed-runtime ownership and Temporal continuation remain separate required coverage."
+}

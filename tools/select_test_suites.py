@@ -96,18 +96,23 @@ INTEGRATION_CI_PREFIXES = (
 )
 
 RELIABILITY_JOURNEY_EXACT = {
+    ".github/workflows/pytest-unit-tests.yml",
     "api_service/Dockerfile",
     "docker-compose.test.yaml",
     "moonmind/schemas/agent_runtime_models.py",
     "moonmind/schemas/managed_session_models.py",
     "moonmind/schemas/temporal_models.py",
     "tests/helpers/codex_session_runtime.py",
+    "tools/select_test_suites.py",
+    "tools/start-worker.sh",
 }
 
 RELIABILITY_JOURNEY_PREFIXES = (
     ".agents/skills/",
     "api_service/docker/",
+    "api_service/services/checkpoint_",
     "docker/",
+    "moonmind/agents/codex_worker/",
     "moonmind/workflows/adapters/",
     "moonmind/workflows/temporal/",
     "tests/integration/reliability/",
@@ -115,6 +120,9 @@ RELIABILITY_JOURNEY_PREFIXES = (
 
 RELIABILITY_JOURNEY_GLOBS = (
     "moonmind/schemas/*checkpoint*",
+    "moonmind/schemas/*recovery*",
+    "moonmind/schemas/*workspace*",
+    "api_service/migrations/**/*checkpoint*",
 )
 
 BACKEND_PREFIXES = (

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -281,6 +281,23 @@ _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
+
+
+class _HashingArchiveReader:
+    """Hash file blocks while ``tarfile`` streams them into an archive."""
+
+    def __init__(self, file_handle: BinaryIO) -> None:
+        self._file_handle = file_handle
+        self._hash = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._file_handle.read(size)
+        if chunk:
+            self._hash.update(chunk)
+        return chunk
+
+    def hexdigest(self) -> str:
+        return self._hash.hexdigest()
 
 
 class PentestWorkloadHandle(Protocol):
@@ -3523,17 +3540,13 @@ class TemporalSandboxActivities:
                 info.gid = _MANAGED_AGENT_GID
                 info.uname = "moonmind"
                 info.gname = "moonmind"
-                # Read the file exactly once and reuse the bytes for both the
-                # archive payload and the manifest digest. Setting info.size from
-                # the read payload also keeps the tar header consistent if the
-                # file changed between gettarinfo() and this read.
-                payload = path.read_bytes()
-                info.size = len(payload)
-                archive.addfile(info, BytesIO(payload))
+                with path.open("rb") as file_handle:
+                    hashing_reader = _HashingArchiveReader(file_handle)
+                    archive.addfile(info, hashing_reader)
                 entries.append({
                     "path": str(relative), "type": "file",
-                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
-                    "bytes": len(payload),
+                    "digest": "sha256:" + hashing_reader.hexdigest(),
+                    "bytes": info.size,
                     "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
                 })
         return output.getvalue(), entries
