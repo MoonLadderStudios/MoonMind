@@ -1,0 +1,9 @@
+{
+  "failureShapeId": "codex-oauth-checkpoint-masking",
+  "incidentWorkflowId": "mm:28dae38e-0488-4e0f-8add-b2249441a28c",
+  "runtime": "codex_cli",
+  "providerLog": "Failed to refresh token: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again. error_code=refresh_token_reused",
+  "legacyWorkspacePath": "/work/agent_jobs/mm:28dae38e-0488-4e0f-8add-b2249441a28c/repo",
+  "escapedFailure": "workspace path escapes sandbox root",
+  "invariant": "A managed-runtime checkpoint gap cannot mask the primary provider authentication failure"
+}

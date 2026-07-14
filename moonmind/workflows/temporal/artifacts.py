@@ -3322,6 +3322,56 @@ class TemporalArtifactActivities:
             )
             return {"started": False, "workflow_id": workflow_id}
 
+    async def provider_profile_acquire_credential_maintenance_lease(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str,
+        owner_id: str,
+        purpose: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Acquire an acknowledged maintenance lease for a workflow owner."""
+
+        from moonmind.provider_profiles.lease_client import (
+            CredentialLeasePurpose,
+            ProviderProfileLeaseClient,
+        )
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from temporalio import activity
+
+        lease_task = asyncio.create_task(
+            ProviderProfileLeaseClient(
+                TemporalClientAdapter()
+            ).acquire_maintenance_lease(
+                runtime_id=runtime_id,
+                profile_id=profile_id,
+                owner_id=owner_id,
+                purpose=CredentialLeasePurpose(purpose),
+                metadata=metadata,
+                owner_is_workflow=True,
+            )
+        )
+        try:
+            while not lease_task.done():
+                await asyncio.wait({lease_task}, timeout=10)
+                if not lease_task.done():
+                    activity.heartbeat({"phase": "waiting_for_maintenance_lease"})
+            lease = await lease_task
+        except BaseException:
+            if not lease_task.done():
+                lease_task.cancel()
+                await asyncio.gather(lease_task, return_exceptions=True)
+            raise
+        return {
+            "profile_id": lease.profile_id,
+            "runtime_id": lease.runtime_id,
+            "lease_id": lease.lease_id,
+            "owner_id": lease.owner_id,
+            "purpose": lease.purpose.value,
+            "already_held": lease.already_held,
+        }
+
     async def provider_profile_reset_manager(
         self,
         *,

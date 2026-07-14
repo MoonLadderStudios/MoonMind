@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -1364,6 +1365,214 @@ def test_runtime_send_turn_recovers_usage_limit_from_recent_log_for_empty_task_c
         "failureClass": "permanent",
         "reason": quota_summary,
     }
+
+
+def test_runtime_send_turn_recovers_auth_failure_from_recent_log_for_empty_task_complete(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "07"
+        / "13"
+        / "rollout-2026-07-13T17-55-14-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-07-13T17:57:55.661Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "model_client:auth: Failed to refresh token: " + auth_summary,
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+
+
+def test_runtime_send_turn_waits_for_auth_log_after_system_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    transcript_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "07"
+        / "13"
+        / "rollout-2026-07-13T16-58-45-vendor-thread-1.jsonl"
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        omit_turns_on_read=True,
+        thread_status_type="systemError",
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": "2026-07-13T16:58:47.056Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "vendor-turn-1",
+                    "last_agent_message": None,
+                },
+            }
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    recovery_attempts = iter((None, auth_summary))
+    monkeypatch.setattr(
+        runtime,
+        "_extract_turn_error_from_logs",
+        lambda *_args, **_kwargs: next(recovery_attempts),
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+    assert "retryRecommendedAction" not in response.metadata
+
+
+def test_runtime_send_turn_honors_system_error_with_visible_in_progress_turn(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        completion_notification_method=None,
+        complete_turn_on_read=False,
+        thread_status_type="systemError",
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    auth_summary = (
+        "Your access token could not be refreshed because your refresh token "
+        "was already used. Please log out and sign in again."
+    )
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                int(time.time()) + 1,
+                "model_client:auth: Failed to refresh token: " + auth_summary,
+            )
+        ],
+    )
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "failed"
+    assert response.metadata == {
+        "failureClass": "permanent",
+        "reason": auth_summary,
+    }
+
+
+def test_system_error_thread_status_is_terminal_failure() -> None:
+    outcome = CodexManagedSessionRuntime._terminal_thread_outcome(
+        {"thread": {"status": {"type": "systemError"}}}
+    )
+
+    assert outcome is not None
+    assert outcome.status == "failed"
+    assert outcome.error_text == "systemerror"
+    assert outcome.failure_class == "permanent"
+
 
 def _spool_skill_outcome_path(request: LaunchCodexManagedSessionRequest) -> Path:
     return Path(request.artifact_spool_path) / "skill_outcome.json"
@@ -4116,6 +4325,156 @@ def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(
         '{"token":"oauth-refresh"}'
     )
     assert destination_auth.stat().st_mode & 0o777 == 0o444
+
+
+def test_runtime_syncs_rotated_auth_to_durable_volume(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"rotated"}'
+    )
+    assert (auth_volume_path / ".moonmind-auth-sync.lock").is_file()
+
+
+def test_runtime_auth_sync_preserves_concurrent_reconnect(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated-by-run"}', encoding="utf-8"
+    )
+    durable_auth_path.write_text(
+        '{"credentialVersion":"reconnected"}', encoding="utf-8"
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"reconnected"}'
+    )
+
+
+def test_runtime_auth_sync_defers_when_volume_lock_is_busy(tmp_path: Path) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+    lock_path = auth_volume_path / ".moonmind-auth-sync.lock"
+    with lock_path.open("a+b") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"seed"}'
+    )
+    assert "auth sync deferred" in Path(
+        request.artifact_spool_path, "stderr.log"
+    ).read_text(encoding="utf-8")
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"rotated"}'
+    )
+
+
+def test_runtime_auth_sync_contains_filesystem_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    durable_auth_path = auth_volume_path / "auth.json"
+    durable_auth_path.write_text(
+        '{"credentialVersion":"seed"}', encoding="utf-8"
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+    )
+    runtime._seed_codex_home_from_auth_volume()
+    Path(request.codex_home_path, "auth.json").write_text(
+        '{"credentialVersion":"rotated"}', encoding="utf-8"
+    )
+
+    def fail_copy(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected auth-volume write failure")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.copy2",
+        fail_copy,
+    )
+
+    runtime._sync_codex_auth_to_volume()
+
+    assert durable_auth_path.read_text(encoding="utf-8") == (
+        '{"credentialVersion":"seed"}'
+    )
+    assert "rotated auth persistence failed" in Path(
+        request.artifact_spool_path, "stderr.log"
+    ).read_text(encoding="utf-8")
+
 
 def test_runtime_launch_session_rejects_missing_auth_volume_path(
     tmp_path: Path,

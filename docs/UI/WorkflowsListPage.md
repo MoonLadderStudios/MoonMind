@@ -231,12 +231,13 @@ Rules:
 
 1. Loading state shows `Loading workflows...`.
 2. API errors render a visible error notice.
-3. Empty first pages show `No workflows found for the current filters.`
-4. Empty later pages keep the previous-page button enabled.
-5. Pagination uses an opaque `nextPageToken` plus a client-side cursor stack for previous-page navigation.
-6. The results footer shows row range and count when available.
-7. Page size is controlled through the shared `PageSizeSelector`.
-8. The current-page-only sort notice remains visible when the table has rows and frontend sorting is not server-authoritative.
+3. Empty first pages show `No workflows found for the current filters.` followed by a `Create a workflow` link to `/workflows/new`.
+4. Successful empty desktop results retain the normal table header, column filters, sorting controls, visible-column selection, and optional Actions header.
+5. Empty later pages show the same message and Create action while keeping the previous-page button enabled.
+6. Pagination uses an opaque `nextPageToken` plus a client-side cursor stack for previous-page navigation.
+7. The results footer shows row range and count when available.
+8. Page size is controlled through the shared `PageSizeSelector`.
+9. The current-page-only sort notice remains visible when the table has rows and frontend sorting is not server-authoritative.
 
 ---
 

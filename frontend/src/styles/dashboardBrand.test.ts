@@ -27,6 +27,12 @@ function cssRuleBlock(selector: string): string {
   return blocks.join('\n');
 }
 
+describe('dashboard page layout styles', () => {
+  it('centers the create page title', () => {
+    expect(cssRuleBlock('.workflow-start-heading')).toContain('text-align: center;');
+  });
+});
+
 describe('dashboard masthead brand styles', () => {
   it('keeps Moon white and renders the MoonMind header at the compact size', () => {
     expect(cssRuleBlock('.masthead-brand')).toContain('color: rgb(var(--mm-ink));');
@@ -97,19 +103,45 @@ describe('dashboard masthead brand styles', () => {
   });
 
   it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
-    // The shared treatment: a bright top-edge inset, a faint lit bottom-edge
-    // inset, and a tight accent glow hugging the bottom edge so it reads as
-    // backlit (a wide diffuse glow does not register at 1x against the
-    // masthead's glass fill). The sides stay open — no perimeter ring.
+    // The shared liquid-glass treatment: the edge light is a masked gradient
+    // ring built from two corner-anchored radials — white bleeding out of the
+    // top-left corner, violet out of the bottom-right, fading to nothing
+    // before the other two corners — plus a quite faint under-glow kept
+    // almost entirely on the bottom edge. The hover variant swaps the glow to
+    // light blue.
     const highlightShadow =
       /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
     expect(dashboardCss).toMatch(
-      /--mm-shadow-highlight-edge:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.26\),\s*inset 0 -1px 0 rgb\(167 139 250 \/ 0\.4\),\s*0 3px 9px -2px rgb\(var\(--mm-accent\) \/ 0\.75\);/,
+      /--mm-highlight-edge-ring:\s*radial-gradient\(\s*130% 220% at 0% 0%,\s*rgb\(255 255 255 \/ 0\.6\) 0%,[\s\S]*?transparent 45%\s*\),\s*radial-gradient\(\s*130% 220% at 100% 100%,\s*rgb\(167 139 250 \/ 0\.7\) 0%,[\s\S]*?transparent 45%\s*\);/,
     );
-    // The token must stay side-open: no perimeter ring, so the buttons read
-    // as a top highlight plus a backlit bottom rim instead of an outline.
+    expect(dashboardCss).toMatch(
+      /--mm-shadow-highlight-edge:\s*0 5px 9px -5px rgb\(var\(--mm-accent\) \/ 0\.45\);/,
+    );
+    expect(dashboardCss).toMatch(
+      /--mm-shadow-highlight-edge-hover:\s*0 5px 9px -5px rgb\(110 180 255 \/ 0\.6\);/,
+    );
+    // The shadow tokens carry only the under-glow — no inset edge lines and
+    // no perimeter ring — so the edge light comes solely from the diagonal
+    // gradient ring and cannot read as a full outline.
     expect(dashboardCss).not.toMatch(
-      /--mm-shadow-highlight-edge:[^;]*0 0 0 1px/s,
+      /--mm-shadow-highlight-edge(?:-hover)?:[^;]*(?:inset|0 0 0 1px)/s,
+    );
+    // The ring is drawn on a pseudo-element masked down to a 1px border band;
+    // the radio group uses ::after because ::before is its sliding thumb.
+    const ring = cssRuleBlock('.route-nav-primary a::before');
+    expect(ring).toContain('background: var(--mm-highlight-edge-ring);');
+    expect(ring).toContain('padding: 1px;');
+    expect(ring).toContain('mask-composite: exclude;');
+    expect(ring).toContain('pointer-events: none;');
+    expect(cssRuleBlock('.dashboard-system-trigger::before')).toContain(
+      'background: var(--mm-highlight-edge-ring);',
+    );
+    expect(cssRuleBlock('.workflow-list-display-control::after')).toContain(
+      'background: var(--mm-highlight-edge-ring);',
+    );
+    // The collapsed mobile nav renders flat menu rows without the ring.
+    expect(dashboardCss).toMatch(
+      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.route-nav-primary a::before\s*\{[^}]*content:\s*none;/s,
     );
 
     // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
@@ -137,7 +169,7 @@ describe('dashboard masthead brand styles', () => {
     expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
 
     // Workflows/Create and the System trigger share the same highlight-edge
-    // look. Both shadows are non-layout-affecting so the active underline
+    // look. The shadows are non-layout-affecting so the active underline
     // geometry is unchanged.
     const primary = cssRuleBlock('.route-nav-primary a');
     expect(primary).not.toContain('var(--mm-glass-fill)');
@@ -145,6 +177,25 @@ describe('dashboard masthead brand styles', () => {
     const trigger = cssRuleBlock('.dashboard-system-trigger');
     expect(trigger).toContain('background: transparent;');
     expect(trigger).toMatch(highlightShadow);
+
+    // Hover: all three buttons brighten, grow slightly, and swap the purple
+    // under-glow for light blue. The trigger states these explicitly so
+    // the filled-CTA global button:hover shadow cannot leak onto it.
+    for (const hover of [
+      cssRuleBlock('.route-nav-primary a:hover'),
+      cssRuleBlock('.dashboard-system-trigger:hover'),
+    ]) {
+      expect(hover).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
+      expect(hover).toContain('transform: scale(var(--mm-control-hover-scale));');
+      expect(hover).toMatch(/filter: brightness\([\d.]+\)/);
+    }
+
+    // Opening the System popover keeps its highlighted surface without
+    // leaving the trigger scaled or brightened after hover ends.
+    const expandedTrigger = cssRuleBlock('.dashboard-system-trigger[aria-expanded="true"]');
+    expect(expandedTrigger).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
+    expect(expandedTrigger).not.toContain('transform:');
+    expect(expandedTrigger).not.toContain('filter:');
   });
 
   it('marks the open System selection like the sidebar instead of the trigger underline', () => {

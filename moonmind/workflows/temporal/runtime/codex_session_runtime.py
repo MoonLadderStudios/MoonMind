@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -56,13 +58,19 @@ _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
 )
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({".tmp", "config.toml", "sessions", "tmp"})
-_AUTH_SEED_EXCLUDED_FILE_NAMES = frozenset({".codex-remote-plugin-install.json"})
+_AUTH_STATE_FILENAME = "auth.json"
+_AUTH_SYNC_LOCK_FILENAME = ".moonmind-auth-sync.lock"
+_AUTH_SEED_EXCLUDED_FILE_NAMES = frozenset(
+    {".codex-remote-plugin-install.json", _AUTH_SYNC_LOCK_FILENAME}
+)
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_PROVIDER_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
+_PROVIDER_LOG_SETTLE_GRACE_SECONDS = 1.0
+_PROVIDER_LOG_SETTLE_RETRY_SECONDS = 0.1
 _LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = provider_failure_search_markers()
 EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
 _EMPTY_ASSISTANT_FAILURE_REASONS: tuple[str, ...] = (
@@ -539,6 +547,7 @@ class CodexManagedSessionRuntime:
         self._auth_volume_path = (
             Path(auth_volume_path) if str(auth_volume_path or "").strip() else None
         )
+        self._auth_seed_digest: str | None = None
         self._image_ref = image_ref
         self._control_url = control_url
         self._container_id = container_id
@@ -629,6 +638,8 @@ class CodexManagedSessionRuntime:
             )
 
         self._ensure_directories()
+        durable_auth = source_root / _AUTH_STATE_FILENAME
+        self._auth_seed_digest = self._file_digest(durable_auth)
         for source_path in sorted(source_root.iterdir()):
             if not self._should_seed_auth_entry(source_path):
                 continue
@@ -644,6 +655,81 @@ class CodexManagedSessionRuntime:
                 )
                 continue
             self._copy_auth_seed_file(source_path, destination)
+
+    @staticmethod
+    def _file_digest(path: Path) -> str | None:
+        if path.is_symlink() or not path.is_file():
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _sync_codex_auth_to_volume(self) -> None:
+        """Persist a rotated Codex OAuth token without clobbering newer auth.
+
+        Codex needs a writable per-run home for its runtime state, while the
+        provider profile owns the durable OAuth volume.  Refresh tokens rotate,
+        so a successful refresh in the per-run home must be copied back.  The
+        seed digest plus a volume-local lock form a compare-and-swap boundary:
+        if another session or a reconnect changed durable auth, this session
+        refuses to overwrite it.
+        """
+
+        if self._auth_volume_path is None or self._auth_seed_digest is None:
+            return
+        try:
+            local_auth = self._codex_home_path / _AUTH_STATE_FILENAME
+            local_digest = self._file_digest(local_auth)
+            if local_digest is None or local_digest == self._auth_seed_digest:
+                return
+
+            durable_auth = self._auth_volume_path / _AUTH_STATE_FILENAME
+            lock_path = self._auth_volume_path / _AUTH_SYNC_LOCK_FILENAME
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+b") as lock_handle:
+                try:
+                    fcntl.flock(
+                        lock_handle.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    self._record_auth_sync_warning(
+                        "durable auth volume lock is busy; a later lifecycle "
+                        "boundary will retry"
+                    )
+                    return
+                if self._file_digest(durable_auth) != self._auth_seed_digest:
+                    return
+                temp_fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{_AUTH_STATE_FILENAME}.",
+                    dir=str(self._auth_volume_path),
+                )
+                os.close(temp_fd)
+                temp_path = Path(temp_name)
+                try:
+                    shutil.copy2(local_auth, temp_path)
+                    with temp_path.open("rb") as temp_handle:
+                        os.fsync(temp_handle.fileno())
+                    os.replace(temp_path, durable_auth)
+                    self._auth_seed_digest = local_digest
+                finally:
+                    temp_path.unlink(missing_ok=True)
+        except Exception as exc:
+            self._record_auth_sync_warning(f"rotated auth persistence failed: {exc}")
+
+    def _record_auth_sync_warning(self, message: str) -> None:
+        try:
+            self._append_spool(
+                "stderr",
+                "auth sync deferred: "
+                f"{_redact_text(message, max_chars=_DIAGNOSTIC_TEXT_MAX_CHARS)}\n",
+            )
+        except OSError:
+            # Synchronization diagnostics are best-effort and must not replace
+            # the authoritative assistant turn outcome.
+            pass
 
     def _append_spool(self, stream_name: str, text: str) -> None:
         if stream_name not in {"stdout", "stderr"}:
@@ -1474,6 +1560,12 @@ class CodexManagedSessionRuntime:
             recovered = text[marker_index + len(marker) :].strip()
             if recovered:
                 return recovered
+        refresh_marker = "Failed to refresh token:"
+        refresh_index = text.find(refresh_marker)
+        if refresh_index >= 0:
+            recovered = text[refresh_index + len(refresh_marker) :].strip()
+            if recovered:
+                return recovered
         recovered = cls._extract_quoted_log_field(text, "error.message")
         if recovered:
             return recovered
@@ -1593,6 +1685,27 @@ class CodexManagedSessionRuntime:
             if provider_rows_remaining <= 0:
                 break
         return None
+
+    def _settled_turn_error_from_logs(
+        self,
+        vendor_turn_id: str,
+        *,
+        turn_started_at: float | None = None,
+    ) -> str | None:
+        """Allow Codex's asynchronous SQLite logger to commit terminal errors."""
+
+        deadline = time.monotonic() + _PROVIDER_LOG_SETTLE_GRACE_SECONDS
+        while True:
+            recovered = self._extract_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=turn_started_at,
+            )
+            if recovered:
+                return recovered
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(_PROVIDER_LOG_SETTLE_RETRY_SECONDS, remaining))
 
     def _recent_runtime_log_excerpts(
         self,
@@ -2176,9 +2289,14 @@ class CodexManagedSessionRuntime:
         vendor_turn_id: str,
         rollout_scan: _RolloutTurnScan | None = None,
     ) -> _TurnTerminalOutcome | None:
+        failed_thread_outcome = self._failed_thread_terminal_outcome(
+            state=state,
+            thread_payload=thread_payload,
+            vendor_turn_id=vendor_turn_id,
+        )
+        if failed_thread_outcome is not None:
+            return failed_thread_outcome
         thread_outcome = self._terminal_thread_outcome(thread_payload)
-        if thread_outcome is not None and thread_outcome.status != "completed":
-            return thread_outcome
 
         if rollout_scan is None:
             vendor_thread_path = self._resolved_rollout_path(
@@ -2206,6 +2324,29 @@ class CodexManagedSessionRuntime:
         if thread_outcome is not None and not rollout_scan.references_turn:
             return thread_outcome
         return None
+
+    def _failed_thread_terminal_outcome(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        vendor_turn_id: str,
+    ) -> _TurnTerminalOutcome | None:
+        thread_outcome = self._terminal_thread_outcome(thread_payload)
+        if thread_outcome is None or thread_outcome.status == "completed":
+            return None
+        if self._thread_status_type(thread_payload) == "systemerror":
+            recovered_error = self._settled_turn_error_from_logs(
+                vendor_turn_id,
+                turn_started_at=state.last_control_at,
+            )
+            if recovered_error:
+                return _TurnTerminalOutcome(
+                    status="failed",
+                    error_text=recovered_error,
+                    failure_class="permanent",
+                )
+        return thread_outcome
 
     def _wait_for_turn_completion(
         self,
@@ -2265,6 +2406,13 @@ class CodexManagedSessionRuntime:
             if isinstance(turn_payload, Mapping):
                 missing_turn_first_seen_at = None
                 outcome = self._terminal_turn_outcome(turn_payload)
+                if outcome is not None:
+                    return thread_payload, outcome
+                outcome = self._failed_thread_terminal_outcome(
+                    state=state,
+                    thread_payload=thread_payload,
+                    vendor_turn_id=vendor_turn_id,
+                )
                 if outcome is not None:
                     return thread_payload, outcome
             else:
@@ -2496,10 +2644,10 @@ class CodexManagedSessionRuntime:
         status_type = cls._thread_status_type(thread_payload)
         if status_type == "idle":
             return _TurnTerminalOutcome(status="completed")
-        if status_type in {"failed", "error"}:
+        if status_type in {"failed", "error", "systemerror"}:
             return _TurnTerminalOutcome(
                 status="failed",
-                error_text=cls._thread_status_reason(thread_payload),
+                error_text=cls._thread_status_reason(thread_payload) or status_type,
                 failure_class="permanent",
             )
         if status_type in {"interrupted", "cancelled", "canceled"}:
@@ -2535,6 +2683,7 @@ class CodexManagedSessionRuntime:
         if status == "completed":
             state.last_assistant_text = assistant_text or None
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         if (
             append_assistant_to_spool
             and status == "completed"
@@ -2675,6 +2824,7 @@ class CodexManagedSessionRuntime:
             lastControlAt=time.time(),
         )
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         self._append_spool(
             "stdout",
             f"session started: {request.session_id} thread={request.thread_id}\n",
@@ -3013,6 +3163,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "clear_session"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         self._append_spool(
             "stdout",
             f"session cleared: epoch={state.session_epoch} thread={state.logical_thread_id}\n",
@@ -3028,6 +3179,7 @@ class CodexManagedSessionRuntime:
         state.last_control_action = "terminate_session"
         state.last_control_at = time.time()
         self._save_state(state)
+        self._sync_codex_auth_to_volume()
         self._append_spool("stdout", f"session terminated: {request.session_id}\n")
         return self._handle(state, status="terminated")
 

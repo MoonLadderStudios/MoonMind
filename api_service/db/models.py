@@ -3017,6 +3017,42 @@ class SkillSetEntry(Base):
         """Return the slug of the associated skill."""
         return self.skill.slug
 
+
+def _default_container_job_auxiliary_outcome() -> dict[str, str]:
+    from moonmind.schemas.container_job_models import AuxiliaryOutcomeState
+
+    return {"state": AuxiliaryOutcomeState.NOT_ATTEMPTED.value}
+
+
+class ContainerJobRecord(Base):
+    """API-owned durable container-job identity and compact observations."""
+
+    __tablename__ = "container_jobs"
+    __table_args__ = (
+        UniqueConstraint("owner_type", "owner_id", "idempotency_key", name="uq_container_jobs_owner_idempotency"),
+        Index("ix_container_jobs_owner_created", "owner_type", "owner_id", "created_at"),
+    )
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    contract_version: Mapped[str] = mapped_column(String(16), nullable=False, default="v1")
+    owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False)
+    request_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    backend_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    backend_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    image_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
+    terminal_outcome_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
+    publication_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
+    cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
+    logs_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    artifacts_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    cancel_idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 

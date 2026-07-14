@@ -155,6 +155,41 @@ async def test_activity_lease_client_marks_deterministic_owner_as_non_workflow()
 
 
 @pytest.mark.asyncio
+async def test_activity_lease_client_preserves_delegating_workflow_owner() -> None:
+    class Adapter:
+        def __init__(self) -> None:
+            self.payload = None
+
+        async def get_client(self):
+            return self
+
+        async def start_workflow(self, *_args, **_kwargs):
+            return None
+
+        async def update_workflow(self, _workflow_id, _update_name, payload):
+            self.payload = payload
+            return {
+                "profile_id": "codex",
+                "lease_id": payload["requester_workflow_id"],
+            }
+
+    adapter = Adapter()
+    await ProviderProfileLeaseClient(adapter).acquire_maintenance_lease(
+        runtime_id="codex_cli",
+        profile_id="codex",
+        owner_id="oauth-session:oas-1",
+        purpose=CredentialLeasePurpose.OAUTH_RECONNECT,
+        metadata={"workflowId": "oauth-session:oas-1"},
+        owner_is_workflow=True,
+    )
+
+    assert adapter.payload["metadata"] == {
+        "workflowId": "oauth-session:oas-1",
+        "ownerIsWorkflow": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     tmp_path,
 ) -> None:

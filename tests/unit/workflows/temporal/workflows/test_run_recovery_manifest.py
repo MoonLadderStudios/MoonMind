@@ -16,6 +16,9 @@ import pytest
 from moonmind.schemas.temporal_models import (
     FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
 )
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -96,6 +99,12 @@ async def test_emit_recovery_manifest_writes_artifact_and_compact_summary(
     _configure(monkeypatch, patched=True)
     workflow = MoonMindRunWorkflow()
     _seed_failed_run(workflow)
+    capabilities = resolve_runtime_execution_capabilities("omnigent")
+    assert capabilities is not None
+    workflow._step_workspace_capture_inputs["run-tests"] = {
+        "kind": "external_state_ref",
+        "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
+    }
 
     writes: list[dict[str, Any]] = []
 
@@ -132,6 +141,7 @@ async def test_emit_recovery_manifest_writes_artifact_and_compact_summary(
     assert payload["lastAcceptedStep"]["logicalStepId"] == "prepare"
     assert payload["validation"]["result"] == "valid"
     assert payload["resumeAllowed"] is True
+    assert payload["recoveryEligibility"]["checkpointKind"] == "external_state_ref"
     # Compact, execution-linked summary.
     assert summary["resumeAllowed"] is True
     assert summary["failedLogicalStepId"] == "run-tests"
@@ -241,7 +251,7 @@ async def test_recovery_manifest_emitted_before_terminal_failure_in_finalizing(
     assert workflow._finish_summary is not None
     recovery_block = workflow._finish_summary.get("recoveryManifest")
     assert recovery_block is not None
-    assert recovery_block["resumeAllowed"] is True
+    assert recovery_block["resumeAllowed"] is False
     assert recovery_block["failedLogicalStepId"] == "run-tests"
     assert recovery_block["manifestRef"] == "manifest-artifact-1"
 

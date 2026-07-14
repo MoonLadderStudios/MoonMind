@@ -271,6 +271,21 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
             "pr_resolver_merge_gate_owned",
         ),
     )
+    terminal_checkpoint_publication_enabled: bool = Field(
+        default=False,
+        alias="terminalCheckpointPublicationEnabled",
+        validation_alias=AliasChoices(
+            "terminalCheckpointPublicationEnabled",
+            "terminal_checkpoint_publication_enabled",
+        ),
+    )
+    no_remote_writes: bool = Field(False, alias="noRemoteWrites")
+    read_only: bool = Field(False, alias="readOnly")
+    dry_run: bool = Field(False, alias="dryRun")
+    workspace_authoritative: bool = Field(True, alias="workspaceAuthoritative")
+    terminal_checkpoint_capability_supported: bool = Field(
+        True, alias="terminalCheckpointCapabilitySupported"
+    )
 
     @model_validator(mode="after")
     def _normalize_fetch(self) -> "AgentRuntimeFetchResultInput":
@@ -280,6 +295,75 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
                 normalized = value.strip()
                 setattr(self, field_name, normalized or None)
         return self
+
+
+class AgentRuntimeTerminalCheckpointInput(AgentRuntimeStatusInput):
+    """Bounded request for best-effort controlled-failure publication."""
+
+    failure_class: Literal[
+        "user_error", "execution_error", "integration_error", "timed_out"
+    ] = Field(..., alias="failureClass")
+    target_branch: str | None = Field(None, alias="targetBranch")
+    existing_branch: str | None = Field(None, alias="existingBranch")
+    existing_head_sha: str | None = Field(None, alias="existingHeadSha")
+    existing_pr_url: str | None = Field(None, alias="existingPrUrl")
+    no_remote_writes: bool = Field(False, alias="noRemoteWrites")
+    publication_enabled: bool = Field(True, alias="publicationEnabled")
+    read_only: bool = Field(False, alias="readOnly")
+    dry_run: bool = Field(False, alias="dryRun")
+    workspace_authoritative: bool = Field(True, alias="workspaceAuthoritative")
+    runtime_capability_supported: bool = Field(
+        True, alias="runtimeCapabilitySupported"
+    )
+    source: Literal["live_workspace", "checkpoint_restore", "provider_native"] = (
+        "live_workspace"
+    )
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @model_validator(mode="after")
+    def _normalize_terminal_checkpoint(self) -> "AgentRuntimeTerminalCheckpointInput":
+        for field_name in (
+            "target_branch",
+            "existing_branch",
+            "existing_head_sha",
+            "existing_pr_url",
+            "idempotency_key",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, str):
+                setattr(self, field_name, value.strip() or None)
+        if not self.idempotency_key:
+            raise ValueError("idempotencyKey must be nonblank")
+        return self
+
+
+class AgentRuntimeTerminalCheckpointResult(BaseModel):
+    """Typed terminal-publication evidence; never changes primary failure."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    intent: Literal["terminal_checkpoint"] = "terminal_checkpoint"
+    status: Literal[
+        "pushed",
+        "already_published",
+        "no_changes",
+        "skipped",
+        "failed",
+    ]
+    reason_code: str = Field(..., alias="reasonCode")
+    source: Literal["live_workspace", "checkpoint_restore", "provider_native"]
+    attempted: bool
+    commit_created: bool = Field(False, alias="commitCreated")
+    branch_pushed: bool = Field(False, alias="branchPushed")
+    branch_name: str | None = Field(None, alias="branchName")
+    branch_url: str | None = Field(None, alias="branchUrl")
+    head_sha: str | None = Field(None, alias="headSha")
+    base_branch: str | None = Field(None, alias="baseBranch")
+    pr_url: str | None = Field(None, alias="prUrl")
+    remote_verified: bool = Field(False, alias="remoteVerified")
+    idempotency_key: str = Field(..., alias="idempotencyKey")
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+    error: str | None = None
 
 
 class ResiliencePolicyCompileInput(BaseModel):

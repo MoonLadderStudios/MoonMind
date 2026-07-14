@@ -309,6 +309,9 @@ MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-bindin
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
 )
+TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID = (
+    "agent-run-terminal-checkpoint-publication-v1"
+)
 STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-story-breakdown-artifact-handoff-v1"
 )
@@ -1269,6 +1272,48 @@ class MoonMindAgentRun:
         if agent_run_id:
             metadata.setdefault("agentRunId", agent_run_id)
 
+        if request.agent_kind == "managed":
+            runtime_id = (
+                request.managed_session.runtime_id
+                if request.managed_session is not None
+                else request.agent_id
+            )
+            capabilities = resolve_runtime_execution_capabilities(runtime_id)
+            metadata["agentKind"] = request.agent_kind
+            metadata["agentId"] = capabilities.runtime_id
+            metadata["runtimeCapabilities"] = capabilities.model_dump(
+                by_alias=True,
+                mode="json",
+            )
+            if (
+                capabilities.workspace_authority == "managed_runtime"
+                and agent_run_id
+            ):
+                metadata["workspaceLocator"] = {
+                    "kind": "managed_runtime",
+                    "runtimeId": capabilities.runtime_id,
+                    "agentRunId": agent_run_id,
+                    "relativePath": "repo",
+                }
+                for legacy_path_key in (
+                    "workspacePath",
+                    "workspace_path",
+                    "workspaceRoot",
+                    "workspace_root",
+                ):
+                    metadata.pop(legacy_path_key, None)
+                nested_workspace_spec = metadata.get("workspaceSpec")
+                if isinstance(nested_workspace_spec, Mapping):
+                    sanitized_workspace_spec = dict(nested_workspace_spec)
+                    for legacy_path_key in (
+                        "workspacePath",
+                        "workspace_path",
+                        "workspaceRoot",
+                        "workspace_root",
+                    ):
+                        sanitized_workspace_spec.pop(legacy_path_key, None)
+                    metadata["workspaceSpec"] = sanitized_workspace_spec
+
         request_params = (
             request.parameters if isinstance(request.parameters, Mapping) else {}
         )
@@ -1855,6 +1900,34 @@ class MoonMindAgentRun:
                 activity_input["prResolverMergeGateOwned"] = (
                     _request_pr_resolver_merge_gate_owned(request)
                 )
+        terminal_checkpoint_patch_active = workflow.patched(
+            TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID
+        )
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, Mapping) else {}
+        )
+        checkpoint_policy = (
+            params.get("checkpointPolicy")
+            if isinstance(params.get("checkpointPolicy"), Mapping)
+            else {}
+        )
+        if terminal_checkpoint_patch_active:
+            activity_input["terminalCheckpointPublicationEnabled"] = bool(
+                checkpoint_policy.get("publishOnGracefulFailure", True)
+            )
+            activity_input["noRemoteWrites"] = bool(
+                params.get("noRemoteWrites") or workspace_spec.get("noRemoteWrites")
+            )
+            activity_input["readOnly"] = bool(
+                params.get("readOnly") or workspace_spec.get("readOnly")
+            )
+            activity_input["dryRun"] = bool(params.get("dryRun"))
+            activity_input["workspaceAuthoritative"] = not bool(
+                workspace_spec.get("authorityLost")
+            )
+            activity_input["terminalCheckpointCapabilitySupported"] = not bool(
+                workspace_spec.get("terminalCheckpointPublicationUnsupported")
+            )
         return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(

@@ -2452,29 +2452,58 @@ describe('Dashboard shared entry', () => {
     expect(reducedMotionBlock).toContain('transform: none !important');
   });
 
-  it('draws a thin divider directly to the left of the workflow sidebar scrollbar', async () => {
+  it('separates the collection rail with its own right border, not a scrollbar-offset divider', async () => {
     const sidebarBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar');
     expect(sidebarBlock).toContain('padding: 0');
-    // The scrollbar width is a shared token so the divider offset tracks it.
-    expect(sidebarBlock).toContain('--workflow-list-sidebar-scrollbar-width: 6px');
+    // The rail no longer hard-codes a scrollbar width, and no longer clamps to a
+    // content/viewport height that shrinks the divider with the row count.
+    expect(sidebarBlock).not.toContain('--workflow-list-sidebar-scrollbar-width');
+    expect(sidebarBlock).not.toContain('max-height');
 
+    // The separator is the shared collection rail's own inline-end border, one
+    // divider-width wide, applied through the neutral `.collection-sidebar`
+    // primitive so Workflows, Recurring, and Skills stay consistent.
+    const railBorderBlock = cssRuleBlock(
+      dashboardCss,
+      '.workflow-workspace-shell > .collection-sidebar,\n.collection-workspace--edge-rail > .collection-sidebar',
+    );
+    const normalizedRailBorder = railBorderBlock.replace(/\s+/g, ' ');
+    expect(normalizedRailBorder).toContain(
+      'border-inline-end: var(--workflow-list-divider-width) solid var(--workflow-list-divider-color)',
+    );
+    // Height is owned by the workspace block-size token, not by the rows.
+    expect(railBorderBlock).toContain('block-size: var(--mm-collection-workspace-block-size)');
+    expect(railBorderBlock).toContain('max-block-size: var(--mm-collection-workspace-block-size)');
+    expect(railBorderBlock).toContain('align-self: stretch');
+
+    // The old pseudo-element divider no longer draws anything.
+    const dividerBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar::after');
+    expect(dividerBlock).toContain('content: none');
+    expect(dividerBlock).not.toContain('right:');
+    expect(dividerBlock).not.toContain('background:');
+
+    // The list stays the scroll container; its scrollbar styling is cosmetic and
+    // no separator geometry references a scrollbar-width token anywhere.
     const sidebarTableBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar-table');
+    expect(sidebarTableBlock).toContain('overflow-y: auto');
     expect(sidebarTableBlock).toContain('scrollbar-width: thin');
+    expect(sidebarTableBlock).toContain('scrollbar-gutter: stable');
 
     const scrollbarBlock = cssRuleBlock(
       dashboardCss,
       '.workflow-workspace-sidebar-table::-webkit-scrollbar',
     );
-    expect(scrollbarBlock).toContain('width: var(--workflow-list-sidebar-scrollbar-width)');
+    expect(scrollbarBlock).toContain('width: 6px');
 
-    // The divider sits directly to the left of the scrollbar (offset by its
-    // width) and reuses the shared list divider token for color/thickness.
-    const dividerBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-sidebar::after');
-    expect(dividerBlock).toContain('right: var(--workflow-list-sidebar-scrollbar-width)');
-    expect(dividerBlock).toContain('width: var(--workflow-list-divider-width)');
-    expect(dividerBlock).toContain('background: var(--workflow-list-divider-color)');
-    expect(dividerBlock).toContain('top: 0');
-    expect(dividerBlock).toContain('bottom: 0');
+    // The workspace shell provides the block-size floor so zero, three, or
+    // thirty rows all produce the same rail height.
+    const shellBlock = cssRuleBlock(dashboardCss, '.workflow-workspace-shell');
+    expect(shellBlock).toContain('min-block-size: var(--mm-collection-workspace-block-size)');
+    const rootBlock = cssRuleBlock(dashboardCss, ':root');
+    expect(rootBlock).toContain('--mm-collection-workspace-block-size:');
+
+    // No rule anywhere positions a divider using a scrollbar-width token.
+    expect(dashboardCss).not.toContain('--workflow-list-sidebar-scrollbar-width');
 
     // The full-screen workflow table has no inner scrollbar and never draws the
     // sidebar divider.

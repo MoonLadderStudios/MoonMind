@@ -84,6 +84,9 @@ _AUTH_FAILURE_MARKERS = (
     "not logged in",
     "please run /login",
     "refresh token was revoked",
+    "refresh token was already used",
+    "refresh_token_reused",
+    "token_expired",
 )
 
 # Credential-scope markers are deliberately scoped to HTTP 403 wording or

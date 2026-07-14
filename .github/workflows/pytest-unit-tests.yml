@@ -436,8 +436,11 @@ jobs:
       run: npm ci
     - name: Run frontend CI
       run: npm run frontend:ci
-    - name: Install Playwright Chromium for browser-computed style tests
-      run: npx playwright install --with-deps chromium
+    - name: Install Playwright browsers for browser-computed style tests
+      # The real-browser suite (frontend/vitest.browser.config.ts) runs in both
+      # Chromium and Firefox, so both engines must be installed or Firefox fails
+      # to launch before any test runs.
+      run: npx playwright install --with-deps chromium firefox
     - name: Run real-browser style regression suite
       run: npm run ui:test:browser
     - name: Upload dashboard dist artifact

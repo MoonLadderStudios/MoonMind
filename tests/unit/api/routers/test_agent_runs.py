@@ -3398,7 +3398,7 @@ def test_get_agent_run_artifact_session_projection_forbids_cross_owner_access() 
         == "You do not have permission to access this agent run or its session projection."
     )
 
-def test_post_agent_run_artifact_session_control_routes_send_follow_up_and_returns_projection(
+def test_post_agent_run_artifact_session_control_routes_same_session_continuation_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, artifact_service = client
@@ -3427,7 +3427,7 @@ def test_post_agent_run_artifact_session_control_routes_send_follow_up_and_retur
             response = test_client.post(
                 "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
                 json={
-                    "action": "send_follow_up",
+                    "action": "continue_same_session",
                     "message": "Continue reusing the current session.",
                     "reason": "Operator clarification",
                 },
@@ -3443,7 +3443,7 @@ def test_post_agent_run_artifact_session_control_routes_send_follow_up_and_retur
         },
     )
     body = response.json()
-    assert body["action"] == "send_follow_up"
+    assert body["action"] == "continue_same_session"
     assert body["projection"]["session_epoch"] == 2
     assert body["projection"]["latest_summary_ref"]["artifact_id"] == "art_summary"
     assert body["projection"]["latest_checkpoint_ref"]["artifact_id"] == "art_checkpoint"
@@ -3600,7 +3600,7 @@ def test_post_agent_run_artifact_session_control_rejects_blank_follow_up_message
     response = test_client.post(
         "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
         json={
-            "action": "send_follow_up",
+            "action": "continue_same_session",
             "message": "   ",
         },
     )

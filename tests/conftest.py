@@ -49,6 +49,24 @@ def global_test_settings():
     settings.workflow.enable_proposals = False
 
 
+@pytest.fixture(scope="session", autouse=True)
+def pin_temporal_test_server_download():
+    """Use an explicit Temporal test-server release for hermetic test startup."""
+    from temporalio.testing import WorkflowEnvironment
+
+    original_start_time_skipping = WorkflowEnvironment.start_time_skipping
+
+    async def start_time_skipping(**kwargs):
+        kwargs.setdefault("test_server_download_version", "v1.29.0")
+        return await original_start_time_skipping(**kwargs)
+
+    WorkflowEnvironment.start_time_skipping = staticmethod(start_time_skipping)
+    try:
+        yield
+    finally:
+        WorkflowEnvironment.start_time_skipping = original_start_time_skipping
+
+
 def _relative_test_path(path: Path) -> Path:
     try:
         return path.resolve().relative_to(_REPO_ROOT)

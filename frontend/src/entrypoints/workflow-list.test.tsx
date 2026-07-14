@@ -111,6 +111,25 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByLabelText('Live updates')).toBeNull();
   });
 
+  it('keeps table headers, creation, and footer controls visible for unfiltered empty results', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], count: 0 }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
+    expect(screen.getByRole('table')).toBeTruthy();
+    for (const header of ['Workflow', 'Status', 'Progress', 'Repo', 'Runtime', 'Updated']) {
+      expect(screen.getByRole('columnheader', { name: new RegExp(header, 'i') })).toBeTruthy();
+    }
+    expect(screen.queryByRole('columnheader', { name: 'Actions' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Create a workflow' }).getAttribute('href')).toBe('/workflows/new');
+    expect(screen.getByLabelText('Show')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeTruthy();
+  });
+
   it('renders desktop column filters and keeps the mobile filter drawer available', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
@@ -215,6 +234,9 @@ describe('Workflows Entrypoint', () => {
     applyFilterDrawer();
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
+    expect(screen.getByRole('table')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: /Workflow/i })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Create a workflow' }).getAttribute('href')).toBe('/workflows/new');
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
@@ -2558,6 +2580,7 @@ describe('Workflows Entrypoint', () => {
       expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
 
       expect(document.querySelector('.workflow-list-results-header')).toBeTruthy();
+      expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'View options' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Advanced filters' })).toBeNull();

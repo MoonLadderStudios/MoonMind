@@ -17,3 +17,10 @@ pytest tests/integration/reliability -m reliability_journey -q
 The suite complements focused tests. Replays should cross the production
 adapter, terminal-evidence, activity-routing, or finalization boundary that let
 the incident escape, and failure messages should name the violated invariant.
+Bounded-continuation journeys drive AgentRun's terminal-contract owner directly
+and cross the production activity route (asserting the managed agent-runtime task
+queue) instead of standing up a time-skipping Temporal server, which keeps them
+inside the hermetic `integration_ci` budget while still asserting stable
+session/thread/epoch identity across each continuation turn. Finalization faults
+use the shared fail-first injector so checkpoint or publication retries can be
+tested independently from the exactly-once primary agent execution.

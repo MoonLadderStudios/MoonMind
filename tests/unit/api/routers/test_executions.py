@@ -51,6 +51,7 @@ from api_service.api.routers.executions import (
     _optional_temporal_search_attributes_cache,
     get_temporal_client,
     _serialize_execution,
+    _verified_output_branch,
     router,
     update_execution as update_execution_route,
 )
@@ -204,6 +205,57 @@ def _completed_attachment_artifact(
     )
 
 
+def test_verified_output_branch_projects_terminal_checkpoint_evidence() -> None:
+    result = _verified_output_branch({
+        "publish": {"status": "failed"},
+        "publishContext": {
+            "terminalPublication": {
+                "intent": "terminal_checkpoint",
+                "status": "pushed",
+                "branchName": "mm/run/workflow/cp-123/terminal-recovered-work",
+                "headSha": "abc123",
+                "baseBranch": "main",
+                "remoteVerified": True,
+            }
+        },
+    })
+    assert result == {
+        "name": "mm/run/workflow/cp-123/terminal-recovered-work",
+        "headSha": "abc123",
+        "baseBranch": "main",
+        "intent": "terminal_checkpoint",
+        "status": "pushed",
+    }
+
+
+def test_verified_output_branch_rejects_unverified_claim() -> None:
+    assert _verified_output_branch({
+        "publishContext": {
+            "terminalPublication": {
+                "status": "pushed",
+                "branchName": "mm/unverified",
+                "remoteVerified": False,
+            }
+        }
+    }) is None
+
+
+def test_verified_output_branch_coerces_unknown_intent() -> None:
+    result = _verified_output_branch({
+        "publishContext": {
+            "terminalPublication": {
+                "intent": "future_intent",
+                "status": "pushed",
+                "branchName": "mm/recovered",
+                "remoteVerified": True,
+            }
+        }
+    })
+
+    assert result is not None
+    assert result["intent"] == "normal"
+
+
 def test_mm_1129_derive_task_title_synthesizes_issue_title_from_instructions() -> None:
     title = _derive_task_title(
         {
@@ -284,11 +336,12 @@ def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> N
         manifest_artifact_ref="artifact://manifest/implement-2",
     )["recoveryEligibility"]
 
-    assert eligible["eligible"] is True
-    assert eligible["defaultAction"] == "resume_from_checkpoint"
+    assert eligible["eligible"] is False
+    assert eligible["defaultAction"] == "full_retry"
     assert eligible["checkpointRef"] == "artifact://checkpoint/before"
-    assert eligible["requiredBoundary"] == "before_execution"
-    assert eligible["operatorGuidance"] == "resume"
+    assert eligible["checkpointBoundary"] == "before_execution"
+    assert eligible["operatorGuidance"] == "full_retry"
+    assert eligible["disabledReasonCode"] == "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
 
     ineligible = _step_execution_detail_payload(
         _phase_11_manifest(workspace={"stateCheckpointRef": "artifact://checkpoint/state"}),
@@ -297,7 +350,7 @@ def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> N
 
     assert ineligible["eligible"] is False
     assert ineligible["defaultAction"] == "full_retry"
-    assert ineligible["disabledReasonCode"] == "missing_required_checkpoint_boundary"
+    assert ineligible["disabledReasonCode"] == "CHECKPOINT_ARTIFACT_INVALID"
     assert ineligible["evidence"][0]["status"] == "missing"
 
 
@@ -319,7 +372,7 @@ def test_step_execution_detail_payload_tolerates_nullable_manifest_sections() ->
     assert payload["recoveryEligibility"]["eligible"] is False
     assert (
         payload["recoveryEligibility"]["disabledReasonCode"]
-        == "missing_required_checkpoint_boundary"
+        == "CHECKPOINT_ARTIFACT_INVALID"
     )
 
 
@@ -383,7 +436,7 @@ def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> Non
     }
 
     assert recovery["eligible"] is False
-    assert recovery["defaultAction"] == "environment_fix"
+    assert recovery["defaultAction"] == "fix_environment"
     assert recovery["disabledReasonCode"] == "environment_invalid"
     assert recovery["operatorGuidance"] == "fix_environment"
     assert diagnostic_kinds == {"provider_lease", "sidecar", "ghcr", "preflight"}
