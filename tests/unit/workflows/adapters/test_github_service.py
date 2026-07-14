@@ -691,6 +691,50 @@ async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypa
     assert result.checks_complete is False
     assert result.blockers[0]["kind"] == "checks_running"
 
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_preserves_failed_and_running_checks(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "pending"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "in_progress", "conclusion": None},
+                        {"status": "completed", "conclusion": "failure"},
+                    ]
+                },
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+
+    assert result.checks_complete is False
+    assert result.checks_passing is False
+    assert [blocker["kind"] for blocker in result.blockers] == [
+        "checks_running",
+        "checks_failed",
+    ]
+
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_reports_checks_permission_missing(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
@@ -917,10 +961,10 @@ async def test_evaluate_pull_request_readiness_respects_failed_combined_status_w
             policy={"checks": "required", "automatedReview": "disabled"},
         )
 
-    assert result.ready is True
+    assert result.ready is False
     assert result.checks_complete is True
     assert result.checks_passing is False
-    assert result.blockers == []
+    assert [blocker["kind"] for blocker in result.blockers] == ["checks_failed"]
 
 @pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_treats_commented_automated_review_as_complete(

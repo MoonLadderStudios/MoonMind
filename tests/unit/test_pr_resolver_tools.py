@@ -756,6 +756,57 @@ def test_finalize_reports_ci_before_codex_review_grace(
 
     assert decision == {"action": "blocked", "reason": "ci_failures"}
 
+
+def test_finalize_reports_known_ci_failures_before_degraded_signal(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
+            "ci": {
+                "isRunning": True,
+                "hasFailures": True,
+                "hasAuthoritativeFailures": True,
+                "signalQuality": "degraded",
+            },
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "ci_failures"}
+
+
+def test_finalize_keeps_degraded_only_ci_out_of_fix_ci(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
+            "ci": {
+                "isRunning": False,
+                "hasFailures": True,
+                "hasAuthoritativeFailures": False,
+                "signalQuality": "degraded",
+            },
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "ci_signal_degraded"}
+
+
 def test_finalize_merges_after_codex_review_grace_expires(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:
@@ -1728,6 +1779,7 @@ def test_summarize_ci_treats_stale_rollup_as_running(
     assert summary["nonSecurityCheckCount"] == 1
     assert summary["isRunning"] is False
     assert summary["hasFailures"] is False
+    assert summary["hasAuthoritativeFailures"] is False
 
     # Simulate an empty HEAD check-run result (CI hasn't started)
     head_summary = summarize([])
@@ -1736,6 +1788,16 @@ def test_summarize_ci_treats_stale_rollup_as_running(
 
     # Verify the condition our cross-check uses
     assert rollup_non_sec > 0 and head_non_sec == 0
+
+
+def test_summarize_ci_degraded_only_signal_is_not_authoritative_failure(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summary = pr_resolve_snapshot_module["summarize_ci_checks"]([])
+
+    assert summary["signalQuality"] == "degraded"
+    assert summary["hasFailures"] is True
+    assert summary["hasAuthoritativeFailures"] is False
 
 def test_summarize_ci_head_checks_propagate_failures(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1760,6 +1822,7 @@ def test_summarize_ci_head_checks_propagate_failures(
     ]
     summary = summarize(head_checks)
     assert summary["hasFailures"] is True
+    assert summary["hasAuthoritativeFailures"] is True
     assert summary["isRunning"] is False
     assert summary["nonSecurityCheckCount"] == 1
     assert len(summary["failedChecks"]) == 1
