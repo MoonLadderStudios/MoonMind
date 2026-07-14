@@ -44,7 +44,7 @@ def _modern_bash() -> str:
     return bash
 
 
-def test_source_update_force_recreates_selected_services(tmp_path: Path) -> None:
+def _run_update_scenario(tmp_path: Path, *, changed_file: str) -> list[str]:
     bash = _modern_bash()
     seed = tmp_path / "seed"
     remote = tmp_path / "origin.git"
@@ -56,10 +56,10 @@ def test_source_update_force_recreates_selected_services(tmp_path: Path) -> None
     _run_git("init", "-b", "main", cwd=seed)
     _run_git("config", "user.name", "MoonMind Test", cwd=seed)
     _run_git("config", "user.email", "moonmind-test@example.invalid", cwd=seed)
-    (seed / "moonmind").mkdir()
-    source_file = seed / "moonmind" / "example.py"
+    source_file = seed / changed_file
+    source_file.parent.mkdir(parents=True)
     source_file.write_text("VERSION = 1\n", encoding="utf-8")
-    _run_git("add", "moonmind/example.py", cwd=seed)
+    _run_git("add", changed_file, cwd=seed)
     _run_git("commit", "-m", "initial", cwd=seed)
 
     _run_git("init", "--bare", str(remote), cwd=tmp_path)
@@ -69,7 +69,7 @@ def test_source_update_force_recreates_selected_services(tmp_path: Path) -> None
     _run_git("clone", str(remote), str(checkout), cwd=tmp_path)
 
     source_file.write_text("VERSION = 2\n", encoding="utf-8")
-    _run_git("add", "moonmind/example.py", cwd=seed)
+    _run_git("add", changed_file, cwd=seed)
     _run_git("commit", "-m", "update source", cwd=seed)
     _run_git("push", "origin", "main", cwd=seed)
     expected_head = _run_git("rev-parse", "HEAD", cwd=seed).stdout.strip()
@@ -94,10 +94,10 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   "config --services")
-    printf '%s\\n' api temporal-worker-workflow
+    printf '%s\\n' api postgres temporal-worker-deployment-control temporal-worker-workflow
     ;;
   "config --format")
-    printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+    printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
     ;;
   "pull ")
     exit 0
@@ -127,13 +127,46 @@ esac
     )
 
     assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected_head
-    up_commands = [
+    return [
         line
         for line in docker_log.read_text(encoding="utf-8").splitlines()
         if line.startswith("compose up ")
     ]
+
+
+def test_runtime_source_update_force_recreates_only_application_services(
+    tmp_path: Path,
+) -> None:
+    up_commands = _run_update_scenario(
+        tmp_path,
+        changed_file="moonmind/example.py",
+    )
+
     assert len(up_commands) == 2
-    assert "--force-recreate" in up_commands[0]
+    recreate_command = next(
+        command for command in up_commands if "--force-recreate" in command
+    )
+    restart_command = next(
+        command for command in up_commands if "--force-recreate" not in command
+    )
+    assert "api" in recreate_command
+    assert "temporal-worker-workflow" in recreate_command
+    assert "postgres" not in recreate_command
+    assert "postgres" in restart_command
+    assert all("temporal-worker-deployment-control" not in row for row in up_commands)
+
+
+def test_documentation_update_does_not_force_recreate_services(
+    tmp_path: Path,
+) -> None:
+    up_commands = _run_update_scenario(
+        tmp_path,
+        changed_file="docs/guide.md",
+    )
+
+    assert len(up_commands) == 1
+    assert "--force-recreate" not in up_commands[0]
     assert "api" in up_commands[0]
+    assert "postgres" in up_commands[0]
     assert "temporal-worker-workflow" in up_commands[0]
-    assert "--force-recreate" not in up_commands[1]
+    assert "temporal-worker-deployment-control" not in up_commands[0]
