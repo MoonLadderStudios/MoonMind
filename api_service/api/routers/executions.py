@@ -3444,8 +3444,6 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         memo=memo,
         finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
     )
-    recovery_eligibility = _project_recovery_eligibility(record, target_runtime)
-
     started_at = getattr(record, "started_at", None)
     updated_at = getattr(record, "updated_at", None) or started_at or datetime.now(UTC)
     created_at = getattr(record, "created_at", None) or started_at or updated_at
