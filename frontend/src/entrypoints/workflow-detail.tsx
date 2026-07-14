@@ -1228,6 +1228,11 @@ const ArtifactSessionProjectionSchema = z.object({
 
 const ArtifactSessionControlResponseSchema = z.object({
   action: z.enum(['continue_same_session', 'clear_session', 'interrupt_turn', 'cancel_session']),
+  controlRequestId: z.string().default('legacy-control-request'),
+  status: z.enum(['accepted', 'rejected', 'completed', 'failed', 'delivery_unknown']).default('completed'),
+  stableReasonCode: z.string().nullable().optional(),
+  controlEventRef: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
   projection: ArtifactSessionProjectionSchema,
 });
 
@@ -1276,7 +1281,12 @@ const SessionResourceListSchema = z.object({
 type ArtifactSessionControlAction = z.infer<typeof ArtifactSessionControlResponseSchema>['action'];
 
 type ArtifactSessionControlRequest = {
+  schemaVersion: 1;
+  controlRequestId: string;
+  idempotencyKey: string;
   action: ArtifactSessionControlAction;
+  expectedSessionEpoch: number;
+  expectedTurnId?: string;
   message?: string;
   reason?: string;
 };
@@ -2361,8 +2371,12 @@ function chatSessionMessageEventToControlRequest(
   event: ChatSessionMessageEvent,
 ): ArtifactSessionControlRequest {
   return {
+    schemaVersion: 1,
+    controlRequestId: event.clientEventKey,
+    idempotencyKey: event.clientEventKey,
     action: 'continue_same_session',
     message: event.message,
+    expectedSessionEpoch: event.sessionEpoch,
   };
 }
 
@@ -6290,23 +6304,45 @@ function SessionContinuityPanel({
   };
 
   const clearSession = () => {
+    if (!window.confirm('Clear this managed session and start a new context boundary?')) return;
+    const requestId = crypto.randomUUID();
     setPanelError(null);
     controlMutation.mutate({
+      schemaVersion: 1,
+      controlRequestId: requestId,
+      idempotencyKey: requestId,
       action: 'clear_session',
+      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+      reason: 'Operator confirmed clear session',
     });
   };
 
   const interruptTurn = () => {
+    const activeTurnId = sessionSnapshot?.activeTurnId;
+    if (!activeTurnId) return;
+    const requestId = crypto.randomUUID();
     setPanelError(null);
     controlMutation.mutate({
+      schemaVersion: 1,
+      controlRequestId: requestId,
+      idempotencyKey: requestId,
       action: 'interrupt_turn',
+      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+      expectedTurnId: activeTurnId,
     });
   };
 
   const cancelSession = () => {
+    if (!window.confirm('Stop this managed session?')) return;
+    const requestId = crypto.randomUUID();
     setPanelError(null);
     controlMutation.mutate({
+      schemaVersion: 1,
+      controlRequestId: requestId,
+      idempotencyKey: requestId,
       action: 'cancel_session',
+      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+      reason: 'Operator confirmed stop session',
     });
   };
 
