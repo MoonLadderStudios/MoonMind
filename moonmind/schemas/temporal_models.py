@@ -104,17 +104,48 @@ EvidenceStatus = Literal[
     "skipped",
     "unavailable",
 ]
-RecoveryDefaultAction = Literal[
-    "resume_from_checkpoint",
-    "full_retry",
-    "environment_fix",
-    "none",
-]
-RecoveryOperatorGuidance = Literal[
-    "resume",
+RecoveryAction = Literal[
+    "continue_same_session",
+    "resume_from_workspace_checkpoint",
     "full_retry",
     "fix_environment",
-    "needs_human",
+    "manual_intervention",
+]
+RecoveryDefaultAction = RecoveryAction
+RecoveryResumePhase = Literal[
+    "rerun_failed_step",
+    "continue_to_gate",
+    "continue_after_gate",
+    "resume_publication",
+    "retry_restoration",
+]
+CheckpointRecoveryDisabledReason = Literal[
+    "CHECKPOINT_CAPTURE_UNSUPPORTED",
+    "CHECKPOINT_RESTORE_UNSUPPORTED",
+    "CHECKPOINT_RESTORE_ROUTE_MISSING",
+    "CHECKPOINT_KIND_INCOMPATIBLE",
+    "CHECKPOINT_BOUNDARY_INCOMPATIBLE",
+    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+    "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING",
+    "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
+    "CHECKPOINT_ARTIFACT_INVALID",
+    "CHECKPOINT_SIDE_EFFECT_UNSAFE",
+]
+SameSessionRecoveryDisabledReason = Literal[
+    "SAME_SESSION_UNREACHABLE",
+    "SAME_SESSION_CONTINUATION_UNSUPPORTED",
+]
+RecoveryDisabledReason = (
+    CheckpointRecoveryDisabledReason
+    | SameSessionRecoveryDisabledReason
+    | Literal["environment_invalid"]
+)
+RecoveryOperatorGuidance = Literal[
+    "continue_same_session",
+    "resume_from_workspace_checkpoint",
+    "full_retry",
+    "fix_environment",
+    "manual_intervention",
 ]
 EnvironmentDiagnosticKind = Literal[
     "environment",
@@ -275,23 +306,66 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     eligible: bool
+    requested_action: RecoveryAction = Field(
+        "resume_from_workspace_checkpoint", alias="requestedAction"
+    )
     default_action: RecoveryDefaultAction = Field(..., alias="defaultAction")
-    disabled_reason_code: str | None = Field(
+    disabled_reason_code: RecoveryDisabledReason | None = Field(
         None, alias="disabledReasonCode", max_length=120
     )
-    required_boundary: str | None = Field(None, alias="requiredBoundary", max_length=100)
+    checkpoint_boundary: str | None = Field(
+        None,
+        alias="checkpointBoundary",
+        validation_alias=AliasChoices("checkpointBoundary", "requiredBoundary"),
+        max_length=100,
+    )
+    resume_phase: RecoveryResumePhase | None = Field(None, alias="resumePhase")
+    checkpoint_kind: str | None = Field(None, alias="checkpointKind", max_length=100)
+    target_runtime_id: str | None = Field(None, alias="targetRuntimeId", max_length=100)
+    capability_set_version: str | None = Field(None, alias="capabilitySetVersion", max_length=100)
+    capability_digest: str | None = Field(None, alias="capabilityDigest", max_length=128)
+    checkpoint_restore_kinds: tuple[str, ...] = Field(default=(), alias="checkpointRestoreKinds")
+    restore_activity: str | None = Field(None, alias="restoreActivity", max_length=200)
+    workspace_authority: str | None = Field(None, alias="workspaceAuthority", max_length=100)
     checkpoint_ref: str | None = Field(None, alias="checkpointRef", max_length=500)
     source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
     source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
+    live_session_id: str | None = Field(None, alias="liveSessionId", max_length=200)
+    supports_same_session_continuation: bool | None = Field(
+        None, alias="supportsSameSessionContinuation"
+    )
     operator_guidance: RecoveryOperatorGuidance = Field(..., alias="operatorGuidance")
     evidence: list[EvidenceRefStatusModel] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _read_legacy_recovery_tokens(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        migrated = dict(value)
+        aliases = {
+            "resume_from_checkpoint": "resume_from_workspace_checkpoint",
+            "environment_fix": "fix_environment",
+            "resume": "resume_from_workspace_checkpoint",
+            "needs_human": "manual_intervention",
+        }
+        for key in ("defaultAction", "default_action", "operatorGuidance", "operator_guidance"):
+            if migrated.get(key) in aliases:
+                migrated[key] = aliases[migrated[key]]
+        return migrated
+
     @field_validator(
         "disabled_reason_code",
-        "required_boundary",
+        "checkpoint_boundary",
+        "checkpoint_kind",
+        "target_runtime_id",
+        "capability_set_version",
+        "capability_digest",
+        "restore_activity",
         "checkpoint_ref",
         "source_workflow_id",
         "source_run_id",
+        "live_session_id",
         mode="before",
     )
     @classmethod
@@ -303,21 +377,57 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate_decision(self) -> "RecoveryEligibilityDiagnosticModel":
+        if self.requested_action == "continue_same_session":
+            if self.checkpoint_ref or self.checkpoint_restore_kinds or self.restore_activity:
+                raise ValueError("same-session continuation cannot use checkpoint evidence")
+            if self.eligible:
+                if not self.live_session_id or not self.supports_same_session_continuation:
+                    raise ValueError("same-session continuation requires a reachable capable session")
+                if self.default_action != "continue_same_session":
+                    raise ValueError("eligible same-session continuation must be the default")
+                if self.operator_guidance != "continue_same_session":
+                    raise ValueError("eligible same-session continuation requires matching guidance")
+                if self.disabled_reason_code is not None:
+                    raise ValueError("eligible same-session continuation cannot be disabled")
+            else:
+                if self.disabled_reason_code not in {
+                    "SAME_SESSION_UNREACHABLE",
+                    "SAME_SESSION_CONTINUATION_UNSUPPORTED",
+                }:
+                    raise ValueError("ineligible same-session continuation requires a session reason")
+                if self.default_action == "continue_same_session":
+                    raise ValueError("ineligible same-session continuation cannot be the default")
+            return self
         if self.eligible:
-            if self.default_action != "resume_from_checkpoint":
-                raise ValueError("eligible checkpoint recovery requires resume_from_checkpoint")
+            if self.requested_action != "resume_from_workspace_checkpoint":
+                raise ValueError("eligible checkpoint recovery requires checkpoint Resume")
+            if self.default_action != "resume_from_workspace_checkpoint":
+                raise ValueError("eligible checkpoint recovery must default to checkpoint Resume")
             if not self.checkpoint_ref:
                 raise ValueError("eligible checkpoint recovery requires checkpointRef")
-            if self.operator_guidance != "resume":
+            if self.operator_guidance != "resume_from_workspace_checkpoint":
                 raise ValueError("eligible checkpoint recovery requires resume guidance")
+            # Old Temporal payloads had none of these fields. Continue to read
+            # them for replay, while every new decision carrying any v2 proof
+            # field must carry the complete immutable proof set.
+            proof = (
+                self.resume_phase, self.checkpoint_kind, self.target_runtime_id,
+                self.capability_set_version, self.capability_digest,
+                self.restore_activity, self.workspace_authority,
+            )
+            if any(proof):
+                if not all((self.checkpoint_boundary, *proof)):
+                    raise ValueError("checkpoint recovery requires immutable restore proof")
+                if self.checkpoint_kind not in self.checkpoint_restore_kinds:
+                    raise ValueError("checkpoint kind is absent from restore capability snapshot")
             if self.disabled_reason_code is not None:
                 raise ValueError("eligible checkpoint recovery cannot include disabledReasonCode")
         else:
             if not self.disabled_reason_code:
                 raise ValueError("ineligible checkpoint recovery requires disabledReasonCode")
-            if self.default_action == "resume_from_checkpoint":
+            if self.default_action == "resume_from_workspace_checkpoint":
                 raise ValueError("ineligible checkpoint recovery cannot default to resume")
-        if self.default_action == "environment_fix" and self.operator_guidance != "fix_environment":
+        if self.default_action == "fix_environment" and self.operator_guidance != "fix_environment":
             raise ValueError("environment recovery requires fix_environment guidance")
         return self
 
@@ -2517,6 +2627,26 @@ class RecoverySourceModel(BaseModel):
     kind: Literal["recover_from_failed_step"] = Field(
         "recover_from_failed_step", alias="kind"
     )
+    recovery_action: Literal["resume_from_workspace_checkpoint"] = Field(
+        "resume_from_workspace_checkpoint", alias="recoveryAction"
+    )
+    resume_phase: RecoveryResumePhase = Field(..., alias="resumePhase")
+    target_runtime_id: str = Field(..., alias="targetRuntimeId", min_length=1)
+    capability_set_version: str = Field(..., alias="capabilitySetVersion", min_length=1)
+    capability_digest: str = Field(..., alias="capabilityDigest", min_length=1)
+    checkpoint_kind: str = Field(..., alias="checkpointKind", min_length=1)
+    checkpoint_restore_kinds: tuple[str, ...] = Field(..., alias="checkpointRestoreKinds")
+    checkpoint_restore_activity: str = Field(..., alias="checkpointRestoreActivity", min_length=1)
+    workspace_authority: str = Field(..., alias="workspaceAuthority", min_length=1)
+    # Optional only while decoding pre-patch histories. New recovery creation
+    # supplies the complete proof set and patch-gated workflow preflight rejects
+    # absent or contradictory values before restoration.
+    selected_target_runtime_id: str | None = Field(None, alias="selectedTargetRuntimeId")
+    selected_capability_digest: str | None = Field(None, alias="selectedCapabilityDigest")
+    registered_restore_activity: str | None = Field(None, alias="registeredRestoreActivity")
+    checkpoint_source_workflow_id: str | None = Field(None, alias="checkpointSourceWorkflowId")
+    checkpoint_source_run_id: str | None = Field(None, alias="checkpointSourceRunId")
+    side_effect_safe: bool | None = Field(None, alias="sideEffectSafe")
     source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
     source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
     source_task_input_snapshot_ref: str = Field(
@@ -2546,6 +2676,12 @@ class RecoverySourceModel(BaseModel):
     preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
         default_factory=list, alias="preservedSteps"
     )
+
+    @model_validator(mode="after")
+    def _validate_restore_contract(self) -> "RecoverySourceModel":
+        if self.checkpoint_kind not in self.checkpoint_restore_kinds:
+            raise ValueError("checkpointKind must be present in checkpointRestoreKinds")
+        return self
 
 class ResumeExecutionRefModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -3113,7 +3249,7 @@ class StepExecutionOutcomeModel(BaseModel):
     result_ref: str | None = Field(None, alias="resultRef")
     output_refs: list[str] = Field(default_factory=list, alias="outputRefs")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
-    workspace_locator: str | None = Field(None, alias="workspaceLocator")
+    workspace_locator: WorkspaceLocator | str | None = Field(None, alias="workspaceLocator")
     recorded_at: datetime = Field(..., alias="recordedAt")
 
 

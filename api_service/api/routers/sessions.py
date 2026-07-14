@@ -264,7 +264,7 @@ async def post_session_event(
     if event_type == "message":
         try:
             control = ArtifactSessionControlRequest(
-                action="send_follow_up",
+                action="continue_same_session",
                 message=payload.get("message"),
                 reason=payload.get("reason"),
             )
@@ -328,7 +328,7 @@ async def resolve_session_elicitation(
     capabilities = agent_runs_router._build_intervention_capabilities(record)
     try:
         agent_runs_router._require_session_control_capability(
-            action="send_follow_up",
+            action="continue_same_session",
             capabilities=capabilities,
         )
     except HTTPException as exc:
@@ -342,7 +342,7 @@ async def resolve_session_elicitation(
             ) from exc
         raise
     control = ArtifactSessionControlRequest(
-        action="send_follow_up",
+        action="continue_same_session",
         message=_ELICITATION_DECISION_MESSAGES[decision],
         reason=f"session_elicitation:{elicitation_id}:{decision}",
     )

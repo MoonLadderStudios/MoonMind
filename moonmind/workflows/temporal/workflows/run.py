@@ -158,6 +158,7 @@ from moonmind.workflows.temporal.step_executions import (
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
 )
+from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
@@ -206,6 +207,7 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 
 
 def bounded_story_loop_step_effects(
@@ -2983,6 +2985,10 @@ class MoonMindRunWorkflow:
             raise ValueError("Recovery source must be a compact mapping.")
         if not recovery_source:
             return None
+        # Patch-gated so histories started before the explicit contract retain
+        # their recorded validation path during replay.
+        if self._workflow_patch_enabled(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
+            validate_recovery_contract(recovery_source)
 
         source_workflow_id = self._recovery_source_text(
             recovery_source,
@@ -5088,12 +5094,20 @@ class MoonMindRunWorkflow:
             max_chars=400,
         )
         capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
-        workspace_locator = self._coerce_text(
-            capture_input.get("workspaceRootRef")
-            or capture_input.get("workspacePath")
-            or capture_input.get("externalStateRef"),
-            max_chars=500,
-        )
+        raw_workspace_locator = capture_input.get("workspaceLocator")
+        if isinstance(raw_workspace_locator, Mapping):
+            # Preserve ownership/authority. Never collapse a new typed locator
+            # to a path-like legacy projection.
+            workspace_locator: dict[str, Any] | str | None = dict(raw_workspace_locator)
+        else:
+            # Read/write fallback retained only for histories whose capture
+            # input predates typed locators.
+            workspace_locator = self._coerce_text(
+                capture_input.get("workspaceRootRef")
+                or capture_input.get("workspacePath")
+                or capture_input.get("externalStateRef"),
+                max_chars=500,
+            )
         result_ref = next(
             (
                 compact_refs[key]
@@ -17622,6 +17636,27 @@ class MoonMindRunWorkflow:
         if not workflow.patched(RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH):
             return None, None
         try:
+            failed_step_id = self._recovery_failed_step_id or self._coerce_text(
+                (self._failure_diagnostic or {}).get("stepId"), max_chars=200
+            )
+            capture_input = self._step_workspace_capture_inputs.get(
+                failed_step_id or "", {}
+            )
+            capability_payload = capture_input.get("runtimeCapabilities")
+            capabilities = (
+                RuntimeExecutionCapabilities.model_validate(capability_payload)
+                if isinstance(capability_payload, Mapping)
+                else None
+            )
+            restore_route_registered = False
+            if capabilities and capabilities.checkpoint_restore_activity:
+                try:
+                    DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        capabilities.checkpoint_restore_activity
+                    )
+                    restore_route_registered = True
+                except Exception:
+                    restore_route_registered = False
             manifest = build_failed_run_recovery_manifest(
                 workflow_id=workflow.info().workflow_id,
                 run_id=workflow.info().run_id,
@@ -17635,6 +17670,12 @@ class MoonMindRunWorkflow:
                 checkpoint_validation_failure=(
                     self._recovery_checkpoint_validation_failure
                 ),
+                checkpoint_kind=self._coerce_text(
+                    capture_input.get("kind") or capture_input.get("checkpointKind"),
+                    max_chars=100,
+                ),
+                runtime_capabilities=capabilities,
+                restore_route_registered=restore_route_registered,
             )
         except Exception as exc:
             self._get_logger().warning(
