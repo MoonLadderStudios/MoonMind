@@ -287,3 +287,23 @@ async def test_publish_evidence_bounds_captured_output(tmp_path) -> None:
     payload = next(iter(captured.values()))
     assert payload.startswith(b"[truncated]\n")
     assert len(payload) <= 1024 + len(b"[truncated]\n")
+
+
+@pytest.mark.asyncio
+async def test_create_failure_does_not_expose_resolved_workspace(tmp_path) -> None:
+    workspace = tmp_path / "art_workspace"
+    workspace.mkdir()
+
+    async def runner(args):
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 1, b"", b"missing"
+        if args[0] == "create":
+            return 1, b"", f"invalid bind src={workspace}".encode()
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        await backend.create_container(_request(tmp_path))
+    assert str(workspace) not in str(excinfo.value)

@@ -446,7 +446,11 @@ class DockerContainerJobBackend:
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
-        await self._checked(*args)
+        code, _, _ = await self._runner(args)
+        if code:
+            # Docker mount errors echo the trusted host source. Keep it out of
+            # workflow history and caller-visible terminal diagnostics.
+            raise RuntimeError("docker create failed for the resolved workspace")
         return ContainerJobActivityResult(containerRef=name)
 
     async def start_container(self, request: ContainerJobActivityRequest):
@@ -502,15 +506,19 @@ class DockerContainerJobBackend:
         artifacts_ref = None
         if self._publish and request.request.spec.outputs:
             workspace = Path(request.resolved_workspace_ref or "").resolve()
-            archive = BytesIO()
-            with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
-                for output in request.request.spec.outputs:
-                    path = (workspace / output.relative_path).resolve()
-                    if workspace not in path.parents and path != workspace:
-                        raise RuntimeError("declared output escapes the workspace")
-                    if not path.exists():
-                        raise RuntimeError(f"declared output is missing: {output.name}")
-                    bundle.add(path, arcname=output.name, recursive=True)
+            def create_archive() -> BytesIO:
+                archive = BytesIO()
+                with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+                    for output in request.request.spec.outputs:
+                        path = (workspace / output.relative_path).resolve()
+                        if workspace not in path.parents and path != workspace:
+                            raise RuntimeError("declared output escapes the workspace")
+                        if not path.exists():
+                            raise RuntimeError(f"declared output is missing: {output.name}")
+                        bundle.add(path, arcname=output.name, recursive=True)
+                return archive
+
+            archive = await asyncio.to_thread(create_archive)
             artifacts_ref = await self._publish(
                 request, f"{request.job_id}-outputs.tar.gz", archive.getvalue()
             )
