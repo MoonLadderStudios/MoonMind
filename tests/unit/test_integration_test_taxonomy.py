@@ -210,7 +210,7 @@ def test_provider_verification_is_not_configured_as_a_github_action() -> None:
         REPO_ROOT / ".github" / "workflows" / "provider-verification.yml"
     )
     required_workflow = (
-        REPO_ROOT / ".github" / "workflows" / "pytest-integration-ci.yml"
+        REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
     ).read_text(encoding="utf-8")
 
     assert not provider_workflow.exists()

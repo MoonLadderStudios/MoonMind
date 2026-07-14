@@ -1772,7 +1772,7 @@ def test_summarize_ci_treats_stale_rollup_as_running(
             "name": "test",
             "status": "COMPLETED",
             "conclusion": "SUCCESS",
-            "workflowName": "Run Pytest Unit Tests",
+            "workflowName": "CI / Test Suite",
         }
     ]
     summary = summarize(stale_checks)
@@ -1811,7 +1811,7 @@ def test_summarize_ci_head_checks_propagate_failures(
             "name": "test",
             "status": "COMPLETED",
             "conclusion": "FAILURE",
-            "workflowName": "Run Pytest Unit Tests",
+            "workflowName": "CI / Test Suite",
         },
         {
             "name": "Analyze (python)",
