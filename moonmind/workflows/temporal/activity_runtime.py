@@ -7878,10 +7878,28 @@ class TemporalAgentRuntimeActivities:
         from moonmind.schemas.container_job_models import (
             ContainerJobActivityRequest,
             ContainerJobActivityResult,
+            ContainerJobBackendError,
+            ContainerJobFailureClass,
         )
 
         request = ContainerJobActivityRequest.model_validate(payload)
-        result = await getattr(self._container_job_backend, operation)(request)
+        try:
+            result = await getattr(self._container_job_backend, operation)(request)
+        except ContainerJobBackendError as exc:
+            # Preserve the specific failure class across the activity boundary
+            # and fail fast on deterministic authority-sensitive denials so a
+            # denied image, credential, or scope is not retried pointlessly.
+            deterministic = {
+                ContainerJobFailureClass.IMAGE_USE_DENIED,
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+                ContainerJobFailureClass.REGISTRY_AUTH_FAILED,
+            }
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.failure_class.value,
+                non_retryable=exc.failure_class in deterministic,
+            ) from exc
         return ContainerJobActivityResult.model_validate(result).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )

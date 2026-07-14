@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import tarfile
 from io import BytesIO
 from pathlib import Path
@@ -15,11 +17,32 @@ from typing import Awaitable, Callable, Sequence
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
+    ContainerJobBackendError,
+    ContainerJobFailureClass,
+    RegistryAuthorization,
+    normalize_image_reference,
+)
+from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
+    RegistryAuthResolutionError,
+    RegistryCredential,
+    resolve_registry_pull_credentials,
 )
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
+RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
+
+
+def _redact(text: str, secrets: Sequence[str]) -> str:
+    """Remove any resolved credential material from an observable string."""
+
+    redacted = text
+    for secret in secrets:
+        token = str(secret or "").strip()
+        if token:
+            redacted = redacted.replace(token, "[redacted]")
+    return redacted
 
 
 class DockerContainerJobBackend:
@@ -34,6 +57,8 @@ class DockerContainerJobBackend:
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
         projection_writer: ProjectionWriter | None = None,
+        registry_auth_resolver: RegistryAuthResolver | None = None,
+        auth_root: str | Path | None = None,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         self._docker_binary = docker_binary
@@ -41,6 +66,16 @@ class DockerContainerJobBackend:
         self._runner = command_runner or self._run
         self._publish = evidence_publisher
         self._write_projection = projection_writer
+        self._resolve_registry_auth = (
+            registry_auth_resolver or resolve_registry_pull_credentials
+        )
+        # Per-job ephemeral Docker auth material lives under a dedicated,
+        # deployment-writable root, never inside the mounted job workspace.
+        self._auth_root = (
+            Path(auth_root).resolve()
+            if auth_root is not None
+            else self._workspace_root.parent / ".mm-container-job-auth"
+        )
 
     async def _run(self, args: Sequence[str]) -> tuple[int, bytes, bytes]:
         env = os.environ.copy()
@@ -79,12 +114,16 @@ class DockerContainerJobBackend:
         return ContainerJobActivityResult(resolvedWorkspaceRef=str(workspace))
 
     async def acquire_image(self, request: ContainerJobActivityRequest):
-        if request.request.spec.registry_credential_ref:
-            raise RuntimeError(
-                "registryCredentialRef is not supported by the selected Docker backend"
-            )
-        image = request.request.spec.image
-        policy = request.request.spec.pull_policy
+        spec = request.request.spec
+        image = spec.image
+        policy = spec.pull_policy
+        credential_ref = spec.registry_credential_ref
+
+        if credential_ref is None:
+            return await self._acquire_public_image(image, policy)
+        return await self._acquire_private_image(request, image, policy, credential_ref)
+
+    async def _acquire_public_image(self, image: str, policy: str):
         inspect_code, stdout, _ = await self._runner(
             ("image", "inspect", "--format", "{{.Id}}", image)
         )
@@ -99,6 +138,138 @@ class DockerContainerJobBackend:
             )
         resolved = stdout.decode(errors="replace").strip() or image
         return ContainerJobActivityResult(resolvedImageRef=resolved)
+
+    async def _acquire_private_image(
+        self,
+        request: ContainerJobActivityRequest,
+        image: str,
+        policy: str,
+        credential_ref: str,
+    ):
+        # Authorization is re-checked on every run before either a cache hit or
+        # a pull is accepted: image presence in the shared daemon never bypasses
+        # policy. The API-owned decision travels with the request; the worker
+        # only enforces and resolves the credential, it does not re-decide.
+        authorization = request.registry_authorization
+        if authorization is None or not authorization.authorized:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.IMAGE_USE_DENIED,
+                "private image use was not authorized for this job",
+            )
+        normalized = normalize_image_reference(image)
+        self._enforce_authorized_scope(normalized, authorization)
+
+        # A local inspect needs no registry authentication.
+        inspect_code, stdout, _ = await self._runner(
+            ("image", "inspect", "--format", "{{.Id}}", image)
+        )
+        cache_present = inspect_code == 0
+        need_pull = policy == "always" or (not cache_present and policy == "if-missing")
+        if policy == "never" and not cache_present:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.IMAGE,
+                "private image is absent under the 'never' pull policy",
+            )
+
+        if need_pull:
+            credential = await self._resolve_credential(credential_ref)
+            secrets = (credential.username, credential.secret)
+            auth_dir = self._auth_dir(request)
+            try:
+                self._materialize_registry_auth(
+                    auth_dir, normalized.registry, credential
+                )
+                await self._authorized_pull(image, auth_dir, secrets)
+            finally:
+                # Remove ephemeral auth immediately after the pull. The terminal
+                # ``cleanup`` activity re-removes it deterministically so a crash
+                # between here and cleanup cannot leak credentials.
+                self._remove_auth_dir(auth_dir, best_effort=True)
+            inspect_code, stdout, _ = await self._runner(
+                ("image", "inspect", "--format", "{{.Id}}", image)
+            )
+
+        if inspect_code:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.IMAGE,
+                "private image is unavailable under the selected pull policy",
+            )
+        resolved = stdout.decode(errors="replace").strip() or image
+        return ContainerJobActivityResult(resolvedImageRef=resolved)
+
+    @staticmethod
+    def _enforce_authorized_scope(
+        normalized, authorization: RegistryAuthorization
+    ) -> None:
+        if normalized.registry.lower() != authorization.registry.lower():
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                "resolved registry is outside the authorized scope",
+            )
+        if normalized.repository != authorization.repository:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                "resolved repository is outside the authorized scope",
+            )
+        if authorization.digest is not None and normalized.digest != authorization.digest:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                "resolved digest does not match the authorized digest",
+            )
+
+    async def _resolve_credential(self, credential_ref: str) -> RegistryCredential:
+        try:
+            return await self._resolve_registry_auth(credential_ref)
+        except RegistryAuthResolutionError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+                "registry credential reference could not be resolved",
+            ) from exc
+
+    def _auth_dir(self, request: ContainerJobActivityRequest) -> Path:
+        suffix = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:20]
+        return self._auth_root / f"job-{suffix}"
+
+    def _materialize_registry_auth(
+        self, auth_dir: Path, registry: str, credential: RegistryCredential
+    ) -> None:
+        """Write a per-job Docker config with restrictive ownership and mode."""
+
+        self._remove_auth_dir(auth_dir, best_effort=True)
+        auth_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(auth_dir, stat.S_IRWXU)  # 0o700
+        config = {"auths": {registry: credential.docker_auth_entry()}}
+        config_path = auth_dir / "config.json"
+        fd = os.open(
+            config_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            stat.S_IRUSR | stat.S_IWUSR,  # 0o600
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(config, handle)
+        finally:
+            os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
+
+    def _remove_auth_dir(self, auth_dir: Path, *, best_effort: bool) -> None:
+        if best_effort:
+            shutil.rmtree(auth_dir, ignore_errors=True)
+            return
+        if auth_dir.exists():
+            shutil.rmtree(auth_dir)
+
+    async def _authorized_pull(
+        self, image: str, auth_dir: Path, secrets: tuple[str, ...]
+    ) -> None:
+        code, _, stderr = await self._runner(
+            ("--config", str(auth_dir), "pull", image)
+        )
+        if code:
+            detail = _redact(stderr.decode(errors="replace").strip()[:1000], secrets)
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.REGISTRY_AUTH_FAILED,
+                f"authorized registry pull failed: {detail}",
+            )
 
     async def reconcile_container(self, request: ContainerJobActivityRequest):
         name = self._name(request)
@@ -223,4 +394,17 @@ class DockerContainerJobBackend:
         return await self.project_status(request)
 
     async def cleanup(self, request: ContainerJobActivityRequest):
+        # Deterministic, job-owned removal of any ephemeral registry auth. This
+        # runs on success, failure, cancellation, timeout, and orphan
+        # reconciliation, so credential material never outlives the job. A
+        # cleanup failure is reported through the workflow's separate cleanup
+        # auxiliary outcome and never rewrites the primary workload result.
+        auth_dir = self._auth_dir(request)
+        try:
+            self._remove_auth_dir(auth_dir, best_effort=False)
+        except OSError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_CLEANUP_FAILED,
+                "ephemeral registry credential directory could not be removed",
+            ) from exc
         return ContainerJobActivityResult()

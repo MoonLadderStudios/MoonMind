@@ -19,6 +19,7 @@ with workflow.unsafe.imports_passed_through():
         ContainerJobWorkflowInput,
         ContainerJobWorkflowResult,
         TerminalOutcome,
+        failure_class_from_exception,
     )
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
@@ -106,6 +107,7 @@ class MoonMindContainerJobWorkflow:
             owner=inp.owner,
             ownershipToken=inp.ownership_token,
             request=inp.request,
+            registryAuthorization=inp.registry_authorization,
         )
         terminal_state = ContainerJobState.FAILED
         exit_code: int | None = None
@@ -171,7 +173,14 @@ class MoonMindContainerJobWorkflow:
             message = "container job exceeded its timeout"
         except Exception as exc:
             terminal_state = ContainerJobState.FAILED
-            failure_class = ContainerJobFailureClass.INFRASTRUCTURE
+            # Preserve the trusted backend's specific failure class (denied image
+            # use, unresolved credential, repository-scope mismatch, registry
+            # auth failure) across the activity boundary; fall back to
+            # infrastructure only when no class is carried.
+            failure_class = (
+                failure_class_from_exception(exc)
+                or ContainerJobFailureClass.INFRASTRUCTURE
+            )
             message = str(exc)[:2048]
 
         request.terminal_state = terminal_state

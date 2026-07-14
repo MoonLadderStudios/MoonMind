@@ -419,12 +419,32 @@ Waiters re-inspect after the owner finishes.
 
 ### 11.4 Private images
 
-Registry credentials are secret references. The service resolves them into an
-ephemeral Docker config, uses them only for the approved registry operation, and
-removes the config afterward.
+A job request carries a non-sensitive `registryCredentialRef` only; it never
+carries a username, token, password, or Docker auth blob. An API-owned
+private-image authorization service evaluates, for every submission and run, the
+authenticated principal, the normalized registry/repository/reference, the
+requested credential reference, the allowed registry/repository scope, image
+execution policy independent of cache state, and any digest/tag restriction. A
+submission that fails authorization fails closed: no workflow starts and no
+queued record is created. The bounded, non-sensitive authorization outcome is
+recorded in the durable job record and travels with the workflow to the worker.
 
-Authorization is checked on every run, including cache hits. A private image
-being present in the daemon does not grant other users permission to execute it.
+Registry credentials are secret references resolved by a generic registry-auth
+resolver only inside a trusted execution-time Activity, immediately before the
+authorized inspect/pull. The resolver reuses the repository's managed-secret
+backends rather than duplicating secret handling. The worker materializes a
+per-job Docker config in a dedicated auth directory with restrictive ownership
+and mode (`0700` directory, `0600` config), uses it only for the approved pull,
+redacts the credential from every observation, and removes it immediately after
+use. A deterministic, job-owned cleanup step re-removes the directory on success,
+failure, cancellation, timeout, and orphan reconciliation, and reports any
+credential-cleanup failure through the separate cleanup auxiliary outcome without
+rewriting the primary workload result.
+
+Authorization is enforced on every run before either a cache hit or a pull is
+accepted. A private image being present in the daemon does not grant another
+user permission to execute it, and a resolved registry/repository/digest outside
+the authorized scope fails closed.
 
 ### 11.5 Image lifetime
 
@@ -623,6 +643,11 @@ image_not_found
 image_pull_timeout
 image_pull_auth_failed
 image_platform_mismatch
+image_use_denied
+credential_unresolved
+repository_scope_mismatch
+registry_auth_failed
+credential_cleanup_failed
 resource_limit_exceeded
 container_start_failed
 workload_failed

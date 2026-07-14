@@ -10,6 +10,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ContainerJobRecord
+from api_service.services.registry_authorization import (
+    PrivateImageAuthorizationService,
+    load_default_authorization_policy,
+)
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobAccepted,
@@ -21,6 +25,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobWorkflowInput,
     ImageObservation,
     OwnerIdentity,
+    RegistryAuthorization,
     TerminalOutcome,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -34,11 +39,30 @@ class ContainerJobIdempotencyConflictError(RuntimeError):
     pass
 
 
+class ContainerJobAuthorizationError(RuntimeError):
+    """Raised when a submission is denied private-image authorization.
+
+    Carries the bounded, non-sensitive authorization outcome so callers can map
+    the specific failure class (denied image use, repository-scope mismatch, ...)
+    to a permission-denied response without leaking credential material.
+    """
+
+    def __init__(self, authorization: RegistryAuthorization) -> None:
+        self.authorization = authorization
+        super().__init__(authorization.message or "private-image use is denied")
+
+
 class ContainerJobRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create_or_replay(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> tuple[ContainerJobRecord, bool]:
+    async def create_or_replay(
+        self,
+        *,
+        owner: OwnerIdentity,
+        request: ContainerJobSubmitRequest,
+        authorization: RegistryAuthorization | None = None,
+    ) -> tuple[ContainerJobRecord, bool]:
         existing = await self._by_idempotency(owner, request.idempotency_key)
         request_json = request.model_dump(mode="json", by_alias=True, exclude_none=True)
         if existing is not None:
@@ -53,6 +77,11 @@ class ContainerJobRepository:
             idempotency_key=request.idempotency_key,
             source_json=request.source.model_dump(mode="json", by_alias=True, exclude_none=True),
             request_json=request_json,
+            authorization_observation_json=(
+                authorization.model_dump(mode="json", by_alias=True, exclude_none=True)
+                if authorization is not None
+                else None
+            ),
             state=ContainerJobState.QUEUED.value,
             publication_outcome_json={"state": "not_attempted"},
             cleanup_outcome_json={"state": "not_attempted"},
@@ -112,14 +141,36 @@ class ContainerJobRepository:
 
 
 class ContainerJobService:
-    def __init__(self, session: AsyncSession, *, temporal: TemporalClientAdapter | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        temporal: TemporalClientAdapter | None = None,
+        authorizer: PrivateImageAuthorizationService | None = None,
+    ) -> None:
         self.repository = ContainerJobRepository(session)
         self._temporal = temporal or TemporalClientAdapter()
+        self._authorizer = authorizer or PrivateImageAuthorizationService(
+            load_default_authorization_policy()
+        )
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
-        record, replayed = await self.repository.create_or_replay(owner=owner, request=request)
+        # Authorize private-image execution and credential use before creating
+        # durable identity. Fails closed: a denied request never starts a
+        # workflow and never persists a queued record.
+        authorization = self._authorizer.authorize(owner=owner, spec=request.spec)
+        if not authorization.authorized:
+            raise ContainerJobAuthorizationError(authorization)
+        record, replayed = await self.repository.create_or_replay(
+            owner=owner, request=request, authorization=authorization
+        )
         await self._temporal.start_container_job(
-            ContainerJobWorkflowInput(jobId=record.job_id, owner=owner, request=request)
+            ContainerJobWorkflowInput(
+                jobId=record.job_id,
+                owner=owner,
+                request=request,
+                registryAuthorization=authorization,
+            )
         )
         created_at = record.created_at or datetime.now(timezone.utc)
         return ContainerJobAccepted(jobId=record.job_id, replayed=replayed, createdAt=created_at)
@@ -131,6 +182,7 @@ class ContainerJobService:
         return ContainerJobStatus(
             jobId=record.job_id, state=record.state, backendKind=record.backend_kind,
             backendRef=record.backend_ref, image=record.image_observation_json,
+            authorization=record.authorization_observation_json,
             terminal=record.terminal_outcome_json, publication=record.publication_outcome_json,
             cleanup=record.cleanup_outcome_json, logsRef=record.logs_ref,
             artifactsRef=record.artifacts_ref, updatedAt=record.updated_at or record.created_at,

@@ -71,6 +71,12 @@ class ContainerJobFailureClass(StrEnum):
     TIMEOUT = "timeout"
     CANCELED = "canceled"
     INFRASTRUCTURE = "infrastructure"
+    # Private-image authorization with ephemeral registry credentials (#3257).
+    IMAGE_USE_DENIED = "image_use_denied"
+    CREDENTIAL_UNRESOLVED = "credential_unresolved"
+    REPOSITORY_SCOPE_MISMATCH = "repository_scope_mismatch"
+    REGISTRY_AUTH_FAILED = "registry_auth_failed"
+    CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
 
 
 class AuxiliaryOutcomeState(StrEnum):
@@ -209,6 +215,162 @@ class ContainerJobAccepted(TemporalContractModel):
         return _validate_job_id(value)
 
 
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_DOCKER_HUB_ALIASES = frozenset(
+    {"docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com"}
+)
+
+
+class NormalizedImageReference(ContractModel):
+    """Backend-neutral registry/repository/reference decomposition (#3257).
+
+    Normalization is authorization input only; it never carries credentials.
+    """
+
+    registry: str = Field(min_length=1, max_length=255)
+    repository: str = Field(min_length=1, max_length=255)
+    tag: str | None = Field(None, max_length=128)
+    digest: str | None = Field(None, pattern=r"^sha256:[0-9a-f]{64}$")
+    reference: str = Field(max_length=512)
+
+
+def normalize_image_reference(image: str) -> NormalizedImageReference:
+    """Decompose an image string into registry/repository/tag/digest.
+
+    Mirrors Docker's reference rules closely enough for repository-scope
+    authorization: an unqualified first path component defaults to ``docker.io``
+    and Docker Hub short names gain the ``library/`` prefix.
+    """
+
+    raw = str(image or "").strip()
+    if not raw:
+        raise ValueError("image reference must not be empty")
+
+    digest: str | None = None
+    remainder = raw
+    if "@" in remainder:
+        remainder, _, digest_part = remainder.partition("@")
+        digest = digest_part.strip()
+        if not _DIGEST.fullmatch(digest):
+            raise ValueError("image digest must be a sha256 reference")
+
+    first, sep, rest = remainder.partition("/")
+    if sep and ("." in first or ":" in first or first == "localhost"):
+        registry = first.lower()
+        path = rest
+    else:
+        registry = "docker.io"
+        path = remainder
+    if registry in _DOCKER_HUB_ALIASES:
+        registry = "docker.io"
+
+    tag: str | None = None
+    last_slash = path.rfind("/")
+    last_segment = path[last_slash + 1 :]
+    if ":" in last_segment:
+        name_tail, _, tag_part = last_segment.rpartition(":")
+        tag = tag_part.strip() or None
+        path = path[: last_slash + 1] + name_tail
+
+    repository = path.strip("/")
+    if not repository:
+        raise ValueError("image reference is missing a repository")
+    if registry == "docker.io" and "/" not in repository:
+        repository = f"library/{repository}"
+
+    reference = f"{registry}/{repository}"
+    if digest is not None:
+        reference = f"{reference}@{digest}"
+    elif tag is not None:
+        reference = f"{reference}:{tag}"
+
+    return NormalizedImageReference(
+        registry=registry,
+        repository=repository,
+        tag=tag,
+        digest=digest,
+        reference=reference,
+    )
+
+
+class RegistryAuthorization(ContractModel):
+    """Non-sensitive private-image authorization outcome (#3257).
+
+    Records the bounded decision and authorized scope only; it never carries a
+    username, token, password, or Docker auth blob. It is safe to persist and to
+    cross Temporal workflow history.
+    """
+
+    authorized: bool
+    registry: str = Field(min_length=1, max_length=255)
+    repository: str = Field(min_length=1, max_length=255)
+    reference: str = Field(max_length=512)
+    credential_ref: str | None = Field(None, alias="credentialRef", max_length=1024)
+    scope: str | None = Field(None, max_length=255)
+    digest: str | None = Field(
+        None, alias="requiredDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    failure_class: ContainerJobFailureClass | None = Field(
+        None, alias="failureClass"
+    )
+    message: str | None = Field(None, max_length=512)
+
+    _validate_credential_ref = field_validator("credential_ref")(
+        _opaque_secret_reference
+    )
+
+
+CONTAINER_JOB_FAILURE_MARKER = "container-job-failure:"
+
+
+class ContainerJobBackendError(RuntimeError):
+    """Trusted-backend error that carries a stable container-job failure class.
+
+    The failure class is encoded into the message with a stable marker so the
+    workflow can recover it even after Temporal wraps the activity failure and
+    the original Python type is lost.
+    """
+
+    def __init__(
+        self, failure_class: ContainerJobFailureClass, detail: str
+    ) -> None:
+        self.failure_class = failure_class
+        super().__init__(
+            f"{CONTAINER_JOB_FAILURE_MARKER}{failure_class.value}: {detail}"
+        )
+
+
+def failure_class_from_exception(
+    exc: BaseException,
+) -> ContainerJobFailureClass | None:
+    """Recover a container-job failure class from an exception, if present.
+
+    Prefers a direct ``failure_class`` attribute (in-process activity calls) and
+    falls back to parsing the stable marker embedded in the message. Temporal
+    wraps an activity failure and re-raises it with the original as ``__cause__``
+    (or ``__context__``), so the whole chain is walked to find either signal.
+    """
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        direct = getattr(current, "failure_class", None)
+        if isinstance(direct, ContainerJobFailureClass):
+            return direct
+        text = str(current)
+        marker_index = text.find(CONTAINER_JOB_FAILURE_MARKER)
+        if marker_index != -1:
+            token = text[marker_index + len(CONTAINER_JOB_FAILURE_MARKER) :]
+            token = token.split(":", 1)[0].strip()
+            try:
+                return ContainerJobFailureClass(token)
+            except ValueError:
+                pass
+        current = current.__cause__ or current.__context__
+    return None
+
+
 class ImageObservation(ContractModel):
     requested_reference: str = Field(alias="requestedReference", max_length=512)
     resolved_digest: str | None = Field(None, alias="resolvedDigest", pattern=r"^sha256:[0-9a-f]{64}$")
@@ -236,6 +398,7 @@ class ContainerJobStatus(TemporalContractModel):
     backend_kind: str | None = Field(None, alias="backendKind", max_length=64)
     backend_ref: str | None = Field(None, alias="backendRef", max_length=255)
     image: ImageObservation | None = None
+    authorization: RegistryAuthorization | None = None
     terminal: TerminalOutcome | None = None
     publication: AuxiliaryOutcome = Field(default_factory=lambda: AuxiliaryOutcome(state="not_attempted"))
     cleanup: AuxiliaryOutcome = Field(default_factory=lambda: AuxiliaryOutcome(state="not_attempted"))
@@ -319,6 +482,9 @@ class ContainerJobWorkflowInput(TemporalContractModel):
         )
     )
     request: ContainerJobSubmitRequest
+    registry_authorization: RegistryAuthorization | None = Field(
+        None, alias="registryAuthorization"
+    )
     observe_interval_seconds: int = Field(
         10, alias="observeIntervalSeconds", ge=1, le=300
     )
@@ -342,6 +508,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     )
     ownership_token: str = Field(alias="ownershipToken", min_length=1, max_length=300)
     request: ContainerJobSubmitRequest
+    registry_authorization: RegistryAuthorization | None = Field(
+        None, alias="registryAuthorization"
+    )
     state: ContainerJobState | None = None
     resolved_workspace_ref: str | None = Field(
         None, alias="resolvedWorkspaceRef", max_length=1024
