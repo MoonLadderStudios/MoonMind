@@ -81,10 +81,24 @@ def test_reliability_journey_production_seams_are_selected() -> None:
         "api_service/docker/install_cli_tooling.sh",
         "tests/integration/reliability/replays/incomplete-terminal-contract/manifest.json",
         "tests/helpers/codex_session_runtime.py",
+        ".github/workflows/pytest-unit-tests.yml",
+        "tools/start-worker.sh",
+        "moonmind/agents/codex_worker/worker.py",
+        "moonmind/schemas/workspace_locator_models.py",
+        "moonmind/schemas/recovery_models.py",
+        "api_service/services/checkpoint_branch_service.py",
+        "api_service/migrations/versions/999_checkpoint_replay.py",
     )
 
     for path in paths:
         assert _outputs([path])["reliability_journey"] == "true", path
+
+
+def test_unknown_backend_path_fails_open_to_reliability_journey() -> None:
+    outputs = _outputs(["new_runtime_backend/worker.py"])
+
+    assert outputs["full_backend"] == "true"
+    assert outputs["reliability_journey"] == "true"
 
 
 def test_managed_session_schema_selects_boundary_and_reliability() -> None:

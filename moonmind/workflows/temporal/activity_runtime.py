@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -281,6 +281,23 @@ _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
+
+
+class _HashingArchiveReader:
+    """Hash file blocks while ``tarfile`` streams them into an archive."""
+
+    def __init__(self, file_handle: BinaryIO) -> None:
+        self._file_handle = file_handle
+        self._hash = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._file_handle.read(size)
+        if chunk:
+            self._hash.update(chunk)
+        return chunk
+
+    def hexdigest(self) -> str:
+        return self._hash.hexdigest()
 
 
 class PentestWorkloadHandle(Protocol):
@@ -3523,17 +3540,13 @@ class TemporalSandboxActivities:
                 info.gid = _MANAGED_AGENT_GID
                 info.uname = "moonmind"
                 info.gname = "moonmind"
-                # Read the file exactly once and reuse the bytes for both the
-                # archive payload and the manifest digest. Setting info.size from
-                # the read payload also keeps the tar header consistent if the
-                # file changed between gettarinfo() and this read.
-                payload = path.read_bytes()
-                info.size = len(payload)
-                archive.addfile(info, BytesIO(payload))
+                with path.open("rb") as file_handle:
+                    hashing_reader = _HashingArchiveReader(file_handle)
+                    archive.addfile(info, hashing_reader)
                 entries.append({
                     "path": str(relative), "type": "file",
-                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
-                    "bytes": len(payload),
+                    "digest": "sha256:" + hashing_reader.hexdigest(),
+                    "bytes": info.size,
                     "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
                 })
         return output.getvalue(), entries
@@ -6832,6 +6845,15 @@ class TemporalAgentRuntimeActivities:
             run_store=run_store,
         )
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
+        )
+
+        self._checkpoint_restore = ManagedCheckpointRestoreService(
+            authority_root=os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            artifact_service=artifact_service,
+            run_store=run_store,
+        )
         # Pentest-specific activity logic lives in a dedicated module/class.
         # Imported lazily to avoid an import cycle (that module imports this one).
         from moonmind.workflows.temporal.activities.pentest_activities import (
@@ -7097,15 +7119,38 @@ class TemporalAgentRuntimeActivities:
             return (await _run_command(["git", *args], cwd=str(workspace))).stdout.strip()
         head = await _git("rev-parse", "HEAD")
         branch = await _git("branch", "--show-current")
-        status = await _git("status", "--porcelain=v1", "--untracked-files=normal")
+        status = (
+            await _run_command(
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                cwd=str(workspace),
+            )
+        ).stdout
         created_at = (record.finished_at or record.started_at).isoformat()
+        staged_paths = []
+        records = status.split("\0")
+        index = 0
+        while index < len(records):
+            line = records[index]
+            index += 1
+            if len(line) < 4:
+                continue
+            if line[0] not in {" ", "?"}:
+                staged_paths.append(line[3:])
+            if line[0] in {"R", "C"} and index < len(records):
+                index += 1
         manifest = {
             "schemaVersion": "v1",
             "contentType": "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "source": {**model.identity.model_dump(by_alias=True, mode="json"), "boundary": model.boundary},
             "runtime": {"runtimeId": "codex_cli", "capabilitySetVersion": model.capability_set_version, "capabilityDigest": model.capability_digest},
             "workspaceLocator": model.workspace_locator.model_dump(by_alias=True, mode="json"),
-            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "submodules": []},
+            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "stagedPaths": staged_paths, "submodules": []},
             "capturePolicy": policy.model_dump(by_alias=True, mode="json"),
             "entries": [entry.model_dump(by_alias=True, mode="json", exclude_none=True) for entry in entries],
             "archive": {"ref": archive_ref, "sha256": archive_digest, "size": len(archive_payload)},
@@ -7157,6 +7202,41 @@ class TemporalAgentRuntimeActivities:
             payload=payload, content_type=content_type,
         )
         return _compact_artifact_ref_text(build_artifact_ref(completed))
+
+    async def agent_runtime_restore_workspace_checkpoint(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Restore and verify a cold checkpoint before any agent is launched."""
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+        try:
+            # Restore performs clone/extract/hash/rename work that can exceed the
+            # activity heartbeat timeout on large archives or slow clones.
+            # Heartbeat while it runs so Temporal does not time out and retry an
+            # attempt that may still be mutating the destination. Outside an
+            # activity context this simply awaits the coroutine.
+            return await _await_with_activity_heartbeats(
+                asyncio.to_thread(
+                    lambda: asyncio.run(self._checkpoint_restore.restore(request))
+                ),
+                heartbeat_payload={
+                    "activity": "agent_runtime.restore_workspace_checkpoint"
+                },
+            )
+        except CheckpointRestoreError as exc:
+            # CheckpointRestoreError is a plain RuntimeError, so Temporal would
+            # record type="CheckpointRestoreError" and the catalog's
+            # non_retryable_error_types (keyed on the stable failure codes) would
+            # never match, retrying deterministic failures up to the attempt cap.
+            # Re-raise as an ApplicationError whose type is the failure code and
+            # mark it non-retryable unless the envelope recommends a retry.
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.code,
+                non_retryable=(
+                    exc.failure_envelope.get("retryRecommendation") != "retry"
+                ),
+            ) from exc
 
     async def execution_notify_completion(
         self,
