@@ -116,6 +116,30 @@ async def test_authorized_pull_materializes_restricted_config_and_cleans_up(
 
 
 @pytest.mark.asyncio
+async def test_docker_hub_auth_uses_cli_index_key(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def runner(args):
+        args = tuple(args)
+        if args[:2] == ("image", "inspect"):
+            return (1, b"", b"") if not captured else (0, DIGEST_ID.encode(), b"")
+        if "pull" in args:
+            config_dir = Path(args[args.index("--config") + 1])
+            captured.update(json.loads((config_dir / "config.json").read_text()))
+        return 0, b"", b""
+
+    backend = _backend(tmp_path, runner)
+    await backend.acquire_image(
+        _request(
+            workspace=tmp_path,
+            image="docker.io/org/app:1",
+            registry="docker.io",
+        )
+    )
+    assert "https://index.docker.io/v1/" in captured["auths"]
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_enforces_authorization_without_pulling(tmp_path: Path) -> None:
     commands: list[tuple[str, ...]] = []
 

@@ -46,7 +46,7 @@ def test_authorized_principal_gets_scope() -> None:
         credentialRef="db://ghcr",
         registry="ghcr.io",
         repositories=["org/*"],
-        principals=["user-a"],
+        principals=["user:user-a"],
     )
     result = service.authorize(
         owner=USER_A, spec=_spec("ghcr.io/org/app:1", "db://ghcr")
@@ -61,7 +61,7 @@ def test_unauthorized_principal_is_denied_image_use() -> None:
         credentialRef="db://ghcr",
         registry="ghcr.io",
         repositories=["org/*"],
-        principals=["user-a"],
+        principals=["user:user-a"],
     )
     result = service.authorize(
         owner=USER_B, spec=_spec("ghcr.io/org/app:1", "db://ghcr")
@@ -79,6 +79,31 @@ def test_unknown_credential_ref_is_denied() -> None:
     )
     assert not result.authorized
     assert result.failure_class == ContainerJobFailureClass.IMAGE_USE_DENIED
+
+
+def test_private_scope_requires_credential_even_for_cached_image() -> None:
+    service = _service(
+        credentialRef="db://ghcr",
+        registry="ghcr.io",
+        repositories=["org/*"],
+        principals=["user:user-a"],
+    )
+    result = service.authorize(owner=USER_A, spec=_spec("ghcr.io/org/app:1"))
+    assert not result.authorized
+    assert result.failure_class == ContainerJobFailureClass.IMAGE_USE_DENIED
+
+
+def test_principal_grants_require_type_qualified_identity() -> None:
+    service = _service(
+        credentialRef="db://ghcr",
+        registry="ghcr.io",
+        repositories=["org/*"],
+        principals=["user-a"],
+    )
+    result = service.authorize(
+        owner=USER_A, spec=_spec("ghcr.io/org/app:1", "db://ghcr")
+    )
+    assert not result.authorized
 
 
 @pytest.mark.parametrize(
@@ -120,6 +145,7 @@ def test_digest_restriction_enforced() -> None:
 
 
 def test_load_default_policy_from_env(monkeypatch) -> None:
+    load_default_authorization_policy.cache_clear()
     monkeypatch.setenv(
         "MOONMIND_REGISTRY_CREDENTIAL_GRANTS",
         '[{"credentialRef": "db://ghcr", "registry": "ghcr.io", "repositories": ["org/*"]}]',
@@ -127,4 +153,6 @@ def test_load_default_policy_from_env(monkeypatch) -> None:
     policy = load_default_authorization_policy()
     assert policy.grants_for("db://ghcr")
     monkeypatch.setenv("MOONMIND_REGISTRY_CREDENTIAL_GRANTS", "{not json")
+    assert load_default_authorization_policy() is policy
+    load_default_authorization_policy.cache_clear()
     assert load_default_authorization_policy().grants == ()

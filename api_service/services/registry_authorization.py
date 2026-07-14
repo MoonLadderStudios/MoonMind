@@ -14,10 +14,11 @@ image already present in the shared daemon cannot bypass policy.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -51,18 +52,18 @@ class RegistryCredentialGrant(BaseModel):
         if "*" in self.principals:
             return True
         token = f"{owner.principal_type}:{owner.principal_id}"
-        return owner.principal_id in self.principals or token in self.principals
+        return token in self.principals
 
     def repository_scope_for(self, repository: str) -> str | None:
         for pattern in self.repositories:
-            if fnmatch(repository, pattern):
+            if fnmatchcase(repository, pattern):
                 return pattern
         return None
 
     def allows_tag(self, tag: str | None) -> bool:
         if not self.tags:
             return True
-        return tag is not None and any(fnmatch(tag, pattern) for pattern in self.tags)
+        return tag is not None and any(fnmatchcase(tag, pattern) for pattern in self.tags)
 
     def allows_digest(self, digest: str | None) -> bool:
         if not self.digests:
@@ -82,6 +83,15 @@ class PrivateImageAuthorizationPolicy(BaseModel):
             grant for grant in self.grants if grant.credential_ref == credential_ref
         )
 
+    def protects(self, reference: NormalizedImageReference) -> bool:
+        """Return whether policy declares the image inside a private scope."""
+
+        return any(
+            grant.registry.lower() == reference.registry.lower()
+            and grant.repository_scope_for(reference.repository) is not None
+            for grant in self.grants
+        )
+
 
 class PrivateImageAuthorizationService:
     """Evaluate private-image execution and credential-use policy."""
@@ -96,6 +106,13 @@ class PrivateImageAuthorizationService:
         credential_ref = spec.registry_credential_ref
 
         if credential_ref is None:
+            if self._policy.protects(reference):
+                return self._deny(
+                    reference,
+                    "",
+                    ContainerJobFailureClass.IMAGE_USE_DENIED,
+                    "a registry credential reference is required for this private image",
+                )
             # A public image needs no registry credential. Execution policy for
             # public images is unrestricted in this deployment; a future policy
             # can deny here without changing the authorization contract.
@@ -193,6 +210,7 @@ class PrivateImageAuthorizationService:
         )
 
 
+@functools.lru_cache(maxsize=1)
 def load_default_authorization_policy() -> PrivateImageAuthorizationPolicy:
     """Load the deployment-owned grant policy from the environment.
 

@@ -499,7 +499,10 @@ class DockerContainerJobBackend:
         self._remove_auth_dir(auth_dir, best_effort=True)
         auth_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(auth_dir, stat.S_IRWXU)  # 0o700
-        config = {"auths": {registry: credential.docker_auth_entry()}}
+        auth_key = (
+            "https://index.docker.io/v1/" if registry == "docker.io" else registry
+        )
+        config = {"auths": {auth_key: credential.docker_auth_entry()}}
         config_path = auth_dir / "config.json"
         fd = os.open(
             config_path,
@@ -507,10 +510,13 @@ class DockerContainerJobBackend:
             stat.S_IRUSR | stat.S_IWUSR,  # 0o600
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(config, handle)
-        finally:
-            os.chmod(config_path, stat.S_IRUSR | stat.S_IWUSR)
+            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+            handle = os.fdopen(fd, "w", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
+        with handle:
+            json.dump(config, handle)
 
     def _remove_auth_dir(self, auth_dir: Path, *, best_effort: bool) -> None:
         if best_effort:

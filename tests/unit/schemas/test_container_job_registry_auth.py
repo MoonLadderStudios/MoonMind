@@ -23,13 +23,13 @@ DIGEST = "sha256:" + "c" * 64
 @pytest.mark.parametrize(
     ("image", "registry", "repository", "tag", "digest"),
     [
-        ("alpine", "docker.io", "library/alpine", None, None),
+        ("alpine", "docker.io", "library/alpine", "latest", None),
         ("ubuntu:24.04", "docker.io", "library/ubuntu", "24.04", None),
         ("org/app:1.2", "docker.io", "org/app", "1.2", None),
         ("ghcr.io/org/app:1.2", "ghcr.io", "org/app", "1.2", None),
         (f"ghcr.io/org/app@{DIGEST}", "ghcr.io", "org/app", None, DIGEST),
         ("localhost:5000/team/svc:dev", "localhost:5000", "team/svc", "dev", None),
-        ("registry.example.com:5000/a/b", "registry.example.com:5000", "a/b", None, None),
+        ("registry.example.com:5000/a/b", "registry.example.com:5000", "a/b", "latest", None),
         ("index.docker.io/library/redis:7", "docker.io", "library/redis", "7", None),
     ],
 )

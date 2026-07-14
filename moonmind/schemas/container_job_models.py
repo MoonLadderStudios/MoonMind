@@ -281,6 +281,9 @@ def normalize_image_reference(image: str) -> NormalizedImageReference:
         tag = tag_part.strip() or None
         path = path[: last_slash + 1] + name_tail
 
+    if tag is None and digest is None:
+        tag = "latest"
+
     repository = path.strip("/")
     if not repository:
         raise ValueError("image reference is missing a repository")

@@ -7896,7 +7896,6 @@ class TemporalAgentRuntimeActivities:
                 ContainerJobFailureClass.IMAGE_USE_DENIED,
                 ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
                 ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
-                ContainerJobFailureClass.REGISTRY_AUTH_FAILED,
             }
             raise temporal_exceptions.ApplicationError(
                 str(exc),
