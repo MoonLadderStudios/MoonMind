@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from moonmind.workflows.executions.checkpoint_resume_admission import (
     CheckpointPromotionEvidence,
@@ -19,7 +19,7 @@ def _readiness():
         captureRouteReady=True, restoreRouteReady=True, artifactStoreReady=True,
         managedRunStoreReady=True,
         capabilitySetVersion=capabilities.capability_set_version,
-        capabilityDigest=capabilities.capability_digest, checkedAt=datetime.now(UTC),
+        capabilityDigest=capabilities.capability_digest, checkedAt=datetime.now(timezone.utc),
     )
 
 
@@ -30,7 +30,7 @@ def _policy(**updates):
         captureSamples=100, sourceDestroyingRestoreSamples=50,
         internalResumeSamples=20,
         integrityFailures=0, duplicateSideEffects=0, liveCanaryPassed=True,
-        recordedAt=datetime.now(UTC),
+        recordedAt=datetime.now(timezone.utc),
     )
     values = dict(
         promotionState="internal", captureEnabled=True, shadowRestoreEnabled=True,
@@ -75,6 +75,18 @@ def test_readiness_gates_and_controls_fail_closed() -> None:
     assert _decision(_policy(maxArchiveBytes=10)).reason_code == "checkpoint_archive_limit_exceeded"
     assert _decision(_policy(captureEnabled=False)).reason_code == "checkpoint_routes_disabled"
     assert _decision(_policy(shadowRestoreEnabled=False)).reason_code == "checkpoint_routes_disabled"
+    assert _decision(_policy(maxArchiveBytes=0)).admitted is True
+
+
+def test_unknown_archive_size_fails_closed() -> None:
+    decision = evaluate_checkpoint_resume_admission(
+        capabilities=resolve_runtime_execution_capabilities("codex_cli"),
+        policy=_policy(), readiness=_readiness(), checkpoint_kind="worktree_archive",
+        checkpoint_boundary="before_execution", resume_phase="rerun_failed_step",
+        archive_bytes=-1,
+    )
+    assert decision.admitted is False
+    assert decision.reason_code == "checkpoint_archive_size_unknown"
 
 
 def test_promotion_evidence_is_generation_bound_and_objective() -> None:
@@ -90,7 +102,7 @@ def test_promotion_evidence_is_generation_bound_and_objective() -> None:
             "integrityFailures": 0,
             "duplicateSideEffects": 0,
             "liveCanaryPassed": True,
-            "recordedAt": datetime.now(UTC),
+            "recordedAt": datetime.now(timezone.utc),
         }
     )
     assert _decision(mismatched).reason_code == "promotion_evidence_missing"

@@ -1,5 +1,4 @@
 """Portable promotion, shadow-validation, telemetry, and rollback contracts.
-
 This module deliberately contains deterministic decisions only. Activities own
 workspace creation/restoration and deployment controllers own worker draining.
 """
@@ -134,4 +133,3 @@ def bounded_checkpoint_metric_tags(
         "generation": generation[:80],
         "outcome": outcome[:60],
     }
-

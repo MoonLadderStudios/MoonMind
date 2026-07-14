@@ -1,6 +1,5 @@
 import pytest
 from pydantic import ValidationError
-
 from moonmind.workflows.executions.checkpoint_promotion import (
     CheckpointPromotionHealth,
     FrozenGenerationUsage,
@@ -67,4 +66,3 @@ def test_metric_tags_are_bounded_and_exclude_identifiers() -> None:
         "outcome": "eligible",
     }
     assert not ({"repository", "owner_id", "artifact_ref"} & tags.keys())
-

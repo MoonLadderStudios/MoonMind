@@ -86,7 +86,11 @@ class RuntimeExecutionCapabilities(BaseModel):
             raise ValueError("checkpoint capture kinds and activity must be declared together")
         if bool(self.checkpoint_restore_kinds) != bool(self.checkpoint_restore_activity):
             raise ValueError("checkpoint restore kinds and activity must be declared together")
-        if self.checkpoint_restore_kinds and not self.checkpoint_artifact_contract_version:
+        if (
+            self.capability_set_version == "runtime-execution-capabilities-v2"
+            and self.checkpoint_restore_kinds
+            and not self.checkpoint_artifact_contract_version
+        ):
             raise ValueError("checkpoint restore capability must name its artifact contract")
         if self.checkpoint_boundary_support and not self.checkpoint_restore_kinds:
             raise ValueError("checkpoint boundary support requires a restore capability")
@@ -131,10 +135,6 @@ _DESCRIPTORS = (
         checkpointArtifactContractVersion="managed-worktree-archive-v1",
         checkpointBoundarySupport={
             "before_execution": ("rerun_failed_step",),
-            "after_execution": ("continue_to_gate",),
-            "after_gate": ("continue_after_gate",),
-            "before_publication": ("resume_publication",),
-            "before_recovery_restoration": ("retry_restoration",),
         },
         supportsSameSessionContinuation=True,
         supportsActiveCommandIntrospection=True,

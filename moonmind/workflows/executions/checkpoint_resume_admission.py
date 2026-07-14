@@ -7,7 +7,7 @@ MoonLadderStudios/MoonMind#3278.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import json
 from typing import Literal
 
@@ -24,7 +24,7 @@ PromotionState = Literal[
 class CheckpointPromotionEvidence(BaseModel):
     """Recorded, generation-bound evidence used by the promotion gate."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     deployment_generation: str = Field(alias="deploymentGeneration")
     cold_resume_ci_passed: bool = Field(False, alias="coldResumeCiPassed")
@@ -56,7 +56,7 @@ class CheckpointPromotionEvidence(BaseModel):
 
 
 class CheckpointResumeRolloutPolicy(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     promotion_state: PromotionState = Field("disabled", alias="promotionState")
     capture_enabled: bool = Field(False, alias="captureEnabled")
@@ -83,7 +83,7 @@ class CheckpointResumeRolloutPolicy(BaseModel):
 
 
 class CheckpointResumeReadiness(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     runtime_id: str = Field(alias="runtimeId")
     deployment_generation: str = Field(alias="deploymentGeneration")
@@ -99,7 +99,7 @@ class CheckpointResumeReadiness(BaseModel):
 class AdmittedCheckpointResumeDecision(BaseModel):
     """Replay-safe snapshot passed to a recovery workflow."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     admitted: bool
     reason_code: str = Field(alias="reasonCode")
@@ -200,11 +200,9 @@ def evaluate_checkpoint_resume_admission(
         reason = "checkpoint_kind_unsupported"
     elif resume_phase not in capabilities.checkpoint_boundary_support.get(checkpoint_boundary, ()):
         reason = "checkpoint_boundary_unsupported"
-    elif (
-        policy.max_archive_bytes <= 0
-        or archive_bytes <= 0
-        or archive_bytes > policy.max_archive_bytes
-    ):
+    elif archive_bytes < 0:
+        reason = "checkpoint_archive_size_unknown"
+    elif policy.max_archive_bytes > 0 and archive_bytes > policy.max_archive_bytes:
         reason = "checkpoint_archive_limit_exceeded"
 
     return AdmittedCheckpointResumeDecision(
@@ -242,7 +240,7 @@ def unavailable_checkpoint_resume_decision(
             managedRunStoreReady=False,
             capabilitySetVersion=capabilities.capability_set_version,
             capabilityDigest=capabilities.capability_digest,
-            checkedAt=datetime.now(UTC),
+            checkedAt=datetime.now(timezone.utc),
         ),
         checkpointKind=checkpoint_kind,
         checkpointBoundary=checkpoint_boundary,
