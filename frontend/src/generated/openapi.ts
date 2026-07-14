@@ -4282,6 +4282,16 @@ export interface components {
          */
         ArtifactSessionControlRequest: {
             /**
+             * Schemaversion
+             * @default 1
+             * @constant
+             */
+            schemaVersion: 1;
+            /** Controlrequestid */
+            controlRequestId: string;
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /**
              * Action
              * @enum {string}
              */
@@ -4290,6 +4300,12 @@ export interface components {
             message?: string | null;
             /** Reason */
             reason?: string | null;
+            /** Expectedsessionepoch */
+            expectedSessionEpoch: number;
+            /** Expectedturnid */
+            expectedTurnId?: string | null;
+            /** Actorprincipal */
+            actorPrincipal?: string | null;
         };
         /**
          * ArtifactSessionControlResponse
@@ -4301,6 +4317,19 @@ export interface components {
              * @enum {string}
              */
             action: "continue_same_session" | "clear_session" | "interrupt_turn" | "cancel_session";
+            /** Controlrequestid */
+            controlRequestId: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "rejected" | "completed" | "failed" | "delivery_unknown";
+            /** Stablereasoncode */
+            stableReasonCode?: string | null;
+            /** Controleventref */
+            controlEventRef?: string | null;
+            /** Completedat */
+            completedAt?: string | null;
             projection: components["schemas"]["ArtifactSessionProjectionModel"];
         };
         /**

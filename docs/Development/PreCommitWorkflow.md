@@ -65,7 +65,7 @@ The selector fails open. Empty changed-file input, unknown paths, CI workflow ch
 
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
 
-The workflow still runs a dedicated frontend validation job, and the generated-contract check still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path.
+The workflow selects `frontend-static` and the Chromium/Firefox browser matrix independently by changed-file impact. They run in parallel, while the always-running `test-frontend` result job preserves the stable required-check context and explicitly passes known non-frontend changes. The generated-contract check remains separate and still runs only when `tools/check_openapi_affecting_changes.sh` reports an OpenAPI-affecting path.
 
 See [Backend Test Selection Strategy](BackendTestSelection.md) for the detailed selector contract, category definitions, full-backend fail-open rules, and maintenance guidance.
 
