@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from moonmind.workflows.executions.checkpoint_resume_admission import (
     CheckpointResumeReadiness,
@@ -18,7 +18,7 @@ def _readiness():
         captureRouteReady=True, restoreRouteReady=True, artifactStoreReady=True,
         managedRunStoreReady=True,
         capabilitySetVersion=capabilities.capability_set_version,
-        capabilityDigest=capabilities.capability_digest, checkedAt=datetime.now(UTC),
+        capabilityDigest=capabilities.capability_digest, checkedAt=datetime.now(timezone.utc),
     )
 
 
@@ -62,6 +62,18 @@ def test_readiness_gates_and_controls_fail_closed() -> None:
     assert _decision(_policy(executionAdmissionEnabled=False)).reason_code == "rollout_admission_disabled"
     assert _decision(_policy(requiredGatesPassed=False)).reason_code == "promotion_evidence_missing"
     assert _decision(_policy(maxArchiveBytes=10)).reason_code == "checkpoint_archive_limit_exceeded"
+    assert _decision(_policy(maxArchiveBytes=0)).admitted is True
+
+
+def test_unknown_archive_size_fails_closed() -> None:
+    decision = evaluate_checkpoint_resume_admission(
+        capabilities=resolve_runtime_execution_capabilities("codex_cli"),
+        policy=_policy(), readiness=_readiness(), checkpoint_kind="worktree_archive",
+        checkpoint_boundary="before_execution", resume_phase="rerun_failed_step",
+        archive_bytes=-1,
+    )
+    assert decision.admitted is False
+    assert decision.reason_code == "checkpoint_archive_size_unknown"
 
 
 def test_only_codex_cli_declares_managed_checkpoint_support() -> None:

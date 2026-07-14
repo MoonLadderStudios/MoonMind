@@ -85,6 +85,22 @@ def test_codex_claims_paired_capture_and_restore_capabilities() -> None:
         codex.checkpoint_restore_activity
         == "agent_runtime.restore_workspace_checkpoint"
     )
+    assert codex.checkpoint_boundary_support == {
+        "before_execution": ("rerun_failed_step",)
+    }
+
+
+def test_v1_restore_snapshot_does_not_require_v2_artifact_contract() -> None:
+    snapshot = RuntimeExecutionCapabilities(
+        capabilitySetVersion="runtime-execution-capabilities-v1",
+        runtimeId="codex_cli", runtimeFamily="managed_cli",
+        workspaceAuthority="managed_runtime",
+        checkpointRestoreKinds=("worktree_archive",),
+        checkpointRestoreActivity="agent_runtime.restore_workspace_checkpoint",
+        supportsSameSessionContinuation=True,
+        postExecutionCheckpointCriticality="recoverability_only",
+    )
+    assert snapshot.checkpoint_artifact_contract_version is None
 
 
 def test_codex_after_execution_selects_its_supported_archive_kind() -> None:

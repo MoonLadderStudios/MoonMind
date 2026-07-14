@@ -19,8 +19,10 @@ entries and do not inherit this support from `managed_cli`.
 Promotion states are `disabled`, `shadow_capture`, `shadow_restore`, `internal`,
 `limited`, `broad`, `ga`, and `paused`. Resume action exposure and execution
 admission are always off during disabled, shadow, and paused states. Capture,
-disposable shadow restore, action exposure, and new execution admission have
-independent controls. All controls default off.
+disposable shadow restore, action exposure, and new execution admission are
+independent fields in the rollout policy snapshot supplied by the owning
+admission boundary. They are not ambient workflow configuration, and all
+controls default off.
 
 Promotion requires recorded objective evidence: at least 100 captures at 99%
 success with verified digests and no authority, credential, or idempotency

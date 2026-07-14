@@ -2185,30 +2185,6 @@ class FeatureFlagsSettings(BaseSettings):
         ),
         description="Auditable managed-checkpoint promotion state; disabled by default.",
     )
-    managed_checkpoint_capture_enabled: bool = Field(
-        False, validation_alias=AliasChoices(
-            "FEATURE_FLAGS__MANAGED_CHECKPOINT_CAPTURE_ENABLED",
-            "MANAGED_CHECKPOINT_CAPTURE_ENABLED",
-        )
-    )
-    checkpoint_shadow_restore_enabled: bool = Field(
-        False, validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CHECKPOINT_SHADOW_RESTORE_ENABLED",
-            "CHECKPOINT_SHADOW_RESTORE_ENABLED",
-        )
-    )
-    checkpoint_resume_action_enabled: bool = Field(
-        False, validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CHECKPOINT_RESUME_ACTION_ENABLED",
-            "CHECKPOINT_RESUME_ACTION_ENABLED",
-        )
-    )
-    checkpoint_resume_admission_enabled: bool = Field(
-        False, validation_alias=AliasChoices(
-            "FEATURE_FLAGS__CHECKPOINT_RESUME_ADMISSION_ENABLED",
-            "CHECKPOINT_RESUME_ADMISSION_ENABLED",
-        )
-    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",
