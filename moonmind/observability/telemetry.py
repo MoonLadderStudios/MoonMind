@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace import TracerProvider
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
-_initialized = False
+_state: dict[str, TracerProvider | None] = {"provider": None}
 _SECRET_KEY = re.compile(r"(?i)(authorization|cookie|password|secret|token|api[-_]?key)")
 
 
@@ -95,13 +95,11 @@ def build_backend_url(template: str | None, **identifiers: str | None) -> str | 
 
 def initialize_telemetry(settings: TelemetrySettings) -> TracerProvider | None:
     """Initialize one process provider and OTLP exporter, failing open."""
-    global _initialized
     if not settings.enabled:
         return None
     with _lock:
-        if _initialized:
-            provider = trace.get_tracer_provider()
-            return provider if isinstance(provider, TracerProvider) else None
+        if _state["provider"] is not None:
+            return _state["provider"]
         try:
             attributes = {
                 "service.name": settings.service_name,
@@ -121,7 +119,7 @@ def initialize_telemetry(settings: TelemetrySettings) -> TracerProvider | None:
                     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
                 provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint)))
             trace.set_tracer_provider(provider)
-            _initialized = True
+            _state["provider"] = provider
             return provider
         except Exception:
             logger.warning("OpenTelemetry initialization failed; continuing without export", exc_info=True)
@@ -147,4 +145,3 @@ def instrument_fastapi(app: object) -> None:
         FastAPIInstrumentor.instrument_app(app, excluded_urls="/healthz,/readyz,/metrics")
     except Exception:
         logger.warning("FastAPI instrumentation unavailable", exc_info=True)
-
