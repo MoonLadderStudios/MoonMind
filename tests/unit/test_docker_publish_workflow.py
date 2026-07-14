@@ -93,7 +93,7 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
 
 def test_docker_publish_writes_build_summary_for_promotion() -> None:
     # The app build mirrors the PentestGPT runner summary so an operator can copy
-    # the version tag / digest straight into the Promote GHCR image to stable
+    # the version tag / digest straight into the Release / Promote Stable
     # workflow. `latest` stays the automatic current-build channel.
     workflow = _load_workflow()
     merge_steps = workflow["jobs"]["merge"]["steps"]
@@ -112,7 +112,7 @@ def test_docker_publish_writes_build_summary_for_promotion() -> None:
     assert 'docker buildx imagetools inspect "${IMAGE_NAME}:latest"' in run
     assert "{{.Manifest.Digest}}" in run
     assert "${IMAGE_NAME}:${VERSION}@${DIGEST}" in run
-    assert "Promote GHCR image to stable" in run
+    assert "Release / Promote Stable" in run
     assert "VERSION=\"${{ needs.metadata.outputs.version_tag }}\"" in run
 
 
