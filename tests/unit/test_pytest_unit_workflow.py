@@ -192,6 +192,7 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
     assert browser["strategy"]["fail-fast"] is False
     assert "frontend_browser_firefox" in browser["strategy"]["matrix"]["engine"]
     assert "@sha256:" in browser["container"]["image"]
+    assert browser["env"]["HOME"] == "/root"
     assert not any("playwright install" in step.get("run", "") for step in browser["steps"])
 
     aggregator = jobs["test-frontend"]
