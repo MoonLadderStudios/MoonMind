@@ -168,6 +168,24 @@ def _docker_env(*, docker_host: str | None = None) -> dict[str, str]:
         env["DOCKER_HOST"] = docker_host
     return env
 
+def structured_container_security_args() -> list[str]:
+    """Return the non-overridable Docker hardening flags for owned containers.
+
+    This is the single definition of the ``--privileged=false`` / capability
+    drop / ``no-new-privileges`` protections applied to every MoonMind-owned
+    container. It is reused by the workload launcher below and by the
+    deployment-selected container-job backend so the two launch paths cannot
+    drift apart.
+    """
+
+    return [
+        "--privileged=false",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+    ]
+
 def _mount_arg(mount: _DockerMount) -> str:
     parts = [
         f"type={mount.type}",
@@ -595,11 +613,7 @@ def _build_unrestricted_run_args(
         workload.workdir or workload.repo_dir,
         "--network",
         workload.network_mode,
-        "--privileged=false",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
+        *structured_container_security_args(),
     ]
     for key, value in _operational_labels(request).items():
         args.extend(["--label", f"{key}={value}"])
@@ -780,11 +794,7 @@ class DockerWorkloadLauncher:
             workload.repo_dir,
             "--network",
             profile.network_policy,
-            "--privileged=false",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
+            *structured_container_security_args(),
         ]
 
         for key, value in _operational_labels(request).items():
@@ -838,11 +848,7 @@ class DockerWorkloadLauncher:
             workload.repo_dir,
             "--network",
             profile.network_policy,
-            "--privileged=false",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges",
+            *structured_container_security_args(),
         ]
         for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])

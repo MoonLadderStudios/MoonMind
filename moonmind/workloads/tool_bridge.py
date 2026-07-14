@@ -46,11 +46,21 @@ UNRESTRICTED_DOOD_TOOL_NAMES = frozenset(
 )
 DOOD_TOOL_NAMES = frozenset({*CURATED_DOOD_TOOL_NAMES, *UNRESTRICTED_DOOD_TOOL_NAMES})
 
-def tool_allowed_for_workflow_docker_mode(*, tool_name: str, workflow_docker_mode: str) -> bool:
+def tool_allowed_for_workflow_docker_mode(
+    *,
+    tool_name: str,
+    workflow_docker_mode: str,
+    raw_cli_enabled: bool = False,
+) -> bool:
     normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
     normalized_tool = str(tool_name or "").strip()
     if normalized_mode == "disabled":
         return False
+    if normalized_tool == CONTAINER_RUN_DOCKER_TOOL:
+        # The raw Docker CLI is an internal escape hatch, disabled by default.
+        # It is never exposed to agent-facing registries unless a deployment
+        # explicitly enables it, and even then only in unrestricted mode.
+        return bool(raw_cli_enabled) and normalized_mode == "unrestricted"
     if normalized_mode == "profiles":
         return normalized_tool in CURATED_DOOD_TOOL_NAMES
     return normalized_tool in DOOD_TOOL_NAMES
@@ -364,12 +374,14 @@ def register_workload_tool_handlers(
     registry: RunnerProfileRegistry,
     launcher: Any,
     workflow_docker_mode: str = "profiles",
+    raw_cli_enabled: bool = False,
 ) -> None:
     normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
     for tool_name in sorted(DOOD_TOOL_NAMES):
         if not tool_allowed_for_workflow_docker_mode(
             tool_name=tool_name,
             workflow_docker_mode=normalized_mode,
+            raw_cli_enabled=raw_cli_enabled,
         ):
             continue
         handler = build_workload_tool_handler(
@@ -377,6 +389,7 @@ def register_workload_tool_handlers(
             registry=registry,
             launcher=launcher,
             workflow_docker_mode=normalized_mode,
+            raw_cli_enabled=raw_cli_enabled,
         )
         dispatcher.register_skill(
             skill_name=tool_name,
@@ -389,6 +402,7 @@ def build_workload_tool_handler(
     registry: RunnerProfileRegistry,
     launcher: Any,
     workflow_docker_mode: str = "profiles",
+    raw_cli_enabled: bool = False,
 ) -> WorkloadToolHandler:
     normalized = str(tool_name or "").strip()
     normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
@@ -402,6 +416,7 @@ def build_workload_tool_handler(
         if not tool_allowed_for_workflow_docker_mode(
             tool_name=normalized,
             workflow_docker_mode=normalized_mode,
+            raw_cli_enabled=raw_cli_enabled,
         ):
             if normalized_mode == "disabled":
                 raise ToolFailure(
@@ -413,6 +428,20 @@ def build_workload_tool_handler(
                     ),
                     retryable=False,
                     details={"reason": "docker_workflows_disabled"},
+                )
+            if normalized == CONTAINER_RUN_DOCKER_TOOL and not raw_cli_enabled:
+                raise ToolFailure(
+                    error_code="PERMISSION_DENIED",
+                    message=(
+                        "The raw Docker CLI is a disabled internal escape hatch "
+                        "and is not callable by agents "
+                        "(raw_docker_cli_disabled)"
+                    ),
+                    retryable=False,
+                    details={
+                        "reason": "raw_docker_cli_disabled",
+                        "toolName": normalized,
+                    },
                 )
             raise ToolFailure(
                 error_code="PERMISSION_DENIED",

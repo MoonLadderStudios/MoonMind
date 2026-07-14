@@ -1012,7 +1012,24 @@ def test_register_workload_tool_handlers_exposes_unrestricted_tools_only_in_unre
     )
 
     registered = set(dispatcher.skills)
-    assert registered == DOOD_TOOL_NAMES
+    # The raw Docker CLI escape hatch stays out of the agent-facing registry
+    # even in unrestricted mode unless it is explicitly enabled (MoonMind#3254).
+    assert registered == DOOD_TOOL_NAMES - {CONTAINER_RUN_DOCKER_TOOL}
+    assert CONTAINER_RUN_DOCKER_TOOL not in registered
+
+
+def test_raw_docker_cli_registers_only_when_escape_hatch_enabled() -> None:
+    dispatcher = _RecordingDispatcher()
+
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=_FailingLauncher(),
+        workflow_docker_mode="unrestricted",
+        raw_cli_enabled=True,
+    )
+
+    assert set(dispatcher.skills) == DOOD_TOOL_NAMES
 
 @pytest.mark.asyncio
 async def test_profiles_mode_denies_direct_unrestricted_container_invocation() -> None:
@@ -1040,13 +1057,37 @@ async def test_profiles_mode_denies_direct_unrestricted_container_invocation() -
     assert exc_info.value.details["workflowDockerMode"] == "profiles"
 
 @pytest.mark.asyncio
-async def test_unrestricted_mode_allows_unrestricted_docker_handler() -> None:
+async def test_raw_docker_cli_denied_without_escape_hatch_even_when_unrestricted() -> None:
+    handler = build_workload_tool_handler(
+        tool_name=CONTAINER_RUN_DOCKER_TOOL,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=_FailingLauncher(),
+        workflow_docker_mode="unrestricted",
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["docker", "ps"],
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
+
+    assert exc_info.value.error_code == "PERMISSION_DENIED"
+    assert exc_info.value.details["reason"] == "raw_docker_cli_disabled"
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_mode_allows_raw_docker_handler_with_escape_hatch() -> None:
     launcher = _FakeLauncher()
     handler = build_workload_tool_handler(
         tool_name=CONTAINER_RUN_DOCKER_TOOL,
         registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
         launcher=launcher,
         workflow_docker_mode="unrestricted",
+        raw_cli_enabled=True,
     )
 
     result = await handler(
