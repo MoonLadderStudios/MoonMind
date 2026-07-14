@@ -178,6 +178,47 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
     assert "skipped intentionally" in required_script
 
 
+def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
+    workflow = _load_workflow()
+    jobs = workflow["jobs"]
+
+    static = jobs["frontend-static"]
+    assert static["needs"] == "select-test-suites"
+    assert static["if"] == "needs.select-test-suites.outputs.frontend_static == 'true'"
+    assert any("npm run frontend:ci" in step.get("run", "") for step in static["steps"])
+
+    browser = jobs["frontend-browser"]
+    assert browser["needs"] == "select-test-suites"
+    assert browser["strategy"]["fail-fast"] is False
+    assert "frontend_browser_firefox" in browser["strategy"]["matrix"]["engine"]
+    assert "@sha256:" in browser["container"]["image"]
+    assert not any("playwright install" in step.get("run", "") for step in browser["steps"])
+
+    aggregator = jobs["test-frontend"]
+    assert aggregator["if"] == "always()"
+    assert aggregator["needs"] == ["select-test-suites", "frontend-static", "frontend-browser"]
+    assert not any("uses" in step for step in aggregator["steps"])
+    script = "\n".join(step.get("run", "") for step in aggregator["steps"])
+    assert "frontend-static was selected" in script
+    assert "frontend-browser was selected" in script
+    assert "skipped intentionally" in script
+
+
+def test_playwright_package_and_container_versions_match() -> None:
+    import json
+
+    package = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+    version = package["devDependencies"]["playwright"]
+    assert version[0].isdigit(), "Playwright must be an exact dependency"
+    image = _load_workflow()["jobs"]["frontend-browser"]["container"]["image"]
+    assert f":v{version}-noble@sha256:" in image
+
+
+def test_frontend_workflow_does_not_upload_dashboard_dist() -> None:
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "dashboard-dist" not in workflow_text
+
+
 def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
     command = _run_command("unit-fast", "Run selected unit suite")
 

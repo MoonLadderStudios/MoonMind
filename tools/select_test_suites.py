@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select backend CI test suites from changed paths.
+"""Select backend and frontend CI test suites from changed paths.
 
 The selector is intentionally conservative: empty input, CI/test/dependency
 changes, main branch pushes, scheduled runs, and manual dispatches all select
@@ -22,7 +22,24 @@ OUTPUT_KEYS = (
     "integration_ci",
     "reliability_journey",
     "full_backend",
+    "frontend_static",
+    "frontend_browser_chromium",
+    "frontend_browser_firefox",
+    "full_frontend",
 )
+
+FRONTEND_STATIC_EXACT = {
+    "package.json", "package-lock.json", "postcss.config.cjs",
+    "tailwind.config.cjs", "tools/test_unit.sh", "tools/run_repo_python.sh",
+    "tools/verify_vite_manifest.py", "tools/export_openapi.py",
+    "tools/generate_openapi_types.py",
+}
+FRONTEND_STATIC_PREFIXES = ("frontend/", "api_service/templates/")
+FRONTEND_CHROMIUM_PREFIXES = ("frontend/src/", "api_service/templates/")
+FRONTEND_FIREFOX_EXACT = {
+    "package.json", "package-lock.json", "frontend/vitest.browser.config.ts",
+}
+FRONTEND_FIREFOX_PREFIXES = ("frontend/src/browser/", "frontend/src/styles/")
 
 FORCE_FULL_EXACT = {
     "pyproject.toml",
@@ -162,6 +179,10 @@ class SuiteSelection:
     integration_ci: bool = False
     reliability_journey: bool = False
     full_backend: bool = False
+    frontend_static: bool = False
+    frontend_browser_chromium: bool = False
+    frontend_browser_firefox: bool = False
+    full_frontend: bool = False
 
     def as_outputs(self) -> dict[str, str]:
         return {
@@ -233,6 +254,18 @@ def _full_backend_selection() -> SuiteSelection:
     )
 
 
+def _full_selection() -> SuiteSelection:
+    return SuiteSelection(
+        **{
+            **_full_backend_selection().__dict__,
+            "frontend_static": True,
+            "frontend_browser_chromium": True,
+            "frontend_browser_firefox": True,
+            "full_frontend": True,
+        }
+    )
+
+
 def select_suites(
     changed_files: Iterable[str],
     *,
@@ -246,14 +279,14 @@ def select_suites(
     ]
 
     if _is_force_full_event(event_name, ref_name):
-        return _full_backend_selection()
+        return _full_selection()
     if not paths:
-        return _full_backend_selection()
+        return _full_selection()
     if any(
         _matches(path, exact=FORCE_FULL_EXACT, prefixes=FORCE_FULL_PREFIXES)
         for path in paths
     ):
-        return _full_backend_selection()
+        return _full_selection()
 
     unknown_paths = [
         path
@@ -261,14 +294,16 @@ def select_suites(
         if not _is_backend_path(path) and not _is_non_backend_path(path)
     ]
     if unknown_paths:
-        return _full_backend_selection()
+        return _full_selection()
 
     backend_paths = [path for path in paths if _is_backend_path(path)]
-    if not backend_paths:
-        return SuiteSelection()
+    static = any(_matches(path, exact=FRONTEND_STATIC_EXACT, prefixes=FRONTEND_STATIC_PREFIXES) for path in paths)
+    firefox = any(_matches(path, exact=FRONTEND_FIREFOX_EXACT, prefixes=FRONTEND_FIREFOX_PREFIXES) for path in paths)
+    chromium = firefox or any(path != "frontend/src/generated/openapi.ts" and _matches(path, prefixes=FRONTEND_CHROMIUM_PREFIXES) for path in paths)
+    full_frontend = any(path in {"package.json", "package-lock.json"} for path in paths)
 
     return SuiteSelection(
-        unit_fast=True,
+        unit_fast=bool(backend_paths),
         api_component=any(
             _matches(
                 path,
@@ -304,6 +339,10 @@ def select_suites(
             )
             for path in backend_paths
         ),
+        frontend_static=static or chromium,
+        frontend_browser_chromium=chromium,
+        frontend_browser_firefox=firefox,
+        full_frontend=full_frontend,
     )
 
 
