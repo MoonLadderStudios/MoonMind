@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnR
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
+    AgentRuntimeStepExecutionLaunch,
     AgentTerminalContract,
 )
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
@@ -22,7 +24,13 @@ from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
 )
-from moonmind.workflows.adapters.codex_session_adapter import _pr_resolver_terminal_contract
+from moonmind.workflows.adapters.codex_session_adapter import (
+    CodexSessionAdapter,
+    _pr_resolver_terminal_contract,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -32,6 +40,7 @@ from moonmind.workflows.temporal.activity_catalog import build_default_activity_
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
@@ -583,6 +592,110 @@ async def test_managed_checkpoint_waits_for_authoritative_locator(
     assert parent._step_checkpoint_capture_outcomes["node-1"] == expected[
         "captureOutcome"
     ]
+
+
+async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:5fe90658 through adapter persistence and checkpoint capture."""
+    replay_id = "codex-session-checkpoint-identity"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    step_execution = AgentRuntimeStepExecutionLaunch.model_validate(
+        manifest["stepExecution"]
+    )
+
+    run_root = tmp_path / manifest["incidentWorkflowId"]
+    workspace = run_root / "repo"
+    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "MoonMind Test"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    (workspace / "result.txt").write_text("agent completed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "result.txt"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "agent result"], cwd=workspace, check=True
+    )
+
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    adapter = CodexSessionAdapter.__new__(CodexSessionAdapter)
+    adapter._run_store = run_store
+    adapter._runtime_id = manifest["runtime"]
+    adapter._workflow_id = manifest["agentRunWorkflowId"]
+    adapter._task_workflow_id = manifest["incidentWorkflowId"]
+    now = datetime.now(timezone.utc)
+    adapter._persist_managed_run_record(
+        run_id="session-turn-1",
+        agent_id=manifest["runtime"],
+        managed_run_id=manifest["incidentWorkflowId"],
+        binding=_binding(),
+        workspace_path=str(workspace),
+        locator={
+            "sessionId": f"sess:{manifest['incidentWorkflowId']}:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-replay",
+            "threadId": "thread-replay",
+        },
+        active_turn_id=None,
+        result={"summary": "completed"},
+        status="completed",
+        started_at=now,
+        finished_at=now,
+        step_execution=step_execution,
+    )
+
+    record = run_store.load(manifest["incidentWorkflowId"])
+    assert record is not None
+    assert record.workflow_id == expected["persistedWorkflowId"]
+    assert record.session_id is not None
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+        artifact_service=object(),
+        client_adapter=object(),
+    )
+
+    async def put(payload: bytes, _content_type: str, kind: str) -> str:
+        return f"artifact://{kind}/{hashlib.sha256(payload).hexdigest()}"
+
+    activities._put_managed_checkpoint_artifact = put
+    capabilities = resolve_runtime_execution_capabilities(manifest["runtime"])
+    capture = await activities.agent_runtime_capture_workspace_checkpoint(
+        {
+            "schemaVersion": "v1",
+            "identity": {
+                "workflowId": step_execution.workflow_id,
+                "runId": step_execution.run_id,
+                "logicalStepId": step_execution.logical_step_id,
+                "executionOrdinal": step_execution.execution_ordinal,
+            },
+            "boundary": "after_execution",
+            "checkpointKind": "worktree_archive",
+            "workspaceLocator": manifest["workspaceLocator"],
+            "expectedRuntimeId": manifest["runtime"],
+            "capabilitySetVersion": capabilities.capability_set_version,
+            "capabilityDigest": capabilities.capability_digest,
+            "artifactNamespace": "step-checkpoints/node-1",
+            "idempotencyKey": f"{step_execution.step_execution_id}:checkpoint",
+            "capturePolicy": {
+                "includeTracked": True,
+                "includeUntracked": True,
+                "includeIgnored": False,
+                "redactionProfile": "managed-code-workspace-v1",
+            },
+        }
+    )
+
+    assert capture["status"] == expected["checkpointStatus"]
+    assert capture["workspace"]["kind"] == "worktree_archive"
 
 
 async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority(

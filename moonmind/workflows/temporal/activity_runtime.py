@@ -6995,36 +6995,27 @@ class TemporalAgentRuntimeActivities:
                         type=WORKSPACE_IDENTITY_MISMATCH,
                         non_retryable=True,
                     )
+                # Session-backed records keep workflowId bound to the AgentRun
+                # child so live task/run lookups remain authoritative. Their
+                # stable runId is the managed-session binding's parent task
+                # workflow ID. Non-session records bind the parent directly in
+                # workflowId.
+                step_workflow_id = (
+                    record.run_id if record.session_id is not None else record.workflow_id
+                )
                 correlation = {
-                    "agentRunId": record.run_id,
+                    "workflowId": step_workflow_id,
                     "ownerRunId": record.owner_run_id,
                     "logicalStepId": record.logical_step_id,
                     "executionOrdinal": record.execution_ordinal,
                 }
                 expected_correlation = {
-                    # ManagedRunRecord.workflow_id identifies the AgentRun child
-                    # that executed the current turn.  It is intentionally not
-                    # the parent UserWorkflow identity carried by the source
-                    # Step Execution.  The workspace owner key plus the
-                    # Temporal run-scoped Step Execution fields are the durable
-                    # authority binding for checkpoint capture.
-                    "agentRunId": locator.agent_run_id,
+                    "workflowId": model.identity.workflow_id,
                     "ownerRunId": model.identity.run_id,
                     "logicalStepId": model.identity.logical_step_id,
                     "executionOrdinal": model.identity.execution_ordinal,
                 }
-                executor_workflow_id = str(record.workflow_id or "").strip()
-                source_workflow_id = model.identity.workflow_id
-                executor_belongs_to_source = (
-                    executor_workflow_id == source_workflow_id
-                    or executor_workflow_id.startswith(
-                        f"{source_workflow_id}:agent:"
-                    )
-                )
-                if (
-                    correlation != expected_correlation
-                    or not executor_belongs_to_source
-                ):
+                if correlation != expected_correlation:
                     logger.warning("managed_checkpoint_capture_authority_rejected")
                     raise temporal_exceptions.ApplicationError(
                         "managed run record does not belong to the source Step Execution",

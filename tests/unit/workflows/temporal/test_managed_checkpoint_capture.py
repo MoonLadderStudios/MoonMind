@@ -283,7 +283,7 @@ async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_managed_capture_accepts_workflow_scoped_session_child_record(
+async def test_managed_capture_accepts_session_record_bound_to_parent_workflow(
     tmp_path,
 ) -> None:
     repo = tmp_path / "wf-1" / "repo"
@@ -301,8 +301,9 @@ async def test_managed_capture_accepts_workflow_scoped_session_child_record(
     store = ManagedRunStore(tmp_path / "managed_runs")
     store.save(
         ManagedRunRecord(
-            runId="agent-run-1",
+            runId="wf-1",
             workflowId="wf-1:agent:implement",
+            sessionId="session-1",
             ownerRunId="run-1",
             logicalStepId="implement",
             executionOrdinal=1,
@@ -322,19 +323,22 @@ async def test_managed_capture_accepts_workflow_scoped_session_child_record(
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
-    result = await activities.agent_runtime_capture_workspace_checkpoint(
-        _request(
-            digest=resolve_runtime_execution_capabilities(
-                "codex_cli"
-            ).capability_digest
-        )
+    request = _request(
+        digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest
     )
+    request["workspaceLocator"] = {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-1",
+        "relativePath": "repo",
+    }
+    result = await activities.agent_runtime_capture_workspace_checkpoint(request)
 
     assert result["status"] == "captured"
     assert result["sourceWorkspaceLocator"] == {
         "kind": "managed_runtime",
         "runtimeId": "codex_cli",
-        "agentRunId": "agent-run-1",
+        "agentRunId": "wf-1",
         "relativePath": "repo",
     }
 
