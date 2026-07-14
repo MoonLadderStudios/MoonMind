@@ -158,6 +158,11 @@ from moonmind.workflows.temporal.step_executions import (
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
 )
+from moonmind.workflows.temporal.recovery_state import (
+    CheckpointRecoveryContract,
+    deterministic_recovery_identity,
+    validate_restore_result,
+)
 from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
@@ -333,6 +338,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
     }
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
+RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH = "run-checkpoint-recovery-state-machine-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = (
     "run-pr-resolver-continuation-identity-v1"
@@ -1223,6 +1229,8 @@ class MoonMindRunWorkflow:
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
         self._recovery_workspace_restored_ref: str | None = None
+        self._checkpoint_recovery_contract: CheckpointRecoveryContract | None = None
+        self._checkpoint_recovery_state: dict[str, Any] | None = None
         # Compact record of a resume-path checkpoint validation/restoration
         # failure (failureCode + checkpointRef), captured before the failure is
         # raised so the failed-run recovery manifest reports the real degraded
@@ -2976,9 +2984,13 @@ class MoonMindRunWorkflow:
 
     def _validate_recovery_source_for_execution(self) -> dict[str, Any] | None:
         recovery_source = self._recovery_source
+        if self._recovery_failed_step_id is not None:
+            return dict(recovery_source) if recovery_source is not None else None
         self._recovery_failed_step_id = None
         self._recovery_workspace = {}
         self._recovery_workspace_restored_ref = None
+        self._checkpoint_recovery_contract = None
+        self._checkpoint_recovery_state = None
         if recovery_source is None:
             return None
         if not isinstance(recovery_source, Mapping):
@@ -3109,6 +3121,33 @@ class MoonMindRunWorkflow:
                     f"preserved step {logical_step_id} requires a state checkpoint ref"
                 )
 
+        explicit_contract = recovery_source.get("checkpointRecovery")
+        if explicit_contract is None:
+            explicit_contract = recovery_source.get("checkpoint_recovery")
+        if explicit_contract is not None:
+            contract = CheckpointRecoveryContract.model_validate(explicit_contract)
+            restore_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                contract.restore_activity
+            )
+            if restore_route.fleet != "agent_runtime":
+                raise ValueError(
+                    "CHECKPOINT_CAPABILITY_INVALID: restore activity must run on "
+                    "the agent_runtime fleet"
+                )
+            self._checkpoint_recovery_contract = contract
+            self._checkpoint_recovery_state = {
+                "status": "recovery_preflight_validated",
+                "recoveryAction": contract.recovery_action,
+                "resumePhase": contract.resume_phase,
+                "sourceCheckpointRef": contract.source_checkpoint_ref,
+                "sourceCheckpointBoundary": contract.source_checkpoint_boundary,
+                "sourceCheckpointKind": contract.source_checkpoint_kind,
+                "targetRuntimeId": contract.capabilities.runtime_id,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
+                "restoreActivity": contract.restore_activity,
+            }
+
         self._recovery_failed_step_id = failed_step_id
         self._recovery_workspace = dict(workspace)
         return dict(recovery_source)
@@ -3143,6 +3182,12 @@ class MoonMindRunWorkflow:
             return self._recovery_workspace_restored_ref
         if not isinstance(self._recovery_source, Mapping):
             return None
+
+        if (
+            self._checkpoint_recovery_contract is not None
+            and workflow.patched(RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH)
+        ):
+            return await self._restore_checkpoint_recovery_workspace(logical_step_id)
 
         checkpoint_ref = self._recovery_workspace_checkpoint_ref(self._recovery_workspace)
         if not checkpoint_ref:
@@ -3292,6 +3337,59 @@ class MoonMindRunWorkflow:
         workspace_ref = str(policy.get("workspaceRef") or target_workspace_ref).strip()
         self._recovery_workspace_restored_ref = workspace_ref or checkpoint_ref
         return self._recovery_workspace_restored_ref
+
+    async def _restore_checkpoint_recovery_workspace(self, logical_step_id: str) -> str:
+        """Invoke the frozen runtime-owned restore route exactly once per history."""
+        contract = self._checkpoint_recovery_contract
+        state = self._checkpoint_recovery_state
+        if contract is None or state is None:
+            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: recovery preflight missing")
+        if state.get("status") == "recovery_workspace_restored":
+            return str(state["restorationEvidenceRef"])
+
+        source_ordinal = self._recovery_source_int(
+            self._recovery_source or {}, "failedStepExecution", "failed_step_execution"
+        ) or 1
+        destination_id, idempotency_key = deterministic_recovery_identity(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=source_ordinal,
+            checkpoint_ref=contract.source_checkpoint_ref,
+        )
+        state.update({
+            "status": "recovery_restoring_workspace",
+            "destinationAgentRunId": destination_id,
+            "restoreIdempotencyKey": idempotency_key,
+        })
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
+        result = await workflow.execute_activity(
+            route.activity_type,
+            {
+                "checkpointRef": contract.source_checkpoint_ref,
+                "checkpointKind": contract.source_checkpoint_kind,
+                "workspacePolicy": contract.workspace_policy,
+                "targetRuntimeId": contract.capabilities.runtime_id,
+                "destinationAgentRunId": destination_id,
+                "idempotencyKey": idempotency_key,
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(result, Mapping):
+            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: invalid restore result")
+        locator, evidence_ref, evidence_digest = validate_restore_result(
+            result,
+            runtime_id=contract.capabilities.runtime_id,
+            destination_agent_run_id=destination_id,
+        )
+        state.update({
+            "status": "recovery_workspace_restored",
+            "destinationWorkspaceLocator": locator,
+            "restorationEvidenceRef": evidence_ref,
+            "restorationEvidenceDigest": evidence_digest,
+        })
+        self._recovery_workspace_restored_ref = evidence_ref
+        return evidence_ref
 
     def _preserved_outputs_for_step(
         self,
@@ -9101,6 +9199,32 @@ class MoonMindRunWorkflow:
                                 queue_order=index,
                                 attempt_reason=attempt_reason,
                             )
+                            if (
+                                node_id == self._recovery_failed_step_id
+                                and self._checkpoint_recovery_state is not None
+                            ):
+                                locator = self._checkpoint_recovery_state.get(
+                                    "destinationWorkspaceLocator"
+                                )
+                                evidence_ref = self._checkpoint_recovery_state.get(
+                                    "restorationEvidenceRef"
+                                )
+                                if not isinstance(locator, Mapping) or not evidence_ref:
+                                    raise ValueError(
+                                        "CHECKPOINT_RESTORATION_NOT_READY: recovered "
+                                        "AgentRun requires destination locator and evidence"
+                                    )
+                                recovered_workspace = dict(request.workspace_spec)
+                                recovered_workspace["workspaceLocator"] = dict(locator)
+                                recovered_workspace["restorationEvidenceRef"] = evidence_ref
+                                recovered_workspace["sourceCheckpointRef"] = (
+                                    self._checkpoint_recovery_state[
+                                        "sourceCheckpointRef"
+                                    ]
+                                )
+                                request = request.model_copy(
+                                    update={"workspace_spec": recovered_workspace}
+                                )
                             await self._resolve_step_resilience_policy_ref(
                                 node_id=node_id,
                                 execution_profile_ref=request.execution_profile_ref,
@@ -11957,12 +12081,20 @@ class MoonMindRunWorkflow:
         if self._codex_session_binding is not None:
             return self._codex_session_binding
 
+        recovery_agent_run_id = ""
+        if self._checkpoint_recovery_state is not None:
+            recovery_agent_run_id = str(
+                self._checkpoint_recovery_state.get("destinationAgentRunId") or ""
+            ).strip()
+        agent_run_id = recovery_agent_run_id or workflow.info().workflow_id
         session_input = CodexManagedSessionWorkflowInput(
-            agentRunId=workflow.info().workflow_id,
+            agentRunId=agent_run_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
         session_workflow_id = self._workflow_scoped_session_workflow_id(runtime_id)
+        if recovery_agent_run_id:
+            session_workflow_id = f"{session_workflow_id}:recovery"
         initial_binding = CodexManagedSessionBinding.from_input(
             workflow_id=session_workflow_id,
             session_input=session_input,

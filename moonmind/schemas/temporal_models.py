@@ -2676,6 +2676,9 @@ class RecoverySourceModel(BaseModel):
     preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
         default_factory=list, alias="preservedSteps"
     )
+    checkpoint_recovery: dict[str, Any] | None = Field(
+        None, alias="checkpointRecovery"
+    )
 
     @model_validator(mode="after")
     def _validate_restore_contract(self) -> "RecoverySourceModel":
