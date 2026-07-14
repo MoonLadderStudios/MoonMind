@@ -1,0 +1,12 @@
+{
+  "incidentWorkflowId": "mm:cecd73db-8b27-42f7-9bb7-fe9fef412dcb",
+  "runId": "019f5f78-4f0d-7e29-9600-7b30eeaf53d7",
+  "failureShape": "successful batch fan-out failed at an irrelevant pre-publication checkpoint",
+  "logicalStepId": "tpl:batch-github-workflows:01:7e28c765",
+  "publishMode": "none",
+  "queuedChildCount": 15,
+  "executionOutcome": {
+    "status": "succeeded",
+    "resultRef": "artifact://batch-workflows-result"
+  }
+}
