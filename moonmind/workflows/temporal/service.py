@@ -73,6 +73,13 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityCatalogError,
+    build_default_activity_catalog,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -3359,6 +3366,73 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest does not allow resume."
             )
+        eligibility = recovery_manifest.recovery_eligibility
+        if eligibility.requested_action != "resume_from_workspace_checkpoint":
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Recovery manifest does not authorize checkpoint Resume."
+            )
+        immutable_proof = (
+            eligibility.resume_phase,
+            eligibility.checkpoint_boundary,
+            eligibility.checkpoint_kind,
+            eligibility.target_runtime_id,
+            eligibility.capability_set_version,
+            eligibility.capability_digest,
+            eligibility.restore_activity,
+            eligibility.workspace_authority,
+        )
+        # Legacy manifests recorded only requiredBoundary/checkpointRef. A
+        # boundary alone therefore does not opt an old payload into v2 proof
+        # validation; any other proof field does.
+        has_immutable_proof = any(
+            value for index, value in enumerate(immutable_proof) if index != 1
+        )
+        if has_immutable_proof and not all(immutable_proof):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
+            )
+        if (
+            has_immutable_proof
+            and eligibility.checkpoint_boundary != recovery_manifest.validation.boundary
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
+            )
+        if any(
+            item.disposition in {"blocked", "needs_compensation"}
+            for item in recovery_manifest.side_effect_dispositions
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_SIDE_EFFECT_UNSAFE"
+            )
+        if has_immutable_proof:
+            capabilities = resolve_runtime_execution_capabilities(
+                eligibility.target_runtime_id
+            )
+            if capabilities is None:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
+                )
+            if capabilities.capability_digest != eligibility.capability_digest:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH"
+                )
+            if eligibility.checkpoint_kind not in capabilities.checkpoint_restore_kinds:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_KIND_INCOMPATIBLE"
+                )
+            if capabilities.checkpoint_restore_activity != eligibility.restore_activity:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_RESTORE_ROUTE_MISSING"
+                )
+            try:
+                build_default_activity_catalog().resolve_activity(
+                    eligibility.restore_activity
+                )
+            except TemporalActivityCatalogError as exc:
+                raise TemporalExecutionRecoveryCheckpointError(
+                    "CHECKPOINT_RESTORE_ROUTE_MISSING"
+                ) from exc
         if recovery_manifest.workflow_id != record.workflow_id:
             raise TemporalExecutionRecoveryCheckpointError(
                 "Failed-run recovery manifest workflowId does not match source execution."
@@ -3453,7 +3527,10 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         for key in AGENT_RUN_ID_PARAM_KEYS:
             params.pop(key, None)
-        recovery_source_payload = RecoverySourceModel(
+        recovery_source_fields = dict(
+            checkpointSourceWorkflowId=checkpoint.source.workflow_id,
+            checkpointSourceRunId=checkpoint.source.run_id,
+            sideEffectSafe=True,
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
@@ -3471,7 +3548,49 @@ class TemporalExecutionService:
             recoveryCheckpointRef=checkpoint_ref,
             recoveryWorkspace=checkpoint.recovery_workspace,
             preservedSteps=preserved_steps,
-        ).model_dump(by_alias=True, mode="json")
+        )
+        if has_immutable_proof:
+            recovery_source_payload = RecoverySourceModel(
+                recoveryAction="resume_from_workspace_checkpoint",
+                resumePhase=eligibility.resume_phase,
+                targetRuntimeId=eligibility.target_runtime_id,
+                capabilitySetVersion=eligibility.capability_set_version,
+                capabilityDigest=eligibility.capability_digest,
+                checkpointKind=eligibility.checkpoint_kind,
+                checkpointRestoreKinds=eligibility.checkpoint_restore_kinds,
+                checkpointRestoreActivity=eligibility.restore_activity,
+                workspaceAuthority=eligibility.workspace_authority,
+                selectedTargetRuntimeId=eligibility.target_runtime_id,
+                selectedCapabilityDigest=capabilities.capability_digest,
+                registeredRestoreActivity=capabilities.checkpoint_restore_activity,
+                **recovery_source_fields,
+            ).model_dump(by_alias=True, mode="json")
+        else:
+            # Preserve the exact pre-v2 recovery shape for manifests recorded
+            # before immutable runtime proof was introduced.
+            recovery_source_payload = {
+                "kind": "recover_from_failed_step",
+                "sourceWorkflowId": record.workflow_id,
+                "sourceRunId": source_run_id,
+                "sourceTaskInputSnapshotRef": source_snapshot_ref,
+                "sourcePlanRef": checkpoint.plan_ref or source_plan_ref,
+                "sourcePlanDigest": checkpoint.plan_digest,
+                "failedStepId": failed_step_id,
+                "failedStepExecution": failed_step_execution,
+                "recoveryMode": recovery_mode,
+                "selectedStartStepId": (
+                    failed_step_id if recovery_mode == "selected_step" else None
+                ),
+                "selectedStartStepExecution": (
+                    failed_step_execution if recovery_mode == "selected_step" else None
+                ),
+                "recoveryCheckpointRef": checkpoint_ref,
+                "recoveryWorkspace": checkpoint.recovery_workspace,
+                "preservedSteps": [
+                    step.model_dump(by_alias=True, mode="json")
+                    for step in preserved_steps
+                ],
+            }
         recovery_source_payload["failedRunRecoveryManifestRef"] = manifest_ref
         recovery_source_payload["selectedCheckpointBoundary"] = (
             recovery_manifest.validation.boundary

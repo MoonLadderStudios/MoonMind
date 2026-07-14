@@ -288,7 +288,7 @@ class ArtifactSessionControlRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     action: Literal[
-        "send_follow_up",
+        "continue_same_session",
         "clear_session",
         "interrupt_turn",
         "cancel_session",
@@ -301,8 +301,8 @@ class ArtifactSessionControlRequest(BaseModel):
             self.message = require_non_blank(self.message, field_name="message")
         if self.reason is not None:
             self.reason = require_non_blank(self.reason, field_name="reason")
-        if self.action == "send_follow_up" and self.message is None:
-            raise ValueError("message is required when action=send_follow_up")
+        if self.action == "continue_same_session" and self.message is None:
+            raise ValueError("message is required when action=continue_same_session")
 
 class ArtifactSessionControlResponse(BaseModel):
     """Control response envelope with the refreshed session projection."""
@@ -310,7 +310,7 @@ class ArtifactSessionControlResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     action: Literal[
-        "send_follow_up",
+        "continue_same_session",
         "clear_session",
         "interrupt_turn",
         "cancel_session",

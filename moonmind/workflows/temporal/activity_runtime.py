@@ -1411,6 +1411,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_publish_terminal_checkpoint",
     ),
+    "agent_runtime.restore_workspace_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_restore_workspace_checkpoint",
+    ),
     "agent_runtime.evaluate_terminal_evidence": (
         "agent_runtime",
         "agent_runtime_evaluate_terminal_evidence",
@@ -10781,6 +10785,73 @@ class TemporalAgentRuntimeActivities:
             metadata=managed_run_status_metadata(record),
         )
         return status
+
+    async def agent_runtime_restore_workspace_checkpoint(
+        self,
+        request: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Restore a captured worktree archive into its managed-run identity."""
+        if self._artifact_service is None or self._run_launcher is None:
+            raise TemporalActivityRuntimeError(
+                "artifact service and managed runtime launcher are required for restore"
+            )
+        checkpoint_ref = str(request.get("checkpointRef") or "").strip()
+        destination_id = str(request.get("destinationAgentRunId") or "").strip()
+        runtime_id = str(request.get("targetRuntimeId") or "").strip()
+        if not checkpoint_ref or not destination_id or not runtime_id:
+            raise TemporalActivityRuntimeError(
+                "checkpointRef, destinationAgentRunId, and targetRuntimeId are required"
+            )
+        _artifact, checkpoint_payload = await self._artifact_service.read(
+            artifact_id=checkpoint_ref,
+            principal="system",
+            allow_restricted_raw=True,
+        )
+        checkpoint = json.loads(checkpoint_payload.decode("utf-8"))
+        workspace = checkpoint.get("workspace") if isinstance(checkpoint, dict) else None
+        if not isinstance(workspace, dict) or workspace.get("kind") != "worktree_archive":
+            raise TemporalActivityRuntimeError(
+                "managed checkpoint restore requires worktree_archive evidence"
+            )
+        archive_ref = str(workspace.get("archiveRef") or "").strip()
+        if not archive_ref:
+            raise TemporalActivityRuntimeError("checkpoint archive evidence is missing")
+        _archive, archive_payload = await self._artifact_service.read(
+            artifact_id=archive_ref,
+            principal="system",
+            allow_restricted_raw=True,
+        )
+        target = (self._run_launcher._workspace_root() / destination_id / "repo").resolve()
+        authority = self._run_launcher._workspace_root().resolve()
+        if not target.is_relative_to(authority):
+            raise TemporalActivityRuntimeError("destination workspace escapes authority")
+        staging = target.parent / ".repo.restore"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        with tarfile.open(fileobj=BytesIO(archive_payload), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                member_path = (staging / member.name).resolve()
+                if not member_path.is_relative_to(staging):
+                    raise TemporalActivityRuntimeError("workspace archive member escapes workspace")
+            archive.extractall(staging, filter="data")
+        if target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging.replace(target)
+        digest = hashlib.sha256(archive_payload).hexdigest()
+        return {
+            "status": "succeeded",
+            "destinationWorkspaceLocator": {
+                "kind": "managed_runtime",
+                "runtimeId": runtime_id,
+                "agentRunId": destination_id,
+                "relativePath": "repo",
+            },
+            "restorationEvidenceRef": archive_ref,
+            "restorationEvidenceDigest": f"sha256:{digest}",
+        }
 
     async def agent_runtime_publish_terminal_checkpoint(
         self,
