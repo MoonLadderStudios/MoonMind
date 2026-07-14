@@ -35,6 +35,7 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.observability import temporal_tracing_interceptors
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.service import TemporalExecutionService
@@ -277,6 +278,7 @@ async def get_temporal_client(address: str, namespace: str) -> Client:
         address,
         namespace=namespace,
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+        interceptors=temporal_tracing_interceptors(),
     )
 
 async def fetch_workflow_execution(
@@ -329,6 +331,7 @@ class TemporalClientAdapter:
                     settings.temporal.address,
                     namespace=settings.temporal.namespace,
                     data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+                    interceptors=temporal_tracing_interceptors(),
                 )
             return self._client
 
