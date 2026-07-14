@@ -8,7 +8,7 @@ from io import BytesIO
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -16,6 +16,7 @@ from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
     StepExecutionIdentityModel,
 )
+from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalCheckpointActivities,
@@ -42,8 +43,9 @@ def _workspace_root(tmp_path: Path) -> Path:
     return root
 
 
-def _repo(root: Path) -> Path:
-    repo = root / "temporal_sandbox" / "repo"
+def _repo(root: Path, *, workspace_id: str | None = None) -> Path:
+    repo = root / "temporal_sandbox"
+    repo = repo / workspace_id / "repo" if workspace_id else repo / "repo"
     repo.mkdir(parents=True)
     subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
@@ -351,6 +353,170 @@ async def test_workspace_classify_git_effect_accepts_workspace_root_ref(
 
     assert result["status"] == "dirty"
     assert result["diagnosticRefs"]
+
+
+async def test_workspace_locator_kinds_are_enforced_for_git_effect(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root, workspace_id="locator-workspace")
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    result = await sandbox.workspace_classify_git_effect(
+        {
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "locator-workspace",
+                "relativePath": "repo",
+            }
+        }
+    )
+    assert result["status"] == "dirty"
+
+    for locator, code in (
+        (
+            {"kind": "managed_runtime", "runtimeId": "codex", "agentRunId": "run-1"},
+            "WORKSPACE_AUTHORITY_MISMATCH",
+        ),
+        (
+            {"kind": "external_state", "artifactRef": "art:sha256:evidence"},
+            "WORKSPACE_LOCATOR_UNSUPPORTED",
+        ),
+    ):
+        with pytest.raises(WorkspaceLocatorResolutionError) as exc_info:
+            await sandbox.workspace_classify_git_effect({"workspaceLocator": locator})
+        assert exc_info.value.code == code
+
+
+async def test_workspace_locator_kinds_are_enforced_for_checkpoint_capture(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    _repo(root, workspace_id="capture-workspace")
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    base_request = {
+        "identity": _identity().model_dump(by_alias=True),
+        "boundary": "after_execution",
+        "artifactNamespace": "checkpoint",
+        "idempotencyKey": "locator-capture",
+    }
+
+    captured = await sandbox.workspace_capture_checkpoint(
+        dict(
+            base_request,
+            kind="git_commit",
+            workspaceLocator={
+                "kind": "sandbox",
+                "workspaceId": "capture-workspace",
+                "relativePath": "repo",
+            },
+        )
+    )
+    assert captured["status"] == "captured"
+
+    external = await sandbox.workspace_capture_checkpoint(
+        dict(
+            base_request,
+            kind="external_state_ref",
+            idempotencyKey="locator-capture-external",
+            workspaceLocator={
+                "kind": "external_state",
+                "artifactRef": "art:sha256:evidence",
+            },
+        )
+    )
+    assert external["status"] == "captured"
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc_info:
+        await sandbox.workspace_capture_checkpoint(
+            dict(
+                base_request,
+                kind="git_commit",
+                idempotencyKey="locator-capture-managed",
+                workspaceLocator={
+                    "kind": "managed_runtime",
+                    "runtimeId": "codex",
+                    "agentRunId": "run-1",
+                },
+            )
+        )
+    assert exc_info.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+
+
+async def test_workspace_locator_kinds_are_enforced_for_recovery_apply(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "worktree_archive",
+            "archiveRef": store.put_bytes(
+                b"invalid", content_type="application/octet-stream"
+            ).artifact_ref,
+        },
+    )
+    base_request = {
+        "identity": _identity().model_dump(by_alias=True),
+        "workspacePolicy": "restore_pre_execution",
+        "checkpointRef": checkpoint_ref,
+        "checkpoint": {},
+        "expectedPlanDigest": "sha256:plan",
+        "idempotencyKey": "locator-recovery",
+    }
+
+    sandbox_request = dict(
+        base_request,
+        targetWorkspaceLocator={
+            "kind": "sandbox",
+            "workspaceId": "recovery-workspace",
+            "relativePath": "repo",
+        },
+    )
+    result = await sandbox.workspace_apply_policy(sandbox_request)
+    assert result["status"] == "rejected"
+    assert result["failureCode"] == "artifact_corrupted"
+
+    for locator, code in (
+        (
+            {"kind": "managed_runtime", "runtimeId": "codex", "agentRunId": "run-1"},
+            "WORKSPACE_AUTHORITY_MISMATCH",
+        ),
+        (
+            {"kind": "external_state", "artifactRef": "art:sha256:evidence"},
+            "WORKSPACE_LOCATOR_UNSUPPORTED",
+        ),
+    ):
+        request = dict(base_request, targetWorkspaceLocator=locator)
+        request["idempotencyKey"] = f"locator-recovery-{locator['kind']}"
+        with pytest.raises(WorkspaceLocatorResolutionError) as exc_info:
+            await sandbox.workspace_apply_policy(request)
+        assert exc_info.value.code == code
+
+
+async def test_legacy_workspace_path_usage_emits_compatibility_metric(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    emitter = Mock()
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.get_metrics_emitter",
+        lambda: emitter,
+    )
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    await sandbox.workspace_classify_git_effect({"workspacePath": str(repo)})
+
+    emitter.increment.assert_called_once_with(
+        "workspace_locator.compatibility_path_usage",
+        tags={"operation": "classify_git_effect"},
+    )
 
 
 async def test_workspace_apply_policy_handles_degraded_checkpoint_payload(
