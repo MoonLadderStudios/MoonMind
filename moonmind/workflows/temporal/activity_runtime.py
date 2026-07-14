@@ -3402,7 +3402,7 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
-            archive_payload, archived_paths = self._build_worktree_archive(workspace)
+            archive_payload, archived_entries = self._build_worktree_archive(workspace)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
@@ -3413,7 +3413,8 @@ class TemporalSandboxActivities:
                     {
                         "kind": "worktree_archive",
                         "archiveRef": archive_ref,
-                        "pathCount": len(archived_paths),
+                        "pathCount": len(archived_entries),
+                        "entries": archived_entries,
                     }
                 ),
                 content_type="application/json",
@@ -3427,8 +3428,10 @@ class TemporalSandboxActivities:
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[str]]:
-        archived_paths: list[str] = []
+    def _build_worktree_archive(
+        self, workspace: Path
+    ) -> tuple[bytes, list[dict[str, Any]]]:
+        archived_entries: list[dict[str, Any]] = []
         output = BytesIO()
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for path in sorted(workspace.rglob("*")):
@@ -3454,7 +3457,14 @@ class TemporalSandboxActivities:
                     info.uname = "moonmind"
                     info.gname = "moonmind"
                     archive.addfile(info)
-                    archived_paths.append(str(relative))
+                    archived_entries.append(
+                        {
+                            "path": str(relative),
+                            "kind": "symlink",
+                            "mode": info.mode,
+                            "target": os.readlink(path),
+                        }
+                    )
                     continue
                 info = archive.gettarinfo(str(path), arcname=str(relative))
                 info.uid = _MANAGED_AGENT_UID
@@ -3463,8 +3473,16 @@ class TemporalSandboxActivities:
                 info.gname = "moonmind"
                 with path.open("rb") as file_handle:
                     archive.addfile(info, file_handle)
-                archived_paths.append(str(relative))
-        return output.getvalue(), archived_paths
+                archived_entries.append(
+                    {
+                        "path": str(relative),
+                        "kind": "file",
+                        "mode": info.mode,
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "size": info.size,
+                    }
+                )
+        return output.getvalue(), archived_entries
 
     async def workspace_apply_policy(
         self,

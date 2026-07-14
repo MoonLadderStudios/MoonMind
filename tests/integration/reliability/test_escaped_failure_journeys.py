@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sqlite3
+import stat
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -538,3 +542,114 @@ async def test_checkpoint_finalization_fault_is_retryable(
     assert second["status"] == "captured"
     assert durable_execution_result["status"] == "completed"
     assert calls == 2
+
+
+async def test_source_destroying_cold_resume_restores_durable_workspace_once(
+    tmp_path: Path,
+) -> None:
+    """Cold-resume replay: restoration cannot observe the source workspace."""
+    replay = load_replay("cold-resume-worktree-archive", "manifest.json")
+    workspace_root = tmp_path / "workspaces"
+    source = workspace_root / "temporal_sandbox" / "source-run" / "repo"
+    destination = workspace_root / "temporal_sandbox" / "destination-run" / "repo"
+    source.mkdir(parents=True)
+
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.email", "replay@moonmind.local"], cwd=source, check=True)
+    subprocess.run(["git", "config", "user.name", "MoonMind Replay"], cwd=source, check=True)
+    (source / "tracked.txt").write_text("accepted prepare\n", encoding="utf-8")
+    (source / "deleted.txt").write_text("delete me\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=source, check=True)
+    base_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+
+    (source / "tracked.txt").write_text("implementation evidence\n", encoding="utf-8")
+    (source / "untracked file.txt").write_text("untracked\n", encoding="utf-8")
+    (source / "binary.bin").write_bytes(bytes(range(256)))
+    executable = source / "scripts" / "run me.sh"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    (source / "nested" / "unicode").mkdir(parents=True)
+    (source / "nested" / "unicode" / "café.txt").write_text("moon\n", encoding="utf-8")
+    os.symlink("tracked.txt", source / "safe-link")
+    (source / "deleted.txt").unlink()
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "excluded.pyc").write_bytes(b"cache")
+    provider_home = tmp_path / "provider-home"
+    provider_home.mkdir()
+    (provider_home / "credentials.json").write_text("excluded", encoding="utf-8")
+
+    activities = TemporalSandboxActivities(workspace_root=workspace_root)
+    identity = {
+        "workflowId": replay["sourceWorkflowId"],
+        "runId": replay["sourceAgentRunId"],
+        "logicalStepId": "implement",
+        "executionOrdinal": 1,
+    }
+    captured = await activities.workspace_capture_checkpoint(
+        {
+            "identity": identity,
+            "boundary": "before_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(source),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": replay["captureIdempotencyKey"],
+        }
+    )
+    assert captured["status"] == "captured"
+    manifest = json.loads(
+        (await activities._read_checkpoint_bytes(captured["workspace"]["manifestRef"])).decode()
+    )
+    assert manifest["pathCount"] == len(manifest["entries"])
+    entries = {entry["path"]: entry for entry in manifest["entries"]}
+    assert entries["binary.bin"]["sha256"] == hashlib.sha256(bytes(range(256))).hexdigest()
+    assert entries["scripts/run me.sh"]["mode"] & stat.S_IXUSR
+    assert entries["safe-link"]["target"] == "tracked.txt"
+    assert "__pycache__/excluded.pyc" not in entries
+    assert all(str(provider_home) not in entry["path"] for entry in manifest["entries"])
+
+    checkpoint_ref = await activities._put_checkpoint_bytes(
+        json.dumps(
+            {
+                "checkpointId": replay["checkpointId"],
+                "boundary": "before_execution",
+                "baseCommit": base_commit,
+                "workspace": captured["workspace"],
+            }
+        ).encode(),
+        content_type="application/json",
+        metadata={"artifact_kind": "step_execution_checkpoint"},
+    )
+    shutil.rmtree(source)
+    del captured
+    assert not source.exists()
+
+    restored = await activities.workspace_apply_policy(
+        {
+            "identity": {**identity, "runId": replay["destinationAgentRunId"], "executionOrdinal": 2},
+            "workspacePolicy": "restore_pre_execution",
+            "checkpointRef": checkpoint_ref,
+            "targetWorkspaceRef": str(destination),
+            "idempotencyKey": replay["restoreIdempotencyKey"],
+        }
+    )
+    restored_again = await activities.workspace_apply_policy(
+        {
+            "identity": {**identity, "runId": replay["destinationAgentRunId"], "executionOrdinal": 2},
+            "workspacePolicy": "restore_pre_execution",
+            "checkpointRef": checkpoint_ref,
+            "targetWorkspaceRef": str(destination),
+            "idempotencyKey": replay["restoreIdempotencyKey"],
+        }
+    )
+
+    assert restored == restored_again
+    assert restored["status"] == "applied"
+    assert replay["sourceAgentRunId"] != replay["destinationAgentRunId"]
+    assert not source.exists()
+    assert (destination / "tracked.txt").read_text() == "implementation evidence\n"
+    assert (destination / "binary.bin").read_bytes() == bytes(range(256))
+    assert os.readlink(destination / "safe-link") == "tracked.txt"
+    assert os.access(destination / "scripts" / "run me.sh", os.X_OK)
+    assert not (destination / "__pycache__").exists()
