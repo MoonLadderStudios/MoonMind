@@ -888,7 +888,9 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert result.metadata["runtimeCapabilities"]["workspaceAuthority"] == (
         "managed_runtime"
     )
-    assert result.metadata["runtimeCapabilities"]["checkpointCaptureKinds"] == []
+    assert result.metadata["runtimeCapabilities"]["checkpointCaptureKinds"] == [
+        "worktree_archive"
+    ]
     assert result.metadata["workspaceLocator"] == {
         "kind": "managed_runtime",
         "runtimeId": "codex_cli",

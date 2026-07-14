@@ -114,6 +114,24 @@ def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
     }
 
 
+def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
+    return {
+        "status": "captured",
+        "workspace": {
+            "kind": "worktree_archive",
+            "baseCommit": "abc123",
+            "archiveRef": "artifact://managed/archive",
+            "archiveDigest": "sha256:" + ("a" * 64),
+            "manifestRef": "artifact://managed/manifest",
+            "manifestDigest": "sha256:" + ("b" * 64),
+            "includesUntracked": True,
+            "includesIgnoredFiles": False,
+        },
+        "diagnosticRefs": ["artifact://managed/manifest"],
+        "idempotencyKey": payload["idempotencyKey"],
+    }
+
+
 def _resilience_policy_compile_result(payload: Any) -> dict[str, Any]:
     return compile_resilience_policy(
         compiled_at=datetime.fromisoformat(payload["compiledAt"]),
@@ -4264,6 +4282,8 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
                 "feedback": None,
                 "issues": [],
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4452,6 +4472,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4633,6 +4655,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4809,6 +4833,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4960,6 +4986,8 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -5108,6 +5136,8 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")

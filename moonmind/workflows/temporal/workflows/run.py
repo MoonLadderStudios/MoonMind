@@ -163,6 +163,7 @@ from moonmind.workflows.temporal.recovery_state import (
     deterministic_recovery_identity,
     validate_restore_result,
 )
+from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
@@ -211,6 +212,7 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 
 
 def bounded_story_loop_step_effects(
@@ -564,6 +566,7 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
@@ -603,6 +606,7 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -1153,6 +1157,7 @@ class MoonMindRunWorkflow:
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
         self._canonical_no_commit_outcome_enabled: bool = False
+        self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
@@ -2992,6 +2997,10 @@ class MoonMindRunWorkflow:
             raise ValueError("Recovery source must be a compact mapping.")
         if not recovery_source:
             return None
+        # Patch-gated so histories started before the explicit contract retain
+        # their recorded validation path during replay.
+        if self._workflow_patch_enabled(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
+            validate_recovery_contract(recovery_source)
 
         source_workflow_id = self._recovery_source_text(
             recovery_source,
@@ -3271,13 +3280,24 @@ class MoonMindRunWorkflow:
                 f"recovery checkpoint validation failed: {failure_code}"
             )
 
+        target_workspace_locator = self._recovery_workspace.get(
+            "targetWorkspaceLocator"
+        )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = self._recovery_workspace.get(
+                "target_workspace_locator"
+            )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = None
         target_workspace_ref = self._recovery_source_text(
             self._recovery_workspace,
             "targetWorkspaceRef",
             "target_workspace_ref",
             "workspaceRef",
             "workspace_ref",
-        ) or checkpoint_ref
+        )
+        if target_workspace_locator is None:
+            target_workspace_ref = target_workspace_ref or checkpoint_ref
         apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("workspace.apply_policy")
         apply_payload = {
             "identity": {
@@ -3289,11 +3309,14 @@ class MoonMindRunWorkflow:
             "workspacePolicy": workspace_policy,
             "checkpointRef": checkpoint_ref,
             "checkpoint": dict(checkpoint_payload),
-            "targetWorkspaceRef": target_workspace_ref,
             "expectedPlanRef": source_plan_ref or None,
             "expectedPlanDigest": source_plan_digest or None,
             "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
         }
+        if target_workspace_locator is not None:
+            apply_payload["targetWorkspaceLocator"] = dict(target_workspace_locator)
+        if target_workspace_ref:
+            apply_payload["targetWorkspaceRef"] = target_workspace_ref
         policy = await workflow.execute_activity(
             apply_route.activity_type,
             apply_payload,
@@ -4987,13 +5010,25 @@ class MoonMindRunWorkflow:
                 else None
             ),
         )
-        if resolved_policy.capture_activity != "workspace.capture_checkpoint":
+        managed_capture_enabled = workflow.patched(RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH)
+        supported_capture_activities = {"workspace.capture_checkpoint"}
+        if managed_capture_enabled:
+            supported_capture_activities.add(
+                "agent_runtime.capture_workspace_checkpoint"
+            )
+        if resolved_policy.capture_activity not in supported_capture_activities:
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "unsupported",
                 "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
                 "boundary": str(boundary),
                 "captureAuthority": resolved_policy.capture_authority,
-                "captureActivity": resolved_policy.capture_activity,
+                "captureActivity": (
+                    None
+                    if resolved_policy.capture_activity
+                    == "agent_runtime.capture_workspace_checkpoint"
+                    and not managed_capture_enabled
+                    else resolved_policy.capture_activity
+                ),
                 "capabilityCriticality": resolved_policy.criticality,
             }
             return None
@@ -5018,15 +5053,35 @@ class MoonMindRunWorkflow:
             )
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "workspace.capture_checkpoint"
+            resolved_policy.capture_activity
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": claimed_kind or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
+        if resolved_policy.capture_activity == "agent_runtime.capture_workspace_checkpoint":
+            capabilities = RuntimeExecutionCapabilities.model_validate(
+                capture_input["runtimeCapabilities"]
+            )
+            payload.update(
+                {
+                    "schemaVersion": "v1",
+                    "checkpointKind": claimed_kind or resolved_policy.checkpoint_kind,
+                    "expectedRuntimeId": capabilities.runtime_id,
+                    "capabilitySetVersion": capabilities.capability_set_version,
+                    "capabilityDigest": capabilities.capability_digest,
+                    "capturePolicy": {
+                        "includeTracked": True,
+                        "includeUntracked": True,
+                        "includeIgnored": False,
+                        "redactionProfile": "managed-code-workspace-v1",
+                    },
+                }
+            )
+        else:
+            payload["kind"] = claimed_kind or resolved_policy.checkpoint_kind
         if isinstance(capture_input.get("workspaceLocator"), Mapping):
             payload["workspaceLocator"] = dict(capture_input["workspaceLocator"])
         if capture_input.get("workspacePath"):
@@ -5137,12 +5192,20 @@ class MoonMindRunWorkflow:
             max_chars=400,
         )
         capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
-        workspace_locator = self._coerce_text(
-            capture_input.get("workspaceRootRef")
-            or capture_input.get("workspacePath")
-            or capture_input.get("externalStateRef"),
-            max_chars=500,
-        )
+        raw_workspace_locator = capture_input.get("workspaceLocator")
+        if isinstance(raw_workspace_locator, Mapping):
+            # Preserve ownership/authority. Never collapse a new typed locator
+            # to a path-like legacy projection.
+            workspace_locator: dict[str, Any] | str | None = dict(raw_workspace_locator)
+        else:
+            # Read/write fallback retained only for histories whose capture
+            # input predates typed locators.
+            workspace_locator = self._coerce_text(
+                capture_input.get("workspaceRootRef")
+                or capture_input.get("workspacePath")
+                or capture_input.get("externalStateRef"),
+                max_chars=500,
+            )
         result_ref = next(
             (
                 compact_refs[key]
@@ -7844,6 +7907,9 @@ class MoonMindRunWorkflow:
             ) from exc
         self._canonical_no_commit_outcome_enabled = workflow.patched(
             RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
+        )
+        self._authoritative_publish_outcome_enabled = workflow.patched(
+            RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
         )
         self._get_logger().info(
             "Starting MoonMind.UserWorkflow workflow",
@@ -13631,6 +13697,18 @@ class MoonMindRunWorkflow:
 
     def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if self._authoritative_publish_outcome_enabled and push_status == "pushed":
+            stale_no_commit = self._publish_context.pop("noCommitPublish", None)
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
+                "not_required",
+                "skipped",
+            }:
+                self._publish_status = None
+                self._publish_reason = None
+            return
         if push_status == "no_commits":
             self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
@@ -14280,6 +14358,30 @@ class MoonMindRunWorkflow:
                 )
 
         publish_mode = self._publish_mode(parameters)
+        if (
+            self._authoritative_publish_outcome_enabled
+            and self._moonspec_draft_publication_reason is not None
+        ):
+            pull_request_url = self._coerce_text(
+                self._pull_request_url
+                or self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+            if pull_request_url:
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification; incomplete work was "
+                    f"preserved in draft pull request {pull_request_url}. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
+            return (
+                "failed",
+                "Workflow failed MoonSpec verification and draft pull request "
+                "publication did not complete. "
+                f"{self._moonspec_draft_publication_reason}",
+                True,
+            )
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
@@ -17666,6 +17768,27 @@ class MoonMindRunWorkflow:
         if not workflow.patched(RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH):
             return None, None
         try:
+            failed_step_id = self._recovery_failed_step_id or self._coerce_text(
+                (self._failure_diagnostic or {}).get("stepId"), max_chars=200
+            )
+            capture_input = self._step_workspace_capture_inputs.get(
+                failed_step_id or "", {}
+            )
+            capability_payload = capture_input.get("runtimeCapabilities")
+            capabilities = (
+                RuntimeExecutionCapabilities.model_validate(capability_payload)
+                if isinstance(capability_payload, Mapping)
+                else None
+            )
+            restore_route_registered = False
+            if capabilities and capabilities.checkpoint_restore_activity:
+                try:
+                    DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        capabilities.checkpoint_restore_activity
+                    )
+                    restore_route_registered = True
+                except Exception:
+                    restore_route_registered = False
             manifest = build_failed_run_recovery_manifest(
                 workflow_id=workflow.info().workflow_id,
                 run_id=workflow.info().run_id,
@@ -17679,6 +17802,12 @@ class MoonMindRunWorkflow:
                 checkpoint_validation_failure=(
                     self._recovery_checkpoint_validation_failure
                 ),
+                checkpoint_kind=self._coerce_text(
+                    capture_input.get("kind") or capture_input.get("checkpointKind"),
+                    max_chars=100,
+                ),
+                runtime_capabilities=capabilities,
+                restore_route_registered=restore_route_registered,
             )
         except Exception as exc:
             self._get_logger().warning(

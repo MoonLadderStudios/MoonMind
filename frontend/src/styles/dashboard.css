@@ -112,6 +112,12 @@
   --workflow-list-column-workflow-width: 20rem;
   --workflow-list-divider-width: 1px;
   --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);
+  /* Visible block size available to a collection workspace below the dashboard
+   * chrome (masthead, banners, alert strip). The route shell overrides this
+   * precisely from the panel's top coordinate + visualViewport height; the
+   * 100dvh default keeps the shared rail full-height before/without that
+   * measurement so its size never depends on the row count. */
+  --mm-collection-workspace-block-size: 100dvh;
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -6118,6 +6124,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-start-heading {
   margin-bottom: 0.35rem;
+  text-align: center;
 }
 
 .queue-advanced-settings-body {
@@ -7980,6 +7987,30 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   column-gap: 1.25rem;
   width: 100%;
   max-width: none;
+  /* The workspace owns its visible block size (route area below the dashboard
+   * chrome), so the sidebar rail can fill it regardless of how many rows the
+   * list holds. This is a floor: a taller detail pane still grows the shell. */
+  min-block-size: var(--mm-collection-workspace-block-size);
+}
+
+/*
+ * The collection rail's separator is its own right border, not a pseudo-element
+ * pinned beside the list scrollbar. The scrollbar is painted inside this border
+ * regardless of its platform-specific width, so the line stays at the rail's
+ * true outer edge whether or not a scrollbar exists. Scoped to the shared
+ * edge-rail layouts (Workflows, Recurring, Skills) via the neutral
+ * `.collection-sidebar` primitive so all three stay consistent. Global
+ * border-box sizing keeps the border inside the existing rail width (no shift).
+ */
+.workflow-workspace-shell > .collection-sidebar,
+.collection-workspace--edge-rail > .collection-sidebar {
+  align-self: stretch;
+  block-size: var(--mm-collection-workspace-block-size);
+  max-block-size: var(--mm-collection-workspace-block-size);
+  border-inline-end:
+    var(--workflow-list-divider-width)
+    solid
+    var(--workflow-list-divider-color);
 }
 
 .collection-workspace {
@@ -8036,20 +8067,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar {
-  /* Width of the sidebar list's thin scrollbar; the divider below sits directly
-   * to its left, and the ::-webkit-scrollbar rule keeps the two in sync. */
-  --workflow-list-sidebar-scrollbar-width: 6px;
-
   position: sticky;
   top: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-height: 100vh;
   overflow: visible;
   /* Not a card: the sidebar is a plain left column. It is separated from the
-   * detail by the grid gap plus a single thin divider (::after) that sits
-   * directly to the left of the list scrollbar — see below. */
+   * detail by the grid gap plus its own right border (border-inline-end on the
+   * shared collection rail — see the edge-rail block above). The rail fills the
+   * workspace block size; the list below is the only scroll container. */
   padding: 0;
   /* MM-1138 Q1: bleed the rail's left edge to the screen edge like the list
    * table's first column. The right edge stays on the grid-column boundary, so
@@ -8228,23 +8255,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /*
- * A thin vertical line directly to the left of the sidebar scrollbar, running
- * the full height of the rail (over the sticky header too). It is scoped to the
- * sidebar, so the full-screen workflow table — which has no sidebar and no inner
- * scrollbar — never draws it. Offset by the scrollbar width so the scrollbar
- * sits in the narrow gutter just to its right; z-index clears the sticky header
- * (z-index 8) and pinned list (z-index 6) so the line stays continuous.
+ * The old scrollbar-positioned divider is gone: the rail's separator is now its
+ * own border-inline-end (see the edge-rail block above), which is deterministic
+ * across scrollbar width, overlay scrollbars, and display scaling. Keep the
+ * pseudo-element explicitly empty so nothing re-draws a second line.
  */
 .workflow-workspace-sidebar::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: var(--workflow-list-sidebar-scrollbar-width);
-  z-index: 9;
-  width: var(--workflow-list-divider-width);
-  background: var(--workflow-list-divider-color);
-  pointer-events: none;
+  content: none;
 }
 
 .workflow-workspace-sidebar-header {
@@ -8299,6 +8316,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-table {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* Pack the header and list rows at the top. The rail now owns a full
+   * `--mm-collection-workspace-block-size` height and this table fills it
+   * (flex: 1 1 auto), so a short list leaves free vertical space. Without an
+   * explicit `align-content`, a grid defaults to `stretch` and would grow the
+   * auto rows — most visibly ballooning the sticky header — to absorb that
+   * slack. `start` keeps the header and rows at their natural height and lets
+   * the leftover space fall below the list instead. */
+  align-content: start;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -8308,10 +8333,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin: 0;
   scrollbar-width: thin;
   scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
+  /* Reserve the scrollbar gutter so the header and rows keep a constant width
+   * whether or not a classic scrollbar is painted. The rail's right border is
+   * outside this element and stays put regardless. This is purely cosmetic —
+   * no separator geometry depends on the scrollbar width. */
+  scrollbar-gutter: stable;
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar {
-  width: var(--workflow-list-sidebar-scrollbar-width);
+  width: 6px;
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar-thumb {

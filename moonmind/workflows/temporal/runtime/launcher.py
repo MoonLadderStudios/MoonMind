@@ -1735,6 +1735,19 @@ class ManagedRuntimeLauncher:
         record = ManagedRunRecord(
             run_id=run_id,
             workflow_id=str(workflow_id or "").strip() or None,
+            owner_run_id=(
+                request.step_execution.run_id if request.step_execution else None
+            ),
+            logical_step_id=(
+                request.step_execution.logical_step_id
+                if request.step_execution
+                else None
+            ),
+            execution_ordinal=(
+                request.step_execution.execution_ordinal
+                if request.step_execution
+                else None
+            ),
             agent_id=request.agent_id,
             runtime_id=profile.runtime_id,
             status="launching",

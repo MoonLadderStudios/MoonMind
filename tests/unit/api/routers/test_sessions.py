@@ -245,7 +245,7 @@ def test_post_session_message_event_maps_to_existing_control_path(
 ) -> None:
     _enable_session_api(monkeypatch)
     test_client, _ = client
-    control_response = SimpleNamespace(action="send_follow_up", projection=_projection())
+    control_response = SimpleNamespace(action="continue_same_session", projection=_projection())
 
     with patch(
         "api_service.api.routers.sessions.ManagedSessionStore.load",
@@ -261,10 +261,10 @@ def test_post_session_message_event_maps_to_existing_control_path(
             )
 
     assert response.status_code == 200
-    assert response.json()["action"] == "send_follow_up"
+    assert response.json()["action"] == "continue_same_session"
     control_payload = control.await_args.kwargs["payload"]
     assert control.await_args.kwargs["agent_run_id"] == "mm:run-1"
-    assert control_payload.action == "send_follow_up"
+    assert control_payload.action == "continue_same_session"
     assert control_payload.message == "continue"
 
 
@@ -294,7 +294,7 @@ def test_resolve_elicitation_maps_approval_to_existing_control_path(
 ) -> None:
     _enable_session_api(monkeypatch)
     test_client, _ = client
-    control_response = SimpleNamespace(action="send_follow_up", projection=_projection())
+    control_response = SimpleNamespace(action="continue_same_session", projection=_projection())
 
     with patch(
         "api_service.api.routers.sessions.ManagedSessionStore.load",
@@ -314,12 +314,12 @@ def test_resolve_elicitation_maps_approval_to_existing_control_path(
     assert body["type"] == "elicitation_resolution"
     assert body["elicitationId"] == "el-1"
     assert body["decision"] == "approve"
-    assert body["action"] == "send_follow_up"
+    assert body["action"] == "continue_same_session"
     assert body["projection"]["agent_run_id"] == "mm:run-1"
     control_payload = control.await_args.kwargs["payload"]
     assert control.await_args.kwargs["agent_run_id"] == "mm:run-1"
     assert control.await_args.kwargs["session_id"] == "sess:mm:run-1:codex_cli"
-    assert control_payload.action == "send_follow_up"
+    assert control_payload.action == "continue_same_session"
     assert control_payload.message == "Approved."
     assert control_payload.reason == "session_elicitation:el-1:approve"
 
