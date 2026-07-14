@@ -1,0 +1,15 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3325",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/pull/3325",
+  "title": "GitHub Issue Implement",
+  "description": "Implement GitHub issue MoonLadderStudios/MoonMind#3266.",
+  "acceptance_criteria": [],
+  "labels": [],
+  "preset_brief": "MoonLadderStudios/MoonMind#3325: GitHub Issue Implement\n\nImplement GitHub issue MoonLadderStudios/MoonMind#3266.",
+  "constraints": "",
+  "source_resolution": "Loaded GitHub issue preset brief for MoonLadderStudios/MoonMind#3325 from trusted GitHub data.",
+  "trusted_source": "moonmind.github.get_issue",
+  "truncated": false,
+  "truncated_fields": []
+}
