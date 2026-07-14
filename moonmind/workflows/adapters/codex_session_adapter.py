@@ -2124,6 +2124,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         record = ManagedRunRecord(
             runId=record_key,
             workflowId=self._workflow_id,
+            ownerRunId=existing.owner_run_id if existing is not None else None,
+            logicalStepId=existing.logical_step_id if existing is not None else None,
+            executionOrdinal=existing.execution_ordinal if existing is not None else None,
             agentId=agent_id,
             runtimeId=runtime_id,
             status=status,

@@ -18,6 +18,13 @@ export default defineConfig({
           browser: 'chromium',
           viewport: { width: 1280, height: 800 },
         },
+        // Firefox paints native scrollbars with a different width/geometry than
+        // Chromium; the collection sidebar rail's separator must not depend on
+        // that, so the guardrail runs in both engines.
+        {
+          browser: 'firefox',
+          viewport: { width: 1280, height: 800 },
+        },
       ],
     },
   },

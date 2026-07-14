@@ -468,6 +468,61 @@ async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_pa
     assert sandbox_calls == expected["sandboxResolverCalls"] == 0
 
 
+async def test_managed_checkpoint_waits_for_authoritative_locator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:8a09888d before the AgentRun workspace exists."""
+    replay_id = "managed-checkpoint-missing-locator"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["runId"],
+        task_queue="mm.workflow.merge_automation",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+
+    activity_calls: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        _payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        activity_calls.append(activity_type)
+        raise AssertionError("managed capture ran without an authoritative locator")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        capture_activity,
+    )
+    now = datetime(2026, 7, 14, 5, 25, tzinfo=timezone.utc)
+    parent._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Investigate"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    parent._mark_step_running("node-1", updated_at=now, summary="Investigating")
+    parent._record_step_workspace_capture_input("node-1", manifest["stepInputs"])
+
+    checkpoint_ref = await parent._record_canonical_step_checkpoint(
+        "node-1",
+        boundary=manifest["boundary"],
+        updated_at=now,
+    )
+
+    assert checkpoint_ref is None
+    assert activity_calls == expected["activityCalls"]
+    assert parent._step_checkpoint_capture_outcomes["node-1"] == expected[
+        "captureOutcome"
+    ]
+
+
 async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -531,13 +586,41 @@ async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
 
-    async def unexpected_activity(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("managed workspace must not reach a sandbox activity")
+    activity_calls: list[str] = []
+
+    async def managed_checkpoint_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        activity_calls.append(activity_type)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "worktree_archive",
+                    "baseCommit": "abc123",
+                    "archiveRef": "artifact://managed/archive",
+                    "archiveDigest": "sha256:" + ("a" * 64),
+                    "manifestRef": "artifact://managed/manifest",
+                    "manifestDigest": "sha256:" + ("b" * 64),
+                    "includesUntracked": True,
+                    "includesIgnoredFiles": False,
+                },
+                "diagnosticRefs": ["artifact://managed/manifest"],
+                "idempotencyKey": payload["idempotencyKey"],
+            }
+        if activity_type == "step_checkpoint.create":
+            return {
+                "checkpointRef": "artifact://checkpoint/after_execution",
+                "checkpointId": payload["idempotencyKey"],
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_activity",
-        unexpected_activity,
+        managed_checkpoint_activity,
     )
     parent = MoonMindRunWorkflow()
     now = datetime(2026, 7, 13, tzinfo=timezone.utc)
@@ -553,10 +636,11 @@ async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority
         "node-1", boundary="after_execution", updated_at=now
     )
 
-    assert checkpoint_ref is None
-    assert parent._step_checkpoint_capture_outcomes["node-1"] == (
-        expected["checkpointOutcome"]
-    )
+    assert checkpoint_ref == "artifact://checkpoint/after_execution"
+    assert activity_calls == [
+        "agent_runtime.capture_workspace_checkpoint",
+        "step_checkpoint.create",
+    ]
 
 
 async def test_codex_system_error_waits_for_delayed_oauth_failure_log(
