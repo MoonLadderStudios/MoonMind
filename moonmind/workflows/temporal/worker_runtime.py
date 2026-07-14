@@ -2426,15 +2426,17 @@ def _build_agent_runtime_deps(
             profile_image_overrides=_pentest_runner_image_overrides(),
         )
     workload_fleet_limit = _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
+    docker_backend_settings = DockerBackendSettings.from_environment()
     workload_launcher = DockerWorkloadLauncher(
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
         concurrency_limiter=DockerWorkloadConcurrencyLimiter(
             fleet_limit=workload_fleet_limit
         ),
+        allow_raw_docker_cli=docker_backend_settings.allow_raw_docker_cli,
     )
     container_job_backend = DockerEngineAdapter(
-        DockerBackendSettings.from_environment()
+        docker_backend_settings
     )
     return (
         store,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from moonmind.schemas.container_job_models import ResolvedContainerLaunchPlan
@@ -32,6 +34,8 @@ def plan(**spec_overrides: object) -> ResolvedContainerLaunchPlan:
         backendKind="docker-engine",
         backendRef="system",
         resolvedWorkspaceRef="/work/agent_jobs/job-1/repo",
+        correlationId="workflow-1/run-1",
+        expiresAt=datetime.now(UTC) + timedelta(hours=1),
         spec=spec,
     )
 
@@ -54,9 +58,12 @@ def test_create_boundary_applies_security_resources_mounts_and_immutable_labels(
     assert "--cap-drop ALL" in rendered
     assert "--security-opt no-new-privileges" in rendered
     assert "--pid private" in rendered and "--ipc private" in rendered
+    assert "--userns private" in rendered
     assert "--pids-limit 64" in rendered
     assert "source=/work/agent_jobs/job-1/repo,target=/workspace" in rendered
     assert "moonmind.job_id=container-job:" in rendered
+    assert "moonmind.correlation_id=workflow-1/run-1" in rendered
+    assert "moonmind.expires_at=" in rendered
     assert "--device" not in args and "/var/run/docker.sock" not in rendered
 
 
@@ -82,7 +89,68 @@ def test_forbidden_workspace_sources_are_rejected() -> None:
         DockerEngineAdapter(settings()).build_create_args(candidate)
 
 
+def test_only_resolver_approved_mount_classes_and_roots_are_accepted() -> None:
+    approved_data = plan().model_dump(mode="json", by_alias=True)
+    approved_data["resolvedMounts"] = [
+        {"mountClass": "workspace", "resolvedRef": "/work/agent_jobs/job-1/repo", "target": "/workspace"},
+        {"mountClass": "scratch", "resolvedRef": "/work/agent_jobs/job-1/scratch", "target": "/scratch"},
+        {"mountClass": "artifact", "resolvedRef": "/var/artifacts/job-1", "target": "/artifacts"},
+    ]
+    approved = ResolvedContainerLaunchPlan.model_validate(approved_data)
+    rendered = " ".join(DockerEngineAdapter(settings()).build_create_args(approved))
+    assert "source=/var/artifacts/job-1,target=/artifacts" in rendered
+    rejected_data = plan().model_dump(mode="json", by_alias=True)
+    rejected_data["resolvedMounts"] = [{"mountClass": "workspace", "resolvedRef": "/etc", "target": "/workspace"}]
+    rejected = ResolvedContainerLaunchPlan.model_validate(rejected_data)
+    with pytest.raises(DockerBackendError, match="approved"):
+        DockerEngineAdapter(settings()).build_create_args(rejected)
+
+
 def test_raw_docker_cli_is_disabled_by_default_and_endpoint_is_deployment_only() -> None:
     loaded = DockerBackendSettings.from_environment({"SYSTEM_DOCKER_HOST": "unix:///run/proxy.sock"})
     assert loaded.allow_raw_docker_cli is False
     assert loaded.endpoint == "unix:///run/proxy.sock"
+
+
+@pytest.mark.parametrize("name", ["MOONMIND_DOCKER_BACKEND_ENABLED", "MOONMIND_ALLOW_RAW_DOCKER_CLI"])
+def test_boolean_settings_reject_ambiguous_values(name: str) -> None:
+    with pytest.raises(DockerBackendError, match=name):
+        DockerBackendSettings.from_environment({"SYSTEM_DOCKER_HOST": "unix:///proxy.sock", name: "enabled-ish"})
+
+
+@pytest.mark.asyncio
+async def test_readiness_error_redacts_endpoint(monkeypatch) -> None:
+    adapter = DockerEngineAdapter(settings(endpoint="tcp://secret-host:2375"))
+
+    async def failed(*args, **kwargs):
+        return b"", b"cannot reach tcp://secret-host:2375", 1
+
+    monkeypatch.setattr(adapter, "_command", failed)
+    with pytest.raises(DockerBackendError, match="<docker-endpoint>") as error:
+        await adapter.ready()
+    assert "secret-host" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_secret_values_are_never_put_in_create_argv(monkeypatch) -> None:
+    adapter = DockerEngineAdapter(settings(), policy=DockerBackendPolicy(allowed_environment=frozenset({"API_TOKEN"})))
+    candidate = plan(environment=[{"name": "API_TOKEN", "secretRef": "secret://token"}])
+    calls = []
+
+    async def command(args, **kwargs):
+        calls.append(tuple(args))
+        if args[0] == "ps":
+            return b"", b"", 0
+        if args[0] == "create":
+            return b"cid\n", b"", 0
+        if args[0] == "inspect":
+            return f"moonmind|container-job|{candidate.job_id}|system|/{adapter._name(candidate.job_id)}\n".encode(), b"", 0
+        if args[0] == "wait":
+            return b"0\n", b"", 0
+        return b"", b"", 0
+
+    monkeypatch.setattr(adapter, "_command", command)
+    await adapter.run(candidate, secrets={"secret://token": "super-secret"})
+    assert "super-secret" not in repr(calls)
+    create = next(call for call in calls if call[0] == "create")
+    assert "--env-file" in create

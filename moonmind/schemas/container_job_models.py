@@ -128,6 +128,16 @@ class ResourceLimits(ContractModel):
     cpu_millis: int = Field(alias="cpuMillis", ge=1, le=128000)
     memory_mib: int = Field(alias="memoryMiB", ge=16, le=1048576)
     pids: int = Field(256, ge=16, le=32768)
+    shm_mib: int = Field(64, alias="shmMiB", ge=16, le=1048576)
+
+
+class ResolvedContainerMount(ContractModel):
+    """Resolver-produced daemon-visible mount; never accepted from callers."""
+
+    mount_class: Literal["workspace", "artifact", "scratch"] = Field(alias="mountClass")
+    resolved_ref: str = Field(alias="resolvedRef", min_length=1, max_length=1024)
+    target: str = Field(pattern=r"^/[A-Za-z0-9._/@+-]+(?:/[A-Za-z0-9._@+-]+)*$", max_length=512)
+    read_only: bool = Field(False, alias="readOnly")
 
 
 class OutputDeclaration(ContractModel):
@@ -303,6 +313,9 @@ class ResolvedContainerLaunchPlan(TemporalContractModel):
     backend_kind: str = Field(alias="backendKind", max_length=64)
     backend_ref: str = Field(alias="backendRef", max_length=255)
     resolved_workspace_ref: str = Field(alias="resolvedWorkspaceRef", max_length=1024)
+    resolved_mounts: list[ResolvedContainerMount] = Field(default_factory=list, alias="resolvedMounts", max_length=4)
+    correlation_id: str = Field(alias="correlationId", min_length=1, max_length=255)
+    expires_at: datetime = Field(alias="expiresAt")
     spec: ContainerJobSpec
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)

@@ -322,6 +322,23 @@ def test_unrestricted_docker_request_replaces_leading_docker_binary(
 
     assert args == ["podman", "ps"]
 
+
+def test_deployment_can_fail_closed_raw_docker_cli(tmp_path: Path) -> None:
+    request = UnrestrictedDockerRequest.model_validate(
+        {
+            "toolName": "container.run_docker",
+            "agentRunId": "task-1",
+            "stepId": "docker-cli",
+            "attempt": 1,
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/docker-cli",
+            "command": ["docker", "ps"],
+        }
+    )
+    validated = _registry(tmp_path).validate_request(request)
+    with pytest.raises(DockerWorkloadLauncherError, match="disabled by deployment policy"):
+        DockerWorkloadLauncher(allow_raw_docker_cli=False).build_run_args(validated)
+
 def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
     tmp_path: Path,
 ) -> None:

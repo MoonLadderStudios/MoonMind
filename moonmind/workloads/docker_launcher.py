@@ -752,9 +752,11 @@ class DockerWorkloadLauncher:
         docker_host: str | None = None,
         janitor: DockerContainerJanitor | None = None,
         concurrency_limiter: DockerWorkloadConcurrencyLimiter | None = None,
+        allow_raw_docker_cli: bool = True,
     ) -> None:
         self._docker_binary = docker_binary
         self._docker_host = docker_host
+        self._allow_raw_docker_cli = allow_raw_docker_cli
         self._janitor = janitor or DockerContainerJanitor(
             docker_binary=docker_binary,
             docker_host=docker_host,
@@ -769,6 +771,8 @@ class DockerWorkloadLauncher:
         profile = request.profile
         workload = request.request
         if profile is None:
+            if isinstance(workload, UnrestrictedDockerRequest) and not self._allow_raw_docker_cli:
+                raise DockerWorkloadLauncherError("raw Docker CLI is disabled by deployment policy")
             return _build_unrestricted_run_args(
                 docker_binary=self._docker_binary,
                 request=request,
@@ -823,6 +827,8 @@ class DockerWorkloadLauncher:
         profile = request.profile
         workload = request.request
         if profile is None:
+            if isinstance(workload, UnrestrictedDockerRequest) and not self._allow_raw_docker_cli:
+                raise DockerWorkloadLauncherError("raw Docker CLI is disabled by deployment policy")
             return _build_unrestricted_run_args(
                 docker_binary=self._docker_binary,
                 request=request,

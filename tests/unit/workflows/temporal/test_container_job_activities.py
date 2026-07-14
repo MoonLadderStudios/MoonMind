@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -22,6 +23,8 @@ async def test_execute_validates_real_resolved_plan_shape_and_calls_backend() ->
         "backendKind": "docker-engine",
         "backendRef": "system",
         "resolvedWorkspaceRef": "/work/agent_jobs/j/repo",
+        "correlationId": "workflow/run",
+        "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
         "spec": {
             "image": "alpine:3.20",
             "workspaceRef": {"kind": "moonmind-session", "sessionId": "s"},

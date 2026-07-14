@@ -45,7 +45,7 @@ def test_submit_has_deterministic_shared_golden_serialization() -> None:
         b'{"omnigentSessionId":"s","source":"omnigent"},"spec":{"caches":[],'
         b'"command":[],"entrypoint":[],"environment":[],"image":"ubuntu:24.04",'
         b'"networkMode":"none","outputs":[],"pullPolicy":"if-missing","resources":'
-        b'{"cpuMillis":1000,"memoryMiB":512,"pids":256},"timeoutSeconds":1800,'
+        b'{"cpuMillis":1000,"memoryMiB":512,"pids":256,"shmMiB":64},"timeoutSeconds":1800,'
         b'"workdir":"/workspace","workspaceRef":{"kind":"omnigent-session",'
         b'"sessionId":"ws"}}}'
     )
@@ -178,6 +178,7 @@ def test_every_history_facing_contract_enforces_temporal_limit(monkeypatch) -> N
         ResolvedContainerLaunchPlan(
             jobId=JOB_ID, backendKind="docker", backendRef="local",
             resolvedWorkspaceRef="workspace://" + "x" * 80,
+            correlationId="test", expiresAt=NOW,
             spec=payload()["spec"],
         )
     with pytest.raises(ValidationError, match="payload must serialize"):

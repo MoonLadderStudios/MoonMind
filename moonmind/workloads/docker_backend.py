@@ -11,6 +11,7 @@ import asyncio
 import os
 import pathlib
 import re
+import tempfile
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence
 
@@ -18,6 +19,15 @@ from moonmind.schemas.container_job_models import ImageObservation, ResolvedCont
 
 _SUPPORTED_KIND = "docker-engine"
 _CACHE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_TRUE = frozenset({"1", "true", "yes"})
+_FALSE = frozenset({"0", "false", "no"})
+
+
+def _strict_bool(source: Mapping[str, str], name: str, default: str) -> bool:
+    value = source.get(name, default).strip().lower()
+    if value not in _TRUE | _FALSE:
+        raise DockerBackendError(f"{name} must be one of true/false, 1/0, or yes/no")
+    return value in _TRUE
 
 
 class DockerBackendError(RuntimeError):
@@ -36,6 +46,15 @@ class DockerBackendPolicy:
     allow_bridge_network: bool = True
     allowed_environment: frozenset[str] = frozenset()
     cache_volume_prefix: str = "moonmind-cache-"
+    approved_mount_roots: Mapping[str, tuple[str, ...]] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.approved_mount_roots is None:
+            object.__setattr__(self, "approved_mount_roots", {
+                "workspace": ("/work/agent_jobs",),
+                "artifact": ("/var/artifacts",),
+                "scratch": ("/work/agent_jobs",),
+            })
 
 
 @dataclass(frozen=True)
@@ -49,14 +68,14 @@ class DockerBackendSettings:
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "DockerBackendSettings":
         source = os.environ if environ is None else environ
-        enabled = source.get("MOONMIND_DOCKER_BACKEND_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
+        enabled = _strict_bool(source, "MOONMIND_DOCKER_BACKEND_ENABLED", "true")
         endpoint = source.get("SYSTEM_DOCKER_HOST", "").strip()
         settings = cls(
             enabled=enabled,
             default_backend_ref=source.get("MOONMIND_DOCKER_BACKEND_DEFAULT_REF", "system").strip(),
             kind=source.get("MOONMIND_DOCKER_BACKEND_KIND", _SUPPORTED_KIND).strip(),
             endpoint=endpoint,
-            allow_raw_docker_cli=source.get("MOONMIND_ALLOW_RAW_DOCKER_CLI", "false").strip().lower() in {"1", "true", "yes"},
+            allow_raw_docker_cli=_strict_bool(source, "MOONMIND_ALLOW_RAW_DOCKER_CLI", "false"),
         )
         settings.validate()
         return settings
@@ -117,7 +136,7 @@ class DockerEngineAdapter:
     async def _checked(self, args: Sequence[str], *, timeout: float = 30) -> bytes:
         stdout, stderr, code = await self._command(args, timeout=timeout)
         if code:
-            message = stderr.decode(errors="replace")[-2048:].strip()
+            message = stderr.decode(errors="replace")[-2048:].replace(self.settings.endpoint, "<docker-endpoint>").strip()
             raise DockerBackendError(f"docker {args[0]} failed ({code}): {message}")
         return stdout
 
@@ -144,6 +163,8 @@ class DockerEngineAdapter:
             "moonmind.owner": "moonmind",
             "moonmind.job_id": plan.job_id,
             "moonmind.backend_ref": plan.backend_ref,
+            "moonmind.correlation_id": plan.correlation_id,
+            "moonmind.expires_at": plan.expires_at.isoformat(),
         }
 
     def _validate_plan(self, plan: ResolvedContainerLaunchPlan) -> None:
@@ -154,16 +175,27 @@ class DockerEngineAdapter:
             raise DockerBackendError("cpuMillis exceeds deployment ceiling")
         if limits.memory_mib > self.policy.max_memory_mib:
             raise DockerBackendError("memoryMiB exceeds deployment ceiling")
+        if limits.shm_mib > self.policy.max_shm_mib:
+            raise DockerBackendError("shmMiB exceeds deployment ceiling")
         if limits.pids > self.policy.max_pids:
             raise DockerBackendError("pids exceeds deployment ceiling")
         if plan.spec.timeout_seconds > self.policy.max_timeout_seconds:
             raise DockerBackendError("timeoutSeconds exceeds deployment ceiling")
         if plan.spec.network_mode == "bridge" and not self.policy.allow_bridge_network:
             raise DockerBackendError("bridge networking is disabled by deployment policy")
-        workspace = pathlib.PurePosixPath(plan.resolved_workspace_ref)
-        forbidden = (pathlib.PurePosixPath("/"), pathlib.PurePosixPath("/var/lib/docker"), pathlib.PurePosixPath("/var/run/docker.sock"))
-        if not workspace.is_absolute() or workspace in forbidden or any(root == workspace or root in workspace.parents for root in forbidden[1:]):
-            raise DockerBackendError("resolved workspace is not an approved daemon-visible source")
+        mounts = plan.resolved_mounts or [{"mount_class": "workspace", "resolved_ref": plan.resolved_workspace_ref, "target": "/workspace", "read_only": False}]
+        seen: set[str] = set()
+        for mount in mounts:
+            mount_class = mount.mount_class if hasattr(mount, "mount_class") else mount["mount_class"]
+            resolved_ref = mount.resolved_ref if hasattr(mount, "resolved_ref") else mount["resolved_ref"]
+            target = mount.target if hasattr(mount, "target") else mount["target"]
+            path = pathlib.PurePosixPath(resolved_ref)
+            roots = tuple(pathlib.PurePosixPath(root) for root in self.policy.approved_mount_roots.get(mount_class, ()))
+            if not roots or not path.is_absolute() or not any(root == path or root in path.parents for root in roots):
+                raise DockerBackendError(f"resolved {mount_class} mount is not an approved daemon-visible source")
+            if target in seen or (mount_class == "workspace" and target != "/workspace"):
+                raise DockerBackendError("resolved mount target is invalid or duplicated")
+            seen.add(target)
         for item in plan.spec.environment:
             if item.name not in self.policy.allowed_environment:
                 raise DockerBackendError(f"environment key is not allowlisted: {item.name}")
@@ -171,7 +203,7 @@ class DockerEngineAdapter:
             if not _CACHE_REF.fullmatch(cache.cache_ref):
                 raise DockerBackendError("cacheRef is not a valid deployment cache identity")
 
-    def build_create_args(self, plan: ResolvedContainerLaunchPlan, *, secrets: Mapping[str, str] | None = None) -> list[str]:
+    def build_create_args(self, plan: ResolvedContainerLaunchPlan, *, secret_env_file: str | None = None) -> list[str]:
         self._validate_plan(plan)
         spec = plan.spec
         args = [
@@ -179,18 +211,27 @@ class DockerEngineAdapter:
             "--network", spec.network_mode, "--privileged=false", "--pid", "private",
             "--ipc", "private", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges", "--cpus", str(spec.resources.cpu_millis / 1000),
-            "--memory", f"{spec.resources.memory_mib}m", "--shm-size", f"{self.policy.max_shm_mib}m",
+            "--memory", f"{spec.resources.memory_mib}m", "--shm-size", f"{spec.resources.shm_mib}m",
             "--pids-limit", str(spec.resources.pids),
-            "--mount", f"type=bind,source={plan.resolved_workspace_ref},target=/workspace",
+            "--userns", "private",
         ]
+        mounts = plan.resolved_mounts or []
+        if not mounts:
+            args.extend(("--mount", f"type=bind,source={plan.resolved_workspace_ref},target=/workspace"))
+        for mount in mounts:
+            rendered = f"type=bind,source={mount.resolved_ref},target={mount.target}"
+            if mount.read_only:
+                rendered += ",readonly"
+            args.extend(("--mount", rendered))
         for key, value in self._labels(plan).items():
             args.extend(("--label", f"{key}={value}"))
-        materialized = secrets or {}
         for item in spec.environment:
-            value = item.value if item.value is not None else materialized.get(item.secret_ref or "")
-            if value is None:
+            if item.value is not None:
+                args.extend(("--env", f"{item.name}={item.value}"))
+            elif secret_env_file is None:
                 raise DockerBackendError(f"secret was not materialized for environment key: {item.name}")
-            args.extend(("--env", f"{item.name}={value}"))
+        if secret_env_file is not None:
+            args.extend(("--env-file", secret_env_file))
         for cache in spec.caches:
             mount = f"type=volume,source={self.policy.cache_volume_prefix}{cache.cache_ref},target={cache.target}"
             if cache.read_only:
@@ -211,8 +252,9 @@ class DockerEngineAdapter:
         return found[0].strip() if found else None
 
     async def _assert_owned(self, container_id: str, job_id: str) -> None:
-        value = (await self._checked(("inspect", container_id, "--format", '{{index .Config.Labels "moonmind.job_id"}}'))).decode().strip()
-        if value != job_id:
+        value = (await self._checked(("inspect", container_id, "--format", '{{index .Config.Labels "moonmind.owner"}}|{{index .Config.Labels "moonmind.kind"}}|{{index .Config.Labels "moonmind.job_id"}}|{{index .Config.Labels "moonmind.backend_ref"}}|{{.Name}}'))).decode().strip()
+        expected = f"moonmind|container-job|{job_id}|{self.settings.default_backend_ref}|/{self._name(job_id)}"
+        if value != expected:
             raise DockerBackendError("container ownership collision")
 
     async def run(self, plan: ResolvedContainerLaunchPlan, *, secrets: Mapping[str, str] | None = None) -> ContainerExecution:
@@ -220,7 +262,32 @@ class DockerEngineAdapter:
         container_id = await self.find_owned(plan.job_id)
         reattached = container_id is not None
         if container_id is None:
-            container_id = (await self._checked(self.build_create_args(plan, secrets=secrets))).decode().strip()
+            secret_file = None
+            try:
+                secret_items = []
+                for item in plan.spec.environment:
+                    if item.secret_ref is not None:
+                        value = (secrets or {}).get(item.secret_ref)
+                        if value is None:
+                            raise DockerBackendError(f"secret was not materialized for environment key: {item.name}")
+                        secret_items.append(f"{item.name}={value}\n")
+                if secret_items:
+                    handle = tempfile.NamedTemporaryFile(mode="w", prefix="mm-docker-env-", delete=False)
+                    secret_file = handle.name
+                    os.chmod(secret_file, 0o600)
+                    with handle:
+                        handle.writelines(secret_items)
+                stdout, _stderr, code = await self._command(self.build_create_args(plan, secret_env_file=secret_file))
+                if code:
+                    container_id = await self.find_owned(plan.job_id)
+                    if container_id is None:
+                        raise DockerBackendError("failed to create owned container")
+                    reattached = True
+                else:
+                    container_id = stdout.decode().strip()
+            finally:
+                if secret_file:
+                    pathlib.Path(secret_file).unlink(missing_ok=True)
         await self._assert_owned(container_id, plan.job_id)
         _stdout, _stderr, start_code = await self._command(("start", container_id))
         if start_code not in (0, 304):
@@ -233,10 +300,21 @@ class DockerEngineAdapter:
         return ContainerExecution(container_id, exit_code, stdout[-limit:], stderr[-limit:], reattached)
 
     async def stop(self, container_id: str, grace_seconds: int) -> None:
-        await self._checked(("stop", "-t", str(min(max(0, grace_seconds), self.policy.stop_grace_seconds)), container_id))
+        labels = await self._ownership(container_id)
+        await self._assert_owned(container_id, labels[2])
+        grace = min(max(0, grace_seconds), self.policy.stop_grace_seconds)
+        _out, _err, code = await self._command(("stop", "-t", str(grace), container_id), timeout=grace + 5)
+        if code:
+            await self._checked(("kill", container_id), timeout=5)
+
+    async def _ownership(self, container_id: str) -> tuple[str, str, str, str]:
+        value = (await self._checked(("inspect", container_id, "--format", '{{index .Config.Labels "moonmind.owner"}}|{{index .Config.Labels "moonmind.kind"}}|{{index .Config.Labels "moonmind.job_id"}}|{{index .Config.Labels "moonmind.backend_ref"}}'))).decode().strip()
+        parts = tuple(value.split("|"))
+        if len(parts) != 4 or parts[:2] != ("moonmind", "container-job") or parts[3] != self.settings.default_backend_ref:
+            raise DockerBackendError("refusing lifecycle operation for an unowned container")
+        return parts  # type: ignore[return-value]
 
     async def remove(self, container_id: str) -> None:
-        kind = (await self._checked(("inspect", container_id, "--format", '{{index .Config.Labels "moonmind.kind"}}'))).decode().strip()
-        if kind != "container-job":
-            raise DockerBackendError("refusing to remove a container not owned by the container-job backend")
+        labels = await self._ownership(container_id)
+        await self._assert_owned(container_id, labels[2])
         await self._checked(("rm", "-f", container_id))
