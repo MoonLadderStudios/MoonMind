@@ -6,6 +6,7 @@ import subprocess
 import tarfile
 from datetime import UTC, datetime
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -14,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_checkpoint_models import ManagedWorkspaceCheckpointCaptureInput
 from moonmind.workflows.executions.runtime_capabilities import resolve_runtime_execution_capabilities
 from moonmind.workflows.temporal.activity_catalog import AGENT_RUNTIME_FLEET, build_default_activity_catalog
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -46,6 +48,70 @@ def test_managed_capture_contract_and_catalog_reject_other_authorities() -> None
     )
     assert route.fleet == AGENT_RUNTIME_FLEET
     assert route.task_queue == "mm.activity.agent_runtime"
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_command(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    (repo / "tracked.txt").write_text("checkpoint evidence\n")
+    resolved_repo = str(repo.resolve())
+    expected_prefix = [
+        "git",
+        "-c",
+        f"safe.directory={resolved_repo}",
+        "-C",
+        resolved_repo,
+    ]
+    commands: list[list[str]] = []
+
+    async def run_git(command, **_kwargs):
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[: len(expected_prefix)] != expected_prefix:
+            raise RuntimeError(
+                f"fatal: detected dubious ownership in repository at '{resolved_repo}'"
+            )
+        operation = normalized[len(expected_prefix) :]
+        if operation[0] == "ls-files":
+            return SimpleNamespace(stdout="tracked.txt\0")
+        if operation[:2] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(stdout="abc123\n")
+        if operation[:2] == ["branch", "--show-current"]:
+            return SimpleNamespace(stdout="main\n")
+        if operation[0] == "status":
+            return SimpleNamespace(stdout="")
+        raise AssertionError(f"unexpected git command: {operation}")
+
+    monkeypatch.setattr(activity_runtime_module, "_run_command", run_git)
+    activities = TemporalAgentRuntimeActivities(
+        run_store=object(), artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        return "artifact://" + hashlib.sha256(payload).hexdigest()
+
+    activities._put_managed_checkpoint_artifact = put
+    model = ManagedWorkspaceCheckpointCaptureInput.model_validate(
+        _request(
+            digest=resolve_runtime_execution_capabilities(
+                "codex_cli"
+            ).capability_digest
+        )
+    )
+    now = datetime.now(UTC)
+
+    result = await activities._capture_managed_worktree(
+        model,
+        repo,
+        SimpleNamespace(started_at=now, finished_at=now),
+    )
+
+    assert result["workspace"]["archiveRef"].startswith("artifact://")
+    assert len(commands) == 4
+    assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
 
 
 @pytest.mark.asyncio
