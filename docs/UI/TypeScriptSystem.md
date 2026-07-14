@@ -351,7 +351,7 @@ Recommended scripts:
 
 ### Authoritative builds (correctness)
 
-- **CI** runs **`npm run frontend:ci`** once for the deterministic frontend path (typecheck, lint, unit tests, build, manifest verification). Generated API types are checked separately with **`npm run contracts:check`** only when backend/OpenAPI-affecting files change. The workflow may upload **`dashboard-dist`** as an artifact.
+- **CI** selects a static job running **`npm run frontend:ci`** (typecheck, lint, unit tests, build, manifest verification) and a parallel, pinned Playwright browser matrix according to changed-file impact. The always-running **`test-frontend`** aggregator preserves the required-check identity. Generated API types remain a separate **`npm run contracts:check`** check, and CI does not upload the unused `dashboard-dist` artifact.
 - **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
 - **Shared dashboard CSS:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** plus the shared React shell templates so the frontend-owned stylesheet imported from `frontend/src/styles/dashboard.css` emits the utilities used by React routes even when **`dist/` does not exist yet**. Do not rely on scanning Vite output alone. See [`docs/UI/WorkflowConsoleArchitecture.md`](WorkflowConsoleArchitecture.md) §5.
 - **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the workflow console router instead of an empty content area.
