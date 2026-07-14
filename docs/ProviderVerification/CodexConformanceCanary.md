@@ -44,7 +44,7 @@ classify every outage as a product conformance regression.
 
 ## CONTRACT-004 Promotion Gate
 
-The `Promote GHCR image to stable` workflow blocks app image promotion unless a
+The `Release / Promote Stable` workflow blocks app image promotion unless a
 fresh Codex conformance result validates for the exact candidate digest being
 promoted. The accepted freshness window is 72 hours. Digest mismatches and stale
 results fail closed.
@@ -93,8 +93,9 @@ python -m moonmind.codex_conformance.canary check \
 
 ## TEST-002 Alerting
 
-The scheduled `Codex conformance canary` workflow is the production alert
-surface. A previously passing production digest that begins failing nightly
-requires comparing the failing result with the previous passing result for the
-same digest and checking whether the reason code is provider availability,
-protocol conformance, duplicate execution, stale evidence, or marker validation.
+The scheduled `Provider / Codex Conformance Canary` workflow is the production
+alert surface. A previously passing production digest that begins failing
+nightly requires comparing the failing result with the previous passing result
+for the same digest and checking whether the reason code is provider
+availability, protocol conformance, duplicate execution, stale evidence, or
+marker validation.

@@ -1,4 +1,4 @@
-name: Alembic Migration Gate
+name: CI / Alembic Migration Gate
 
 "on":
   pull_request:

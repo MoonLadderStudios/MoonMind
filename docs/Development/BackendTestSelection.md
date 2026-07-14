@@ -157,7 +157,9 @@ Pull request CI is impact-aware. Safety paths are intentionally broader:
 - Pushes to `main` run full backend verification.
 - Manual dispatches run full backend verification.
 - Scheduled runs run full backend verification.
-- The standalone `Run Pytest Integration CI` workflow remains available for scheduled and manual hermetic integration runs.
+- The `CI / Test Suite` workflow owns the hermetic `integration-ci` job for all
+  three safety paths, so scheduled and manual runs do not need a second
+  standalone integration workflow.
 - Provider verification remains separate and should run only where required provider credentials are intentionally available.
 
 ## Local Commands
