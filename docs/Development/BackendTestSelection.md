@@ -205,6 +205,27 @@ MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
 ```
 
+Run the checkpoint archive cold-resume replay directly:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest \
+  tests/integration/reliability/test_escaped_failure_journeys.py \
+  -k source_destroying_cold_resume -q
+```
+
+Verify checkpoint/runtime selector coverage with:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh \
+  tests/unit/tools/test_select_test_suites.py --python-only
+```
+
+The archive replay deliberately destroys the source workspace before using
+durable artifact evidence to restore a distinct destination and retries the
+restore idempotently. It exercises production capture/restore engines and the
+artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
+journey. The required CI reliability job has a 30-minute budget.
+
 Run full backend unit verification:
 
 ```bash
