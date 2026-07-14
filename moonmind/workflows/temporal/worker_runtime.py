@@ -85,6 +85,9 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.config.container_backend_settings import (
+    resolve_container_backend_settings,
+)
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
@@ -2313,49 +2316,83 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
         return artifact.artifact_id
     return publish
 
-async def _container_job_projection_writer(request) -> None:
-    """Persist workflow projections in the API-owned job record."""
-    async with get_async_session_context() as session:
-        result = await session.execute(
-            select(ContainerJobRecord).where(ContainerJobRecord.job_id == request.job_id)
-        )
-        record = result.scalar_one_or_none()
-        if record is None:
-            raise RuntimeError(f"container job record not found: {request.job_id}")
-        state_value = request.state or request.terminal_state
-        record.state = (
-            state_value.value if hasattr(state_value, "value") else state_value
-        ) or record.state
-        record.backend_kind = "docker-engine"
-        record.backend_ref = "system"
-        if request.resolved_image_ref:
-            record.image_observation_json = {
-                "requestedReference": request.request.spec.image,
-                "resolvedDigest": request.resolved_image_ref
-                if request.resolved_image_ref.startswith("sha256:") else None,
-                "cachePresent": True,
-                "cacheHit": True,
-                "pullLockWaitMs": 0,
-            }
-        if request.exit_code is not None or request.failure_class or request.message:
-            record.terminal_outcome_json = {
-                "exitCode": request.exit_code,
-                "failureClass": request.failure_class,
-                "message": request.message,
-            }
-        if request.publication is not None:
-            record.publication_outcome_json = request.publication.model_dump(
-                mode="json", by_alias=True, exclude_none=True
+def _container_job_projection_writer(backend_kind: str, backend_ref: str):
+    """Build a projection writer bound to the deployment-selected backend."""
+
+    async def _write(request) -> None:
+        """Persist workflow projections in the API-owned job record."""
+        async with get_async_session_context() as session:
+            result = await session.execute(
+                select(ContainerJobRecord).where(
+                    ContainerJobRecord.job_id == request.job_id
+                )
             )
-        if request.cleanup_outcome is not None:
-            record.cleanup_outcome_json = request.cleanup_outcome.model_dump(
-                mode="json", by_alias=True, exclude_none=True
+            record = result.scalar_one_or_none()
+            if record is None:
+                raise RuntimeError(f"container job record not found: {request.job_id}")
+            state_value = request.state or request.terminal_state
+            record.state = (
+                state_value.value if hasattr(state_value, "value") else state_value
+            ) or record.state
+            record.backend_kind = backend_kind
+            record.backend_ref = backend_ref
+            if request.resolved_image_ref:
+                record.image_observation_json = {
+                    "requestedReference": request.request.spec.image,
+                    "resolvedDigest": request.resolved_image_ref
+                    if request.resolved_image_ref.startswith("sha256:") else None,
+                    "cachePresent": True,
+                    "cacheHit": True,
+                    "pullLockWaitMs": 0,
+                }
+            if (
+                request.exit_code is not None
+                or request.failure_class
+                or request.message
+            ):
+                record.terminal_outcome_json = {
+                    "exitCode": request.exit_code,
+                    "failureClass": request.failure_class,
+                    "message": request.message,
+                }
+            if request.publication is not None:
+                record.publication_outcome_json = request.publication.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+            if request.cleanup_outcome is not None:
+                record.cleanup_outcome_json = request.cleanup_outcome.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+            if request.logs_ref:
+                record.logs_ref = request.logs_ref
+            if request.artifacts_ref:
+                record.artifacts_ref = request.artifacts_ref
+            await session.commit()
+
+    return _write
+
+
+def _container_job_secret_resolver():
+    """Materialize an execution-time secret reference to plaintext.
+
+    Plaintext is returned only for injection into the container launch
+    environment and is never persisted or rendered into diagnostics/evidence.
+    """
+
+    from moonmind.workflows.adapters.secret_boundary import DatabaseSecretResolver
+
+    async def _resolve(secret_ref: str) -> str:
+        async with get_async_session_context() as session:
+            resolved = await DatabaseSecretResolver(session).resolve_secrets(
+                {"value": secret_ref}
             )
-        if request.logs_ref:
-            record.logs_ref = request.logs_ref
-        if request.artifacts_ref:
-            record.artifacts_ref = request.artifacts_ref
-        await session.commit()
+        if "value" not in resolved:
+            raise RuntimeError(
+                "execution-time secret reference could not be resolved"
+            )
+        return resolved["value"]
+
+    return _resolve
 
 def _build_agent_runtime_deps(
     *,
@@ -2597,6 +2634,27 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         reaped_containers,
                         reaped_volumes,
                     )
+            container_backend_settings = resolve_container_backend_settings()
+            container_job_backend = DockerContainerJobBackend(
+                workspace_root=os.environ.get(
+                    "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+                ),
+                settings=container_backend_settings,
+                docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
+                evidence_publisher=_container_job_evidence_publisher(artifact_service),
+                projection_writer=_container_job_projection_writer(
+                    container_backend_settings.kind,
+                    container_backend_settings.default_backend_ref,
+                ),
+                secret_resolver=_container_job_secret_resolver(),
+                managed_run_store=run_store,
+            )
+            if container_backend_settings.enabled:
+                # Fail fast at startup when the deployment-selected endpoint is
+                # missing or unreachable rather than at first job launch.
+                await container_job_backend.check_readiness()
+            else:
+                container_job_backend = None
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2607,29 +2665,15 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 workload_registry=workload_registry,
                 workload_launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
-                container_job_backend=DockerContainerJobBackend(
-                    workspace_root=os.environ.get(
-                        "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
-                    ),
-                    docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
-                    docker_host=(
-                        os.environ.get("DOCKER_HOST")
-                        or os.environ.get("SYSTEM_DOCKER_HOST")
-                        or "tcp://docker-proxy:2375"
-                    ),
-                    omnigent_worktree_root=os.environ.get(
-                        "MOONMIND_OMNIGENT_WORKTREE_ROOT"
-                    ),
-                    probe_image=os.environ.get("MOONMIND_CONTAINER_JOB_PROBE_IMAGE"),
-                    evidence_publisher=_container_job_evidence_publisher(artifact_service),
-                    projection_writer=_container_job_projection_writer,
-                ),
+                raw_docker_cli_enabled=container_backend_settings.raw_cli_enabled,
+                container_job_backend=container_job_backend,
             )
             register_workload_tool_handlers(
                 dispatcher,
                 registry=workload_registry,
                 launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
+                raw_cli_enabled=container_backend_settings.raw_cli_enabled,
             )
         if topology.fleet == DEPLOYMENT_FLEET:
             register_deployment_update_tool_handler(

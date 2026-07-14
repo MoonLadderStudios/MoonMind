@@ -4183,9 +4183,15 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
             "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
             side_effect=_fake_session_context,
         ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.DockerContainerJobBackend"
+        ) as mock_backend_cls,
     ):
         mock_settings.workflow.workflow_docker_mode = "profiles"
+        mock_backend_cls.return_value.check_readiness = AsyncMock()
         resources, handlers = await _build_runtime_activities(topology)
+
+    mock_backend_cls.return_value.check_readiness.assert_awaited_once()
 
     assert handlers == [
         "agent_runtime_handler",
@@ -4214,6 +4220,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
         workflow_docker_mode="profiles",
+        raw_docker_cli_enabled=False,
         container_job_backend=ANY,
     )
     mock_build_bindings.assert_called_once_with(
@@ -4359,14 +4366,21 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     mock_binding.handler = "agent_runtime_handler"
     mock_build_bindings.return_value = [mock_binding]
 
-    with patch(
-        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
-        side_effect=_fake_session_context,
+    with (
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+            side_effect=_fake_session_context,
+        ),
+        patch(
+            "moonmind.workflows.temporal.worker_runtime.DockerContainerJobBackend"
+        ) as mock_backend_cls,
     ):
+        mock_backend_cls.return_value.check_readiness = AsyncMock()
         resources, _handlers = await _build_runtime_activities(topology)
 
     mock_agent_runtime_activities_cls.assert_called_once()
     assert mock_agent_runtime_activities_cls.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
     mock_register_workload_tool_handlers.assert_called_once()
     assert mock_register_workload_tool_handlers.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
+    assert mock_register_workload_tool_handlers.call_args.kwargs["raw_cli_enabled"] is False
     await resources.aclose()

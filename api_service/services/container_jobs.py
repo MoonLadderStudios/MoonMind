@@ -10,9 +10,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ContainerJobRecord
-from api_service.services.container_job_workspace_authorizer import (
-    ContainerJobWorkspaceAuthorizer,
-)
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobAccepted,
@@ -128,16 +125,9 @@ class ContainerJobRepository:
 
 
 class ContainerJobService:
-    def __init__(
-        self,
-        session: AsyncSession,
-        *,
-        temporal: TemporalClientAdapter | None = None,
-        workspace_authorizer: ContainerJobWorkspaceAuthorizer | None = None,
-    ) -> None:
+    def __init__(self, session: AsyncSession, *, temporal: TemporalClientAdapter | None = None) -> None:
         self.repository = ContainerJobRepository(session)
         self._temporal = temporal or TemporalClientAdapter()
-        self._workspace_authorizer = workspace_authorizer
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
@@ -146,13 +136,6 @@ class ContainerJobService:
             return ContainerJobAccepted(
                 jobId=existing.job_id, replayed=True, createdAt=created_at
             )
-        # Authorize the logical workspace reference against its canonical
-        # durable ownership record before any durable job identity or workflow
-        # is created (MoonMind#3255). Absent, terminally deleted, cross-user,
-        # and cross-session references fail closed here with a stable
-        # classification and never reach the workflow or a Docker backend.
-        if self._workspace_authorizer is not None:
-            await self._workspace_authorizer.authorize(owner=owner, request=request)
         record, replayed = await self.repository.create_or_replay(owner=owner, request=request)
         await self._temporal.start_container_job(
             ContainerJobWorkflowInput(jobId=record.job_id, owner=owner, request=request)

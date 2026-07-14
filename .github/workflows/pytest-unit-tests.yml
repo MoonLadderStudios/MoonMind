@@ -285,7 +285,7 @@ jobs:
           path: /tmp/pytest-integration-ci
           if-no-files-found: error
 
-  reliability-journey:
+  reliability-journey-checkpoint-resume:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
@@ -311,7 +311,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
-      - name: Run hermetic reliability journeys
+      - name: Run hermetic checkpoint-resume reliability journey
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
         run: |
@@ -350,7 +350,7 @@ jobs:
       - api-component
       - temporal-boundary
       - integration-ci
-      - reliability-journey
+      - reliability-journey-checkpoint-resume
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -412,8 +412,8 @@ jobs:
                        "integration-ci"
 
           check_result "${{ needs.select-test-suites.outputs.reliability_journey }}" \
-                       "${{ needs.reliability-journey.result }}" \
-                       "reliability-journey"
+                       "${{ needs.reliability-journey-checkpoint-resume.result }}" \
+                       "reliability-journey-checkpoint-resume"
 
           echo "All selected backend suites passed."
 

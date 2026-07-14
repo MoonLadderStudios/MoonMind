@@ -31,7 +31,7 @@ def _input() -> dict[str, Any]:
             "spec": {
                 "image": "python:3.13",
                 "workspaceRef": {
-                    "kind": "artifact-workspace",
+                    "kind": "external_state",
                     "artifactRef": "art_workspace",
                 },
                 "resources": {"cpuMillis": 1000, "memoryMiB": 512},
@@ -44,7 +44,6 @@ def _input() -> dict[str, Any]:
 def _activities() -> list[Any]:
     names = (
         "resolve_workspace",
-        "probe_workspace",
         "acquire_image",
         "create_container",
         "start_container",

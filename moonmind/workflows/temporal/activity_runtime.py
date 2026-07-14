@@ -1418,7 +1418,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
         for name in (
             "resolve_workspace",
-            "probe_workspace",
             "acquire_image",
             "create_container",
             "start_container",
@@ -6814,6 +6813,7 @@ class TemporalAgentRuntimeActivities:
         workload_registry: Any | None = None,
         container_job_backend: Any | None = None,
         workflow_docker_mode: str = "profiles",
+        raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
         pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
     ) -> None:
@@ -6827,6 +6827,7 @@ class TemporalAgentRuntimeActivities:
         self._workload_registry = workload_registry
         self._container_job_backend = container_job_backend
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
+        self._raw_docker_cli_enabled = bool(raw_docker_cli_enabled)
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -7845,6 +7846,7 @@ class TemporalAgentRuntimeActivities:
         if not tool_allowed_for_workflow_docker_mode(
             tool_name=request.tool_name,
             workflow_docker_mode=workflow_mode,
+            raw_cli_enabled=self._raw_docker_cli_enabled,
         ):
             raise _docker_workflow_mode_forbidden_failure(
                 workflow_docker_mode=workflow_mode,
@@ -7876,33 +7878,19 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 f"container-job backend is required for container_job.{operation}"
             )
-        from temporalio.exceptions import ApplicationError
-
         from moonmind.schemas.container_job_models import (
             ContainerJobActivityRequest,
             ContainerJobActivityResult,
         )
-        from moonmind.workloads.container_workspace import ContainerWorkspaceError
 
         request = ContainerJobActivityRequest.model_validate(payload)
-        try:
-            result = await getattr(self._container_job_backend, operation)(request)
-        except ContainerWorkspaceError as err:
-            # Surface a stable, non-retryable classification (workspace_not_found
-            # / permission_denied / workspace_not_visible) without leaking the
-            # resolved host or volume source into Temporal history or logs.
-            raise ApplicationError(
-                str(err), type=err.code, non_retryable=True
-            ) from err
+        result = await getattr(self._container_job_backend, operation)(request)
         return ContainerJobActivityResult.model_validate(result).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
 
     async def container_job_resolve_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
         return await self._container_job_call("resolve_workspace", payload)
-
-    async def container_job_probe_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
-        return await self._container_job_call("probe_workspace", payload)
 
     async def container_job_acquire_image(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
         return await self._container_job_call("acquire_image", payload)
