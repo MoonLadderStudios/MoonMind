@@ -349,6 +349,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/container-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Container Job
+         * @description Create-or-replay a durable container job and start its Temporal workflow.
+         */
+        post: operations["submit_container_job_api_v1_container_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/container-jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Container Job Status */
+        get: operations["get_container_job_status_api_v1_container_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/container-jobs/{job_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Container Job Logs */
+        get: operations["get_container_job_logs_api_v1_container_jobs__job_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/container-jobs/{job_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Container Job Artifacts */
+        get: operations["get_container_job_artifacts_api_v1_container_jobs__job_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/container-jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Container Job */
+        post: operations["cancel_container_job_api_v1_container_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jira/connections/verify": {
         parameters: {
             query?: never;
@@ -4400,6 +4488,17 @@ export interface components {
          * @enum {string}
          */
         AutomationTaskStatus: "pending" | "running" | "completed" | "failed" | "skipped" | "retrying";
+        /** AuxiliaryOutcome */
+        AuxiliaryOutcome: {
+            state: components["schemas"]["AuxiliaryOutcomeState"];
+            /** Diagnosticsref */
+            diagnosticsRef?: string | null;
+        };
+        /**
+         * AuxiliaryOutcomeState
+         * @enum {string}
+         */
+        AuxiliaryOutcomeState: "not_attempted" | "succeeded" | "failed";
         /** BearerResponse */
         BearerResponse: {
             /** Access Token */
@@ -4515,6 +4614,18 @@ export interface components {
             type: string;
         } & {
             [key: string]: unknown;
+        };
+        /** CacheMount */
+        CacheMount: {
+            /** Cacheref */
+            cacheRef: string;
+            /** Target */
+            target: string;
+            /**
+             * Readonly
+             * @default false
+             */
+            readOnly: boolean;
         };
         /**
          * CancelExecutionRequest
@@ -5195,6 +5306,195 @@ export interface components {
             cql_query?: string | null;
             /** Max Pages To Fetch */
             max_pages_to_fetch?: number | null;
+        };
+        /** ContainerJobAccepted */
+        ContainerJobAccepted: {
+            /**
+             * Contractversion
+             * @default v1
+             * @constant
+             */
+            contractVersion: "v1";
+            /** Jobid */
+            jobId: string;
+            /**
+             * State
+             * @default queued
+             * @constant
+             */
+            state: "queued";
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /** ContainerJobArtifact */
+        ContainerJobArtifact: {
+            /** Name */
+            name: string;
+            /** Artifactref */
+            artifactRef: string;
+            /** Sizebytes */
+            sizeBytes: number;
+            /** Sha256 */
+            sha256: string;
+        };
+        /** ContainerJobArtifactPage */
+        ContainerJobArtifactPage: {
+            /** Jobid */
+            jobId: string;
+            /** Artifacts */
+            artifacts: components["schemas"]["ContainerJobArtifact"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+            publication: components["schemas"]["AuxiliaryOutcome"];
+        };
+        /** ContainerJobCancelRequest */
+        ContainerJobCancelRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** ContainerJobCancelResult */
+        ContainerJobCancelResult: {
+            /** Jobid */
+            jobId: string;
+            state: components["schemas"]["ContainerJobState"];
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
+        /**
+         * ContainerJobFailureClass
+         * @enum {string}
+         */
+        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed";
+        /** ContainerJobLogEntry */
+        ContainerJobLogEntry: {
+            /** Sequence */
+            sequence: number;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /**
+             * Stream
+             * @enum {string}
+             */
+            stream: "stdout" | "stderr" | "system";
+            /** Text */
+            text: string;
+        };
+        /** ContainerJobLogPage */
+        ContainerJobLogPage: {
+            /** Jobid */
+            jobId: string;
+            /** Entries */
+            entries: components["schemas"]["ContainerJobLogEntry"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+        };
+        /** ContainerJobSpec */
+        ContainerJobSpec: {
+            /** Image */
+            image: string;
+            /** Workspaceref */
+            workspaceRef: components["schemas"]["SandboxWorkspaceLocator"] | components["schemas"]["ManagedWorkspaceLocator"] | components["schemas"]["ExternalStateLocator"];
+            /** Command */
+            command?: string[];
+            /** Entrypoint */
+            entrypoint?: string[];
+            /**
+             * Workdir
+             * @default /workspace
+             */
+            workdir: string;
+            /** Environment */
+            environment?: components["schemas"]["EnvironmentOverride"][];
+            /** Caches */
+            caches?: components["schemas"]["CacheMount"][];
+            /**
+             * Networkmode
+             * @default none
+             * @enum {string}
+             */
+            networkMode: "none" | "bridge";
+            resources: components["schemas"]["ResourceLimits"];
+            /**
+             * Timeoutseconds
+             * @default 1800
+             */
+            timeoutSeconds: number;
+            /**
+             * Pullpolicy
+             * @default if-missing
+             * @enum {string}
+             */
+            pullPolicy: "if-missing" | "always" | "never";
+            /** Registrycredentialref */
+            registryCredentialRef?: string | null;
+            /** Outputs */
+            outputs?: components["schemas"]["OutputDeclaration"][];
+        };
+        /**
+         * ContainerJobState
+         * @enum {string}
+         */
+        ContainerJobState: "queued" | "preparing" | "acquiring_image" | "running" | "canceling" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
+        /** ContainerJobStatus */
+        ContainerJobStatus: {
+            /**
+             * Contractversion
+             * @default v1
+             * @constant
+             */
+            contractVersion: "v1";
+            /** Jobid */
+            jobId: string;
+            state: components["schemas"]["ContainerJobState"];
+            /** Backendkind */
+            backendKind?: string | null;
+            /** Backendref */
+            backendRef?: string | null;
+            image?: components["schemas"]["ImageObservation"] | null;
+            authorization?: components["schemas"]["RegistryAuthorization"] | null;
+            terminal?: components["schemas"]["TerminalOutcome"] | null;
+            publication?: components["schemas"]["AuxiliaryOutcome"];
+            cleanup?: components["schemas"]["AuxiliaryOutcome"];
+            /** Logsref */
+            logsRef?: string | null;
+            /** Artifactsref */
+            artifactsRef?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** ContainerJobSubmitRequest */
+        ContainerJobSubmitRequest: {
+            /**
+             * Contractversion
+             * @default v1
+             * @constant
+             */
+            contractVersion: "v1";
+            /** Idempotencykey */
+            idempotencyKey: string;
+            source: components["schemas"]["SourceCorrelation"];
+            spec: components["schemas"]["ContainerJobSpec"];
         };
         /** ContextMessage */
         ContextMessage: {
@@ -5943,6 +6243,15 @@ export interface components {
             reasonCode: string;
             /** Summary */
             summary: string;
+        };
+        /** EnvironmentOverride */
+        EnvironmentOverride: {
+            /** Name */
+            name: string;
+            /** Value */
+            value?: string | null;
+            /** Secretref */
+            secretRef?: string | null;
         };
         /** ErrorModel */
         ErrorModel: {
@@ -7241,6 +7550,30 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ImageObservation */
+        ImageObservation: {
+            /** Requestedreference */
+            requestedReference: string;
+            /** Resolveddigest */
+            resolvedDigest?: string | null;
+            /**
+             * Cachepresent
+             * @default false
+             */
+            cachePresent: boolean;
+            /**
+             * Cachehit
+             * @default false
+             */
+            cacheHit: boolean;
+            /**
+             * Pulllockwaitms
+             * @default 0
+             */
+            pullLockWaitMs: number;
+            /** Pulldurationms */
+            pullDurationMs?: number | null;
+        };
         /** ImageTargetModel */
         ImageTargetModel: {
             /** Repository */
@@ -8008,6 +8341,13 @@ export interface components {
             unavailableReason?: string | null;
             /** Rollbackaction */
             rollbackAction?: string | null;
+        };
+        /** OutputDeclaration */
+        OutputDeclaration: {
+            /** Name */
+            name: string;
+            /** Relativepath */
+            relativePath: string;
         };
         /**
          * PinArtifactRequest
@@ -9285,6 +9625,33 @@ export interface components {
              */
             updatedAt: string;
         };
+        /**
+         * RegistryAuthorization
+         * @description Non-sensitive private-image authorization outcome (#3257).
+         *
+         *     Records the bounded decision and authorized scope only; it never carries a
+         *     username, token, password, or Docker auth blob. It is safe to persist and to
+         *     cross Temporal workflow history.
+         */
+        RegistryAuthorization: {
+            /** Authorized */
+            authorized: boolean;
+            /** Registry */
+            registry: string;
+            /** Repository */
+            repository: string;
+            /** Reference */
+            reference: string;
+            /** Credentialref */
+            credentialRef?: string | null;
+            /** Scope */
+            scope?: string | null;
+            /** Requireddigest */
+            requiredDigest?: string | null;
+            failureClass?: components["schemas"]["ContainerJobFailureClass"] | null;
+            /** Message */
+            message?: string | null;
+        };
         /** RemediationApprovalDecisionRequest */
         RemediationApprovalDecisionRequest: {
             /** Decision */
@@ -9545,6 +9912,18 @@ export interface components {
              * Format: date-time
              */
             scheduledFor: string;
+        };
+        /** ResourceLimits */
+        ResourceLimits: {
+            /** Cpumillis */
+            cpuMillis: number;
+            /** Memorymib */
+            memoryMiB: number;
+            /**
+             * Pids
+             * @default 256
+             */
+            pids: number;
         };
         /**
          * ResourceListResponse
@@ -9982,6 +10361,30 @@ export interface components {
             warnings?: {
                 [key: string]: string;
             }[];
+        };
+        /** SourceCorrelation */
+        SourceCorrelation: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "http" | "mcp" | "workflow" | "managed_session" | "omnigent";
+            /** Callerrequestid */
+            callerRequestId?: string | null;
+            /** Workflowid */
+            workflowId?: string | null;
+            /** Runid */
+            runId?: string | null;
+            /** Stepid */
+            stepId?: string | null;
+            /** Managedsessionid */
+            managedSessionId?: string | null;
+            /** Agentrunid */
+            agentRunId?: string | null;
+            /** Omnigentsessionid */
+            omnigentSessionId?: string | null;
+            /** Omnigentconversationid */
+            omnigentConversationId?: string | null;
         };
         /**
          * StepEvidenceSummaryModel
@@ -10573,6 +10976,14 @@ export interface components {
          * @enum {string}
          */
         TemporalArtifactStorageBackend: "s3" | "local_fs";
+        /** TerminalOutcome */
+        TerminalOutcome: {
+            /** Exitcode */
+            exitCode?: number | null;
+            failureClass?: components["schemas"]["ContainerJobFailureClass"] | null;
+            /** Message */
+            message?: string | null;
+        };
         /**
          * ToolCallRequest
          * @description HTTP request envelope for MCP tool invocation.
@@ -11830,6 +12241,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolCallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_container_job_api_v1_container_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerJobSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerJobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_container_job_status_api_v1_container_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerJobStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_container_job_logs_api_v1_container_jobs__job_id__logs_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerJobLogPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_container_job_artifacts_api_v1_container_jobs__job_id__artifacts_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerJobArtifactPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_container_job_api_v1_container_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerJobCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerJobCancelResult"];
                 };
             };
             /** @description Validation Error */
