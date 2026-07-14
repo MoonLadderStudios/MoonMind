@@ -10,9 +10,11 @@ trusted worker.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -38,7 +40,34 @@ from moonmind.workflows import get_temporal_artifact_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/container-jobs", tags=["container-jobs"])
+class _RedactedValidationRoute(APIRoute):
+    """Keep rejected request values out of container-job error responses."""
+
+    def get_route_handler(self):
+        route_handler = super().get_route_handler()
+
+        async def redacted_route_handler(request: Request):
+            try:
+                return await route_handler(request)
+            except RequestValidationError:
+                return JSONResponse(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    content={
+                        "detail": {
+                            "code": "invalid_request",
+                            "message": "Container-job request validation failed.",
+                        }
+                    },
+                )
+
+        return redacted_route_handler
+
+
+router = APIRouter(
+    prefix="/api/v1/container-jobs",
+    tags=["container-jobs"],
+    route_class=_RedactedValidationRoute,
+)
 
 
 def container_jobs_ready() -> bool:
@@ -92,7 +121,7 @@ def _audit(request: Request, user: User, action: str, job_id: str | None) -> Non
 
 @router.post("", response_model=ContainerJobAccepted, response_model_by_alias=True)
 async def submit_container_job(
-    payload: Annotated[Any, Body()],
+    payload: ContainerJobSubmitRequest,
     request: Request,
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
@@ -100,10 +129,9 @@ async def submit_container_job(
     """Create-or-replay a durable container job and start its Temporal workflow."""
 
     try:
-        validated = ContainerJobSubmitRequest.model_validate(payload)
         _require_ready()
         service = _build_service(session)
-        accepted = await service.submit(owner=_owner(user), request=validated)
+        accepted = await service.submit(owner=_owner(user), request=payload)
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc
     _audit(request, user, "submit", accepted.job_id)
