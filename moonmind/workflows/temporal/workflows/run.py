@@ -13506,11 +13506,10 @@ class MoonMindRunWorkflow:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
         if self._authoritative_publish_outcome_enabled and push_status == "pushed":
             stale_no_commit = self._publish_context.pop("noCommitPublish", None)
-            stale_no_commit = (
-                self._publish_context.pop("noChangePublish", None)
-                or stale_no_commit
-            )
-            if stale_no_commit is not None and self._publish_status in {
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
                 "not_required",
                 "skipped",
             }:

@@ -3832,6 +3832,23 @@ def test_pushed_commits_supersede_stale_no_commit_before_draft_failure(
     assert "https://github.com/org/repo/pull/8" in message
 
 
+def test_pushed_commits_supersede_empty_stale_no_change_evidence(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._authoritative_publish_outcome_enabled = True
+    mock_run_workflow._publish_context["noChangePublish"] = {}
+    mock_run_workflow._publish_status = "skipped"
+    mock_run_workflow._publish_reason = "No repository changes were detected."
+
+    mock_run_workflow._record_no_commit_publish_evidence(
+        {"push_status": "pushed"}
+    )
+
+    assert "noChangePublish" not in mock_run_workflow._publish_context
+    assert mock_run_workflow._publish_status is None
+    assert mock_run_workflow._publish_reason is None
+
+
 def test_authoritative_publish_outcome_patch_preserves_legacy_draft_completion(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
