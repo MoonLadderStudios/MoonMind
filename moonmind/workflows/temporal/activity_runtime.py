@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 from email.message import EmailMessage
 import hashlib
 import httpx
@@ -6750,6 +6751,8 @@ class TemporalAgentRuntimeActivities:
             else ManagedWorkspaceCheckpointCaptureInput.model_validate(request)
         )
         locator = model.workspace_locator
+        capture_started = time.monotonic()
+        logger.info("managed_checkpoint_capture_requested")
         lock = self._checkpoint_capture_locks.setdefault(
             model.idempotency_key, asyncio.Lock()
         )
@@ -6761,18 +6764,24 @@ class TemporalAgentRuntimeActivities:
             record_root = self._run_store.store_root / "checkpoint_captures"
             record_root.mkdir(parents=True, exist_ok=True)
             record_name = hashlib.sha256(model.idempotency_key.encode()).hexdigest()
+            lock_file = (record_root / f"{record_name}.lock").open("a+b")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             record_path = record_root / f"{record_name}.json"
             immutable = model.model_dump(by_alias=True, mode="json")
             immutable_digest = hashlib.sha256(_json_bytes(immutable)).hexdigest()
             if record_path.exists():
                 saved = json.loads(record_path.read_text(encoding="utf-8"))
                 if saved.get("immutableDigest") != immutable_digest:
+                    lock_file.close()
                     raise temporal_exceptions.ApplicationError(
                         "immutable capture inputs changed",
                         type="CHECKPOINT_IDEMPOTENCY_CONFLICT",
                         non_retryable=True,
                     )
-                return dict(saved["result"])
+                result = dict(saved["result"])
+                logger.info("managed_checkpoint_capture_reused")
+                lock_file.close()
+                return result
 
             expected = resolve_runtime_execution_capabilities("codex_cli")
             if model.capability_digest != expected.capability_digest:
@@ -6791,6 +6800,23 @@ class TemporalAgentRuntimeActivities:
             if record.workflow_id != model.identity.workflow_id:
                 raise temporal_exceptions.ApplicationError(
                     "managed run record does not belong to the source workflow",
+                    type=WORKSPACE_IDENTITY_MISMATCH,
+                    non_retryable=True,
+                )
+            correlation = {
+                "ownerRunId": record.owner_run_id,
+                "logicalStepId": record.logical_step_id,
+                "executionOrdinal": record.execution_ordinal,
+            }
+            expected_correlation = {
+                "ownerRunId": model.identity.run_id,
+                "logicalStepId": model.identity.logical_step_id,
+                "executionOrdinal": model.identity.execution_ordinal,
+            }
+            if correlation != expected_correlation:
+                logger.warning("managed_checkpoint_capture_authority_rejected")
+                raise temporal_exceptions.ApplicationError(
+                    "managed run record does not belong to the source Step Execution",
                     type=WORKSPACE_IDENTITY_MISMATCH,
                     non_retryable=True,
                 )
@@ -6816,6 +6842,11 @@ class TemporalAgentRuntimeActivities:
                 encoding="utf-8",
             )
             os.replace(temporary, record_path)
+            logger.info(
+                "managed_checkpoint_capture_succeeded duration_ms=%s",
+                int((time.monotonic() - capture_started) * 1000),
+            )
+            lock_file.close()
             return result
 
     async def _capture_managed_worktree(
@@ -6875,7 +6906,11 @@ class TemporalAgentRuntimeActivities:
                             "maximum per-file size exceeded",
                             type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
                         )
-                    payload = path.read_bytes()
+                    digest = hashlib.sha256()
+                    with path.open("rb") as source:
+                        while chunk := source.read(1024 * 1024):
+                            digest.update(chunk)
+                    payload = None
                     target = None
                     entry_type = "file"
                 else:
@@ -6883,7 +6918,10 @@ class TemporalAgentRuntimeActivities:
                         f"unsupported file type: {relative_text}",
                         type="CHECKPOINT_CAPTURE_POLICY_INVALID", non_retryable=True,
                     )
-                total += len(payload)
+                payload_size = (
+                    len(payload) if payload is not None else info_stat.st_size
+                )
+                total += payload_size
                 if total > policy.max_total_bytes:
                     raise temporal_exceptions.ApplicationError(
                         "maximum total size exceeded",
@@ -6893,7 +6931,8 @@ class TemporalAgentRuntimeActivities:
                 tar_info.uid = tar_info.gid = tar_info.mtime = 0
                 tar_info.uname = tar_info.gname = ""
                 if entry_type == "file":
-                    archive.addfile(tar_info, BytesIO(payload))
+                    with path.open("rb") as source:
+                        archive.addfile(tar_info, source)
                 else:
                     archive.addfile(tar_info)
                 entries.append(
@@ -6901,8 +6940,12 @@ class TemporalAgentRuntimeActivities:
                         path=relative_text,
                         type=entry_type,
                         mode=f"{stat.S_IMODE(info_stat.st_mode):06o}",
-                        size=len(payload),
-                        sha256=hashlib.sha256(payload).hexdigest(),
+                        size=payload_size,
+                        sha256=(
+                            digest.hexdigest()
+                            if entry_type == "file"
+                            else hashlib.sha256(payload).hexdigest()
+                        ),
                         linkTarget=target,
                     )
                 )
@@ -6932,6 +6975,18 @@ class TemporalAgentRuntimeActivities:
             "createdAt": created_at,
         }
         manifest_payload = _json_bytes(manifest)
+        scan = scan_outbound_bundle(
+            [
+                OutboundBundleItem(location="checkpoint.manifest", content=manifest_payload.decode("utf-8")),
+            ],
+            high_security_mode=True,
+        )
+        if not scan.allowed:
+            raise temporal_exceptions.ApplicationError(
+                "checkpoint metadata failed outbound secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
         manifest_digest = "sha256:" + hashlib.sha256(manifest_payload).hexdigest()
         manifest_ref = await self._put_managed_checkpoint_artifact(
             manifest_payload,

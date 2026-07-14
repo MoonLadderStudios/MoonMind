@@ -68,6 +68,7 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
     store.save(
         ManagedRunRecord(
             runId="agent-run-1", workflowId="wf-1", agentId="codex_cli",
+            ownerRunId="run-1", logicalStepId="implement", executionOrdinal=1,
             runtimeId="codex_cli", status="completed", startedAt=datetime.now(UTC),
             finishedAt=datetime.now(UTC), workspacePath=str(repo),
         )
@@ -94,3 +95,40 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
         assert archive.getmember("tracked.sh").mode & 0o111
         assert archive.getmember("safe-link").issym()
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ownerRunId", "other-run"),
+        ("logicalStepId", "other-step"),
+        ("executionOrdinal", 2),
+    ],
+)
+async def test_managed_capture_rejects_step_execution_mismatch(
+    tmp_path, field: str, value: object
+) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "base"],
+        cwd=repo,
+        check=True,
+    )
+    record = {
+        "runId": "agent-run-1", "workflowId": "wf-1", "ownerRunId": "run-1",
+        "logicalStepId": "implement", "executionOrdinal": 1, "agentId": "codex_cli",
+        "runtimeId": "codex_cli", "status": "completed", "startedAt": datetime.now(UTC),
+        "workspacePath": str(repo),
+    }
+    record[field] = value
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(ManagedRunRecord(**record))
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+    with pytest.raises(Exception, match="source Step Execution"):
+        await activities.agent_runtime_capture_workspace_checkpoint(
+            _request(digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest)
+        )
