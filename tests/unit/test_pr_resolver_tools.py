@@ -756,6 +756,31 @@ def test_finalize_reports_ci_before_codex_review_grace(
 
     assert decision == {"action": "blocked", "reason": "ci_failures"}
 
+
+def test_finalize_reports_known_ci_failures_before_degraded_signal(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "UNSTABLE"},
+            "ci": {
+                "isRunning": True,
+                "hasFailures": True,
+                "signalQuality": "degraded",
+            },
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "ci_failures"}
+
+
 def test_finalize_merges_after_codex_review_grace_expires(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:

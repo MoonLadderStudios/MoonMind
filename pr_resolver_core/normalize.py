@@ -72,6 +72,10 @@ def normalize_temporal_snapshot(
         checks_passing=(
             ready or ("checks_failed" not in kinds and _bool(checks_passing))
         ),
+        checks_failed=(
+            "checks_failed" in kinds
+            or (checks_complete is True and checks_passing is False)
+        ),
         checks_degraded=bool(degraded_kinds & set(kinds)),
         checks_signal_available=isinstance(checks_complete, bool),
         actionable_comments=(
@@ -161,6 +165,7 @@ def normalize_portable_snapshot(
             and not _bool(ci.get("isRunning"))
             and signal_quality in {"", "ok"}
         ),
+        checks_failed=_bool(ci.get("hasFailures")),
         checks_degraded=signal_quality not in {"", "ok"},
         checks_signal_available=bool(ci),
         actionable_comments=_bool(comments_summary.get("hasActionableComments")),

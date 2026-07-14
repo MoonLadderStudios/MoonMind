@@ -87,6 +87,28 @@ from pr_resolver_core import (
             ResolverAction.RUN_REMEDIATION,
         ),
         (
+            {
+                "blockers": [
+                    {"kind": "checks_failed"},
+                    {"kind": "checks_unavailable"},
+                ],
+                "checksComplete": False,
+                "checksPassing": False,
+            },
+            {
+                "pr": {"state": "OPEN", "mergeStateStatus": "UNSTABLE"},
+                "ci": {
+                    "isRunning": True,
+                    "hasFailures": True,
+                    "signalQuality": "degraded",
+                },
+                "commentsFetch": {"succeeded": True},
+                "commentsSummary": {"includeBotReviewComments": True},
+            },
+            "ci_failures",
+            ResolverAction.RUN_REMEDIATION,
+        ),
+        (
             {"blockers": [{"kind": "checks_unavailable"}]},
             {
                 "pr": {"state": "OPEN"},
@@ -176,6 +198,19 @@ def test_unknown_or_degraded_state_never_attempts_merge() -> None:
         CanonicalPullRequestSnapshot(publish_available=False),
     ):
         assert classify_snapshot(snapshot).action is not ResolverAction.ATTEMPT_MERGE
+
+
+def test_actionable_comments_keep_priority_over_known_ci_failures() -> None:
+    decision = classify_snapshot(
+        CanonicalPullRequestSnapshot(
+            actionable_comments=True,
+            checks_failed=True,
+            checks_degraded=True,
+        )
+    )
+
+    assert decision.classification == "actionable_comments"
+    assert decision.action is ResolverAction.RUN_REMEDIATION
 
 
 def test_state_reducer_enforces_no_progress_and_finalize_budgets() -> None:

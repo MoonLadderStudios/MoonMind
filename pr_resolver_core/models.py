@@ -29,6 +29,7 @@ class CanonicalPullRequestSnapshot:
     mergeability_unknown: bool = False
     checks_complete: bool = False
     checks_passing: bool = False
+    checks_failed: bool = False
     checks_degraded: bool = False
     checks_signal_available: bool = False
     actionable_comments: bool = False
