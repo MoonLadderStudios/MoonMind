@@ -6813,6 +6813,7 @@ class TemporalAgentRuntimeActivities:
         workload_registry: Any | None = None,
         container_job_backend: Any | None = None,
         workflow_docker_mode: str = "profiles",
+        raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
         pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
     ) -> None:
@@ -6826,6 +6827,7 @@ class TemporalAgentRuntimeActivities:
         self._workload_registry = workload_registry
         self._container_job_backend = container_job_backend
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
+        self._raw_docker_cli_enabled = bool(raw_docker_cli_enabled)
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -7844,6 +7846,7 @@ class TemporalAgentRuntimeActivities:
         if not tool_allowed_for_workflow_docker_mode(
             tool_name=request.tool_name,
             workflow_docker_mode=workflow_mode,
+            raw_cli_enabled=self._raw_docker_cli_enabled,
         ):
             raise _docker_workflow_mode_forbidden_failure(
                 workflow_docker_mode=workflow_mode,

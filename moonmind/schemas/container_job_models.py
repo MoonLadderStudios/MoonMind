@@ -10,6 +10,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+    WorkspaceLocator,
+)
+
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
 MAX_LOG_PAGE_ENTRIES = 500
@@ -27,6 +34,22 @@ def _validate_job_id(value: str) -> str:
     if not _JOB_ID.fullmatch(value):
         raise ValueError("jobId must be a container-job identifier")
     return value
+
+
+def workspace_locator_identity(locator: WorkspaceLocator) -> str:
+    """Return the stable logical identity segment for a canonical #3147 locator.
+
+    The identity is a logical name, never a host path or mount source; resolving
+    it into a filesystem location is a trusted-worker/backend responsibility.
+    """
+
+    if isinstance(locator, ExternalStateLocator):
+        return locator.artifact_ref
+    if isinstance(locator, SandboxWorkspaceLocator):
+        return locator.workspace_id
+    if isinstance(locator, ManagedWorkspaceLocator):
+        return f"{locator.runtime_id}-{locator.agent_run_id}"
+    raise ValueError("unsupported workspace locator kind")
 
 
 class ContractModel(BaseModel):
@@ -151,7 +174,7 @@ class OutputDeclaration(ContractModel):
 
 class ContainerJobSpec(ContractModel):
     image: str = Field(min_length=1, max_length=512)
-    workspace_ref: dict[str, Any] = Field(alias="workspaceRef")
+    workspace_ref: WorkspaceLocator = Field(alias="workspaceRef")
     command: list[str] = Field(default_factory=list, max_length=128)
     entrypoint: list[str] = Field(default_factory=list, max_length=32)
     workdir: str = Field("/workspace", pattern=r"^/workspace(?:/[^/]+)*$", max_length=512)
@@ -165,20 +188,6 @@ class ContainerJobSpec(ContractModel):
     outputs: list[OutputDeclaration] = Field(default_factory=list, max_length=64)
 
     _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
-
-    @field_validator("workspace_ref")
-    @classmethod
-    def valid_workspace_ref(cls, value: dict[str, Any]) -> dict[str, Any]:
-        kind = value.get("kind")
-        identity_fields = {
-            "omnigent-session": "sessionId",
-            "moonmind-session": "sessionId",
-            "artifact-workspace": "artifactRef",
-        }
-        identity = identity_fields.get(str(kind))
-        if identity is None or not isinstance(value.get(identity), str) or not value[identity].strip():
-            raise ValueError("workspaceRef must contain a supported kind and identity")
-        return value
 
     @field_validator("workdir")
     @classmethod
@@ -490,6 +499,44 @@ class ContainerJobWorkflowInput(TemporalContractModel):
     )
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_v1_workspace_locator(cls, value: Any) -> Any:
+        """Keep already-recorded v1 workflow histories decodable at the boundary."""
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        request = payload.get("request")
+        if not isinstance(request, dict):
+            return payload
+        request = dict(request)
+        spec = request.get("spec")
+        if not isinstance(spec, dict):
+            return payload
+        spec = dict(spec)
+        locator = spec.get("workspaceRef")
+        if not isinstance(locator, dict):
+            return payload
+        kind = locator.get("kind")
+        if kind == "artifact-workspace" and locator.get("artifactRef"):
+            spec["workspaceRef"] = {
+                "kind": "external_state",
+                "artifactRef": locator["artifactRef"],
+            }
+        elif kind in {"moonmind-session", "omnigent-session"} and locator.get(
+            "sessionId"
+        ):
+            # The v1 backend resolved these opaque identities directly below its
+            # authority root. External-state preserves that legacy resolution
+            # without admitting the superseded vocabulary to new submissions.
+            spec["workspaceRef"] = {
+                "kind": "external_state",
+                "artifactRef": locator["sessionId"],
+            }
+        request["spec"] = spec
+        payload["request"] = request
+        return payload
 
     @property
     def ownership_token(self) -> str:
