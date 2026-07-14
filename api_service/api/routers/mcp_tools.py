@@ -10,13 +10,21 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.routers.container_jobs import container_jobs_ready
 from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
+from api_service.services.container_jobs import ContainerJobService
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
+from moonmind.mcp.container_job_tool_registry import (
+    ContainerJobToolContext,
+    ContainerJobToolRegistry,
+    classify_container_job_error,
+)
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
+from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.mcp.jira_tool_registry import (
     JiraToolExecutionContext,
     JiraToolRegistry,
@@ -52,6 +60,7 @@ MCP_SERVER_INFO = {"name": "moonmind", "version": "0.1.0"}
 
 _queue_registry = QueueToolRegistry()
 _execution_tool_registry = ExecutableToolDiscoveryRegistry()
+_container_job_registry = ContainerJobToolRegistry()
 _skills_on_demand_registry = SkillsOnDemandToolRegistry(
     expose_commands=settings.workflow.skills_on_demand_enabled
 )
@@ -144,11 +153,18 @@ def _to_http_exception(exc: Exception) -> HTTPException:
     )
 
 
+def _list_container_job_tools() -> list[Any]:
+    if not container_jobs_ready():
+        return []
+    return _container_job_registry.list_tools()
+
+
 def _list_registered_tools() -> list[Any]:
     tools = (
         _queue_registry.list_tools()
         + _execution_tool_registry.list_tools()
         + _skills_on_demand_registry.list_tools()
+        + _list_container_job_tools()
     )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
@@ -158,7 +174,11 @@ def _list_registered_tools() -> list[Any]:
 
 
 def _list_streamable_callable_tools() -> list[Any]:
-    tools = _queue_registry.list_tools() + _skills_on_demand_registry.list_tools()
+    tools = (
+        _queue_registry.list_tools()
+        + _skills_on_demand_registry.list_tools()
+        + _list_container_job_tools()
+    )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
     if _jules_registry is not None:
@@ -166,11 +186,55 @@ def _list_streamable_callable_tools() -> list[Any]:
     return tools
 
 
+async def _dispatch_container_job_tool(
+    payload: ToolCallRequest,
+    user: User,
+    session: AsyncSession,
+) -> Any:
+    if not container_jobs_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "backend_unavailable",
+                "message": "The container-job service is not enabled on this deployment.",
+            },
+        )
+    context = ContainerJobToolContext(
+        service=ContainerJobService(
+            session, artifacts=get_temporal_artifact_service(session)
+        ),
+        owner=OwnerIdentity(principalId=str(user.id), principalType="user"),
+        transport="mcp",
+    )
+    try:
+        return await _container_job_registry.call_tool(
+            tool=payload.tool, arguments=payload.arguments, context=context
+        )
+    except ToolNotFoundError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - normalized to a stable MCP error
+        normalized = classify_container_job_error(exc)
+        raise HTTPException(
+            status_code=normalized.http_status,
+            detail={"code": normalized.code, "message": normalized.message},
+        ) from exc
+
+
 async def _dispatch_tool_call(
     payload: ToolCallRequest,
     user: User,
     session: AsyncSession | None = None,
 ) -> Any:
+    if _container_job_registry.has_tool(payload.tool):
+        if session is None:  # pragma: no cover - transport always provides a session
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "backend_unavailable",
+                    "message": "The container-job service requires a database session.",
+                },
+            )
+        return await _dispatch_container_job_tool(payload, user, session)
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
