@@ -88,7 +88,7 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
 class ManagedWorkspaceRestoreResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
-    status: Literal["restored"] = "restored"
+    status: Literal["succeeded"] = "succeeded"
     checkpoint_ref: str = Field(alias="checkpointRef")
     destination_workspace_locator: ManagedWorkspaceLocator = Field(
         alias="destinationWorkspaceLocator"
@@ -113,7 +113,10 @@ class CheckpointRestoreError(RuntimeError):
             "failureClass": "recovery_restoration",
             "failureCode": code,
             "retryRecommendation": (
-                "retry" if code in {"CHECKPOINT_ARTIFACT_MISSING"} else "do_not_retry"
+                "retry"
+                if code
+                in {"CHECKPOINT_ARTIFACT_MISSING", "CHECKPOINT_REPOSITORY_UNAVAILABLE"}
+                else "do_not_retry"
             ),
             "message": message[:500],
         }
