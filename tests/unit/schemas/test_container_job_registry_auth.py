@@ -78,7 +78,7 @@ def test_authorization_is_temporal_safe_and_non_sensitive() -> None:
             "source": {"source": "mcp"},
             "spec": {
                 "image": "ghcr.io/org/app:1",
-                "workspaceRef": {"kind": "moonmind-session", "sessionId": "s"},
+                "workspaceRef": {"kind": "sandbox", "workspaceId": "s"},
                 "registryCredentialRef": "db://ghcr-pull",
                 "resources": {"cpuMillis": 100, "memoryMiB": 64},
             },
@@ -117,7 +117,7 @@ def test_workflow_input_accepts_optional_authorization_for_in_flight_compat() ->
             "source": {"source": "workflow"},
             "spec": {
                 "image": "alpine",
-                "workspaceRef": {"kind": "moonmind-session", "sessionId": "s"},
+                "workspaceRef": {"kind": "sandbox", "workspaceId": "s"},
                 "resources": {"cpuMillis": 100, "memoryMiB": 64},
             },
         },

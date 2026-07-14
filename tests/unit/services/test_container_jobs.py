@@ -68,7 +68,7 @@ def private_authorizer() -> PrivateImageAuthorizationService:
                     "credentialRef": "db://ghcr",
                     "registry": "ghcr.io",
                     "repositories": ["org/*"],
-                    "principals": ["user-a"],
+                    "principals": ["user:user-a"],
                 }
             ]
         }

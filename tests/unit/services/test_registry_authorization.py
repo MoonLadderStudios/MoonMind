@@ -23,7 +23,7 @@ def _spec(image: str, credential_ref: str | None = None) -> ContainerJobSpec:
     return ContainerJobSpec.model_validate(
         {
             "image": image,
-            "workspaceRef": {"kind": "moonmind-session", "sessionId": "s"},
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "s"},
             "registryCredentialRef": credential_ref,
             "resources": {"cpuMillis": 100, "memoryMiB": 64},
         }
