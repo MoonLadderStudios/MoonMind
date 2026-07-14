@@ -37,6 +37,7 @@ def _request(
         {
             "jobId": JOB_ID,
             "ownershipToken": f"{JOB_ID}:v1",
+            "resolvedWorkspaceRef": str(workspace),
             "request": {
                 "idempotencyKey": "issue-3257",
                 "source": {"source": "workflow"},
@@ -253,6 +254,7 @@ async def test_public_image_never_materializes_auth(tmp_path: Path) -> None:
         {
             "jobId": JOB_ID,
             "ownershipToken": f"{JOB_ID}:v1",
+            "resolvedWorkspaceRef": str(tmp_path),
             "request": {
                 "idempotencyKey": "k",
                 "source": {"source": "workflow"},
