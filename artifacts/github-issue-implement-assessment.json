@@ -1,0 +1,76 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3274",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3274",
+  "verdict": "FULLY_IMPLEMENTED",
+  "branch": "github-issue-implement-937b735d",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "All 16 visible acceptance criteria are satisfied in the current default-branch state. The implementation landed through merged PRs #3285 (57d3ddd42) and #3296 (38a7c0578): the latter completed workflow wiring, heartbeat-safe execution, managed launch gating, and contract alignment after the first PR reported remaining gaps. Evidence includes strict restore models, the agent-runtime-only catalog route, source-independent and authority-contained restoration, authenticated artifact reads and digest checks, safe bounded extraction and full materialization verification, pinned Git baseline and status verification, atomic activation, durable typed evidence, idempotency conflict detection and locking, ready-state launch enforcement, and targeted unit/integration boundary tests. No long verification suite was run, as required by this assessment step.",
+  "requirements": [
+    {
+      "description": "`agent_runtime.restore_workspace_checkpoint` is registered on the agent-runtime queue and nowhere else.",
+      "status": "met"
+    },
+    {
+      "description": "Restore works when the original managed session, container, worker, run record’s live process, and source workspace have been removed.",
+      "status": "met"
+    },
+    {
+      "description": "Source and destination agent-run identities are distinct and correctly recorded.",
+      "status": "met"
+    },
+    {
+      "description": "The destination workspace is created under the configured managed runtime authority.",
+      "status": "met"
+    },
+    {
+      "description": "The repository is pinned to the checkpoint’s base commit; missing commits fail explicitly.",
+      "status": "met"
+    },
+    {
+      "description": "Checkpoint, archive, and manifest artifacts are authorized and digest-verified before extraction.",
+      "status": "met"
+    },
+    {
+      "description": "Extraction rejects absolute paths, traversal, symlink-parent escapes, unsafe symlink targets, and special files.",
+      "status": "met"
+    },
+    {
+      "description": "Every restored regular file, mode, and symlink target is verified against the manifest.",
+      "status": "met"
+    },
+    {
+      "description": "The verified staging workspace is activated atomically or through a restart-safe reconciliation protocol.",
+      "status": "met"
+    },
+    {
+      "description": "The activity returns a new destination `ManagedWorkspaceLocator`, not the source locator or an absolute path.",
+      "status": "met"
+    },
+    {
+      "description": "A restoration evidence artifact links source checkpoint identity to destination workspace identity.",
+      "status": "met"
+    },
+    {
+      "description": "Agent launch is blocked until verified restoration reaches `ready`.",
+      "status": "met"
+    },
+    {
+      "description": "Restore is idempotent across activity retries, worker restart, and concurrent duplicate requests.",
+      "status": "met"
+    },
+    {
+      "description": "Input drift under the same idempotency key fails closed.",
+      "status": "met"
+    },
+    {
+      "description": "No agent executes when restoration is partial, corrupted, unauthorized, or incompatible.",
+      "status": "met"
+    },
+    {
+      "description": "Existing Temporal histories remain replayable through a versioned activity/contract cutover.",
+      "status": "met"
+    }
+  ]
+}
