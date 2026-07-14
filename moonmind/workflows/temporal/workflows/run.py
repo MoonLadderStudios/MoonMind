@@ -573,6 +573,9 @@ RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
 )
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
+RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
+    "run-skip-no-publish-prepublication-checkpoint-v1"
+)
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
 FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
 FINALIZATION_RETRY_EXHAUSTED = "FINALIZATION_RETRY_EXHAUSTED"
@@ -5430,6 +5433,50 @@ class MoonMindRunWorkflow:
         self._summary = "Execution succeeded; finalization failed during publication."
         self._attention_required = True
         self._update_memo()
+
+    async def _record_prepublication_checkpoint(
+        self,
+        logical_step_id: str,
+        *,
+        publish_mode: str,
+        updated_at: datetime,
+    ) -> bool:
+        """Return whether a required pre-publication checkpoint failed."""
+
+        if (
+            workflow.patched(RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH)
+            and publish_mode == "none"
+        ):
+            return False
+        try:
+            await self._record_canonical_step_checkpoint(
+                logical_step_id,
+                boundary="before_publication",
+                updated_at=updated_at,
+            )
+        except Exception as exc:
+            if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                raise
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, dict):
+                row["finalizationOutcome"] = {
+                    "status": "failed",
+                    "phase": "before_publication_checkpoint",
+                    "criticality": "required",
+                    "failureCode": FINALIZATION_CHECKPOINT_FAILED,
+                    "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
+                    "retryCount": 1,
+                    "message": self._coerce_text(exc, max_chars=500),
+                    "updatedAt": workflow.now().isoformat(),
+                }
+            self._summary = (
+                "Execution succeeded; finalization failed during the "
+                "pre-publication checkpoint."
+            )
+            self._attention_required = True
+            self._update_memo()
+            return True
+        return False
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
@@ -10500,35 +10547,13 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            prepublication_checkpoint_failed = False
-            try:
-                await self._record_canonical_step_checkpoint(
+            prepublication_checkpoint_failed = (
+                await self._record_prepublication_checkpoint(
                     node_id,
-                    boundary="before_publication",
+                    publish_mode=publish_mode,
                     updated_at=workflow.now(),
                 )
-            except Exception as exc:
-                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
-                    raise
-                row = self._step_ledger_row_for(node_id)
-                if isinstance(row, dict):
-                    row["finalizationOutcome"] = {
-                        "status": "failed",
-                        "phase": "before_publication_checkpoint",
-                        "criticality": "required",
-                        "failureCode": FINALIZATION_CHECKPOINT_FAILED,
-                        "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
-                        "retryCount": 1,
-                        "message": self._coerce_text(exc, max_chars=500),
-                        "updatedAt": workflow.now().isoformat(),
-                    }
-                self._summary = (
-                    "Execution succeeded; finalization failed during the "
-                    "pre-publication checkpoint."
-                )
-                self._attention_required = True
-                self._update_memo()
-                prepublication_checkpoint_failed = True
+            )
             if prepublication_checkpoint_failed:
                 break
             publication_raised = False

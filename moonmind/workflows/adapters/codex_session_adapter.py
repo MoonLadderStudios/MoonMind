@@ -21,11 +21,12 @@ from temporalio.exceptions import (
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
-    AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
     AgentRunState,
     AgentRunStatus,
+    AgentRuntimeStepExecutionLaunch,
+    AgentTerminalContract,
     ManagedRunRecord,
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
@@ -727,6 +728,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             started_at=started_at,
             finished_at=None,
             profile_id=launch_context.profile_id or None,
+            step_execution=request.step_execution,
         )
 
         current_locator = locator
@@ -2005,6 +2007,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         started_at: datetime,
         finished_at: datetime | None = None,
         profile_id: str | None = None,
+        step_execution: AgentRuntimeStepExecutionLaunch | None = None,
     ) -> None:
         self._run_states[run_id] = CodexSessionExecutionState(
             runId=run_id,
@@ -2032,6 +2035,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             status=status,
             started_at=started_at,
             finished_at=finished_at,
+            step_execution=step_execution,
         )
 
     def _persist_managed_run_record(
@@ -2048,6 +2052,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         status: AgentRunState,
         started_at: datetime,
         finished_at: datetime | None,
+        step_execution: AgentRuntimeStepExecutionLaunch | None = None,
     ) -> None:
         if self._run_store is None:
             return
@@ -2124,9 +2129,21 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         record = ManagedRunRecord(
             runId=record_key,
             workflowId=self._workflow_id,
-            ownerRunId=existing.owner_run_id if existing is not None else None,
-            logicalStepId=existing.logical_step_id if existing is not None else None,
-            executionOrdinal=existing.execution_ordinal if existing is not None else None,
+            ownerRunId=(
+                step_execution.run_id
+                if step_execution is not None
+                else (existing.owner_run_id if existing is not None else None)
+            ),
+            logicalStepId=(
+                step_execution.logical_step_id
+                if step_execution is not None
+                else (existing.logical_step_id if existing is not None else None)
+            ),
+            executionOrdinal=(
+                step_execution.execution_ordinal
+                if step_execution is not None
+                else (existing.execution_ordinal if existing is not None else None)
+            ),
             agentId=agent_id,
             runtimeId=runtime_id,
             status=status,
