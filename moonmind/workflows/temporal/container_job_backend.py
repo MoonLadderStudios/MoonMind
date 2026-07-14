@@ -148,10 +148,15 @@ class DockerContainerJobBackend:
             )
             observed = stdout.decode(errors="replace").strip()
             if code or observed != expected:
+                # Never fold raw docker stderr into the failure message: on a
+                # mount failure it routinely contains the resolved bind
+                # ``src=`` host path, and this message becomes an
+                # ApplicationError string that enters Temporal history and
+                # ordinary logs (AC10). Emit a fixed, host-path-free
+                # classification message only.
                 raise ContainerWorkspaceError(
                     CONTAINER_WORKSPACE_NOT_VISIBLE,
-                    "selected Docker daemon cannot read the resolved workspace: "
-                    + stderr.decode(errors="replace").strip()[:500],
+                    "selected Docker daemon cannot read the resolved workspace",
                 )
             if artifacts_marker.read_text(encoding="utf-8").strip() != expected:
                 raise ContainerWorkspaceError(
@@ -159,9 +164,12 @@ class DockerContainerJobBackend:
                     "selected Docker daemon cannot write the resolved artifacts area",
                 )
         except OSError as exc:
+            # OSError stringifies with the offending filename, which is the
+            # resolved host marker path under the workspace/artifacts source.
+            # Keep it out of the caller-visible classification message (AC10).
             raise ContainerWorkspaceError(
                 CONTAINER_WORKSPACE_NOT_VISIBLE,
-                f"workspace visibility marker could not be prepared: {exc}",
+                "workspace visibility marker could not be prepared",
             ) from exc
         finally:
             for path in (workspace_marker, artifacts_marker):

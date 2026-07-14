@@ -32,6 +32,7 @@ def _input(*, timeout: int = 60) -> ContainerJobWorkflowInput:
         {
             "jobId": JOB_ID,
             "observeIntervalSeconds": 1,
+            "owner": {"principalId": "user-1", "principalType": "user"},
             "request": {
                 "idempotencyKey": "issue-3277",
                 "source": {"source": "workflow", "workflowId": "mm:3277"},
@@ -107,7 +108,8 @@ async def test_typed_activity_boundary_delegates_to_backend() -> None:
 async def test_production_backend_makes_every_registered_activity_callable(
     tmp_path,
 ) -> None:
-    workspace = tmp_path / "art_workspace" / "repo"
+    # Artifact workspaces are owner-scoped under the principal id (AC4).
+    workspace = tmp_path / "user-1" / "art_workspace" / "repo"
     workspace.mkdir(parents=True)
     commands: list[tuple[str, ...]] = []
 
@@ -137,6 +139,7 @@ async def test_production_backend_makes_every_registered_activity_callable(
     payload = {
         "jobId": JOB_ID,
         "ownershipToken": inp.ownership_token,
+        "owner": inp.owner.model_dump(mode="json", by_alias=True),
         "request": inp.request.model_dump(mode="json", by_alias=True),
     }
     resolved = await activities.container_job_resolve_workspace(payload)

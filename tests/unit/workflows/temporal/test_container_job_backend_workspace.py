@@ -17,6 +17,10 @@ from moonmind.workloads.container_workspace import (
 )
 
 JOB_ID = "container-job:" + "b" * 32
+# Artifact workspaces are owner-scoped, so the resolved source lives under
+# ``<root>/<principal>/<artifactRef>``.
+OWNER_ID = "user-1"
+OWNER = {"principalId": OWNER_ID, "principalType": "user"}
 
 
 def _request(root_marker: str = "art") -> ContainerJobActivityRequest:
@@ -24,6 +28,7 @@ def _request(root_marker: str = "art") -> ContainerJobActivityRequest:
         {
             "jobId": JOB_ID,
             "ownershipToken": f"{JOB_ID}:v1",
+            "owner": OWNER,
             "request": {
                 "idempotencyKey": "k",
                 "source": {"source": "workflow"},
@@ -50,7 +55,7 @@ def _backend(tmp_path, runner) -> DockerContainerJobBackend:
 
 @pytest.mark.asyncio
 async def test_resolve_workspace_returns_opaque_handle_not_host_path(tmp_path) -> None:
-    (tmp_path / "art" / "repo").mkdir(parents=True)
+    (tmp_path / OWNER_ID / "art" / "repo").mkdir(parents=True)
 
     async def runner(args):  # pragma: no cover - resolve issues no commands
         return 0, b"", b""
@@ -66,7 +71,7 @@ async def test_resolve_workspace_returns_opaque_handle_not_host_path(tmp_path) -
 
 @pytest.mark.asyncio
 async def test_probe_uses_small_image_and_removes_marker(tmp_path) -> None:
-    workspace = tmp_path / "art" / "repo"
+    workspace = tmp_path / OWNER_ID / "art" / "repo"
     workspace.mkdir(parents=True)
     commands: list[tuple[str, ...]] = []
 
@@ -97,7 +102,7 @@ async def test_probe_uses_small_image_and_removes_marker(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_probe_failure_is_workspace_not_visible(tmp_path) -> None:
-    (tmp_path / "art" / "repo").mkdir(parents=True)
+    (tmp_path / OWNER_ID / "art" / "repo").mkdir(parents=True)
 
     async def runner(args):
         return 1, b"", b"cannot mount source"
@@ -106,6 +111,58 @@ async def test_probe_failure_is_workspace_not_visible(tmp_path) -> None:
     with pytest.raises(ContainerWorkspaceError) as excinfo:
         await backend.probe_workspace(_request())
     assert excinfo.value.code == CONTAINER_WORKSPACE_NOT_VISIBLE
+
+
+@pytest.mark.asyncio
+async def test_probe_failure_message_does_not_leak_host_path(tmp_path) -> None:
+    # A real dockerd mount failure stderr contains the resolved bind ``src=``
+    # host path; it must never reach the caller-visible classification message
+    # (AC10), because that string enters Temporal history and ordinary logs.
+    workspace = tmp_path / OWNER_ID / "art" / "repo"
+    workspace.mkdir(parents=True)
+    leaked = str(workspace)
+
+    async def runner(args):
+        return (
+            1,
+            b"",
+            f"docker: Error response from daemon: invalid mount config: "
+            f"bind source path does not exist: src={leaked}".encode(),
+        )
+
+    backend = _backend(tmp_path, runner)
+    with pytest.raises(ContainerWorkspaceError) as excinfo:
+        await backend.probe_workspace(_request())
+    assert excinfo.value.code == CONTAINER_WORKSPACE_NOT_VISIBLE
+    message = str(excinfo.value)
+    assert leaked not in message
+    assert str(tmp_path) not in message
+
+
+@pytest.mark.asyncio
+async def test_activity_boundary_workspace_not_visible_does_not_leak_host_path(
+    tmp_path,
+) -> None:
+    from temporalio.exceptions import ApplicationError
+
+    workspace = tmp_path / OWNER_ID / "art" / "repo"
+    workspace.mkdir(parents=True)
+    leaked = str(workspace)
+
+    async def runner(args):
+        return 1, b"", f"cannot mount src={leaked}".encode()
+
+    backend = _backend(tmp_path, runner)
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    payload = _request().model_dump(mode="json", by_alias=True)
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities.container_job_probe_workspace(payload)
+    assert excinfo.value.type == CONTAINER_WORKSPACE_NOT_VISIBLE
+    assert excinfo.value.non_retryable is True
+    # The ApplicationError message becomes the workflow terminal message and
+    # enters Temporal history; it must carry no resolved host source.
+    assert leaked not in str(excinfo.value)
+    assert str(tmp_path) not in str(excinfo.value)
 
 
 @pytest.mark.asyncio

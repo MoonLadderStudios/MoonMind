@@ -11,6 +11,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
+# Placeholder principal used when no authenticated owner is supplied. It is a
+# system sentinel only and is NEVER sufficient authorization for owner-scoped
+# workspace kinds (for example artifact-materialization workspaces).
+DEFAULT_CONTAINER_JOB_PRINCIPAL_ID = "container_job"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
 MAX_LOG_PAGE_ENTRIES = 500
 MAX_ARTIFACT_PAGE_ENTRIES = 200
@@ -317,7 +321,7 @@ class ContainerJobWorkflowInput(TemporalContractModel):
     job_id: str = Field(alias="jobId")
     owner: OwnerIdentity = Field(
         default_factory=lambda: OwnerIdentity(
-            principalId="container_job", principalType="system"
+            principalId=DEFAULT_CONTAINER_JOB_PRINCIPAL_ID, principalType="system"
         )
     )
     request: ContainerJobSubmitRequest
@@ -339,7 +343,7 @@ class ContainerJobActivityRequest(TemporalContractModel):
     job_id: str = Field(alias="jobId")
     owner: OwnerIdentity = Field(
         default_factory=lambda: OwnerIdentity(
-            principalId="container_job", principalType="system"
+            principalId=DEFAULT_CONTAINER_JOB_PRINCIPAL_ID, principalType="system"
         )
     )
     ownership_token: str = Field(alias="ownershipToken", min_length=1, max_length=300)

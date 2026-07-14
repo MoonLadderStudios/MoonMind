@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Iterable
 
 from moonmind.schemas.container_job_models import (
+    DEFAULT_CONTAINER_JOB_PRINCIPAL_ID,
     ContainerJobActivityRequest,
     ContainerJobFailureClass,
 )
@@ -208,6 +209,22 @@ def _require(condition: bool, code: str, message: str) -> None:
         raise ContainerWorkspaceError(code, message)
 
 
+def _is_authenticated_owner(owner) -> bool:
+    """Return whether an owner is a genuine principal, not the placeholder.
+
+    The default ``OwnerIdentity`` is the system sentinel
+    ``container_job``/``system``; it is never sufficient authorization for an
+    owner-scoped workspace kind.
+    """
+
+    if not owner.principal_id:
+        return False
+    return not (
+        owner.principal_id == DEFAULT_CONTAINER_JOB_PRINCIPAL_ID
+        and owner.principal_type == "system"
+    )
+
+
 class ContainerWorkspaceResolver:
     """Resolve authorized locators into trusted, daemon-visible mount plans."""
 
@@ -242,6 +259,15 @@ class ContainerWorkspaceResolver:
         self._authorize(locator, request)
 
         approved_root = self._mapping.approved_root_for_kind(locator.kind).resolve()
+        if isinstance(locator, ContainerArtifactWorkspaceLocator):
+            # Owner-scope artifact-materialization workspaces: a principal may
+            # only ever name artifact refs under its own subtree, so one
+            # principal can never resolve another principal's artifactRef even
+            # by naming the same ref. A different principal resolves under a
+            # different root and is contained away from it (AC4).
+            approved_root = (
+                approved_root / _sanitize_identity(request.owner.principal_id)
+            ).resolve()
         identity, relative_path = _identity_and_relative(locator)
         workspace_source = self._contained_source(
             approved_root, identity, relative_path
@@ -326,10 +352,14 @@ class ContainerWorkspaceResolver:
                 "run workspace does not correlate with the caller's run identity",
             )
         elif isinstance(locator, ContainerArtifactWorkspaceLocator):
-            # Artifact-materialization workspaces are owner-scoped only; the
-            # owner principal on the trusted input is the authority.
+            # Artifact-materialization workspaces are owner-scoped: they require
+            # a genuinely authenticated principal, not the default system
+            # placeholder. The placeholder is never sufficient authorization, so
+            # an unauthenticated submission can never reach any artifactRef
+            # (AC4). Cross-user isolation is enforced structurally by scoping the
+            # resolved source under the owner principal in ``resolve``.
             _require(
-                bool(request.owner.principal_id),
+                _is_authenticated_owner(request.owner),
                 CONTAINER_WORKSPACE_PERMISSION_DENIED,
                 "artifact workspace requires an authenticated owner",
             )

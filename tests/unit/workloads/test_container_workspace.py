@@ -25,6 +25,7 @@ from moonmind.workloads.container_workspace import (
 )
 
 JOB_ID = "container-job:" + "a" * 32
+OWNER = {"principalId": "user-1", "principalType": "user"}
 
 
 def _request(
@@ -32,6 +33,7 @@ def _request(
     workspace_ref: dict,
     source: dict,
     caches: list | None = None,
+    owner: dict | None = None,
 ) -> ContainerJobActivityRequest:
     spec = {
         "image": "python:3.13",
@@ -40,17 +42,18 @@ def _request(
     }
     if caches is not None:
         spec["caches"] = caches
-    return ContainerJobActivityRequest.model_validate(
-        {
-            "jobId": JOB_ID,
-            "ownershipToken": f"{JOB_ID}:v1",
-            "request": {
-                "idempotencyKey": "k",
-                "source": source,
-                "spec": spec,
-            },
-        }
-    )
+    payload = {
+        "jobId": JOB_ID,
+        "ownershipToken": f"{JOB_ID}:v1",
+        "request": {
+            "idempotencyKey": "k",
+            "source": source,
+            "spec": spec,
+        },
+    }
+    if owner is not None:
+        payload["owner"] = owner
+    return ContainerJobActivityRequest.model_validate(payload)
 
 
 def _resolver(root: Path, **kwargs) -> ContainerWorkspaceResolver:
@@ -99,6 +102,7 @@ def test_absent_workspace_is_workspace_not_found(tmp_path) -> None:
     request = _request(
         workspace_ref={"kind": "artifact-workspace", "artifactRef": "missing"},
         source={"source": "workflow"},
+        owner=OWNER,
     )
     with pytest.raises(ContainerWorkspaceError) as excinfo:
         resolver.resolve(request)
@@ -112,9 +116,12 @@ def test_symlink_escape_is_rejected(tmp_path) -> None:
     (outside / "secret").mkdir()
     root = tmp_path / "root"
     root.mkdir()
-    # An identity directory whose "repo" child is a symlink pointing outside.
-    (root / "art").mkdir()
-    os.symlink(outside / "secret", root / "art" / "repo")
+    # Artifact workspaces are owner-scoped under the principal id, so the
+    # identity directory lives under ``<root>/<principal>/art``; its "repo"
+    # child is a symlink pointing outside the approved root.
+    owner_root = root / OWNER["principalId"]
+    (owner_root / "art").mkdir(parents=True)
+    os.symlink(outside / "secret", owner_root / "art" / "repo")
     resolver = ContainerWorkspaceResolver(
         mapping=ApprovedWorkspaceMapping(
             run_root=root,
@@ -127,6 +134,7 @@ def test_symlink_escape_is_rejected(tmp_path) -> None:
     request = _request(
         workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
         source={"source": "workflow"},
+        owner=OWNER,
     )
     with pytest.raises(ContainerWorkspaceError) as excinfo:
         resolver.resolve(request)
@@ -134,12 +142,13 @@ def test_symlink_escape_is_rejected(tmp_path) -> None:
 
 
 def test_cache_target_collision_with_reserved_target_is_rejected(tmp_path) -> None:
-    (tmp_path / "art" / "repo").mkdir(parents=True)
+    (tmp_path / OWNER["principalId"] / "art" / "repo").mkdir(parents=True)
     resolver = _resolver(tmp_path)
     request = _request(
         workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
         source={"source": "workflow"},
         caches=[{"cacheRef": "pip", "target": ARTIFACTS_TARGET}],
+        owner=OWNER,
     )
     with pytest.raises(ContainerWorkspaceError) as excinfo:
         resolver.resolve(request)
@@ -147,7 +156,7 @@ def test_cache_target_collision_with_reserved_target_is_rejected(tmp_path) -> No
 
 
 def test_cache_mounts_get_distinct_job_owned_sources(tmp_path) -> None:
-    (tmp_path / "art" / "repo").mkdir(parents=True)
+    (tmp_path / OWNER["principalId"] / "art" / "repo").mkdir(parents=True)
     resolver = _resolver(tmp_path)
     request = _request(
         workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
@@ -156,6 +165,7 @@ def test_cache_mounts_get_distinct_job_owned_sources(tmp_path) -> None:
             {"cacheRef": "pip", "target": "/root/.cache/pip"},
             {"cacheRef": "npm", "target": "/root/.cache/npm", "readOnly": True},
         ],
+        owner=OWNER,
     )
     plan = resolver.resolve(request)
     cache_mounts = [m for m in plan.mounts if m.mount_class == "cache"]
@@ -165,3 +175,72 @@ def test_cache_mounts_get_distinct_job_owned_sources(tmp_path) -> None:
     # No cache source escapes the job-owned scratch root.
     for mount in cache_mounts:
         assert str((tmp_path / ".container-job-scratch").resolve()) in mount.source
+
+
+def test_artifact_workspace_default_owner_is_permission_denied(tmp_path) -> None:
+    # The default OwnerIdentity placeholder (container_job/system) is never
+    # sufficient authorization for an owner-scoped artifact reference (AC4).
+    (tmp_path / "container_job" / "art" / "repo").mkdir(parents=True)
+    resolver = _resolver(tmp_path)
+    request = _request(
+        workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
+        source={"source": "workflow"},
+    )
+    with pytest.raises(ContainerWorkspaceError) as excinfo:
+        resolver.resolve(request)
+    assert excinfo.value.code == CONTAINER_WORKSPACE_PERMISSION_DENIED
+    assert excinfo.value.failure_class == ContainerJobFailureClass.AUTHORIZATION
+
+
+def test_artifact_workspace_cross_user_reference_fails_closed(tmp_path) -> None:
+    # user-A owns an artifact ref; user-B naming the same ref must not resolve
+    # into user-A's subtree. Cross-user access fails closed as
+    # workspace_not_found because user-B's owner-scoped root has no such dir.
+    (tmp_path / "user-a" / "art" / "repo").mkdir(parents=True)
+    resolver = _resolver(tmp_path)
+
+    owner_a = {"principalId": "user-a", "principalType": "user"}
+    request_a = _request(
+        workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
+        source={"source": "workflow"},
+        owner=owner_a,
+    )
+    plan_a = resolver.resolve(request_a)
+    assert plan_a.workspace_source == str(
+        (tmp_path / "user-a" / "art" / "repo").resolve()
+    )
+
+    owner_b = {"principalId": "user-b", "principalType": "user"}
+    request_b = _request(
+        workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
+        source={"source": "workflow"},
+        owner=owner_b,
+    )
+    with pytest.raises(ContainerWorkspaceError) as excinfo:
+        resolver.resolve(request_b)
+    assert excinfo.value.code == CONTAINER_WORKSPACE_NOT_FOUND
+
+
+def test_artifact_workspace_sources_are_owner_partitioned(tmp_path) -> None:
+    # Two principals naming the same artifact ref get distinct, owner-scoped
+    # sources; neither source can reach the other principal's subtree.
+    (tmp_path / "user-a" / "art" / "repo").mkdir(parents=True)
+    (tmp_path / "user-b" / "art" / "repo").mkdir(parents=True)
+    resolver = _resolver(tmp_path)
+
+    source_a = resolver.resolve(
+        _request(
+            workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
+            source={"source": "workflow"},
+            owner={"principalId": "user-a", "principalType": "user"},
+        )
+    ).workspace_source
+    source_b = resolver.resolve(
+        _request(
+            workspace_ref={"kind": "artifact-workspace", "artifactRef": "art"},
+            source={"source": "workflow"},
+            owner={"principalId": "user-b", "principalType": "user"},
+        )
+    ).workspace_source
+    assert source_a != source_b
+    assert "user-a" in source_a and "user-b" in source_b

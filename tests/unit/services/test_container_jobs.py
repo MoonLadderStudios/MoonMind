@@ -6,6 +6,11 @@ from unittest.mock import AsyncMock
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base
+from api_service.services.container_job_workspace_authorizer import (
+    ContainerJobWorkspaceAuthorizationError,
+    ContainerJobWorkspaceAuthorizer,
+    WorkspaceOwnershipRecord,
+)
 from api_service.services.container_jobs import (
     ContainerJobIdempotencyConflictError,
     ContainerJobNotFoundError,
@@ -39,10 +44,28 @@ def temporal():
     return adapter
 
 
+def managed_session_authorizer(
+    *, session_id: str = "run", record: WorkspaceOwnershipRecord | None = None
+) -> ContainerJobWorkspaceAuthorizer:
+    """Authorizer whose managed-session store holds one live owned record."""
+
+    live = record if record is not None else WorkspaceOwnershipRecord(session_id=session_id)
+
+    async def lookup(identity: str) -> WorkspaceOwnershipRecord | None:
+        return live if identity == session_id else None
+
+    return ContainerJobWorkspaceAuthorizer(managed_session_lookup=lookup)
+
+
+@pytest.fixture
+def authorizer() -> ContainerJobWorkspaceAuthorizer:
+    return managed_session_authorizer()
+
+
 def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmitRequest:
     return ContainerJobSubmitRequest(
         idempotencyKey=key,
-        source={"source": "mcp", "callerRequestId": "r"},
+        source={"source": "mcp", "callerRequestId": "r", "managedSessionId": "run"},
         spec={
             "image": image,
             "workspaceRef": {"kind": "moonmind-session", "sessionId": "run"},
@@ -52,9 +75,9 @@ def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmit
 
 
 @pytest.mark.asyncio
-async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory, temporal) -> None:
+async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal)
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
         owner = OwnerIdentity(principalId="user-1", principalType="user")
         first = await service.submit(owner=owner, request=submission())
         second = await service.submit(owner=owner, request=submission())
@@ -71,9 +94,9 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory,
 
 
 @pytest.mark.asyncio
-async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_factory, temporal) -> None:
+async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal)
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
         user = OwnerIdentity(principalId="shared", principalType="user")
         system = OwnerIdentity(principalId="shared", principalType="system")
         user_job = await service.submit(owner=user, request=submission())
@@ -89,7 +112,9 @@ async def test_concurrent_duplicate_submission_has_one_durable_identity(session_
 
     async def submit_once():
         async with session_factory() as session:
-            result = await ContainerJobService(session, temporal=temporal).submit(owner=owner, request=submission())
+            result = await ContainerJobService(
+                session, temporal=temporal, workspace_authorizer=managed_session_authorizer()
+            ).submit(owner=owner, request=submission())
             await session.commit()
             return result
 
@@ -99,9 +124,9 @@ async def test_concurrent_duplicate_submission_has_one_durable_identity(session_
 
 
 @pytest.mark.asyncio
-async def test_terminal_observations_and_auxiliary_failures_project_independently(session_factory, temporal) -> None:
+async def test_terminal_observations_and_auxiliary_failures_project_independently(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal)
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
         accepted = await service.submit(
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
@@ -130,9 +155,9 @@ async def test_terminal_observations_and_auxiliary_failures_project_independentl
 
 
 @pytest.mark.asyncio
-async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temporal) -> None:
+async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal)
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
         accepted = await service.submit(
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
@@ -152,3 +177,142 @@ async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temp
         assert not terminal.accepted and terminal.state == "succeeded"
         with pytest.raises(ContainerJobNotFoundError):
             await service.cancel(owner=OwnerIdentity(principalId="other", principalType="user"), job_id=accepted.job_id, request=request)
+
+
+# --- AC3: durable ownership-record authorization at the submit boundary ------
+
+
+def _managed_submission(*, session_id: str, managed_session_id: str) -> ContainerJobSubmitRequest:
+    return ContainerJobSubmitRequest(
+        idempotencyKey="k",
+        source={"source": "mcp", "callerRequestId": "r", "managedSessionId": managed_session_id},
+        spec={
+            "image": "alpine",
+            "workspaceRef": {"kind": "moonmind-session", "sessionId": session_id},
+            "resources": {"cpuMillis": 100, "memoryMiB": 64},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_absent_ownership_record_fails_closed(session_factory, temporal) -> None:
+    async def lookup(identity):
+        return None
+
+    authorizer = ContainerJobWorkspaceAuthorizer(managed_session_lookup=lookup)
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        with pytest.raises(ContainerJobWorkspaceAuthorizationError) as excinfo:
+            await service.submit(
+                owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
+            )
+    assert excinfo.value.code == "workspace_not_found"
+    # No durable job identity or workflow is created for an unowned reference.
+    temporal.start_container_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_terminally_deleted_record_fails_closed(session_factory, temporal) -> None:
+    authorizer = managed_session_authorizer(
+        record=WorkspaceOwnershipRecord(session_id="run", is_terminal=True)
+    )
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        with pytest.raises(ContainerJobWorkspaceAuthorizationError) as excinfo:
+            await service.submit(
+                owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
+            )
+    assert excinfo.value.code == "workspace_not_found"
+    temporal.start_container_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_cross_user_ownership_record_denied(session_factory, temporal) -> None:
+    authorizer = managed_session_authorizer(
+        record=WorkspaceOwnershipRecord(session_id="run", principal_id="owner-a")
+    )
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        with pytest.raises(ContainerJobWorkspaceAuthorizationError) as excinfo:
+            await service.submit(
+                owner=OwnerIdentity(principalId="attacker", principalType="user"),
+                request=submission(),
+            )
+    assert excinfo.value.code == "permission_denied"
+    temporal.start_container_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_cross_session_reference_denied(session_factory, temporal) -> None:
+    # Attacker names the victim's session as the locator but the API only
+    # authenticated the attacker's own managed session id.
+    async def lookup(identity):
+        if identity == "victim":
+            return WorkspaceOwnershipRecord(session_id="victim")
+        return None
+
+    authorizer = ContainerJobWorkspaceAuthorizer(managed_session_lookup=lookup)
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        with pytest.raises(ContainerJobWorkspaceAuthorizationError) as excinfo:
+            await service.submit(
+                owner=OwnerIdentity(principalId="attacker", principalType="user"),
+                request=_managed_submission(session_id="victim", managed_session_id="attacker"),
+            )
+    assert excinfo.value.code == "permission_denied"
+    temporal.start_container_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_unconfigured_kind_fails_closed(session_factory, temporal) -> None:
+    # Only the managed-session lookup is wired; an Omnigent reference cannot be
+    # proven owned and must fail closed rather than fall open.
+    authorizer = managed_session_authorizer()
+    omnigent_request = ContainerJobSubmitRequest(
+        idempotencyKey="k",
+        source={"source": "omnigent", "omnigentSessionId": "sess"},
+        spec={
+            "image": "alpine",
+            "workspaceRef": {"kind": "omnigent-session", "sessionId": "sess"},
+            "resources": {"cpuMillis": 100, "memoryMiB": 64},
+        },
+    )
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        with pytest.raises(ContainerJobWorkspaceAuthorizationError) as excinfo:
+            await service.submit(
+                owner=OwnerIdentity(principalId="u", principalType="user"),
+                request=omnigent_request,
+            )
+    assert excinfo.value.code == "permission_denied"
+    temporal.start_container_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_artifact_requires_authenticated_owner(session_factory, temporal) -> None:
+    authorizer = ContainerJobWorkspaceAuthorizer()
+    artifact_request = ContainerJobSubmitRequest(
+        idempotencyKey="k",
+        source={"source": "workflow"},
+        spec={
+            "image": "alpine",
+            "workspaceRef": {"kind": "artifact-workspace", "artifactRef": "art"},
+            "resources": {"cpuMillis": 100, "memoryMiB": 64},
+        },
+    )
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        # Default system placeholder owner is never sufficient for an artifact ref.
+        with pytest.raises(ContainerJobWorkspaceAuthorizationError) as excinfo:
+            await service.submit(
+                owner=OwnerIdentity(principalId="container_job", principalType="system"),
+                request=artifact_request,
+            )
+        assert excinfo.value.code == "permission_denied"
+        # A genuinely authenticated principal is accepted.
+        accepted = await service.submit(
+            owner=OwnerIdentity(principalId="real-user", principalType="user"),
+            request=artifact_request,
+        )
+        assert accepted.job_id
+    temporal.start_container_job.assert_awaited_once()
