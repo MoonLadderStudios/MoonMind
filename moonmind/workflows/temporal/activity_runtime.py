@@ -2668,7 +2668,14 @@ async def _await_with_activity_heartbeats(
             done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
             if task in done:
                 return await task
-            activity.heartbeat(dict(heartbeat_payload))
+            try:
+                activity.heartbeat(dict(heartbeat_payload))
+            except asyncio.QueueFull:
+                # The Temporal SDK coalesces activity heartbeats through a
+                # bounded local queue.  Queue saturation means an earlier
+                # heartbeat is already pending; it is backpressure, not an
+                # activity failure.
+                logger.debug("activity_heartbeat_coalesced_queue_full")
     finally:
         if not task.done():
             task.cancel()
@@ -6940,8 +6947,14 @@ class TemporalAgentRuntimeActivities:
                     raise TemporalActivityRuntimeError(
                         "managed checkpoint capture requires run and artifact stores"
                     )
-                return await self._capture_managed_checkpoint_locked(
-                    model, locator, capture_started
+                return await _await_with_activity_heartbeats(
+                    self._capture_managed_checkpoint_locked(
+                        model, locator, capture_started
+                    ),
+                    heartbeat_payload={
+                        "activity": "agent_runtime.capture_workspace_checkpoint",
+                        "phase": "capture",
+                    },
                 )
             except Exception as exc:
                 failure_type = getattr(exc, "type", type(exc).__name__)
@@ -7091,10 +7104,10 @@ class TemporalAgentRuntimeActivities:
             fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
             for relative_text in selected:
-                if temporal_activity.in_activity():
-                    temporal_activity.heartbeat(
-                        {"phase": "archive", "filesCaptured": len(entries)}
-                    )
+                # Archive construction is synchronous. Yield between entries so
+                # the bounded heartbeat task can run without enqueueing one
+                # heartbeat per file and flooding the Temporal SDK queue.
+                await asyncio.sleep(0)
                 path = workspace / relative_text
                 if not path.exists() and not path.is_symlink():
                     continue
