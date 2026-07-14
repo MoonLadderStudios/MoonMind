@@ -14,7 +14,11 @@ from moonmind.schemas.container_job_models import (
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
-from moonmind.workflows.temporal.client import TemporalClientAdapter, WorkflowStartResult
+from moonmind.workflows.temporal.client import (
+    TemporalClientAdapter,
+    WorkflowStartResult,
+)
+from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.workflow_registry import workflow_fleet_workflow_types
 from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
@@ -50,13 +54,17 @@ def test_workflow_identity_registration_and_activity_routes() -> None:
     assert container_job_workflow_id(JOB_ID) == f"container-job-workflow:{JOB_ID}"
     assert "MoonMind.ContainerJob" in workflow_fleet_workflow_types(settings.temporal)
     routes = [
-        item for item in build_default_activity_catalog().activities
+        item
+        for item in build_default_activity_catalog().activities
         if item.family == "container_job"
     ]
     assert len(routes) == 12
-    assert build_default_activity_catalog().resolve_activity(
-        "container_job.create_container"
-    ).retries.max_attempts == 1
+    assert (
+        build_default_activity_catalog()
+        .resolve_activity("container_job.create_container")
+        .retries.max_attempts
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -69,7 +77,10 @@ async def test_start_container_job_is_asynchronous_start_or_attach() -> None:
     )
     result = await adapter.start_container_job(_input())
     assert result.workflow_id == container_job_workflow_id(JOB_ID)
-    assert adapter.start_workflow.await_args.kwargs["workflow_type"] == "MoonMind.ContainerJob"
+    assert (
+        adapter.start_workflow.await_args.kwargs["workflow_type"]
+        == "MoonMind.ContainerJob"
+    )
 
 
 @pytest.mark.asyncio
@@ -90,6 +101,69 @@ async def test_typed_activity_boundary_delegates_to_backend() -> None:
     )
     assert result["resolvedWorkspaceRef"] == "ws:1"
     backend.resolve_workspace.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_production_backend_makes_every_registered_activity_callable(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "art_workspace"
+    workspace.mkdir()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[:2] == ("image", "inspect"):
+            return 0, b"sha256:" + b"a" * 64, b""
+        if args[:2] == ("inspect", "--format"):
+            if "json" in args[2]:
+                return 0, b'{"Running":false,"ExitCode":0}', b""
+            return 1, b"", b"missing"
+        if args[0] == "logs":
+            return 0, b"completed", b""
+        return 0, b"", b""
+
+    publish = AsyncMock(return_value="art:logs")
+    project = AsyncMock()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+        projection_writer=project,
+    )
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    inp = _input()
+    payload = {
+        "jobId": JOB_ID,
+        "ownershipToken": inp.ownership_token,
+        "request": inp.request.model_dump(mode="json", by_alias=True),
+    }
+    resolved = await activities.container_job_resolve_workspace(payload)
+    payload["resolvedWorkspaceRef"] = resolved["resolvedWorkspaceRef"]
+    image = await activities.container_job_acquire_image(payload)
+    payload["resolvedImageRef"] = image["resolvedImageRef"]
+    assert not (await activities.container_job_reconcile_container(payload)).get(
+        "containerRef"
+    )
+    created = await activities.container_job_create_container(payload)
+    payload["containerRef"] = created["containerRef"]
+    await activities.container_job_start_container(payload)
+    observed = await activities.container_job_observe_container(payload)
+    assert observed["terminalState"] == "succeeded"
+    await activities.container_job_stop_container(payload)
+    evidence = await activities.container_job_publish_evidence(payload)
+    assert evidence["logsRef"] == "art:logs"
+    payload.update(
+        {"state": "succeeded", "terminalState": "succeeded", "projectionSequence": 7}
+    )
+    await activities.container_job_project_status(payload)
+    await activities.container_job_repair_projection(payload)
+    await activities.container_job_remove_container(payload)
+    await activities.container_job_cleanup(payload)
+    assert any(command[0] == "create" for command in commands)
+    assert all("DOCKER_HOST" not in " ".join(command) for command in commands)
+    assert project.await_count == 2
 
 
 def _result_for(name: str) -> ContainerJobActivityResult:

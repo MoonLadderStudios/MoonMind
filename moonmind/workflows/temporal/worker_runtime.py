@@ -28,6 +28,7 @@ from typing import Any, Mapping
 import temporalio.activity
 import temporalio.workflow
 from opentelemetry import trace as otel_trace
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
@@ -43,6 +44,7 @@ from structlog.stdlib import ProcessorFormatter
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
+    ContainerJobRecord,
     TemporalArtifactRetentionClass,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
@@ -83,6 +85,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
     DEPLOYMENT_FLEET,
@@ -2289,6 +2292,45 @@ def _pentest_runner_image_overrides() -> dict[str, str]:
         pentest.claude_oauth_runner_profile_id: pentest.runner_image,
     }
 
+def _container_job_evidence_publisher(artifact_service: TemporalArtifactService):
+    async def publish(name: str, payload: bytes) -> str:
+        artifact, _ = await artifact_service.create(
+            principal="system:container_job",
+            content_type="text/plain",
+            metadata_json={"artifact_type": "container_job.evidence", "name": name},
+        )
+        await artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal="system:container_job",
+            payload=payload,
+            content_type="text/plain",
+        )
+        return artifact.artifact_id
+    return publish
+
+async def _container_job_projection_writer(request) -> None:
+    """Persist workflow projections in the API-owned job record."""
+    async with get_async_session_context() as session:
+        result = await session.execute(
+            select(ContainerJobRecord).where(ContainerJobRecord.job_id == request.job_id)
+        )
+        record = result.scalar_one_or_none()
+        if record is None:
+            raise RuntimeError(f"container job record not found: {request.job_id}")
+        record.state = (request.state or request.terminal_state or record.state).value
+        record.backend_kind = "docker-engine"
+        record.backend_ref = "system"
+        if request.resolved_image_ref:
+            record.image_observation_json = {
+                "requestedReference": request.request.spec.image,
+                "resolvedDigest": request.resolved_image_ref
+                if request.resolved_image_ref.startswith("sha256:") else None,
+                "cachePresent": True,
+                "cacheHit": True,
+                "pullLockWaitMs": 0,
+            }
+        await session.commit()
+
 def _build_agent_runtime_deps(
     *,
     artifact_service: Any | None = None,
@@ -2297,8 +2339,8 @@ def _build_agent_runtime_deps(
     ManagedRunSupervisor,
     ManagedRuntimeLauncher,
     DockerCodexManagedSessionController,
-    "RunnerProfileRegistry",
-    "DockerWorkloadLauncher",
+    Any,
+    Any,
     ManagedSessionStore,
 ]:
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
@@ -2539,6 +2581,19 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 workload_registry=workload_registry,
                 workload_launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
+                container_job_backend=DockerContainerJobBackend(
+                    workspace_root=os.environ.get(
+                        "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+                    ),
+                    docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
+                    docker_host=(
+                        os.environ.get("DOCKER_HOST")
+                        or os.environ.get("SYSTEM_DOCKER_HOST")
+                        or "tcp://docker-proxy:2375"
+                    ),
+                    evidence_publisher=_container_job_evidence_publisher(artifact_service),
+                    projection_writer=_container_job_projection_writer,
+                ),
             )
             register_workload_tool_handlers(
                 dispatcher,
