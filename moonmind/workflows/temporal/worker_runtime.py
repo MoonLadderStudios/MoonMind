@@ -147,7 +147,6 @@ from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
-from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -2674,13 +2673,6 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
                 raw_docker_cli_enabled=container_backend_settings.raw_cli_enabled,
                 container_job_backend=container_job_backend,
-            )
-            register_workload_tool_handlers(
-                dispatcher,
-                registry=workload_registry,
-                launcher=workload_launcher,
-                workflow_docker_mode=settings.workflow.workflow_docker_mode,
-                raw_cli_enabled=container_backend_settings.raw_cli_enabled,
             )
         if topology.fleet == DEPLOYMENT_FLEET:
             register_deployment_update_tool_handler(

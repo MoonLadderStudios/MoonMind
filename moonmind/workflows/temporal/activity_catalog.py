@@ -1414,6 +1414,9 @@ def build_default_activity_catalog(
                 ),
             )
             for name in (
+                "submit",
+                "status",
+                "cancel",
                 "resolve_workspace",
                 "acquire_image",
                 "create_container",

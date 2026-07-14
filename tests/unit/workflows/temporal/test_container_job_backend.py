@@ -13,9 +13,13 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.schemas.container_job_models import ContainerJobActivityRequest
 from moonmind.workflows.temporal.container_job_backend import (
+    LABEL_BACKEND_REF,
     LABEL_CORRELATION,
     LABEL_EXPIRES_AT,
+    LABEL_OBJECT_KIND,
     LABEL_OWNERSHIP,
+    LABEL_OWNERSHIP_SCHEMA,
+    OWNERSHIP_SCHEMA_VERSION,
     ContainerJobBackend,
     DockerContainerJobBackend,
 )
@@ -116,6 +120,54 @@ async def test_create_applies_hardening_shm_pids_and_labels(tmp_path) -> None:
     assert f"{LABEL_OWNERSHIP}={JOB_ID}:v1" in joined
     assert f"{LABEL_CORRELATION}=mm:3254" in joined
     assert f"{LABEL_EXPIRES_AT}=" in joined
+    assert f"{LABEL_OBJECT_KIND}=container" in joined
+    assert f"{LABEL_BACKEND_REF}=system" in joined
+    assert f"{LABEL_OWNERSHIP_SCHEMA}={OWNERSHIP_SCHEMA_VERSION}" in joined
+
+
+@pytest.mark.asyncio
+async def test_remove_is_idempotent_when_owned_container_is_absent(tmp_path) -> None:
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(commands, missing=True),
+    )
+
+    await backend.remove_container(_request(tmp_path))
+
+    assert not any(command[0] == "rm" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_remove_refuses_replacement_with_mismatched_ownership(tmp_path) -> None:
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(
+            commands, ownership=b"container-job:ffffffffffffffffffffffffffffffff:v1"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await backend.remove_container(_request(tmp_path))
+
+    assert not any(command[0] == "rm" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_stop_refuses_replacement_with_mismatched_ownership(tmp_path) -> None:
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(
+            commands, ownership=b"container-job:ffffffffffffffffffffffffffffffff:v1"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        await backend.stop_container(_request(tmp_path))
+
+    assert not any(command[0] == "stop" for command in commands)
 
 
 @pytest.mark.asyncio

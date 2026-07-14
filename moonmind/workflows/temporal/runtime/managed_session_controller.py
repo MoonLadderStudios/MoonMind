@@ -2788,6 +2788,19 @@ class DockerCodexManagedSessionController:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
                 session_environment["MOONMIND_URL"] = self._moonmind_url
+        # Repository container work is submitted through MoonMind's authenticated,
+        # asynchronous MCP surface.  Keep the logical workspace identity separate
+        # from the host path that the trusted container-job worker resolves.
+        if session_environment.get("MOONMIND_URL"):
+            session_environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] = (
+                session_environment["MOONMIND_URL"].rstrip("/") + "/mcp"
+            )
+            session_environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] = (
+                "moonmind-session"
+            )
+            session_environment["MOONMIND_CONTAINER_JOBS_SESSION_ID"] = (
+                request.session_id
+            )
         docker_sidecar_enabled = self._session_docker_sidecar_enabled(
             session_environment,
             request.docker_capability,
@@ -2804,8 +2817,6 @@ class DockerCodexManagedSessionController:
             session_environment.pop("SYSTEM_DOCKER_HOST", None)
             if docker_capability is not None and docker_capability.activation == "on_demand":
                 session_environment["MOONMIND_DOCKER_ACTIVATION_COMMAND"] = "true"
-        elif docker_capability is None:
-            self._apply_unrestricted_docker_session_environment(session_environment)
         else:
             session_environment.pop("DOCKER_HOST", None)
             session_environment.pop("SYSTEM_DOCKER_HOST", None)
@@ -2889,14 +2900,10 @@ class DockerCodexManagedSessionController:
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
         )
-        unrestricted_proxy_network = (
-            None
-            if docker_capability is not None
-            else self._unrestricted_docker_proxy_network(
-                session_environment=session_environment,
-                docker_network=docker_network,
-            )
-        )
+        # Managed sessions never join the system Docker proxy network. Explicit
+        # legacy sidecars remain isolated on the ordinary session network until
+        # their dedicated removal change lands.
+        unrestricted_proxy_network = None
         if docker_network:
             run_command.extend(["--network", docker_network])
         if docker_sidecar_enabled:
@@ -3046,6 +3053,29 @@ class DockerCodexManagedSessionController:
                 }
             else:
                 docker_capability_metadata = {}
+            docker_capability_metadata = self._merge_capability_metadata(
+                docker_capability_metadata,
+                {
+                    "capabilities": {
+                        "containerJobs": {
+                            "available": bool(session_environment.get("MOONMIND_URL")),
+                            "transport": "moonmind-mcp",
+                            "backendKind": "docker-engine",
+                            "workspace": {
+                                "kind": "moonmind-session",
+                                "sessionId": request.session_id,
+                            },
+                            "tools": [
+                                "container.submit",
+                                "container.status",
+                                "container.logs",
+                                "container.artifacts",
+                                "container.cancel",
+                            ],
+                        }
+                    }
+                },
+            )
             docker_capability_metadata = self._merge_capability_metadata(
                 {
                     "capabilities": {

@@ -4306,7 +4306,6 @@ async def test_build_runtime_activities_registers_deployment_tool_only_on_deploy
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.settings")
-@patch("moonmind.workflows.temporal.worker_runtime.register_workload_tool_handlers")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
@@ -4332,7 +4331,6 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     mock_agent_runtime_activities_cls,
     mock_build_deps,
     mock_build_bindings,
-    mock_register_workload_tool_handlers,
     mock_settings,
 ):
     run_store = MagicMock()
@@ -4380,7 +4378,5 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
 
     mock_agent_runtime_activities_cls.assert_called_once()
     assert mock_agent_runtime_activities_cls.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
-    mock_register_workload_tool_handlers.assert_called_once()
-    assert mock_register_workload_tool_handlers.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
-    assert mock_register_workload_tool_handlers.call_args.kwargs["raw_cli_enabled"] is False
+    # Legacy workload handlers are not registered on the agent-facing dispatcher.
     await resources.aclose()

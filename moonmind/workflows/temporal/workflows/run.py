@@ -23,6 +23,12 @@ with workflow.unsafe.imports_passed_through():
         provider_profile_launch_ready_from_payload,
     )
     from moonmind.schemas.agent_skill_models import SkillSelector
+    from moonmind.schemas.container_job_models import (
+        ContainerJobState,
+        ContainerJobSubmitRequest,
+        OwnerIdentity,
+    )
+    from moonmind.workloads.tool_bridge import CONTAINER_RUN_JOB_TOOL
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionClearRequest,
@@ -9691,6 +9697,31 @@ class MoonMindRunWorkflow:
                         result_status = "FAILED"
                         break
 
+                    elif tool_type == "skill" and tool_name == CONTAINER_RUN_JOB_TOOL:
+                        try:
+                            execution_result = await self._execute_container_job_tool(
+                                node_inputs=node_inputs,
+                                node_id=node_id,
+                                execution_ordinal=current_step_execution,
+                            )
+                        except Exception as exc:
+                            diagnostic = self._record_step_execution_exception(
+                                exc,
+                                logical_step_id=node_id,
+                                tool_name=tool_name,
+                                source="container_job",
+                                updated_at=workflow.now(),
+                            )
+                            if failure_mode == "FAIL_FAST":
+                                raise
+                            execution_result = {
+                                "status": "FAILED",
+                                "outputs": {
+                                    "error": diagnostic.get("category"),
+                                    "summary": diagnostic.get("message"),
+                                },
+                            }
+
                     elif tool_type == "skill":
                         snapshot = await load_registry_snapshot()
                         definition = snapshot.get_skill(name=tool_name)
@@ -17085,6 +17116,108 @@ class MoonMindRunWorkflow:
             selector["providerId"] = "minimax"
 
         return selector
+
+    async def _execute_container_job_tool(
+        self,
+        *,
+        node_inputs: Mapping[str, Any],
+        node_id: str,
+        execution_ordinal: int,
+    ) -> dict[str, Any]:
+        """Submit once, then durably poll the separately owned job record."""
+
+        info = workflow.info()
+        owner = OwnerIdentity(
+            principalId=self._principal(), principalType="service"
+        )
+        request = ContainerJobSubmitRequest.model_validate(
+            {
+                "contractVersion": node_inputs.get("contractVersion", "v1"),
+                "idempotencyKey": node_inputs.get("idempotencyKey"),
+                "source": {
+                    "source": "workflow",
+                    "callerRequestId": node_inputs.get("callerRequestId"),
+                    "workflowId": info.workflow_id,
+                    "runId": info.run_id,
+                    "stepId": node_id,
+                },
+                "spec": node_inputs.get("spec"),
+            }
+        )
+        owner_payload = owner.model_dump(mode="json", by_alias=True)
+        request_payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("container_job.submit")
+        accepted = await workflow.execute_activity(
+            submit_route.activity_type,
+            {"owner": owner_payload, "request": request_payload},
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(submit_route),
+        )
+        job_id = str(self._get_from_result(accepted, "jobId") or "")
+        if not job_id:
+            raise ValueError("container-job submission returned no jobId")
+
+        status_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("container_job.status")
+        terminal_states = {
+            ContainerJobState.SUCCEEDED.value,
+            ContainerJobState.FAILED.value,
+            ContainerJobState.CANCELED.value,
+            ContainerJobState.TIMED_OUT.value,
+            ContainerJobState.REJECTED.value,
+        }
+        snapshot: Any = None
+        while True:
+            if self._cancel_requested:
+                cancel_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("container_job.cancel")
+                await workflow.execute_activity(
+                    cancel_route.activity_type,
+                    {
+                        "owner": owner_payload,
+                        "jobId": job_id,
+                        "request": {
+                            "idempotencyKey": (
+                                f"{info.workflow_id}:{node_id}:{execution_ordinal}:cancel"
+                            )
+                        },
+                    },
+                    cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                    **self._execute_kwargs_for_route(cancel_route),
+                )
+                return {"status": "CANCELLED", "outputs": {"jobId": job_id, "state": "canceling"}}
+            snapshot = await workflow.execute_activity(
+                status_route.activity_type,
+                {"owner": owner_payload, "jobId": job_id},
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **self._execute_kwargs_for_route(status_route),
+            )
+            state = str(self._get_from_result(snapshot, "state") or "")
+            if state in terminal_states:
+                break
+            await workflow.sleep(timedelta(seconds=5))
+
+        terminal = self._get_from_result(snapshot, "terminal")
+        outputs = {
+            "jobId": job_id,
+            "state": str(self._get_from_result(snapshot, "state") or ""),
+            "logsRef": self._get_from_result(snapshot, "logsRef"),
+            "artifactsRef": self._get_from_result(snapshot, "artifactsRef"),
+        }
+        if isinstance(terminal, Mapping):
+            outputs.update(
+                {
+                    "exitCode": terminal.get("exitCode"),
+                    "failureClass": terminal.get("failureClass"),
+                    "summary": terminal.get("message"),
+                }
+            )
+        outputs = {key: value for key, value in outputs.items() if value is not None}
+        state = outputs["state"]
+        return {
+            "status": "COMPLETED" if state == ContainerJobState.SUCCEEDED.value else (
+                "CANCELLED" if state == ContainerJobState.CANCELED.value else "FAILED"
+            ),
+            "outputs": outputs,
+        }
 
     def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
         """Convert ``AgentRunResult`` to the dict format the execution loop expects."""
