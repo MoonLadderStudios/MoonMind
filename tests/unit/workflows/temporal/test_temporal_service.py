@@ -6443,50 +6443,70 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
 @pytest.mark.asyncio
 async def test_describe_execution_accepts_scheduled_temporal_projection(
     tmp_path,
+    mock_client_adapter,
 ):
     async with temporal_db(tmp_path) as session:
-        service = TemporalExecutionService(session)
         owner_id = str(uuid4())
         created_at = datetime.now(UTC)
         workflow_id = "mm:scheduled-parent-2026-07-14T06:59:11Z"
-        scheduled_parent = TemporalExecutionRecord(
-            workflow_id=workflow_id,
-            run_id=str(uuid4()),
-            namespace="default",
-            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
-            owner_id=owner_id,
-            owner_type=TemporalExecutionOwnerType.USER,
-            state=MoonMindWorkflowState.EXECUTING,
-            close_status=None,
-            entry="user_workflow",
-            search_attributes={
-                "mm_owner_type": "user",
-                "mm_owner_id": owner_id,
-                "mm_state": "executing",
-                "mm_target_runtime": ["codex_cli"],
+        runtime_parameters = {
+            "targetRuntime": "codex_cli",
+            "model": "gpt-5.3-codex-spark",
+            "effort": "xhigh",
+            "profileId": "codex_openai_oauth",
+            "workflow": {
+                "runtime": {
+                    "mode": "codex_cli",
+                    "model": "gpt-5.3-codex-spark",
+                    "effort": "xhigh",
+                    "executionProfileRef": "codex_openai_oauth",
+                }
             },
-            memo={"title": "Scheduled parent", "targetRuntime": "codex_cli"},
-            artifact_refs=[],
-            parameters={},
-            projection_version=1,
-            last_synced_at=created_at,
-            sync_state=TemporalExecutionProjectionSyncState.FRESH,
-            sync_error=None,
-            source_mode=(
-                TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
-            ),
-            started_at=created_at,
-            updated_at=created_at,
-            closed_at=None,
+        }
+        description = Mock(spec=WorkflowExecutionDescription)
+        description.id = workflow_id
+        description.run_id = str(uuid4())
+        description.namespace = "default"
+        description.workflow_type = "MoonMind.UserWorkflow"
+        description.status = WorkflowExecutionStatus.RUNNING
+        description.start_time = created_at
+        description.execution_time = created_at
+        description.close_time = None
+        description.search_attributes = {
+            "mm_owner_type": "user",
+            "mm_owner_id": owner_id,
+            "mm_state": "executing",
+            "mm_target_runtime": ["codex_cli"],
+        }
+
+        async def _memo() -> dict[str, object]:
+            return {
+                "title": "Scheduled parent",
+                "targetRuntime": "codex_cli",
+                "parameters": runtime_parameters,
+            }
+
+        description.memo = _memo
+        mock_client_adapter.describe_workflow.return_value = description
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
         )
-        session.add(scheduled_parent)
-        await session.commit()
 
         described = await service.describe_execution(workflow_id)
 
         assert described.workflow_id == workflow_id
         assert described.owner_id == owner_id
         assert described.memo["targetRuntime"] == "codex_cli"
+        assert described.parameters == runtime_parameters
+        assert (
+            described.source_mode
+            == TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+        assert (
+            await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            is None
+        )
 
 
 @pytest.mark.asyncio

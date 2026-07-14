@@ -494,6 +494,7 @@ RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = (
     "run-update-inputs-visibility-refresh-v1"
 )
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
+RUN_MEMO_RUNTIME_INHERITANCE_PATCH = "run-memo-runtime-inheritance-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -1151,6 +1152,7 @@ class MoonMindRunWorkflow:
         self._integration: Optional[str] = None
         self._target_runtime: Optional[str] = None
         self._target_skill: Optional[str] = None
+        self._runtime_inheritance_parameters: dict[str, Any] = {}
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
         self._summary: str = "Execution initialized."
@@ -8328,6 +8330,9 @@ class MoonMindRunWorkflow:
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)
+        self._runtime_inheritance_parameters = (
+            self._runtime_inheritance_parameters_from_parameters(parameters)
+        )
         task_parameters = self._mapping_value(parameters, "workflow")
         if not task_parameters:
             task_parameters = self._mapping_value(parameters, "task")
@@ -8509,6 +8514,50 @@ class MoonMindRunWorkflow:
                 authored_runtime_payload.get("target_runtime"), max_chars=80
             )
         )
+
+    def _runtime_inheritance_parameters_from_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        task_payload = (
+            self._mapping_value(parameters, "workflow")
+            or self._mapping_value(parameters, "task")
+            or {}
+        )
+        task_runtime = self._mapping_value(task_payload, "runtime") or {}
+        runtime_payload = self._mapping_value(parameters, "runtime") or {}
+        authored_payload = self._mapping_value(parameters, "authoredTaskInput") or {}
+        authored_runtime = self._mapping_value(authored_payload, "runtime") or {}
+
+        selection: dict[str, Any] = {}
+        for source in (
+            parameters,
+            task_payload,
+            task_runtime,
+            runtime_payload,
+            authored_runtime,
+        ):
+            for key, value in self._runtime_selection_from_source(source).items():
+                selection.setdefault(key, value)
+        if self._target_runtime:
+            selection.setdefault("targetRuntime", self._target_runtime)
+
+        compact: dict[str, Any] = {}
+        runtime: dict[str, Any] = {}
+        for selection_key, parameter_key, runtime_key in (
+            ("targetRuntime", "targetRuntime", "mode"),
+            ("model", "model", "model"),
+            ("effort", "effort", "effort"),
+            ("executionProfileRef", "profileId", "executionProfileRef"),
+        ):
+            value = selection.get(selection_key)
+            if value is None:
+                continue
+            compact[parameter_key] = value
+            runtime[runtime_key] = value
+        if runtime:
+            compact["workflow"] = {"runtime": runtime}
+        return compact
 
     def _skill_visibility_from_parameters(
         self,
@@ -18719,6 +18768,11 @@ class MoonMindRunWorkflow:
                 memo_dict["targetRuntime"] = self._target_runtime
             if self._target_skill:
                 memo_dict["targetSkill"] = self._target_skill
+        if (
+            workflow.patched(RUN_MEMO_RUNTIME_INHERITANCE_PATCH)
+            and self._runtime_inheritance_parameters
+        ):
+            memo_dict["parameters"] = dict(self._runtime_inheritance_parameters)
         if self._input_ref:
             memo_dict["input_artifact_ref"] = self._input_ref
         if self._plan_ref:
