@@ -22,6 +22,7 @@ def _capabilities() -> dict[str, object]:
         workspaceAuthority="managed_runtime",
         checkpointRestoreKinds=("worktree_archive",),
         checkpointRestoreActivity="agent_runtime.restore_workspace_checkpoint",
+        checkpointArtifactContractVersion="managed-worktree-archive-v1",
         supportsSameSessionContinuation=True,
         postExecutionCheckpointCriticality="recoverability_only",
     ).with_digest().model_dump(by_alias=True)

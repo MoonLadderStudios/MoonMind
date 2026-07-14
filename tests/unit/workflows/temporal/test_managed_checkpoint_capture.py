@@ -88,6 +88,9 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
         digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest
     )
     first = await activities.agent_runtime_capture_workspace_checkpoint(request)
+    assert first["workspace"]["archiveBytes"] == len(
+        artifacts[first["workspace"]["archiveRef"]]
+    )
     (repo / "binary.bin").write_bytes(b"changed after capture")
     assert await activities.agent_runtime_capture_workspace_checkpoint(request) == first
     with tarfile.open(
