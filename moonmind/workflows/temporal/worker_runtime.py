@@ -2328,15 +2328,12 @@ async def _container_job_projection_writer(request) -> None:
         ) or record.state
         record.backend_kind = "docker-engine"
         record.backend_ref = "system"
-        if request.resolved_image_ref:
-            record.image_observation_json = {
-                "requestedReference": request.request.spec.image,
-                "resolvedDigest": request.resolved_image_ref
-                if request.resolved_image_ref.startswith("sha256:") else None,
-                "cachePresent": True,
-                "cacheHit": True,
-                "pullLockWaitMs": 0,
-            }
+        if request.image_observation is not None:
+            # Persist the exact, backend-scoped observation produced by the
+            # trusted acquisition service; never fabricate cache/pull evidence.
+            record.image_observation_json = request.image_observation.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
         if request.exit_code is not None or request.failure_class or request.message:
             record.terminal_outcome_json = {
                 "exitCode": request.exit_code,

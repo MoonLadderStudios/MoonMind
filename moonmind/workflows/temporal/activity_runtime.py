@@ -7875,13 +7875,27 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 f"container-job backend is required for container_job.{operation}"
             )
+        from temporalio.exceptions import ApplicationError
+
         from moonmind.schemas.container_job_models import (
             ContainerJobActivityRequest,
             ContainerJobActivityResult,
         )
+        from moonmind.workflows.temporal.container_image_acquisition import (
+            ImageAcquisitionError,
+        )
 
         request = ContainerJobActivityRequest.model_validate(payload)
-        result = await getattr(self._container_job_backend, operation)(request)
+        try:
+            result = await getattr(self._container_job_backend, operation)(request)
+        except ImageAcquisitionError as exc:
+            # Surface the granular image failure class to the workflow via the
+            # ApplicationError type so the durable terminal outcome is exact.
+            raise ApplicationError(
+                str(exc),
+                type=exc.failure_class.value,
+                non_retryable=exc.terminal,
+            ) from exc
         return ContainerJobActivityResult.model_validate(result).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
