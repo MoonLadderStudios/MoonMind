@@ -26,6 +26,8 @@ import json
 import os
 import re
 import tarfile
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -39,6 +41,17 @@ from moonmind.config.container_backend_settings import (
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
+    ContainerJobFailureClass,
+    ImageObservation,
+)
+from moonmind.workflows.temporal.container_image_acquisition import (
+    FilesystemImageAcquisitionLock,
+    ImageAcquisitionError,
+    ImageAcquisitionLock,
+    classify_pull_failure,
+    image_lock_key,
+    normalize_image_reference,
+    parse_resolved_digest,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
 from moonmind.schemas.workspace_locator_models import (
@@ -148,6 +161,13 @@ class ContainerJobBackend(Protocol):
         self, request: ContainerJobActivityRequest
     ) -> ContainerJobActivityResult: pass
 
+# Only the exact image id and registry repo digests are read; never the full
+# manifest, so unbounded inspect output cannot reach the observation payload.
+_INSPECT_FORMAT = "{{.Id}}\t{{join .RepoDigests \",\"}}"
+# Bytes of bounded pull progress retained as diagnostics evidence. The full,
+# unbounded pull output never crosses the activity/Temporal boundary.
+_PULL_DIAGNOSTICS_MAX_BYTES = 8192
+
 
 class DockerContainerJobBackend:
     """Thin, deployment-selected Docker CLI adapter with owned identities."""
@@ -159,9 +179,15 @@ class DockerContainerJobBackend:
         settings: ContainerBackendSettings | None = None,
         docker_binary: str = "docker",
         docker_host: str | None = None,
+        backend_ref: str = "system",
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
         projection_writer: ProjectionWriter | None = None,
+        image_lock: ImageAcquisitionLock | None = None,
+        image_lock_root: str | Path | None = None,
+        pull_lease_ttl_seconds: float = 240.0,
+        pull_lock_poll_seconds: float = 2.0,
+        pull_lock_max_wait_seconds: float = 280.0,
         secret_resolver: SecretResolver | None = None,
         managed_run_store: ManagedRunRecordStore | None = None,
     ) -> None:
@@ -172,13 +198,23 @@ class DockerContainerJobBackend:
         self._settings = settings or resolve_container_backend_settings({})
         self._docker_binary = docker_binary
         self._docker_host = docker_host or self._settings.endpoint
+        self._backend_ref = backend_ref
         self._runner = command_runner or self._run
         self._publish = evidence_publisher
         self._write_projection = projection_writer
+        lock_root = (
+            Path(image_lock_root)
+            if image_lock_root is not None
+            else self._workspace_root.parent / ".moonmind-image-acquisition-locks"
+        )
+        self._image_lock = image_lock or FilesystemImageAcquisitionLock(lock_root)
+        self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
+        self._pull_lock_poll_seconds = pull_lock_poll_seconds
+        self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
         self._resolve_secret = secret_resolver
+        self._managed_run_store = managed_run_store
 
     # ------------------------------------------------------------------ helpers
-        self._managed_run_store = managed_run_store
 
     async def _run(self, args: Sequence[str]) -> tuple[int, bytes, bytes]:
         env = os.environ.copy()
@@ -340,27 +376,216 @@ class DockerContainerJobBackend:
             raise RuntimeError("authorized container-job workspace is unavailable")
         return ContainerJobActivityResult(resolvedWorkspaceRef=str(workspace))
 
+    async def _inspect_image(
+        self, image: str
+    ) -> tuple[bool, str, str | None]:
+        """Return ``(present, resolved_launch_ref, resolved_digest)``.
+
+        Presence is probed on the selected daemon, never in the caller
+        container. The resolved launch reference is the exact image id so the
+        container launches the observed content, not a mutable tag.
+        """
+
+        code, stdout, stderr = await self._runner(
+            ("image", "inspect", "--format", _INSPECT_FORMAT, image)
+        )
+        if code:
+            detail = stderr.decode(errors="replace")
+            if "no such image" not in detail.lower() and "not found" not in detail.lower():
+                failure = classify_pull_failure(detail)
+                if failure == ContainerJobFailureClass.IMAGE:
+                    failure = ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE
+                raise ImageAcquisitionError(
+                    "docker image inspection failed",
+                    failure_class=failure,
+                )
+            return False, image, None
+        text = stdout.decode(errors="replace").strip()
+        image_id, _, repo_digests = text.partition("\t")
+        image_id = image_id.strip()
+        digest = parse_resolved_digest(repo_digests, image_id)
+        return True, (image_id or image), digest
+
+    async def _publish_pull_diagnostics(
+        self,
+        request: ContainerJobActivityRequest,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> str | None:
+        """Publish a bounded tail of pull output as durable diagnostics.
+
+        The bounded tail is the only pull output that leaves this activity; the
+        raw, potentially multi-gigabyte progress stream never reaches Temporal
+        history.
+        """
+
+        if self._publish is None:
+            return None
+        combined = stdout + (b"\n[stderr]\n" + stderr if stderr else b"")
+        bounded = combined[-_PULL_DIAGNOSTICS_MAX_BYTES:]
+        try:
+            return await self._publish(
+                request, f"{request.job_id}-image-pull.txt", bounded
+            )
+        except Exception:
+            # Diagnostics are auxiliary evidence and must never mask the pull
+            # outcome; a failure to persist them is tolerated.
+            return None
+
+    async def _pull_image(
+        self, request: ContainerJobActivityRequest, image: str
+    ) -> tuple[int, str | None]:
+        """Pull ``image``, returning ``(duration_ms, diagnostics_ref)``.
+
+        Raises :class:`ImageAcquisitionError` with a granular failure class when
+        the pull fails, attaching the bounded diagnostics reference.
+        """
+
+        started = time.monotonic()
+        code, stdout, stderr = await self._runner(("pull", image))
+        duration_ms = int((time.monotonic() - started) * 1000)
+        diagnostics_ref = await self._publish_pull_diagnostics(
+            request, stdout, stderr
+        )
+        if code:
+            failure = classify_pull_failure(stderr.decode(errors="replace"))
+            raise ImageAcquisitionError(
+                f"docker pull failed for the requested image ({failure.value})",
+                failure_class=failure,
+                diagnostics_ref=diagnostics_ref,
+            )
+        return duration_ms, diagnostics_ref
+
     async def acquire_image(self, request: ContainerJobActivityRequest):
-        if request.request.spec.registry_credential_ref:
+        spec = request.request.spec
+        if spec.registry_credential_ref:
             raise RuntimeError(
                 "registryCredentialRef is not supported by the selected Docker backend"
             )
-        image = request.request.spec.image
-        policy = request.request.spec.pull_policy
-        inspect_code, stdout, _ = await self._runner(
-            ("image", "inspect", "--format", "{{.Id}}", image)
+        # Workspace visibility is authorized before any expensive acquisition,
+        # so a missing-image pull can never precede workspace resolution.
+        if not request.resolved_workspace_ref:
+            raise ImageAcquisitionError(
+                "workspace must be resolved before image acquisition",
+                failure_class=ContainerJobFailureClass.WORKSPACE,
+            )
+
+        image = spec.image
+        policy = spec.pull_policy
+        normalized = normalize_image_reference(image)
+        key = image_lock_key(self._backend_ref, normalized)
+
+        present, resolved_ref, digest = await self._inspect_image(image)
+        present_at_start = present
+
+        # Cache reuse: a present image under a reuse policy pulls nothing.
+        if present and policy != "always":
+            return self._image_result(
+                resolved_ref,
+                requested=image,
+                digest=digest,
+                cache_present=True,
+                cache_hit=True,
+                lock_wait_ms=0,
+            )
+
+        if policy == "never":
+            raise ImageAcquisitionError(
+                "requested image is absent and pullPolicy=never",
+                failure_class=ContainerJobFailureClass.IMAGE_NOT_FOUND,
+            )
+
+        # A missing image (or an authorized `always` refresh) is acquired once
+        # per normalized identity on this backend while concurrent jobs wait and
+        # re-inspect. Unrelated images use distinct keys and are not serialized.
+        owner_id = f"{os.getpid()}:{request.job_id}:{uuid.uuid4().hex}"
+        waited_started = time.monotonic()
+        while True:
+            lock_wait_ms = int((time.monotonic() - waited_started) * 1000)
+            acquired = await self._image_lock.try_acquire(
+                key,
+                ttl_seconds=self._pull_lease_ttl_seconds,
+                owner_id=owner_id,
+            )
+            if acquired:
+                try:
+                    # Re-inspect after winning the lease: a concurrent owner may
+                    # have completed the pull, and the lease alone is never
+                    # treated as proof the image is present.
+                    present, resolved_ref, digest = await self._inspect_image(image)
+                    if present and policy != "always":
+                        return self._image_result(
+                            resolved_ref,
+                            requested=image,
+                            digest=digest,
+                            cache_present=present_at_start,
+                            cache_hit=True,
+                            lock_wait_ms=lock_wait_ms,
+                        )
+                    pull_ms, diagnostics_ref = await self._pull_image(request, image)
+                    present, resolved_ref, digest = await self._inspect_image(image)
+                    if not present:
+                        raise ImageAcquisitionError(
+                            "image is still absent after a completed pull",
+                            failure_class=ContainerJobFailureClass.IMAGE,
+                            diagnostics_ref=diagnostics_ref,
+                        )
+                    return self._image_result(
+                        resolved_ref,
+                        requested=image,
+                        digest=digest,
+                        cache_present=present_at_start,
+                        cache_hit=False,
+                        lock_wait_ms=lock_wait_ms,
+                        pull_duration_ms=pull_ms,
+                        diagnostics_ref=diagnostics_ref,
+                    )
+                finally:
+                    await self._image_lock.release(key, owner_id)
+
+            # Another worker owns the pull; wait, then re-inspect for reuse.
+            await asyncio.sleep(self._pull_lock_poll_seconds)
+            present, resolved_ref, digest = await self._inspect_image(image)
+            if present and policy != "always":
+                return self._image_result(
+                    resolved_ref,
+                    requested=image,
+                    digest=digest,
+                    cache_present=False,
+                    cache_hit=True,
+                    lock_wait_ms=int((time.monotonic() - waited_started) * 1000),
+                )
+            if time.monotonic() - waited_started > self._pull_lock_max_wait_seconds:
+                raise ImageAcquisitionError(
+                    "timed out waiting for a concurrent image pull to complete",
+                    failure_class=ContainerJobFailureClass.IMAGE_PULL_TIMEOUT,
+                )
+
+    def _image_result(
+        self,
+        resolved_ref: str,
+        *,
+        requested: str,
+        digest: str | None,
+        cache_present: bool,
+        cache_hit: bool,
+        lock_wait_ms: int,
+        pull_duration_ms: int | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> ContainerJobActivityResult:
+        observation = ImageObservation(
+            requestedReference=requested,
+            resolvedDigest=digest,
+            cachePresent=cache_present,
+            cacheHit=cache_hit,
+            pullLockWaitMs=max(0, lock_wait_ms),
+            pullDurationMs=pull_duration_ms,
         )
-        if policy == "always" or (inspect_code and policy == "if-missing"):
-            await self._checked("pull", image)
-            inspect_code, stdout, _ = await self._runner(
-                ("image", "inspect", "--format", "{{.Id}}", image)
-            )
-        if inspect_code:
-            raise RuntimeError(
-                "container image is unavailable under the selected pull policy"
-            )
-        resolved = stdout.decode(errors="replace").strip() or image
-        return ContainerJobActivityResult(resolvedImageRef=resolved)
+        return ContainerJobActivityResult(
+            resolvedImageRef=resolved_ref,
+            imageObservation=observation,
+            diagnosticsRef=diagnostics_ref,
+        )
 
     async def reconcile_container(self, request: ContainerJobActivityRequest):
         name = self._name(request)

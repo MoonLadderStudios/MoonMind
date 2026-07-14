@@ -89,6 +89,11 @@ class ContainerJobFailureClass(StrEnum):
     AUTHORIZATION = "authorization"
     WORKSPACE = "workspace"
     IMAGE = "image"
+    IMAGE_NOT_FOUND = "image_not_found"
+    IMAGE_PULL_TIMEOUT = "image_pull_timeout"
+    IMAGE_PULL_AUTH_FAILED = "image_pull_auth_failed"
+    IMAGE_PLATFORM_MISMATCH = "image_platform_mismatch"
+    IMAGE_BACKEND_UNAVAILABLE = "image_backend_unavailable"
     LAUNCH = "launch"
     EXECUTION = "execution"
     TIMEOUT = "timeout"
@@ -396,6 +401,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     resolved_image_ref: str | None = Field(
         None, alias="resolvedImageRef", max_length=1024
     )
+    image_observation: ImageObservation | None = Field(
+        None, alias="imageObservation"
+    )
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
@@ -422,6 +430,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     )
     resolved_image_ref: str | None = Field(
         None, alias="resolvedImageRef", max_length=1024
+    )
+    image_observation: ImageObservation | None = Field(
+        None, alias="imageObservation"
     )
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     running: bool | None = None

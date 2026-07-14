@@ -5,12 +5,14 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
     ContainerJobWorkflowInput,
+    ImageObservation,
     container_job_workflow_id,
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
@@ -307,3 +309,56 @@ async def test_terminal_projection_carries_authoritative_evidence(
     assert terminal.cleanup_outcome.state == "succeeded"
     assert terminal.logs_ref == "art:logs"
     assert terminal.artifacts_ref == "art:outputs"
+
+
+@pytest.mark.asyncio
+async def test_image_acquisition_failure_maps_to_granular_failure_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+
+    async def activity(name, request):
+        if name == "container_job.acquire_image":
+            # The trusted backend surfaces the class via the ApplicationError type.
+            raise ApplicationError("image absent", type="image_not_found")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert result["state"] == "failed"
+    assert result["terminal"]["failureClass"] == "image_not_found"
+
+
+@pytest.mark.asyncio
+async def test_image_observation_threads_into_terminal_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+    digest = "sha256:" + "d" * 64
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        if name == "container_job.acquire_image":
+            return ContainerJobActivityResult(
+                resolvedImageRef=digest,
+                imageObservation=ImageObservation(
+                    requestedReference="python:3.13",
+                    resolvedDigest=digest,
+                    cachePresent=False,
+                    cacheHit=False,
+                    pullLockWaitMs=12,
+                    pullDurationMs=345,
+                ),
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    terminal = projections[-1]
+    assert terminal.image_observation is not None
+    assert terminal.image_observation.resolved_digest == digest
+    assert terminal.image_observation.pull_duration_ms == 345
+    assert terminal.image_observation.pull_lock_wait_ms == 12
