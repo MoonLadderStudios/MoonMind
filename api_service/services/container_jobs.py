@@ -18,10 +18,12 @@ from moonmind.schemas.container_job_models import (
     ContainerJobState,
     ContainerJobStatus,
     ContainerJobSubmitRequest,
+    ContainerJobWorkflowInput,
     ImageObservation,
     OwnerIdentity,
     TerminalOutcome,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 
 class ContainerJobNotFoundError(RuntimeError):
@@ -110,11 +112,15 @@ class ContainerJobRepository:
 
 
 class ContainerJobService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, temporal: TemporalClientAdapter | None = None) -> None:
         self.repository = ContainerJobRepository(session)
+        self._temporal = temporal or TemporalClientAdapter()
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
         record, replayed = await self.repository.create_or_replay(owner=owner, request=request)
+        await self._temporal.start_container_job(
+            ContainerJobWorkflowInput(jobId=record.job_id, owner=owner, request=request)
+        )
         created_at = record.created_at or datetime.now(timezone.utc)
         return ContainerJobAccepted(jobId=record.job_id, replayed=replayed, createdAt=created_at)
 
@@ -140,4 +146,5 @@ class ContainerJobService:
             record.cancel_idempotency_key = request.idempotency_key
             record.state = ContainerJobState.CANCELING.value
             await self.repository._session.flush()
+            await self._temporal.signal_container_job_cancel(job_id)
         return ContainerJobCancelResult(jobId=job_id, state=record.state, accepted=not terminal, replayed=replayed)

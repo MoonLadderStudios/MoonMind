@@ -129,6 +129,7 @@ def test_workflow_worker_startup_rejects_unroutable_activity_handler(
 def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
+        "MoonMind.ContainerJob",
         "MoonMind.ManifestIngest",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",

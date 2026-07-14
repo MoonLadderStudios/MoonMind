@@ -92,15 +92,16 @@ def test_resolve_checkpoint_policy_uses_canonical_external_capabilities() -> Non
     assert control.checkpoint_kind is None
 
 
-def test_resolve_checkpoint_policy_does_not_default_managed_runtime_to_local_capture() -> None:
+def test_resolve_checkpoint_policy_routes_managed_runtime_to_owner_capture() -> None:
     policy = resolve_checkpoint_policy(
         boundary="after_execution",
         runtime_kind="codex_cli",
     )
 
     assert policy.workspace_policy == "restore_pre_execution"
-    assert policy.checkpoint_kind is None
-    assert policy.required_evidence == ()
+    assert policy.checkpoint_kind == "worktree_archive"
+    assert policy.required_evidence == ("archiveRef", "manifestRef")
+    assert policy.capture_activity == "agent_runtime.capture_workspace_checkpoint"
 
 
 def test_resolve_checkpoint_policy_assigns_managed_runtime_authority() -> None:
@@ -111,9 +112,9 @@ def test_resolve_checkpoint_policy_assigns_managed_runtime_authority() -> None:
     )
 
     assert policy.capture_authority == "managed_runtime"
-    assert policy.checkpoint_kind is None
+    assert policy.checkpoint_kind == "worktree_archive"
     assert policy.resumable is False
-    assert policy.required_evidence == ()
+    assert policy.required_evidence == ("archiveRef", "manifestRef")
 
 
 def test_omnigent_unsupported_recovery_boundary_does_not_invent_local_capture() -> None:

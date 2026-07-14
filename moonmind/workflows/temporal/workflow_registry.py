@@ -33,6 +33,10 @@ USER_WORKFLOW_REGISTRATION = WorkflowRegistration(
 
 STATIC_WORKFLOW_REGISTRATIONS = (
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.container_job",
+        "MoonMindContainerJobWorkflow",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.manifest_ingest",
         "MoonMindManifestIngestWorkflow",
     ),

@@ -146,7 +146,9 @@ Conditional GitHub Actions jobs are not suitable as individual branch-protection
 - `unit-fast`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey` run only when selected.
 - `ci-required` always runs and fails if any selected backend suite did not complete successfully.
 
-Branch protection should require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks.
+Branch protection must require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks. It must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
+
+Required checks must run against the current merge candidate. Prefer GitHub Merge Queue, which exercises the checked-in `merge_group` triggers before each queued merge. If Merge Queue is unavailable, require branches to be up to date with `main` before merging. A successful check from an older base revision is not authoritative: two concurrent pull requests can each have a valid migration graph while their combined result creates multiple Alembic heads.
 
 ## Main, Manual, And Scheduled Runs
 

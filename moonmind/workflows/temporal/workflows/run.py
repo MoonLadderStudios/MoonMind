@@ -558,6 +558,7 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
@@ -597,6 +598,7 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -1147,6 +1149,7 @@ class MoonMindRunWorkflow:
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
         self._canonical_no_commit_outcome_enabled: bool = False
+        self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
@@ -4903,13 +4906,25 @@ class MoonMindRunWorkflow:
                 else None
             ),
         )
-        if resolved_policy.capture_activity != "workspace.capture_checkpoint":
+        managed_capture_enabled = workflow.patched(RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH)
+        supported_capture_activities = {"workspace.capture_checkpoint"}
+        if managed_capture_enabled:
+            supported_capture_activities.add(
+                "agent_runtime.capture_workspace_checkpoint"
+            )
+        if resolved_policy.capture_activity not in supported_capture_activities:
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "unsupported",
                 "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
                 "boundary": str(boundary),
                 "captureAuthority": resolved_policy.capture_authority,
-                "captureActivity": resolved_policy.capture_activity,
+                "captureActivity": (
+                    None
+                    if resolved_policy.capture_activity
+                    == "agent_runtime.capture_workspace_checkpoint"
+                    and not managed_capture_enabled
+                    else resolved_policy.capture_activity
+                ),
                 "capabilityCriticality": resolved_policy.criticality,
             }
             return None
@@ -4934,15 +4949,35 @@ class MoonMindRunWorkflow:
             )
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "workspace.capture_checkpoint"
+            resolved_policy.capture_activity
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": claimed_kind or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
+        if resolved_policy.capture_activity == "agent_runtime.capture_workspace_checkpoint":
+            capabilities = RuntimeExecutionCapabilities.model_validate(
+                capture_input["runtimeCapabilities"]
+            )
+            payload.update(
+                {
+                    "schemaVersion": "v1",
+                    "checkpointKind": claimed_kind or resolved_policy.checkpoint_kind,
+                    "expectedRuntimeId": capabilities.runtime_id,
+                    "capabilitySetVersion": capabilities.capability_set_version,
+                    "capabilityDigest": capabilities.capability_digest,
+                    "capturePolicy": {
+                        "includeTracked": True,
+                        "includeUntracked": True,
+                        "includeIgnored": False,
+                        "redactionProfile": "managed-code-workspace-v1",
+                    },
+                }
+            )
+        else:
+            payload["kind"] = claimed_kind or resolved_policy.checkpoint_kind
         if isinstance(capture_input.get("workspaceLocator"), Mapping):
             payload["workspaceLocator"] = dict(capture_input["workspaceLocator"])
         if capture_input.get("workspacePath"):
@@ -7760,6 +7795,9 @@ class MoonMindRunWorkflow:
             ) from exc
         self._canonical_no_commit_outcome_enabled = workflow.patched(
             RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
+        )
+        self._authoritative_publish_outcome_enabled = workflow.patched(
+            RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
         )
         self._get_logger().info(
             "Starting MoonMind.UserWorkflow workflow",
@@ -13513,6 +13551,18 @@ class MoonMindRunWorkflow:
 
     def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if self._authoritative_publish_outcome_enabled and push_status == "pushed":
+            stale_no_commit = self._publish_context.pop("noCommitPublish", None)
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
+                "not_required",
+                "skipped",
+            }:
+                self._publish_status = None
+                self._publish_reason = None
+            return
         if push_status == "no_commits":
             self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
@@ -14162,6 +14212,30 @@ class MoonMindRunWorkflow:
                 )
 
         publish_mode = self._publish_mode(parameters)
+        if (
+            self._authoritative_publish_outcome_enabled
+            and self._moonspec_draft_publication_reason is not None
+        ):
+            pull_request_url = self._coerce_text(
+                self._pull_request_url
+                or self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+            if pull_request_url:
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification; incomplete work was "
+                    f"preserved in draft pull request {pull_request_url}. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
+            return (
+                "failed",
+                "Workflow failed MoonSpec verification and draft pull request "
+                "publication did not complete. "
+                f"{self._moonspec_draft_publication_reason}",
+                True,
+            )
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
