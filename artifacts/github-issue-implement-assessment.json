@@ -1,0 +1,28 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3277",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/pull/3277",
+  "verdict": "FULLY_IMPLEMENTED",
+  "branch": "github-issue-implement-pr-3277-0baa8682",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "Every visible in-scope requirement is satisfied at current trunk HEAD e37dc2e7e. The original ContainerJob implementation is present, and merge 3b4f7c166 (PR #3289) closed the brief's remaining verification gaps by adding Temporal test-server workflow-boundary and replay coverage plus controlling lifecycle tests. Merge da1143f96 (PR #3302) subsequently recorded the #3277 assessment. No code work is needed.",
+  "requirements": [
+    {
+      "description": "Provide the versioned MoonMind.ContainerJob workflow with compact contracts, typed Activity boundaries, existing-fleet registration, and stable asynchronous start-or-attach identity.",
+      "status": "met"
+    },
+    {
+      "description": "Provide deterministic ownership and publication tokens, timeout and cancellation finalization, monotonic projection sequencing, and separation of primary outcome from publication and cleanup diagnostics.",
+      "status": "met"
+    },
+    {
+      "description": "Provide ContainerJob Temporal test-server workflow-boundary execution and replay coverage.",
+      "status": "met"
+    },
+    {
+      "description": "Provide controlling tests for cancellation during acquisition, running, and publication; timeout stop/evidence/cleanup ordering; auxiliary publication/cleanup failures; and authoritative terminal projection evidence.",
+      "status": "met"
+    }
+  ]
+}
