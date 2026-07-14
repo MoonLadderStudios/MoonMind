@@ -116,6 +116,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     managed_run_status_metadata,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -3232,6 +3233,8 @@ class TemporalSandboxActivities:
                     WORKSPACE_LOCATOR_UNSUPPORTED,
                     "filesystem workspace locator cannot be used as external state",
                 )
+            if model.workspace_locator is None and model.workspace_root_ref:
+                self._record_legacy_workspace_path_usage("capture_checkpoint")
             source_ref = (
                 model.workspace_locator.artifact_ref
                 if isinstance(model.workspace_locator, ExternalStateLocator)
@@ -3267,6 +3270,8 @@ class TemporalSandboxActivities:
                 WORKSPACE_LOCATOR_UNSUPPORTED,
                 "external state cannot be used by a local checkpoint operation",
             )
+        if model.workspace_locator is None:
+            self._record_legacy_workspace_path_usage("capture_checkpoint")
         workspace = (
             self._resolve_sandbox_locator(model.workspace_locator, must_exist=True)
             if isinstance(model.workspace_locator, SandboxWorkspaceLocator)
@@ -3587,7 +3592,21 @@ class TemporalSandboxActivities:
         return decoded
 
     def _policy_target_workspace(self, model: WorkspacePolicyApplyInput) -> Path:
+        locator = model.target_workspace_locator
+        if isinstance(locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot apply recovery to a managed-runtime workspace",
+            )
+        if isinstance(locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used as a local recovery target",
+            )
+        if isinstance(locator, SandboxWorkspaceLocator):
+            return self._resolve_sandbox_locator(locator, must_exist=False)
         if model.target_workspace_ref:
+            self._record_legacy_workspace_path_usage("apply_policy")
             return self._resolve_workspace(model.target_workspace_ref, must_exist=False)
         digest = hashlib.sha256(model.idempotency_key.encode("utf-8")).hexdigest()[:16]
         target = (
@@ -3956,6 +3975,8 @@ class TemporalSandboxActivities:
                 WORKSPACE_LOCATOR_UNSUPPORTED,
                 "external state cannot be used for git-effect classification",
             )
+        if locator is None:
+            self._record_legacy_workspace_path_usage("classify_git_effect")
         workspace = (
             self._resolve_sandbox_locator(locator, must_exist=True)
             if isinstance(locator, SandboxWorkspaceLocator)
@@ -3982,6 +4003,19 @@ class TemporalSandboxActivities:
             "summary": f"git workspace is {disposition}",
             "diagnosticRefs": refs,
         }
+
+    @staticmethod
+    def _record_legacy_workspace_path_usage(operation: str) -> None:
+        try:
+            get_metrics_emitter().increment(
+                "workspace_locator.compatibility_path_usage",
+                tags={"operation": operation},
+            )
+        except Exception:
+            logger.warning(
+                "Failed to emit legacy workspace path compatibility metric",
+                exc_info=True,
+            )
 
     def _resolve_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool

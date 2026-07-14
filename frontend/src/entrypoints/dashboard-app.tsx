@@ -2,6 +2,7 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
   type KeyboardEvent,
   type Ref,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import {
   BrowserRouter,
@@ -845,6 +847,91 @@ function DashboardNavigation({
   );
 }
 
+/**
+ * The route shell owns `--mm-collection-workspace-block-size`: the visible
+ * block size below the dashboard chrome that a collection workspace (and its
+ * shared sidebar rail) should fill. It is measured from the panel's current
+ * viewport-relative top (which accounts for banners, the masthead, and the
+ * alert strip above it) subtracted from the visual viewport height, then
+ * written onto the panel so descendants inherit it.
+ *
+ * The sidebar rail is `position: sticky; top: 0`, so once the document scrolls
+ * the chrome above the panel out of view the rail should grow to the full
+ * visible viewport. Clamping the subtracted chrome to `>= 0` (instead of
+ * freezing it at the panel's document offset, `rect.top + scrollY`) makes the
+ * rail track that sticky position rather than leaving a persistent gap at the
+ * bottom while scrolling.
+ *
+ * This is the lower-risk alternative to restructuring the whole dashboard shell
+ * into a bounded two-row layout: it keeps every other route's `.panel` geometry
+ * untouched while giving the sidebar a definite, row-count-independent height.
+ */
+function useCollectionWorkspaceBlockSize(
+  rootRef: RefObject<HTMLElement | null>,
+  panelRef: RefObject<HTMLElement | null>,
+): void {
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof window === 'undefined') {
+      return undefined;
+    }
+    // A layout read (`getBoundingClientRect`) followed by a style write, guarded
+    // so an unchanged value never touches the DOM. The guard keeps
+    // high-frequency resize/scroll/observer callbacks from thrashing layout or
+    // driving a ResizeObserver feedback loop.
+    const update = () => {
+      const rect = panel.getBoundingClientRect();
+      const chromeBlockSize = Math.max(0, rect.top);
+      const viewportBlockSize = window.visualViewport?.height ?? window.innerHeight;
+      const available = Math.max(0, viewportBlockSize - chromeBlockSize);
+      const nextValue = `${available}px`;
+      if (
+        panel.style.getPropertyValue('--mm-collection-workspace-block-size') !== nextValue
+      ) {
+        panel.style.setProperty('--mm-collection-workspace-block-size', nextValue);
+      }
+    };
+    // Batch event-driven updates into a single animation frame so a burst of
+    // callbacks coalesces into one read+write. The initial mount measures
+    // synchronously to avoid a flash of an unsized rail.
+    let frameId: number | null = null;
+    const measure = () => {
+      if (frameId !== null) {
+        return;
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        update();
+      });
+    };
+    update();
+    window.addEventListener('resize', measure);
+    // The sticky rail's visible height changes as the document scrolls the
+    // chrome past the top of the viewport, so recompute on scroll too.
+    window.addEventListener('scroll', measure, { passive: true });
+    const viewport = window.visualViewport;
+    viewport?.addEventListener('resize', measure);
+    viewport?.addEventListener('scroll', measure);
+    // Recompute when chrome above the panel changes height (a banner appears,
+    // the alert strip grows) — those reflow the panel's top coordinate.
+    let observer: ResizeObserver | undefined;
+    if (typeof ResizeObserver === 'function' && rootRef.current) {
+      observer = new ResizeObserver(measure);
+      observer.observe(rootRef.current);
+    }
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure);
+      viewport?.removeEventListener('resize', measure);
+      viewport?.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+  }, [rootRef, panelRef]);
+}
+
 function AppShell({
   dataWidePanel,
   uiInfo,
@@ -873,9 +960,12 @@ function AppShell({
   const registrySkew = Boolean(
     uiInfo?.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations),
   );
+  const rootRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  useCollectionWorkspaceBlockSize(rootRef, panelRef);
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
-      <main className="dashboard-root">
+      <main className="dashboard-root" ref={rootRef}>
         {registrySkew ? (
           <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
             <p>
@@ -922,7 +1012,11 @@ function AppShell({
               </div>
             </div>
           </div>
-          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+          <section
+            ref={panelRef}
+            className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
+            aria-live="polite"
+          >
             {children}
           </section>
         </div>
