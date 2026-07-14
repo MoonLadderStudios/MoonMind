@@ -313,6 +313,11 @@ class ContainerJobWorkflowInput(TemporalContractModel):
 
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     job_id: str = Field(alias="jobId")
+    owner: OwnerIdentity = Field(
+        default_factory=lambda: OwnerIdentity(
+            principalId="container_job", principalType="system"
+        )
+    )
     request: ContainerJobSubmitRequest
     observe_interval_seconds: int = Field(
         10, alias="observeIntervalSeconds", ge=1, le=300
@@ -330,6 +335,11 @@ class ContainerJobActivityRequest(TemporalContractModel):
 
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     job_id: str = Field(alias="jobId")
+    owner: OwnerIdentity = Field(
+        default_factory=lambda: OwnerIdentity(
+            principalId="container_job", principalType="system"
+        )
+    )
     ownership_token: str = Field(alias="ownershipToken", min_length=1, max_length=300)
     request: ContainerJobSubmitRequest
     state: ContainerJobState | None = None
@@ -345,6 +355,13 @@ class ContainerJobActivityRequest(TemporalContractModel):
     publication_token: str | None = Field(
         None, alias="publicationToken", max_length=300
     )
+    exit_code: int | None = Field(None, alias="exitCode")
+    failure_class: ContainerJobFailureClass | None = Field(None, alias="failureClass")
+    message: str | None = Field(None, max_length=2048)
+    publication: AuxiliaryOutcome | None = None
+    cleanup_outcome: AuxiliaryOutcome | None = Field(None, alias="cleanup")
+    logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
+    artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 

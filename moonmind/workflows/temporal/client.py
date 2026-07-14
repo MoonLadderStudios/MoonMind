@@ -435,6 +435,11 @@ class TemporalClientAdapter:
             input_args=model.model_dump(mode="json", by_alias=True),
         )
 
+    async def signal_container_job_cancel(self, job_id: str) -> None:
+        """Signal the canonical container-job workflow to stop."""
+        handle = await self.get_workflow_handle(container_job_workflow_id(job_id))
+        await handle.signal("cancel")
+
     async def get_workflow_handle(self, workflow_id: str) -> Any:
         """Get a handle to an existing workflow execution."""
         client = await self.get_client()

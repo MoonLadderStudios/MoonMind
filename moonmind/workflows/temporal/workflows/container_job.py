@@ -103,6 +103,7 @@ class MoonMindContainerJobWorkflow:
         self._job_id = inp.job_id
         request = ContainerJobActivityRequest(
             jobId=inp.job_id,
+            owner=inp.owner,
             ownershipToken=inp.ownership_token,
             request=inp.request,
         )
@@ -111,50 +112,58 @@ class MoonMindContainerJobWorkflow:
         failure_class: ContainerJobFailureClass | None = ContainerJobFailureClass.INFRASTRUCTURE
         message: str | None = None
 
+        async def execute_lifecycle() -> None:
+            nonlocal terminal_state, exit_code, failure_class
+            if not self._cancel_requested:
+                await self._project(request, ContainerJobState.PREPARING)
+                resolved = await self._activity(
+                    "container_job.resolve_workspace", request
+                )
+                request.resolved_workspace_ref = resolved.resolved_workspace_ref
+            if not self._cancel_requested:
+                await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
+                image = await self._activity("container_job.acquire_image", request)
+                request.resolved_image_ref = image.resolved_image_ref
+            if not self._cancel_requested:
+                reconciled = await self._activity(
+                    "container_job.reconcile_container", request
+                )
+                request.container_ref = reconciled.container_ref
+                if request.container_ref is None:
+                    created = await self._activity(
+                        "container_job.create_container", request
+                    )
+                    request.container_ref = created.container_ref
+                if not reconciled.running:
+                    await self._activity("container_job.start_container", request)
+            while not self._cancel_requested and request.container_ref:
+                await self._project(request, ContainerJobState.RUNNING)
+                observed = await self._activity(
+                    "container_job.observe_container", request
+                )
+                if observed.terminal_state is not None:
+                    terminal_state = observed.terminal_state
+                    exit_code = observed.exit_code
+                    failure_class = (
+                        None
+                        if terminal_state == ContainerJobState.SUCCEEDED
+                        else ContainerJobFailureClass.EXECUTION
+                    )
+                    break
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._cancel_requested,
+                        timeout=timedelta(seconds=inp.observe_interval_seconds),
+                    )
+                except TimeoutError:
+                    pass
+            if self._cancel_requested:
+                terminal_state = ContainerJobState.CANCELED
+                failure_class = ContainerJobFailureClass.CANCELED
         try:
-            async with asyncio.timeout(inp.request.spec.timeout_seconds):
-                if not self._cancel_requested:
-                    await self._project(request, ContainerJobState.PREPARING)
-                    resolved = await self._activity(
-                        "container_job.resolve_workspace", request
-                    )
-                    request.resolved_workspace_ref = resolved.resolved_workspace_ref
-                if not self._cancel_requested:
-                    await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
-                    image = await self._activity("container_job.acquire_image", request)
-                    request.resolved_image_ref = image.resolved_image_ref
-                if not self._cancel_requested:
-                    reconciled = await self._activity(
-                        "container_job.reconcile_container", request
-                    )
-                    request.container_ref = reconciled.container_ref
-                    if request.container_ref is None:
-                        created = await self._activity(
-                            "container_job.create_container", request
-                        )
-                        request.container_ref = created.container_ref
-                    if not reconciled.running:
-                        await self._activity("container_job.start_container", request)
-                while not self._cancel_requested and request.container_ref:
-                    await self._project(request, ContainerJobState.RUNNING)
-                    observed = await self._activity(
-                        "container_job.observe_container", request
-                    )
-                    if observed.terminal_state is not None:
-                        terminal_state = observed.terminal_state
-                        exit_code = observed.exit_code
-                        failure_class = (
-                            None
-                            if terminal_state == ContainerJobState.SUCCEEDED
-                            else ContainerJobFailureClass.EXECUTION
-                        )
-                        break
-                    await workflow.sleep(
-                        timedelta(seconds=inp.observe_interval_seconds)
-                    )
-                if self._cancel_requested:
-                    terminal_state = ContainerJobState.CANCELED
-                    failure_class = ContainerJobFailureClass.CANCELED
+            await asyncio.wait_for(
+                execute_lifecycle(), timeout=inp.request.spec.timeout_seconds
+            )
         except TimeoutError:
             terminal_state = ContainerJobState.TIMED_OUT
             failure_class = ContainerJobFailureClass.TIMEOUT
@@ -172,8 +181,6 @@ class MoonMindContainerJobWorkflow:
             await self._project(request, ContainerJobState.CANCELING)
             await self._best_effort("container_job.stop_container", request)
 
-        publication = AuxiliaryOutcome(state="not_attempted")
-        cleanup = AuxiliaryOutcome(state="not_attempted")
         logs_ref: str | None = None
         artifacts_ref: str | None = None
         request.publication_token = f"{inp.ownership_token}:publication"
@@ -192,6 +199,13 @@ class MoonMindContainerJobWorkflow:
         )
 
         self._state = terminal_state
+        request.exit_code = exit_code
+        request.failure_class = failure_class
+        request.message = message
+        request.publication = publication
+        request.cleanup_outcome = cleanup
+        request.logs_ref = logs_ref
+        request.artifacts_ref = artifacts_ref
         await self._project(request, terminal_state)
         if self._projection_repair_required:
             repaired = await self._best_effort(

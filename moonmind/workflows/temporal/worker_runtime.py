@@ -2293,15 +2293,20 @@ def _pentest_runner_image_overrides() -> dict[str, str]:
     }
 
 def _container_job_evidence_publisher(artifact_service: TemporalArtifactService):
-    async def publish(name: str, payload: bytes) -> str:
+    async def publish(request, name: str, payload: bytes) -> str:
+        principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
         artifact, _ = await artifact_service.create(
-            principal="system:container_job",
+            principal=principal,
             content_type="text/plain",
-            metadata_json={"artifact_type": "container_job.evidence", "name": name},
+            metadata_json={
+                "artifact_type": "container_job.evidence",
+                "name": name,
+                "container_job_id": request.job_id,
+            },
         )
         await artifact_service.write_complete(
             artifact_id=artifact.artifact_id,
-            principal="system:container_job",
+            principal=principal,
             payload=payload,
             content_type="text/plain",
         )
@@ -2317,7 +2322,10 @@ async def _container_job_projection_writer(request) -> None:
         record = result.scalar_one_or_none()
         if record is None:
             raise RuntimeError(f"container job record not found: {request.job_id}")
-        record.state = (request.state or request.terminal_state or record.state).value
+        state_value = request.state or request.terminal_state
+        record.state = (
+            state_value.value if hasattr(state_value, "value") else state_value
+        ) or record.state
         record.backend_kind = "docker-engine"
         record.backend_ref = "system"
         if request.resolved_image_ref:
@@ -2329,6 +2337,24 @@ async def _container_job_projection_writer(request) -> None:
                 "cacheHit": True,
                 "pullLockWaitMs": 0,
             }
+        if request.exit_code is not None or request.failure_class or request.message:
+            record.terminal_outcome_json = {
+                "exitCode": request.exit_code,
+                "failureClass": request.failure_class,
+                "message": request.message,
+            }
+        if request.publication is not None:
+            record.publication_outcome_json = request.publication.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        if request.cleanup_outcome is not None:
+            record.cleanup_outcome_json = request.cleanup_outcome.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        if request.logs_ref:
+            record.logs_ref = request.logs_ref
+        if request.artifacts_ref:
+            record.artifacts_ref = request.artifacts_ref
         await session.commit()
 
 def _build_agent_runtime_deps(

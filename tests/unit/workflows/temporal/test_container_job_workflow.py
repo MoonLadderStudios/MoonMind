@@ -162,6 +162,9 @@ async def test_production_backend_makes_every_registered_activity_callable(
     await activities.container_job_remove_container(payload)
     await activities.container_job_cleanup(payload)
     assert any(command[0] == "create" for command in commands)
+    create = next(command for command in commands if command[0] == "create")
+    assert "sha256:" + "a" * 64 in create
+    assert "python:3.13" not in create
     assert all("DOCKER_HOST" not in " ".join(command) for command in commands)
     assert project.await_count == 2
 
@@ -257,3 +260,27 @@ async def test_primary_success_survives_publication_and_cleanup_failures(
     assert result["terminal"].get("failureClass") is None
     assert result["publication"]["state"] == "failed"
     assert result["cleanup"]["state"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_terminal_projection_carries_authoritative_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    terminal = projections[-1]
+    assert result["state"] == "succeeded"
+    assert terminal.exit_code == 0
+    assert terminal.publication.state == "succeeded"
+    assert terminal.cleanup_outcome.state == "succeeded"
+    assert terminal.logs_ref == "art:logs"
+    assert terminal.artifacts_ref == "art:outputs"

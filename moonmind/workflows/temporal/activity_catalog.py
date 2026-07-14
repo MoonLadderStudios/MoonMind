@@ -1341,7 +1341,10 @@ def build_default_activity_catalog(
                 capability_class="docker_workload",
                 task_queue=cfg.activity_agent_runtime_task_queue,
                 fleet=AGENT_RUNTIME_FLEET,
-                timeouts=TemporalActivityTimeouts(60, 300),
+                timeouts=TemporalActivityTimeouts(
+                    300 if name in {"acquire_image", "create_container"} else 60,
+                    300,
+                ),
                 retries=_activity_retries(
                     max_attempts=(
                         1

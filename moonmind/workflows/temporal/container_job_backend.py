@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import tarfile
+from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
 
@@ -16,7 +18,7 @@ from moonmind.schemas.container_job_models import (
 )
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
-EvidencePublisher = Callable[[str, bytes], Awaitable[str]]
+EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
 
 
@@ -77,6 +79,10 @@ class DockerContainerJobBackend:
         return ContainerJobActivityResult(resolvedWorkspaceRef=str(workspace))
 
     async def acquire_image(self, request: ContainerJobActivityRequest):
+        if request.request.spec.registry_credential_ref:
+            raise RuntimeError(
+                "registryCredentialRef is not supported by the selected Docker backend"
+            )
         image = request.request.spec.image
         policy = request.request.spec.pull_policy
         inspect_code, stdout, _ = await self._runner(
@@ -137,7 +143,7 @@ class DockerContainerJobBackend:
             args.extend(("--env", f"{item.name}={item.value}"))
         if spec.entrypoint:
             args.extend(("--entrypoint", spec.entrypoint[0]))
-        args.append(spec.image)
+        args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
         await self._checked(*args)
@@ -184,11 +190,28 @@ class DockerContainerJobBackend:
         if code and not payload:
             raise RuntimeError("container evidence is unavailable")
         logs_ref = (
-            await self._publish(f"{request.job_id}-logs.txt", payload)
+            await self._publish(request, f"{request.job_id}-logs.txt", payload)
             if self._publish
             else None
         )
-        return ContainerJobActivityResult(logsRef=logs_ref)
+        artifacts_ref = None
+        if self._publish and request.request.spec.outputs:
+            workspace = Path(request.resolved_workspace_ref or "").resolve()
+            archive = BytesIO()
+            with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+                for output in request.request.spec.outputs:
+                    path = (workspace / output.relative_path).resolve()
+                    if workspace not in path.parents and path != workspace:
+                        raise RuntimeError("declared output escapes the workspace")
+                    if not path.exists():
+                        raise RuntimeError(f"declared output is missing: {output.name}")
+                    bundle.add(path, arcname=output.name, recursive=True)
+            artifacts_ref = await self._publish(
+                request, f"{request.job_id}-outputs.tar.gz", archive.getvalue()
+            )
+        return ContainerJobActivityResult(
+            logsRef=logs_ref, artifactsRef=artifacts_ref
+        )
 
     async def project_status(self, request: ContainerJobActivityRequest):
         if self._write_projection is None:
