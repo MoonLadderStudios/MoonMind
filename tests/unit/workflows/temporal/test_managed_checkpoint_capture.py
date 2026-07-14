@@ -5,6 +5,7 @@ import hashlib
 import os
 import subprocess
 import tarfile
+import time
 from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
@@ -230,6 +231,81 @@ async def test_managed_capture_coalesces_temporal_heartbeat_backpressure(
 
     assert result["status"] == "captured"
     assert heartbeat_attempts > 0
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_heartbeats_during_slow_archive_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "tracked.txt").write_text("checkpoint evidence\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c",
+            "user.email=test@example.invalid", "commit", "-qm", "base",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    now = datetime.now(UTC)
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1", workflowId="wf-1", agentId="codex_cli",
+            ownerRunId="run-1", logicalStepId="implement", executionOrdinal=1,
+            runtimeId="codex_cli", status="completed", startedAt=now,
+            finishedAt=now, workspacePath=str(repo),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        return "artifact://" + hashlib.sha256(payload).hexdigest()
+
+    original_addfile = tarfile.TarFile.addfile
+    archive_write_active = False
+    heartbeat_during_archive = False
+
+    def slow_addfile(self, *args, **kwargs) -> None:
+        nonlocal archive_write_active
+        archive_write_active = True
+        try:
+            time.sleep(0.03)
+            original_addfile(self, *args, **kwargs)
+        finally:
+            archive_write_active = False
+
+    def heartbeat(_details: object) -> None:
+        nonlocal heartbeat_during_archive
+        heartbeat_during_archive = (
+            heartbeat_during_archive or archive_write_active
+        )
+
+    activities._put_managed_checkpoint_artifact = put
+    monkeypatch.setattr(tarfile.TarFile, "addfile", slow_addfile)
+    monkeypatch.setattr(activity_runtime_module.temporal_activity, "in_activity", lambda: True)
+    monkeypatch.setattr(activity_runtime_module.temporal_activity, "heartbeat", heartbeat)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS",
+        0.001,
+    )
+
+    result = await activities.agent_runtime_capture_workspace_checkpoint(
+        _request(
+            digest=resolve_runtime_execution_capabilities(
+                "codex_cli"
+            ).capability_digest
+        )
+    )
+
+    assert result["status"] == "captured"
+    assert heartbeat_during_archive is True
 
 
 @pytest.mark.asyncio

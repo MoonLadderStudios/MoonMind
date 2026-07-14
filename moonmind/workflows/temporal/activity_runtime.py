@@ -294,6 +294,14 @@ async def _run_command(cmd, **kwargs):
 
 logger = getLogger(__name__)
 
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
@@ -7128,10 +7136,7 @@ class TemporalAgentRuntimeActivities:
                             "maximum per-file size exceeded",
                             type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
                         )
-                    digest = hashlib.sha256()
-                    with path.open("rb") as source:
-                        while chunk := source.read(1024 * 1024):
-                            digest.update(chunk)
+                    digest = await asyncio.to_thread(_sha256_file, path)
                     payload = None
                     target = None
                     entry_type = "file"
@@ -7158,7 +7163,7 @@ class TemporalAgentRuntimeActivities:
                 tar_info.uname = tar_info.gname = ""
                 if entry_type == "file":
                     with path.open("rb") as source:
-                        archive.addfile(tar_info, source)
+                        await asyncio.to_thread(archive.addfile, tar_info, source)
                 else:
                     archive.addfile(tar_info)
                 entries.append(
@@ -7168,7 +7173,7 @@ class TemporalAgentRuntimeActivities:
                         mode=f"{stat.S_IMODE(info_stat.st_mode):06o}",
                         size=payload_size,
                         sha256=(
-                            digest.hexdigest()
+                            digest
                             if entry_type == "file"
                             else hashlib.sha256(payload).hexdigest()
                         ),
