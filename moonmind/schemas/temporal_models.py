@@ -961,6 +961,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     head_commit: str | None = Field(None, alias="headCommit")
     patch_ref: str | None = Field(None, alias="patchRef")
     archive_ref: str | None = Field(None, alias="archiveRef")
+    archive_digest: str | None = Field(None, alias="archiveDigest")
     workspace_ref: str | None = Field(None, alias="workspaceRef")
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
@@ -978,6 +979,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     terminal_ref: str | None = Field(None, alias="terminalRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
     manifest_ref: str | None = Field(None, alias="manifestRef")
+    manifest_digest: str | None = Field(None, alias="manifestDigest")
     branch: str | None = Field(None, alias="branch")
     includes_untracked: bool = Field(False, alias="includesUntracked")
     includes_ignored_files: bool = Field(False, alias="includesIgnoredFiles")
@@ -989,6 +991,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "head_commit",
         "patch_ref",
         "archive_ref",
+        "archive_digest",
         "workspace_ref",
         "workspace_artifact_ref",
         "external_state_ref",
@@ -1005,6 +1008,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
         "terminal_ref",
         "diagnostics_ref",
         "manifest_ref",
+        "manifest_digest",
         "branch",
         mode="before",
     )

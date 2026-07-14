@@ -492,6 +492,7 @@ Current implemented activities:
 - `agent_runtime.reconcile_managed_sessions`
 - `agent_runtime.status`
 - `agent_runtime.fetch_result`
+- `agent_runtime.restore_workspace_checkpoint`
 - `agent_runtime.evaluate_terminal_evidence`
 - `agent_runtime.cancel`
 
@@ -501,6 +502,7 @@ Worker queue: `mm.activity.agent_runtime`
 
 - `agent_runtime.status(...) -> AgentRunStatus`
 - `agent_runtime.fetch_result(...) -> AgentRunResult`
+- `agent_runtime.restore_workspace_checkpoint(...) -> ManagedWorkspaceRestoreResult`
 - `agent_runtime.cancel(...) -> AgentRunStatus`
 - `agent_runtime.launch_session(...) -> ManagedSessionHandle`
 - `agent_runtime.session_status(...) -> ManagedSessionHandle`
@@ -521,6 +523,8 @@ Worker queue: `mm.activity.agent_runtime`
 `agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
 
 The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
+
+`agent_runtime.restore_workspace_checkpoint` is the `codex_cli` cold-restore data plane. It runs only on `mm.activity.agent_runtime`, verifies checkpoint, archive, manifest, repository base, path containment, and restored entries before atomically activating a new managed workspace, and persists compact restoration evidence. A launch carrying a restoration requirement is rejected unless the destination is `ready` and its checkpoint and capability digest match.
 
 The session-oriented activity surface is intended to become runtime-neutral at the workflow boundary, but the live activity/controller path currently admits Codex CLI only. Runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code must add a Claude-specific session adapter/controller before carrying `runtimeFamily = "claude_code"` or recording `runtimeId = "claude_code"` through this activity surface.
 
@@ -599,6 +603,7 @@ Representative capability classes include:
 - `sandbox.run_tests` routes to `mm.activity.sandbox`
 - `integration.jules.start` routes to `mm.activity.integrations`
 - `agent_runtime.fetch_result` routes to `mm.activity.agent_runtime`
+- `agent_runtime.restore_workspace_checkpoint` routes to `mm.activity.agent_runtime`
 - `provider_profile.list` routes to `mm.activity.artifacts`
 - `integration.resolve_adapter_metadata` routes to `mm.workflow`
 
