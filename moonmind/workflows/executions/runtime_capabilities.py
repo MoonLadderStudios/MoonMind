@@ -129,8 +129,8 @@ _DESCRIPTORS = (
         runtimeId="codex_cli", runtimeFamily="managed_cli",
         workspaceAuthority="managed_runtime",
         checkpointCaptureKinds=("worktree_archive",),
-        checkpointCaptureActivity="agent_runtime.capture_workspace_checkpoint",
         checkpointRestoreKinds=("worktree_archive",),
+        checkpointCaptureActivity="agent_runtime.capture_workspace_checkpoint",
         checkpointRestoreActivity="agent_runtime.restore_workspace_checkpoint",
         checkpointArtifactContractVersion="managed-worktree-archive-v1",
         checkpointBoundarySupport={
