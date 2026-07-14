@@ -21,7 +21,11 @@ WorkspaceAuthority = Literal[
 ]
 CheckpointCriticality = Literal["required", "recoverability_only", "unsupported"]
 
-CAPABILITY_SET_VERSION = "runtime-execution-capabilities-v1"
+CAPABILITY_SET_VERSION = "runtime-execution-capabilities-v2"
+CheckpointResumePhase = Literal[
+    "rerun_failed_step", "continue_to_gate", "continue_after_gate",
+    "resume_publication", "retry_restoration",
+]
 
 
 class RuntimeCapabilityError(ValueError):
@@ -33,7 +37,9 @@ class RuntimeExecutionCapabilities(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
-    capability_set_version: Literal["runtime-execution-capabilities-v1"] = Field(
+    capability_set_version: Literal[
+        "runtime-execution-capabilities-v1", "runtime-execution-capabilities-v2"
+    ] = Field(
         CAPABILITY_SET_VERSION, alias="capabilitySetVersion"
     )
     runtime_id: NonBlankStr = Field(..., alias="runtimeId")
@@ -50,6 +56,12 @@ class RuntimeExecutionCapabilities(BaseModel):
     )
     checkpoint_restore_activity: str | None = Field(
         None, alias="checkpointRestoreActivity"
+    )
+    checkpoint_artifact_contract_version: str | None = Field(
+        None, alias="checkpointArtifactContractVersion"
+    )
+    checkpoint_boundary_support: dict[str, tuple[CheckpointResumePhase, ...]] = Field(
+        default_factory=dict, alias="checkpointBoundarySupport"
     )
     supports_same_session_continuation: bool = Field(
         ..., alias="supportsSameSessionContinuation"
@@ -74,6 +86,17 @@ class RuntimeExecutionCapabilities(BaseModel):
             raise ValueError("checkpoint capture kinds and activity must be declared together")
         if bool(self.checkpoint_restore_kinds) != bool(self.checkpoint_restore_activity):
             raise ValueError("checkpoint restore kinds and activity must be declared together")
+        if self.checkpoint_restore_kinds and not self.checkpoint_artifact_contract_version:
+            raise ValueError("checkpoint restore capability must name its artifact contract")
+        if self.checkpoint_boundary_support and not self.checkpoint_restore_kinds:
+            raise ValueError("checkpoint boundary support requires a restore capability")
+        for activity in (self.checkpoint_capture_activity, self.checkpoint_restore_activity):
+            if (
+                activity
+                and self.workspace_authority == "managed_runtime"
+                and not activity.startswith("agent_runtime.")
+            ):
+                raise ValueError("managed checkpoint activities must use agent_runtime routes")
         if (
             self.post_execution_checkpoint_criticality == "required"
             and not self.checkpoint_capture_kinds
@@ -105,6 +128,14 @@ _DESCRIPTORS = (
         checkpointCaptureActivity="agent_runtime.capture_workspace_checkpoint",
         checkpointRestoreKinds=("worktree_archive",),
         checkpointRestoreActivity="agent_runtime.restore_workspace_checkpoint",
+        checkpointArtifactContractVersion="managed-worktree-archive-v1",
+        checkpointBoundarySupport={
+            "before_execution": ("rerun_failed_step",),
+            "after_execution": ("continue_to_gate",),
+            "after_gate": ("continue_after_gate",),
+            "before_publication": ("resume_publication",),
+            "before_recovery_restoration": ("retry_restoration",),
+        },
         supportsSameSessionContinuation=True,
         supportsActiveCommandIntrospection=True,
         activeCommandIntrospectionOwner="managed_agent.command_status",
@@ -141,6 +172,7 @@ _DESCRIPTORS = (
         # it never resolves or reads an external provider workspace path.
         checkpointCaptureActivity="workspace.capture_checkpoint",
         checkpointRestoreActivity="integration.omnigent.execute",
+        checkpointArtifactContractVersion="external-state-ref-v1",
         supportsSameSessionContinuation=True,
         terminalContractIds=("omnigent_execution_terminal_v1",),
         postExecutionCheckpointCriticality="required",
