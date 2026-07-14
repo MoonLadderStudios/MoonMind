@@ -87,6 +87,29 @@ from pr_resolver_core import (
             ResolverAction.RUN_REMEDIATION,
         ),
         (
+            {
+                "blockers": [
+                    {"kind": "checks_failed"},
+                    {"kind": "checks_unavailable"},
+                ],
+                "checksComplete": False,
+                "checksPassing": False,
+            },
+            {
+                "pr": {"state": "OPEN", "mergeStateStatus": "UNSTABLE"},
+                "ci": {
+                    "isRunning": True,
+                    "hasFailures": True,
+                    "hasAuthoritativeFailures": True,
+                    "signalQuality": "degraded",
+                },
+                "commentsFetch": {"succeeded": True},
+                "commentsSummary": {"includeBotReviewComments": True},
+            },
+            "ci_failures",
+            ResolverAction.RUN_REMEDIATION,
+        ),
+        (
             {"blockers": [{"kind": "checks_unavailable"}]},
             {
                 "pr": {"state": "OPEN"},
@@ -178,6 +201,34 @@ def test_unknown_or_degraded_state_never_attempts_merge() -> None:
         assert classify_snapshot(snapshot).action is not ResolverAction.ATTEMPT_MERGE
 
 
+def test_actionable_comments_keep_priority_over_known_ci_failures() -> None:
+    decision = classify_snapshot(
+        CanonicalPullRequestSnapshot(
+            actionable_comments=True,
+            checks_failed=True,
+            checks_degraded=True,
+        )
+    )
+
+    assert decision.classification == "actionable_comments"
+    assert decision.action is ResolverAction.RUN_REMEDIATION
+
+
+def test_legacy_ci_precedence_keeps_degraded_failure_in_manual_review() -> None:
+    snapshot = CanonicalPullRequestSnapshot(
+        checks_failed=True,
+        checks_degraded=True,
+    )
+
+    decision = classify_snapshot(
+        snapshot,
+        known_ci_failures_precede_degraded=False,
+    )
+
+    assert decision.reason_code == "ci_signal_degraded"
+    assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+
+
 def test_state_reducer_enforces_no_progress_and_finalize_budgets() -> None:
     conflict = CanonicalPullRequestSnapshot(merge_conflict=True)
     first = reduce_resolver_state(
@@ -251,6 +302,14 @@ def test_temporal_snapshot_handles_null_blockers() -> None:
 
     assert snapshot.merge_conflict is False
     assert snapshot.actionable_comments is False
+
+
+def test_temporal_completed_snapshot_normalizes_missing_passing_as_failure() -> None:
+    snapshot = normalize_temporal_snapshot(
+        {"checksComplete": True, "checksPassing": None}
+    )
+
+    assert snapshot.checks_failed is True
 
 
 def test_malformed_snapshot_stops_instead_of_waiting_for_ci() -> None:

@@ -3637,6 +3637,75 @@ async def test_after_execution_finalization_is_idempotent_and_does_not_execute_a
 
 
 @pytest.mark.asyncio
+async def test_publish_none_skips_required_prepublication_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "queue-issues", "inputs": {"title": "Queue issues"}}],
+        dependency_map={"queue-issues": []},
+        updated_at=now,
+    )
+
+    async def unexpected_checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("publishMode none has no pre-publication boundary")
+
+    monkeypatch.setattr(
+        workflow,
+        "_record_canonical_step_checkpoint",
+        unexpected_checkpoint,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "queue-issues",
+        publish_mode="none",
+        updated_at=now,
+    )
+
+    assert failed is False
+    assert workflow._attention_required is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_history_preserves_prepublication_checkpoint_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "queue-issues", "inputs": {"title": "Queue issues"}}],
+        dependency_map={"queue-issues": []},
+        updated_at=now,
+    )
+    calls: list[str] = []
+
+    async def checkpoint(
+        _logical_step_id: str,
+        *,
+        boundary: str,
+        updated_at: datetime,
+    ) -> str:
+        calls.append(boundary)
+        return "artifact://checkpoint/before_publication"
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", checkpoint)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "queue-issues",
+        publish_mode="none",
+        updated_at=now,
+    )
+
+    assert failed is False
+    assert calls == ["before_publication"]
+
+
+@pytest.mark.asyncio
 async def test_after_execution_finalization_retry_preserves_retry_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -28,7 +28,11 @@ def _decision(
     )
 
 
-def classify_snapshot(snapshot: CanonicalPullRequestSnapshot) -> ResolverDecision:
+def classify_snapshot(
+    snapshot: CanonicalPullRequestSnapshot,
+    *,
+    known_ci_failures_precede_degraded: bool = True,
+) -> ResolverDecision:
     if snapshot.merged:
         return _decision(
             "already_merged",
@@ -63,7 +67,9 @@ def classify_snapshot(snapshot: CanonicalPullRequestSnapshot) -> ResolverDecisio
             "comment_policy_not_enforced",
             ResolverAction.STOP_MANUAL_REVIEW,
         )
-    if snapshot.checks_degraded:
+    if snapshot.checks_degraded and (
+        not snapshot.checks_failed or not known_ci_failures_precede_degraded
+    ):
         return _decision(
             "manual_review", "ci_signal_degraded", ResolverAction.STOP_MANUAL_REVIEW
         )
@@ -79,7 +85,7 @@ def classify_snapshot(snapshot: CanonicalPullRequestSnapshot) -> ResolverDecisio
         return _decision(
             "actionable_comments", "actionable_comments", ResolverAction.RUN_REMEDIATION
         )
-    if snapshot.checks_complete and not snapshot.checks_passing:
+    if snapshot.checks_failed:
         return _decision("ci_failures", "ci_failures", ResolverAction.RUN_REMEDIATION)
     if snapshot.automated_review_pending:
         return _decision("review_grace", "review_grace", ResolverAction.WAIT)

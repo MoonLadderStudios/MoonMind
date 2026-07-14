@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentTerminalContract,
+)
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -33,7 +37,11 @@ from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
-from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
+from tests.integration.reliability.helpers import (
+    FinalizationFaultInjector,
+    NestedYieldProcess,
+    load_replay,
+)
 from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
@@ -239,6 +247,68 @@ async def test_completed_batch_no_op_replays_through_production_activity_route(
     assert result.metadata["queuedChildCount"] == 0
 
 
+async def test_successful_batch_without_publication_skips_prepublication_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the false-failure incident through the finalization boundary."""
+
+    replay_id = "batch-fanout-no-publish-checkpoint"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=timezone.utc)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": manifest["logicalStepId"],
+                "inputs": {"title": "Queue GitHub issue workflows"},
+            }
+        ],
+        dependency_map={manifest["logicalStepId"]: []},
+        updated_at=now,
+    )
+    row = workflow._step_ledger_row_for(manifest["logicalStepId"])
+    assert row is not None
+    row["executionOutcome"] = manifest["executionOutcome"]
+    workflow._publish_status = "not_required"
+    workflow._publish_reason = (
+        f"queued {manifest['queuedChildCount']} child workflows"
+    )
+    checkpoint_calls: list[str] = []
+
+    async def checkpoint(
+        _logical_step_id: str,
+        *,
+        boundary: str,
+        updated_at: datetime,
+    ) -> str:
+        checkpoint_calls.append(boundary)
+        raise AssertionError("publishMode none has no pre-publication boundary")
+
+    monkeypatch.setattr(
+        workflow,
+        "_record_canonical_step_checkpoint",
+        checkpoint,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _id: True)
+
+    checkpoint_failed = await workflow._record_prepublication_checkpoint(
+        manifest["logicalStepId"],
+        publish_mode=manifest["publishMode"],
+        updated_at=now,
+    )
+    completion = workflow._determine_publish_completion(
+        parameters={"publishMode": manifest["publishMode"]}
+    )
+
+    assert checkpoint_failed is False
+    assert len(checkpoint_calls) == expected["prepublicationCheckpointCalls"]
+    assert completion[0] == expected["completionStatus"]
+    assert completion[2] is False
+    assert workflow._attention_required is expected["attentionRequired"]
+    assert expected["parentState"] == "completed"
+
+
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:
     manifest = load_replay(replay_id, "workspace-manifest.json")
     for item in manifest["artifacts"]:
@@ -289,6 +359,136 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
     assert {
         (item.session_id, item.session_epoch, item.thread_id) for item in requests
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
+
+
+@pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+async def test_nested_yield_continuation_replays_through_production_agent_run_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recover: bool
+) -> None:
+    """MoonLadderStudios/MoonMind#3145 continuation journey across the agent route.
+
+    AgentRun owns capability-aware bounded continuation. Replay the incident at
+    the production activity-routing and terminal-evidence boundaries: every
+    continuation activity must resolve through the real catalog to the managed
+    agent-runtime queue, evaluate real workspace evidence, and preserve a stable
+    session/thread/epoch identity across bounded continuation turns.
+    """
+    replay_id = "incomplete-terminal-contract"
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / "repo"
+    _materialize_workspace_fixture(replay_id, workspace)
+
+    # AgentRun evaluates terminal evidence and drives continuation outside a live
+    # Temporal event loop here; enable the continuation patch gates and provide a
+    # workflow info stub so the production helper runs in-process.
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="reliability-3145:agent:node-1",
+        run_id="reliability-3145-run",
+        search_attributes={},
+        parent=None,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+
+    binding = _binding()
+    execution_ref = "mm:reliability-3145:terminal-contract"
+    container_id = "ctr-reliability-3145"
+    thread_id = "thread-terminal-contract"
+    request = _pr_resolver_request(binding, workspace).model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                contractId="pr_resolver_terminal.v1",
+                relativePath="var/pr_resolver/result.json",
+                expectedSchemaVersion="moonmind.pr-resolver-result.v1",
+                executionRef=execution_ref,
+            )
+        }
+    )
+
+    turns: list[SendCodexManagedSessionTurnRequest] = []
+    routed_queues: set[str] = set()
+
+    async def execute_activity(name: str, payload: object, **kwargs: object) -> object:
+        # Keep AgentRun's production catalog lookup and route construction in the
+        # replay; only the Temporal SDK handoff is doubled, so catalog drift that
+        # sent continuation activities to the wrong worker cannot be hidden.
+        routed_queues.add(kwargs["task_queue"])
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            activities = TemporalAgentRuntimeActivities(client_adapter=object())
+            evaluated = await activities.agent_runtime_evaluate_terminal_evidence(
+                payload
+            )
+            return evaluated.model_dump(mode="json", by_alias=True)
+        if name == "agent_runtime.load_session_snapshot":
+            return {
+                "sessionId": binding.session_id,
+                "sessionEpoch": binding.session_epoch,
+                "containerId": container_id,
+                "threadId": thread_id,
+            }
+        if name == "agent_runtime.send_turn":
+            turns.append(payload)
+            if recover and len(turns) == 1:
+                # A recovered continuation writes satisfied terminal evidence:
+                # a merged disposition whose executionRef matches the contract,
+                # plus the required auto-publish artifact.
+                result_path = workspace / "var/pr_resolver/result.json"
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                result_path.write_text(
+                    json.dumps(
+                        {
+                            "executionRef": execution_ref,
+                            "mergeAutomationDisposition": "merged",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                publish_path = workspace / "artifacts/publish_result.json"
+                publish_path.parent.mkdir(parents=True, exist_ok=True)
+                publish_path.write_text(
+                    json.dumps({"status": "merged"}), encoding="utf-8"
+                )
+            return _turn_response(
+                session_id=payload.session_id,
+                session_epoch=payload.session_epoch,
+                container_id=payload.container_id,
+                thread_id=payload.thread_id,
+                turn_id=f"continuation-{len(turns)}",
+            ).model_dump(mode="json", by_alias=True)
+        if name == "agent_runtime.fetch_result":
+            return AgentRunResult(
+                summary="continuation completed",
+                metadata={"workspacePath": str(workspace)},
+            ).model_dump(mode="json", by_alias=True)
+        raise AssertionError(f"unexpected activity: {name}")
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+
+    result = await MoonMindAgentRun()._evaluate_terminal_contract(
+        request=request,
+        result=AgentRunResult(
+            summary="wrapper completed while inner process remained active",
+            metadata={"workspacePath": str(workspace)},
+        ),
+    )
+
+    # Every terminal-contract continuation activity crosses the production
+    # managed agent-runtime route, never a per-test task queue.
+    assert routed_queues == {"mm.activity.agent_runtime"}
+    expected_turns = 1 if recover else expected["continuationCount"]
+    assert len(turns) == expected_turns
+    assert {
+        (turn.session_id, turn.session_epoch, turn.thread_id) for turn in turns
+    } == {(binding.session_id, binding.session_epoch, thread_id)}
+    assert result.metadata["terminalContractContinuationCount"] == expected_turns
+    if recover:
+        assert result.failure_class is None
+        assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    else:
+        assert result.failure_class == expected["failureClass"]
+        assert result.metadata["failureCode"] == expected["failureCode"]
+        assert result.metadata["terminalContractRecoveryOutcome"] == "incomplete"
 
 
 async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_path(
@@ -590,16 +790,27 @@ async def test_checkpoint_finalization_fault_is_retryable(
     repo.mkdir(parents=True)
     activities = TemporalSandboxActivities(workspace_root=workspace_root)
 
-    durable_execution_result = load_replay(replay_id, "execution-result.json")
+    agent_execution_calls = 0
+    durable_execution_result: dict[str, object] | None = None
+
+    async def execute_agent_once() -> dict[str, object]:
+        """Primary agent execution is exactly-once and durable across retries."""
+        nonlocal agent_execution_calls, durable_execution_result
+        if durable_execution_result is None:
+            agent_execution_calls += 1
+            durable_execution_result = load_replay(replay_id, "execution-result.json")
+        return durable_execution_result
+
     original_capture = activities._capture_workspace_evidence
-    calls = 0
+    fault = FinalizationFaultInjector()
 
     async def fail_once(model: object, workspace: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("injected finalization failure")
-        return await original_capture(model, workspace)
+        # The retried finalization path must reuse the durable primary execution
+        # result, never re-run the agent. If a regression re-executed the agent on
+        # each finalization attempt, ``agent_execution_calls`` would exceed one.
+        execution = await execute_agent_once()
+        assert execution["status"] == "completed"
+        return await fault.invoke(original_capture, model, workspace)
 
     monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
     payload = {
@@ -621,4 +832,5 @@ async def test_checkpoint_finalization_fault_is_retryable(
     second = await activities.workspace_capture_checkpoint(payload)
     assert second["status"] == "captured"
     assert durable_execution_result["status"] == "completed"
-    assert calls == 2
+    assert fault.calls == 2
+    assert agent_execution_calls == 1

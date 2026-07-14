@@ -11,9 +11,34 @@ logs.
 Run the corpus with:
 
 ```bash
-pytest tests/integration/reliability -m reliability_journey -q
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
+  -m reliability_journey -q --durations=25
 ```
+
+Run only the source-destroying archive replay with:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest \
+  tests/integration/reliability/test_escaped_failure_journeys.py \
+  -k source_destroying_cold_resume -q
+```
+
+The cold-resume replay crosses the production archive capture, artifact store,
+source disposal, archive restore, filesystem-safety, and restore-idempotency
+boundaries. Its fixture is retained under
+`replays/cold-resume-worktree-archive/`. The complete required production
+journey additionally needs the Temporal test server, UserWorkflow recovery
+creation, managed AgentRun owner, and continuation ledger; a sandbox archive
+replay is not evidence for those managed-runtime boundaries. The CI budget for
+the complete reliability corpus is 30 minutes.
 
 The suite complements focused tests. Replays should cross the production
 adapter, terminal-evidence, activity-routing, or finalization boundary that let
 the incident escape, and failure messages should name the violated invariant.
+Bounded-continuation journeys drive AgentRun's terminal-contract owner directly
+and cross the production activity route (asserting the managed agent-runtime task
+queue) instead of standing up a time-skipping Temporal server, which keeps them
+inside the hermetic `integration_ci` budget while still asserting stable
+session/thread/epoch identity across each continuation turn. Finalization faults
+use the shared fail-first injector so checkpoint or publication retries can be
+tested independently from the exactly-once primary agent execution.
