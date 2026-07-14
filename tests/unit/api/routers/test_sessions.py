@@ -257,7 +257,14 @@ def test_post_session_message_event_maps_to_existing_control_path(
         ) as control:
             response = test_client.post(
                 "/api/sessions/sess-1/events",
-                json={"type": "message", "message": "continue", "reason": "operator"},
+                json={
+                    "type": "message",
+                    "message": "continue",
+                    "reason": "operator",
+                    "controlRequestId": "message-1",
+                    "idempotencyKey": "message-1",
+                    "expectedSessionEpoch": 2,
+                },
             )
 
     assert response.status_code == 200
@@ -266,6 +273,7 @@ def test_post_session_message_event_maps_to_existing_control_path(
     assert control.await_args.kwargs["agent_run_id"] == "mm:run-1"
     assert control_payload.action == "continue_same_session"
     assert control_payload.message == "continue"
+    assert control_payload.control_request_id == "message-1"
 
 
 def test_post_session_event_rejects_unknown_type(
@@ -322,6 +330,7 @@ def test_resolve_elicitation_maps_approval_to_existing_control_path(
     assert control_payload.action == "continue_same_session"
     assert control_payload.message == "Approved."
     assert control_payload.reason == "session_elicitation:el-1:approve"
+    assert control_payload.control_request_id == "elicitation:sess-1:el-1:approve"
 
 
 def test_resolve_elicitation_preserves_session_authorization(

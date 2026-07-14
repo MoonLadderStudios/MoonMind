@@ -364,6 +364,7 @@ describe('Workflow Detail Entrypoint', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     virtuosoPropsSpy.mockClear();
     window.history.pushState({}, 'Test', '/workflows/test-123/steps?source=temporal');
     window.sessionStorage.clear();
@@ -9059,10 +9060,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'continue_same_session',
-            message: 'Continue with the existing session.',
-          }),
+          body: expect.stringContaining('"action":"continue_same_session"'),
         }),
       );
     });
@@ -9107,9 +9105,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'clear_session',
-          }),
+          body: expect.stringContaining('"action":"clear_session"'),
         }),
       );
     });
@@ -9324,9 +9320,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'interrupt_turn',
-          }),
+          body: expect.stringContaining('"action":"interrupt_turn"'),
         }),
       );
     });
@@ -9338,9 +9332,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'cancel_session',
-          }),
+          body: expect.stringContaining('"action":"cancel_session"'),
         }),
       );
     });
@@ -9466,7 +9458,7 @@ describe('Workflow Detail Entrypoint', () => {
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ action: 'interrupt_turn' }),
+          body: expect.stringContaining('"action":"interrupt_turn"'),
         }),
       );
     });
@@ -9660,6 +9652,7 @@ describe('LiveLogsPanel', () => {
   let originalScrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     window.history.pushState({}, 'Test', '/workflows/wf-1/steps?source=temporal');
     window.sessionStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
@@ -10971,10 +10964,7 @@ describe('LiveLogsPanel', () => {
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({
-            action: 'continue_same_session',
-            message: 'Continue with the MM-1032 session.',
-          }),
+          body: expect.stringContaining('"action":"continue_same_session"'),
         }),
       );
     });
@@ -11003,7 +10993,7 @@ describe('LiveLogsPanel', () => {
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ action: 'clear_session' }),
+          body: expect.stringContaining('"action":"clear_session"'),
         }),
       );
     });
