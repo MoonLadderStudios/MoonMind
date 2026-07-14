@@ -161,13 +161,30 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workloads.tool_bridge import (
-    CONTAINER_START_HELPER_TOOL,
-    CONTAINER_STOP_HELPER_TOOL,
-    build_dood_tool_definition_payload,
-    is_dood_tool,
-    normalize_workflow_docker_mode,
-    tool_allowed_for_workflow_docker_mode,
+    build_container_job_tool_definition_payload,
+    is_container_job_tool,
 )
+from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
+
+# Replay-only vocabulary for the retained ``workload.run`` Activity. These
+# names are absent from new executable-tool discovery and dispatch.
+_LEGACY_CONTAINER_START_HELPER_TOOL = "container.start_helper"
+_LEGACY_CONTAINER_STOP_HELPER_TOOL = "container.stop_helper"
+
+
+def _legacy_workload_tool_allowed(tool_name: str, workflow_docker_mode: str) -> bool:
+    mode = normalize_workflow_docker_mode(workflow_docker_mode)
+    curated = {
+        "container.run_workload",
+        _LEGACY_CONTAINER_START_HELPER_TOOL,
+        _LEGACY_CONTAINER_STOP_HELPER_TOOL,
+        "moonmind.integration_ci",
+        "unreal.run_tests",
+    }
+    return mode != "disabled" and (
+        tool_name in curated
+        or (mode == "unrestricted" and tool_name == "container.run_container")
+    )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
     CodexManagedSessionBinding,
@@ -1417,6 +1434,9 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     **{
         f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
         for name in (
+            "submit",
+            "status",
+            "cancel",
             "resolve_workspace",
             "acquire_image",
             "create_container",
@@ -1684,8 +1704,8 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     return text[-max_chars:]
 
 def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
-    if is_dood_tool(name):
-        return build_dood_tool_definition_payload(name=name)
+    if is_container_job_tool(name):
+        return build_container_job_tool_definition_payload(name=name)
 
     if name == DEPLOYMENT_UPDATE_TOOL_NAME:
         return build_deployment_update_tool_definition_payload()
@@ -7839,14 +7859,10 @@ class TemporalAgentRuntimeActivities:
             )
         request_payload = dict(payload.get("request", payload))
         reason = str(request_payload.pop("reason", "") or "bounded_window_complete")
-        if request_payload.get("toolName") == CONTAINER_STOP_HELPER_TOOL:
+        if request_payload.get("toolName") == _LEGACY_CONTAINER_STOP_HELPER_TOOL:
             request_payload.setdefault("command", ["stop"])
         request = parse_workload_request(request_payload)
-        if not tool_allowed_for_workflow_docker_mode(
-            tool_name=request.tool_name,
-            workflow_docker_mode=workflow_mode,
-            raw_cli_enabled=self._raw_docker_cli_enabled,
-        ):
+        if not _legacy_workload_tool_allowed(request.tool_name, workflow_mode):
             raise _docker_workflow_mode_forbidden_failure(
                 workflow_docker_mode=workflow_mode,
                 tool_name=request.tool_name,
@@ -7855,9 +7871,9 @@ class TemporalAgentRuntimeActivities:
             request,
             workflow_docker_mode=workflow_mode,
         )
-        if request.tool_name == CONTAINER_START_HELPER_TOOL:
+        if request.tool_name == _LEGACY_CONTAINER_START_HELPER_TOOL:
             result = await self._workload_launcher.start_helper(validated)
-        elif request.tool_name == CONTAINER_STOP_HELPER_TOOL:
+        elif request.tool_name == _LEGACY_CONTAINER_STOP_HELPER_TOOL:
             result = await self._workload_launcher.stop_helper(
                 validated,
                 reason=reason,
@@ -7918,6 +7934,45 @@ class TemporalAgentRuntimeActivities:
         return ContainerJobActivityResult.model_validate(result).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
+
+    async def container_job_submit(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        """Create/reuse API-owned identity and start its durable workflow."""
+        from api_service.db.base import get_async_session_context
+        from api_service.services.container_jobs import ContainerJobService
+        from moonmind.schemas.container_job_models import ContainerJobSubmitRequest, OwnerIdentity
+
+        owner = OwnerIdentity.model_validate(payload.get("owner"))
+        request = ContainerJobSubmitRequest.model_validate(payload.get("request"))
+        async with get_async_session_context() as session:
+            accepted = await ContainerJobService(session).submit(owner=owner, request=request)
+            await session.commit()
+        return accepted.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    async def container_job_status(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.container_jobs import ContainerJobService
+        from moonmind.schemas.container_job_models import OwnerIdentity
+
+        owner = OwnerIdentity.model_validate(payload.get("owner"))
+        async with get_async_session_context() as session:
+            status = await ContainerJobService(session).status(
+                owner=owner, job_id=str(payload.get("jobId") or "")
+            )
+        return status.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    async def container_job_cancel(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        from api_service.db.base import get_async_session_context
+        from api_service.services.container_jobs import ContainerJobService
+        from moonmind.schemas.container_job_models import ContainerJobCancelRequest, OwnerIdentity
+
+        owner = OwnerIdentity.model_validate(payload.get("owner"))
+        request = ContainerJobCancelRequest.model_validate(payload.get("request"))
+        async with get_async_session_context() as session:
+            result = await ContainerJobService(session).cancel(
+                owner=owner, job_id=str(payload.get("jobId") or ""), request=request
+            )
+            await session.commit()
+        return result.model_dump(mode="json", by_alias=True, exclude_none=True)
 
     async def container_job_resolve_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
         return await self._container_job_call("resolve_workspace", payload)

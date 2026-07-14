@@ -211,6 +211,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
         workspace_root=str(workspace_root),
+        moonmind_url="http://api:8000",
         session_store=session_store,
         session_supervisor=session_supervisor,
         command_runner=_fake_runner,
@@ -241,6 +242,11 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert "MOONMIND_TASK_WORKFLOW_ID=wf-task-1" in run_command
     assert "MOONMIND_AGENT_RUN_ID=task-1" in run_command
+    assert "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp" in run_command
+    assert "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND=moonmind-session" in run_command
+    assert "MOONMIND_CONTAINER_JOBS_SESSION_ID=sess-1" in run_command
+    assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
+    assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
     assert "python3" in run_command
     assert "moonmind.workflows.temporal.runtime.codex_session_runtime" in run_command
     stored = session_store.load("sess-1")
@@ -248,6 +254,20 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert stored.agent_run_id == "task-1"
     assert stored.container_id == "ctr-1"
     assert stored.runtime_id == "codex_cli"
+    container_jobs = stored.metadata["capabilities"]["containerJobs"]
+    assert container_jobs == {
+        "available": True,
+        "transport": "moonmind-mcp",
+        "backendKind": "docker-engine",
+        "workspace": {"kind": "moonmind-session", "sessionId": "sess-1"},
+        "tools": [
+            "container.submit",
+            "container.status",
+            "container.logs",
+            "container.artifacts",
+            "container.cancel",
+        ],
+    }
     session_supervisor.start.assert_awaited_once()
     assert [
         call.kwargs["kind"]
@@ -789,7 +809,9 @@ async def test_mm866_explicit_docker_denial_does_not_inherit_unrestricted_proxy(
     rendered = " ".join(run_command)
     assert "DOCKER_HOST=" not in rendered
     assert "SYSTEM_DOCKER_HOST=" not in rendered
-    assert not any(command[:3] == ("docker", "network", "connect") for command in commands)
+    assert not any(
+        command[:3] == ("docker", "network", "connect") for command in commands
+    )
 
 @pytest.mark.asyncio
 async def test_controller_removes_named_container_when_docker_run_returns_blank(
@@ -1298,7 +1320,7 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     assert "local-network" in run_command
 
 @pytest.mark.asyncio
-async def test_mm784_no_docker_session_rejects_unrestricted_docker_proxy(
+async def test_no_docker_session_ignores_unrestricted_docker_proxy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1362,10 +1384,15 @@ async def test_mm784_no_docker_session_rejects_unrestricted_docker_proxy(
         ready_poll_interval_seconds=0,
     )
 
-    with pytest.raises(RuntimeError, match="MM-784 per-runtime Docker policy denied"):
-        await controller.launch_session(request)
+    await controller.launch_session(request)
 
-    assert not any(command[:2] == ("docker", "run") for command in commands)
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
+    assert "docker-proxy-test" not in run_command
+    assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
+    assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
+    assert not any(command[:3] == ("docker", "network", "connect") for command in commands)
 
 @pytest.mark.asyncio
 async def test_mm784_request_unrestricted_mode_uses_sidecar_policy(
