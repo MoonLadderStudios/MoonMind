@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.db.models import Base
 from api_service.services.container_jobs import (
     ContainerJobAuthorizationError,
+    ContainerJobEvidenceUnavailableError,
     ContainerJobIdempotencyConflictError,
     ContainerJobNotFoundError,
     ContainerJobService,
+    owner_artifact_principal,
 )
 from api_service.services.registry_authorization import (
     PrivateImageAuthorizationPolicy,
@@ -20,12 +22,41 @@ from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobCancelRequest,
     ContainerJobFailureClass,
+    ContainerJobLogQuery,
     ContainerJobState,
     ContainerJobSubmitRequest,
     ImageObservation,
     OwnerIdentity,
     TerminalOutcome,
 )
+
+
+class _FakeArtifact:
+    def __init__(self, *, sha256=None, size_bytes=None, metadata_json=None):
+        self.sha256 = sha256
+        self.size_bytes = size_bytes
+        self.metadata_json = metadata_json or {}
+
+
+class _FakeArtifactReader:
+    """Minimal stand-in for TemporalArtifactService reads."""
+
+    def __init__(self, *, blobs=None, artifacts=None):
+        self._blobs = blobs or {}
+        self._artifacts = artifacts or {}
+        self.read_principals: list[str] = []
+
+    async def read(self, *, artifact_id, principal, allow_restricted_raw=False):
+        self.read_principals.append(principal)
+        if artifact_id not in self._blobs:
+            raise KeyError(artifact_id)
+        return self._artifacts.get(artifact_id, _FakeArtifact()), self._blobs[artifact_id]
+
+    async def get_metadata(self, *, artifact_id, principal):
+        self.read_principals.append(principal)
+        if artifact_id not in self._artifacts:
+            raise KeyError(artifact_id)
+        return self._artifacts[artifact_id], [], False, None
 
 
 @pytest_asyncio.fixture
@@ -255,3 +286,108 @@ async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temp
         assert not terminal.accepted and terminal.state == "succeeded"
         with pytest.raises(ContainerJobNotFoundError):
             await service.cancel(owner=OwnerIdentity(principalId="other", principalType="user"), job_id=accepted.job_id, request=request)
+
+
+@pytest.mark.asyncio
+async def test_logs_return_bounded_owner_scoped_pages(session_factory, temporal) -> None:
+    owner = OwnerIdentity(principalId="log-owner", principalType="user")
+    payload = b"line-0\nline-1\nline-2\n[stderr]\nerr-0\n"
+    reader = _FakeArtifactReader(blobs={"artifact://logs": payload})
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, artifacts=reader)
+        accepted = await service.submit(owner=owner, request=submission())
+
+        empty = await service.logs(owner=owner, job_id=accepted.job_id)
+        assert empty.entries == [] and empty.next_cursor is None
+
+        await service.repository.record_observation(
+            owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED,
+            logs_ref="artifact://logs",
+        )
+        first = await service.logs(
+            owner=owner, job_id=accepted.job_id, query=ContainerJobLogQuery(limit=2)
+        )
+        assert [e.text for e in first.entries] == ["line-0", "line-1"]
+        assert first.entries[0].stream == "stdout"
+        assert first.next_cursor == "2"
+
+        rest = await service.logs(
+            owner=owner, job_id=accepted.job_id,
+            query=ContainerJobLogQuery(cursor=first.next_cursor, limit=100),
+        )
+        assert [e.text for e in rest.entries] == ["line-2", "[stderr]", "err-0"]
+        assert rest.entries[-1].stream == "stderr"
+        assert rest.next_cursor is None
+        # Reads use the same artifact principal the workflow published under.
+        assert reader.read_principals == [owner_artifact_principal(owner)] * 2
+
+        with pytest.raises(ValueError, match="valid offset"):
+            await service.logs(
+                owner=owner,
+                job_id=accepted.job_id,
+                query=ContainerJobLogQuery(cursor="abc"),
+            )
+        with pytest.raises(ValueError, match="non-negative"):
+            await service.logs(
+                owner=owner,
+                job_id=accepted.job_id,
+                query=ContainerJobLogQuery(cursor="-1"),
+            )
+
+        with pytest.raises(ContainerJobNotFoundError):
+            await service.logs(
+                owner=OwnerIdentity(principalId="intruder", principalType="user"),
+                job_id=accepted.job_id,
+            )
+
+
+@pytest.mark.asyncio
+async def test_artifacts_return_references_and_publication(session_factory, temporal) -> None:
+    owner = OwnerIdentity(principalId="art-owner", principalType="user")
+    sha = "a" * 64
+    reader = _FakeArtifactReader(
+        artifacts={
+            "artifact://outputs": _FakeArtifact(
+                sha256=sha, size_bytes=42, metadata_json={"name": "outputs.tar.gz"}
+            )
+        }
+    )
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, artifacts=reader)
+        accepted = await service.submit(owner=owner, request=submission())
+
+        none_yet = await service.artifacts(owner=owner, job_id=accepted.job_id)
+        assert none_yet.artifacts == [] and none_yet.publication.state == "not_attempted"
+
+        await service.repository.record_observation(
+            owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED,
+            publication=AuxiliaryOutcome(state="succeeded"),
+            artifacts_ref="artifact://outputs",
+        )
+        page = await service.artifacts(owner=owner, job_id=accepted.job_id)
+        assert page.publication.state == "succeeded"
+        assert len(page.artifacts) == 1
+        entry = page.artifacts[0]
+        assert entry.artifact_ref == "artifact://outputs"
+        assert entry.size_bytes == 42 and entry.sha256 == sha
+        assert entry.name == "outputs.tar.gz"
+        assert reader.read_principals == [owner_artifact_principal(owner)]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_or_missing_evidence_raises_stable_error(session_factory, temporal) -> None:
+    owner = OwnerIdentity(principalId="ev-owner", principalType="user")
+    reader = _FakeArtifactReader(
+        artifacts={"artifact://outputs": _FakeArtifact(sha256=None, size_bytes=None)}
+    )
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal, artifacts=reader)
+        accepted = await service.submit(owner=owner, request=submission())
+        await service.repository.record_observation(
+            owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED,
+            logs_ref="artifact://missing", artifacts_ref="artifact://outputs",
+        )
+        with pytest.raises(ContainerJobEvidenceUnavailableError):
+            await service.logs(owner=owner, job_id=accepted.job_id)
+        with pytest.raises(ContainerJobEvidenceUnavailableError):
+            await service.artifacts(owner=owner, job_id=accepted.job_id)

@@ -294,6 +294,24 @@ Docker CLI execution remains an explicitly gated internal escape hatch.
 `container.run_docker` is not a normal Omnigent or managed-session MCP tool and
 never grants its caller direct daemon access.
 
+### 7.7 Transport surface and readiness
+
+Both transports call one API-owned `ContainerJobService`; neither executes
+Docker nor waits for terminal completion.
+
+- HTTP: `POST /api/v1/container-jobs` (submit), `GET /api/v1/container-jobs/{jobId}`
+  (status), `GET .../{jobId}/logs`, `GET .../{jobId}/artifacts`, and
+  `POST .../{jobId}/cancel`. All are authenticated and owner-scoped.
+- MCP: the five `container.*` tools are dispatched to the same service, and
+  `tools/list` advertises them only when the surface is enabled and ready.
+- Readiness/feature gate: `MOONMIND_CONTAINER_JOBS_ENABLED` (default off).
+  When disabled, MCP discovery omits the tools and both transports return the
+  `backend_unavailable` error until the Docker backend and worker routes are
+  provisioned.
+- Errors use stable machine-readable codes shared by both transports:
+  `invalid_request`, `job_not_found`, `idempotency_conflict`,
+  `evidence_unavailable`, and `backend_unavailable`.
+
 ---
 
 ## 8. Container-job request contract
