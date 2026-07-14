@@ -13992,6 +13992,7 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
             "branch": "feature/resume",
             "commit": "abc123",
             "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -14096,6 +14097,7 @@ def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
         ],
         "recoveryWorkspace": {
             "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -14190,7 +14192,8 @@ def test_selected_step_recovery_pins_source_and_selected_step(
             }
         ],
         "recoveryWorkspace": {
-            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1"
+            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
