@@ -2619,6 +2619,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     ),
                     evidence_publisher=_container_job_evidence_publisher(artifact_service),
                     projection_writer=_container_job_projection_writer,
+                    managed_run_store=run_store,
                 ),
             )
             register_workload_tool_handlers(

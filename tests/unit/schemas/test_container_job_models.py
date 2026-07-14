@@ -14,6 +14,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobState,
     ContainerJobStatus,
     ContainerJobSubmitRequest,
+    ContainerJobWorkflowInput,
     ImageObservation,
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
@@ -193,6 +194,28 @@ def test_workspace_ref_rejects_incompatible_or_unsafe_locators(
     data["spec"]["workspaceRef"] = workspace_ref
     with pytest.raises(ValidationError):
         ContainerJobSubmitRequest.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "legacy,expected",
+    [
+        ({"kind": "artifact-workspace", "artifactRef": "ws"}, "ws"),
+        ({"kind": "moonmind-session", "sessionId": "session-1"}, "session-1"),
+    ],
+)
+def test_workflow_v1_normalizes_legacy_workspace_locators_only_at_temporal_boundary(
+    legacy: dict, expected: str
+) -> None:
+    data = {
+        "jobId": "container-job:0123456789abcdef0123456789abcdef",
+        "request": payload(),
+    }
+    data["request"]["spec"]["workspaceRef"] = legacy
+    parsed = ContainerJobWorkflowInput.model_validate(data)
+    assert parsed.request.spec.workspace_ref.kind == "external_state"
+    assert parsed.request.spec.workspace_ref.artifact_ref == expected
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data["request"])
 
 
 def test_documented_container_job_wire_values_are_accepted() -> None:

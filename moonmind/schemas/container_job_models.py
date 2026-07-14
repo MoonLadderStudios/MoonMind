@@ -334,6 +334,44 @@ class ContainerJobWorkflowInput(TemporalContractModel):
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_v1_workspace_locator(cls, value: Any) -> Any:
+        """Keep already-recorded v1 workflow histories decodable at the boundary."""
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        request = payload.get("request")
+        if not isinstance(request, dict):
+            return payload
+        request = dict(request)
+        spec = request.get("spec")
+        if not isinstance(spec, dict):
+            return payload
+        spec = dict(spec)
+        locator = spec.get("workspaceRef")
+        if not isinstance(locator, dict):
+            return payload
+        kind = locator.get("kind")
+        if kind == "artifact-workspace" and locator.get("artifactRef"):
+            spec["workspaceRef"] = {
+                "kind": "external_state",
+                "artifactRef": locator["artifactRef"],
+            }
+        elif kind in {"moonmind-session", "omnigent-session"} and locator.get(
+            "sessionId"
+        ):
+            # The v1 backend resolved these opaque identities directly below its
+            # authority root. External-state preserves that legacy resolution
+            # without admitting the superseded vocabulary to new submissions.
+            spec["workspaceRef"] = {
+                "kind": "external_state",
+                "artifactRef": locator["sessionId"],
+            }
+        request["spec"] = spec
+        payload["request"] = request
+        return payload
+
     @property
     def ownership_token(self) -> str:
         return f"{self.job_id}:{self.contract_version}"
