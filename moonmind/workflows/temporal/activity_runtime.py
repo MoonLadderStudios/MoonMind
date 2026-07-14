@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -281,31 +281,6 @@ _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
-
-
-class _HashingArchiveReader:
-    """Wrap a file object so ``tarfile`` streaming also produces its digest.
-
-    ``tarfile.addfile`` copies the wrapped file into the archive one block at a
-    time via ``read``. Feeding those same blocks into the hash lets us record a
-    SHA-256 for each archived file in a single streaming pass, instead of
-    reading the whole file a second time. That avoids the duplicate disk I/O and
-    keeps peak memory bounded by the block size rather than the largest file in
-    the worktree.
-    """
-
-    def __init__(self, file_handle: BinaryIO) -> None:
-        self._file_handle = file_handle
-        self._hash = hashlib.sha256()
-
-    def read(self, size: int = -1) -> bytes:
-        chunk = self._file_handle.read(size)
-        if chunk:
-            self._hash.update(chunk)
-        return chunk
-
-    def hexdigest(self) -> str:
-        return self._hash.hexdigest()
 
 
 class PentestWorkloadHandle(Protocol):
@@ -1405,15 +1380,15 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_cleanup_managed_runtime_files",
     ),
+    "agent_runtime.restore_workspace_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_restore_workspace_checkpoint",
+    ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.publish_terminal_checkpoint": (
         "agent_runtime",
         "agent_runtime_publish_terminal_checkpoint",
-    ),
-    "agent_runtime.restore_workspace_checkpoint": (
-        "agent_runtime",
-        "agent_runtime_restore_workspace_checkpoint",
     ),
     "agent_runtime.evaluate_terminal_evidence": (
         "agent_runtime",
@@ -3465,36 +3440,53 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
-            archive_payload, archived_entries = self._build_worktree_archive(workspace)
+            archive_payload, entries = self._build_worktree_archive(workspace)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
                 metadata={"artifact_kind": "checkpoint_archive"},
             )
+            manifest_body: dict[str, Any] = {
+                "schemaVersion": "v1",
+                "kind": "worktree_archive",
+                "baseCommit": model.base_commit,
+                "archiveRef": archive_ref,
+                "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                "entries": entries,
+                "pathCount": len(entries),
+            }
+            # ``gitStatusDigest`` lets restore cross-check the worktree's staged and
+            # untracked state, but only a git worktree exposes one. A non-git
+            # workspace still produces a valid archive + manifest; it simply omits
+            # the optional digest (restore already treats it as optional).
+            if (workspace / ".git").exists():
+                status = await _run_command(
+                    ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                    cwd=str(workspace),
+                )
+                manifest_body["gitStatusDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(status.stdout.encode("utf-8")).hexdigest()
+                )
+            manifest_payload = _json_bytes(manifest_body)
             manifest_ref = await self._put_checkpoint_bytes(
-                _json_bytes(
-                    {
-                        "kind": "worktree_archive",
-                        "archiveRef": archive_ref,
-                        "pathCount": len(archived_entries),
-                        "entries": archived_entries,
-                    }
-                ),
+                manifest_payload,
                 content_type="application/json",
                 metadata={"artifact_kind": "checkpoint_manifest"},
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="worktree_archive",
+                baseCommit=model.base_commit,
                 archiveRef=archive_ref,
+                archiveDigest="sha256:" + hashlib.sha256(archive_payload).hexdigest(),
                 manifestRef=manifest_ref,
+                manifestDigest="sha256:" + hashlib.sha256(manifest_payload).hexdigest(),
                 createdAt=datetime.now(UTC),
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(
-        self, workspace: Path
-    ) -> tuple[bytes, list[dict[str, Any]]]:
-        archived_entries: list[dict[str, Any]] = []
+    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[dict[str, Any]]]:
+        entries: list[dict[str, Any]] = []
         output = BytesIO()
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for path in sorted(workspace.rglob("*")):
@@ -3520,33 +3512,31 @@ class TemporalSandboxActivities:
                     info.uname = "moonmind"
                     info.gname = "moonmind"
                     archive.addfile(info)
-                    archived_entries.append(
-                        {
-                            "path": str(relative),
-                            "kind": "symlink",
-                            "mode": info.mode,
-                            "target": os.readlink(path),
-                        }
-                    )
+                    entries.append({
+                        "path": str(relative), "type": "symlink",
+                        "target": os.readlink(path),
+                        "mode": format(stat.S_IMODE(path.lstat().st_mode), "04o"),
+                    })
                     continue
                 info = archive.gettarinfo(str(path), arcname=str(relative))
                 info.uid = _MANAGED_AGENT_UID
                 info.gid = _MANAGED_AGENT_GID
                 info.uname = "moonmind"
                 info.gname = "moonmind"
-                with path.open("rb") as file_handle:
-                    hashing_reader = _HashingArchiveReader(file_handle)
-                    archive.addfile(info, hashing_reader)
-                archived_entries.append(
-                    {
-                        "path": str(relative),
-                        "kind": "file",
-                        "mode": info.mode,
-                        "sha256": hashing_reader.hexdigest(),
-                        "size": info.size,
-                    }
-                )
-        return output.getvalue(), archived_entries
+                # Read the file exactly once and reuse the bytes for both the
+                # archive payload and the manifest digest. Setting info.size from
+                # the read payload also keeps the tar header consistent if the
+                # file changed between gettarinfo() and this read.
+                payload = path.read_bytes()
+                info.size = len(payload)
+                archive.addfile(info, BytesIO(payload))
+                entries.append({
+                    "path": str(relative), "type": "file",
+                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                    "bytes": len(payload),
+                    "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
+                })
+        return output.getvalue(), entries
 
     async def workspace_apply_policy(
         self,
@@ -6832,6 +6822,15 @@ class TemporalAgentRuntimeActivities:
             or TemporalPentestProviderLeaseManager(client_adapter)
         )
         self._supervision_tasks: set[asyncio.Task] = set()
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
+        )
+
+        self._checkpoint_restore = ManagedCheckpointRestoreService(
+            authority_root=os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            artifact_service=artifact_service,
+            run_store=run_store,
+        )
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
         # Pentest-specific activity logic lives in a dedicated module/class.
         # Imported lazily to avoid an import cycle (that module imports this one).
@@ -6840,6 +6839,39 @@ class TemporalAgentRuntimeActivities:
         )
 
         self._pentest_activities = TemporalPentestActivities(self)
+
+    async def agent_runtime_restore_workspace_checkpoint(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Restore and verify a cold checkpoint before any agent is launched."""
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+        try:
+            # Restore performs clone/extract/hash/rename work that can exceed the
+            # activity heartbeat timeout on large archives or slow clones.
+            # Heartbeat while it runs so Temporal does not time out and retry an
+            # attempt that may still be mutating the destination. Outside an
+            # activity context this simply awaits the coroutine.
+            return await _await_with_activity_heartbeats(
+                self._checkpoint_restore.restore(request),
+                heartbeat_payload={
+                    "activity": "agent_runtime.restore_workspace_checkpoint"
+                },
+            )
+        except CheckpointRestoreError as exc:
+            # CheckpointRestoreError is a plain RuntimeError, so Temporal would
+            # record type="CheckpointRestoreError" and the catalog's
+            # non_retryable_error_types (keyed on the stable failure codes) would
+            # never match, retrying deterministic failures up to the attempt cap.
+            # Re-raise as an ApplicationError whose type is the failure code and
+            # mark it non-retryable unless the envelope recommends a retry.
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.code,
+                non_retryable=(
+                    exc.failure_envelope.get("retryRecommendation") != "retry"
+                ),
+            ) from exc
 
     async def agent_runtime_capture_workspace_checkpoint(
         self, request: Mapping[str, Any] | ManagedWorkspaceCheckpointCaptureInput
@@ -7591,6 +7623,35 @@ class TemporalAgentRuntimeActivities:
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
+        # Whether a resume must restore a workspace checkpoint is decided and
+        # enforced at the authoritative RunWorkflow ``before_recovery_restoration``
+        # boundary, which runs the restore activity before the failed step re-runs.
+        # The real resume payloads carry that decision under
+        # ``parameters["recoverySource"]`` / ``parameters["workflow"]["resume"]`` —
+        # never as a top-level ``recoveryMode == "resume_from_workspace_checkpoint"``
+        # sentinel (that value is produced nowhere), so the former sentinel gate
+        # was dead. When the restoration producer supplies verified evidence in the
+        # launch payload, verify it here as defense-in-depth before the agent
+        # starts.
+        restoration_requirement = payload.get("restoration_requirement")
+        if restoration_requirement is not None:
+            if not isinstance(restoration_requirement, Mapping):
+                raise TemporalActivityRuntimeError("restoration_requirement must be a mapping")
+            self._checkpoint_restore.assert_ready_for_launch(
+                agent_run_id=str(run_id),
+                checkpoint_ref=str(restoration_requirement.get("checkpointRef") or ""),
+                capability_digest=str(restoration_requirement.get("capabilityDigest") or ""),
+            )
+            expected_workspace = (
+                self._checkpoint_restore.root / str(run_id) / "repo"
+            ).resolve()
+            if workspace_path is None or Path(workspace_path).resolve() != expected_workspace:
+                from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                    "launch workspace does not match the verified restored destination",
+                )
 
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else {}
         ref = env_overrides.pop("MANAGED_API_KEY_REF", None)
@@ -10785,73 +10846,6 @@ class TemporalAgentRuntimeActivities:
             metadata=managed_run_status_metadata(record),
         )
         return status
-
-    async def agent_runtime_restore_workspace_checkpoint(
-        self,
-        request: Mapping[str, Any],
-        /,
-    ) -> dict[str, Any]:
-        """Restore a captured worktree archive into its managed-run identity."""
-        if self._artifact_service is None or self._run_launcher is None:
-            raise TemporalActivityRuntimeError(
-                "artifact service and managed runtime launcher are required for restore"
-            )
-        checkpoint_ref = str(request.get("checkpointRef") or "").strip()
-        destination_id = str(request.get("destinationAgentRunId") or "").strip()
-        runtime_id = str(request.get("targetRuntimeId") or "").strip()
-        if not checkpoint_ref or not destination_id or not runtime_id:
-            raise TemporalActivityRuntimeError(
-                "checkpointRef, destinationAgentRunId, and targetRuntimeId are required"
-            )
-        _artifact, checkpoint_payload = await self._artifact_service.read(
-            artifact_id=checkpoint_ref,
-            principal="system",
-            allow_restricted_raw=True,
-        )
-        checkpoint = json.loads(checkpoint_payload.decode("utf-8"))
-        workspace = checkpoint.get("workspace") if isinstance(checkpoint, dict) else None
-        if not isinstance(workspace, dict) or workspace.get("kind") != "worktree_archive":
-            raise TemporalActivityRuntimeError(
-                "managed checkpoint restore requires worktree_archive evidence"
-            )
-        archive_ref = str(workspace.get("archiveRef") or "").strip()
-        if not archive_ref:
-            raise TemporalActivityRuntimeError("checkpoint archive evidence is missing")
-        _archive, archive_payload = await self._artifact_service.read(
-            artifact_id=archive_ref,
-            principal="system",
-            allow_restricted_raw=True,
-        )
-        target = (self._run_launcher._workspace_root() / destination_id / "repo").resolve()
-        authority = self._run_launcher._workspace_root().resolve()
-        if not target.is_relative_to(authority):
-            raise TemporalActivityRuntimeError("destination workspace escapes authority")
-        staging = target.parent / ".repo.restore"
-        if staging.exists():
-            shutil.rmtree(staging)
-        staging.mkdir(parents=True)
-        with tarfile.open(fileobj=BytesIO(archive_payload), mode="r:gz") as archive:
-            for member in archive.getmembers():
-                member_path = (staging / member.name).resolve()
-                if not member_path.is_relative_to(staging):
-                    raise TemporalActivityRuntimeError("workspace archive member escapes workspace")
-            archive.extractall(staging, filter="data")
-        if target.exists():
-            shutil.rmtree(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        staging.replace(target)
-        digest = hashlib.sha256(archive_payload).hexdigest()
-        return {
-            "status": "succeeded",
-            "destinationWorkspaceLocator": {
-                "kind": "managed_runtime",
-                "runtimeId": runtime_id,
-                "agentRunId": destination_id,
-                "relativePath": "repo",
-            },
-            "restorationEvidenceRef": archive_ref,
-            "restorationEvidenceDigest": f"sha256:{digest}",
-        }
 
     async def agent_runtime_publish_terminal_checkpoint(
         self,

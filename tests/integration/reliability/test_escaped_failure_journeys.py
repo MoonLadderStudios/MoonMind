@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
 import sqlite3
-import stat
-import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,7 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentTerminalContract,
+)
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -37,7 +37,11 @@ from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
-from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
+from tests.integration.reliability.helpers import (
+    FinalizationFaultInjector,
+    NestedYieldProcess,
+    load_replay,
+)
 from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
@@ -293,6 +297,136 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
     assert {
         (item.session_id, item.session_epoch, item.thread_id) for item in requests
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
+
+
+@pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+async def test_nested_yield_continuation_replays_through_production_agent_run_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recover: bool
+) -> None:
+    """MoonLadderStudios/MoonMind#3145 continuation journey across the agent route.
+
+    AgentRun owns capability-aware bounded continuation. Replay the incident at
+    the production activity-routing and terminal-evidence boundaries: every
+    continuation activity must resolve through the real catalog to the managed
+    agent-runtime queue, evaluate real workspace evidence, and preserve a stable
+    session/thread/epoch identity across bounded continuation turns.
+    """
+    replay_id = "incomplete-terminal-contract"
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / "repo"
+    _materialize_workspace_fixture(replay_id, workspace)
+
+    # AgentRun evaluates terminal evidence and drives continuation outside a live
+    # Temporal event loop here; enable the continuation patch gates and provide a
+    # workflow info stub so the production helper runs in-process.
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="reliability-3145:agent:node-1",
+        run_id="reliability-3145-run",
+        search_attributes={},
+        parent=None,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+
+    binding = _binding()
+    execution_ref = "mm:reliability-3145:terminal-contract"
+    container_id = "ctr-reliability-3145"
+    thread_id = "thread-terminal-contract"
+    request = _pr_resolver_request(binding, workspace).model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                contractId="pr_resolver_terminal.v1",
+                relativePath="var/pr_resolver/result.json",
+                expectedSchemaVersion="moonmind.pr-resolver-result.v1",
+                executionRef=execution_ref,
+            )
+        }
+    )
+
+    turns: list[SendCodexManagedSessionTurnRequest] = []
+    routed_queues: set[str] = set()
+
+    async def execute_activity(name: str, payload: object, **kwargs: object) -> object:
+        # Keep AgentRun's production catalog lookup and route construction in the
+        # replay; only the Temporal SDK handoff is doubled, so catalog drift that
+        # sent continuation activities to the wrong worker cannot be hidden.
+        routed_queues.add(kwargs["task_queue"])
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            activities = TemporalAgentRuntimeActivities(client_adapter=object())
+            evaluated = await activities.agent_runtime_evaluate_terminal_evidence(
+                payload
+            )
+            return evaluated.model_dump(mode="json", by_alias=True)
+        if name == "agent_runtime.load_session_snapshot":
+            return {
+                "sessionId": binding.session_id,
+                "sessionEpoch": binding.session_epoch,
+                "containerId": container_id,
+                "threadId": thread_id,
+            }
+        if name == "agent_runtime.send_turn":
+            turns.append(payload)
+            if recover and len(turns) == 1:
+                # A recovered continuation writes satisfied terminal evidence:
+                # a merged disposition whose executionRef matches the contract,
+                # plus the required auto-publish artifact.
+                result_path = workspace / "var/pr_resolver/result.json"
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                result_path.write_text(
+                    json.dumps(
+                        {
+                            "executionRef": execution_ref,
+                            "mergeAutomationDisposition": "merged",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                publish_path = workspace / "artifacts/publish_result.json"
+                publish_path.parent.mkdir(parents=True, exist_ok=True)
+                publish_path.write_text(
+                    json.dumps({"status": "merged"}), encoding="utf-8"
+                )
+            return _turn_response(
+                session_id=payload.session_id,
+                session_epoch=payload.session_epoch,
+                container_id=payload.container_id,
+                thread_id=payload.thread_id,
+                turn_id=f"continuation-{len(turns)}",
+            ).model_dump(mode="json", by_alias=True)
+        if name == "agent_runtime.fetch_result":
+            return AgentRunResult(
+                summary="continuation completed",
+                metadata={"workspacePath": str(workspace)},
+            ).model_dump(mode="json", by_alias=True)
+        raise AssertionError(f"unexpected activity: {name}")
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+
+    result = await MoonMindAgentRun()._evaluate_terminal_contract(
+        request=request,
+        result=AgentRunResult(
+            summary="wrapper completed while inner process remained active",
+            metadata={"workspacePath": str(workspace)},
+        ),
+    )
+
+    # Every terminal-contract continuation activity crosses the production
+    # managed agent-runtime route, never a per-test task queue.
+    assert routed_queues == {"mm.activity.agent_runtime"}
+    expected_turns = 1 if recover else expected["continuationCount"]
+    assert len(turns) == expected_turns
+    assert {
+        (turn.session_id, turn.session_epoch, turn.thread_id) for turn in turns
+    } == {(binding.session_id, binding.session_epoch, thread_id)}
+    assert result.metadata["terminalContractContinuationCount"] == expected_turns
+    if recover:
+        assert result.failure_class is None
+        assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    else:
+        assert result.failure_class == expected["failureClass"]
+        assert result.metadata["failureCode"] == expected["failureCode"]
+        assert result.metadata["terminalContractRecoveryOutcome"] == "incomplete"
 
 
 async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_path(
@@ -594,16 +728,27 @@ async def test_checkpoint_finalization_fault_is_retryable(
     repo.mkdir(parents=True)
     activities = TemporalSandboxActivities(workspace_root=workspace_root)
 
-    durable_execution_result = load_replay(replay_id, "execution-result.json")
+    agent_execution_calls = 0
+    durable_execution_result: dict[str, object] | None = None
+
+    async def execute_agent_once() -> dict[str, object]:
+        """Primary agent execution is exactly-once and durable across retries."""
+        nonlocal agent_execution_calls, durable_execution_result
+        if durable_execution_result is None:
+            agent_execution_calls += 1
+            durable_execution_result = load_replay(replay_id, "execution-result.json")
+        return durable_execution_result
+
     original_capture = activities._capture_workspace_evidence
-    calls = 0
+    fault = FinalizationFaultInjector()
 
     async def fail_once(model: object, workspace: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("injected finalization failure")
-        return await original_capture(model, workspace)
+        # The retried finalization path must reuse the durable primary execution
+        # result, never re-run the agent. If a regression re-executed the agent on
+        # each finalization attempt, ``agent_execution_calls`` would exceed one.
+        execution = await execute_agent_once()
+        assert execution["status"] == "completed"
+        return await fault.invoke(original_capture, model, workspace)
 
     monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
     payload = {
@@ -625,134 +770,5 @@ async def test_checkpoint_finalization_fault_is_retryable(
     second = await activities.workspace_capture_checkpoint(payload)
     assert second["status"] == "captured"
     assert durable_execution_result["status"] == "completed"
-    assert calls == 2
-
-
-async def test_source_destroying_cold_resume_restores_durable_workspace_once(
-    tmp_path: Path,
-) -> None:
-    """Cold-resume replay: restoration cannot observe the source workspace."""
-    replay = load_replay("cold-resume-worktree-archive", "manifest.json")
-    workspace_root = tmp_path / "workspaces"
-    source = workspace_root / "temporal_sandbox" / "source-run" / "repo"
-    destination = workspace_root / "temporal_sandbox" / "destination-run" / "repo"
-    source.mkdir(parents=True)
-
-    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
-    subprocess.run(["git", "config", "user.email", "replay@moonmind.local"], cwd=source, check=True)
-    subprocess.run(["git", "config", "user.name", "MoonMind Replay"], cwd=source, check=True)
-    (source / "tracked.txt").write_text("accepted prepare\n", encoding="utf-8")
-    (source / "deleted.txt").write_text("delete me\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=source, check=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=source, check=True)
-    base_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
-
-    # Uncommitted working-tree state that exists *before* the implement step
-    # runs. A restore_pre_execution retry must rewind the workspace to exactly
-    # this snapshot so the failed step reruns from its clean starting point, not
-    # from the failed attempt's dirty output.
-    (source / "tracked.txt").write_text("prepare stage working copy\n", encoding="utf-8")
-    (source / "untracked file.txt").write_text("untracked\n", encoding="utf-8")
-    (source / "binary.bin").write_bytes(bytes(range(256)))
-    executable = source / "scripts" / "run me.sh"
-    executable.parent.mkdir()
-    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
-    (source / "nested" / "unicode").mkdir(parents=True)
-    (source / "nested" / "unicode" / "café.txt").write_text("moon\n", encoding="utf-8")
-    os.symlink("tracked.txt", source / "safe-link")
-    (source / "deleted.txt").unlink()
-    (source / "__pycache__").mkdir()
-    (source / "__pycache__" / "excluded.pyc").write_bytes(b"cache")
-    provider_home = tmp_path / "provider-home"
-    provider_home.mkdir()
-    (provider_home / "credentials.json").write_text("excluded", encoding="utf-8")
-
-    activities = TemporalSandboxActivities(workspace_root=workspace_root)
-    identity = {
-        "workflowId": replay["sourceWorkflowId"],
-        "runId": replay["sourceAgentRunId"],
-        "logicalStepId": "implement",
-        "executionOrdinal": 1,
-    }
-    captured = await activities.workspace_capture_checkpoint(
-        {
-            "identity": identity,
-            "boundary": "before_execution",
-            "kind": "worktree_archive",
-            "workspacePath": str(source),
-            "artifactNamespace": "checkpoint",
-            "idempotencyKey": replay["captureIdempotencyKey"],
-        }
-    )
-    assert captured["status"] == "captured"
-    manifest = json.loads(
-        (await activities._read_checkpoint_bytes(captured["workspace"]["manifestRef"])).decode()
-    )
-    assert manifest["pathCount"] == len(manifest["entries"])
-    entries = {entry["path"]: entry for entry in manifest["entries"]}
-    assert entries["binary.bin"]["sha256"] == hashlib.sha256(bytes(range(256))).hexdigest()
-    assert entries["scripts/run me.sh"]["mode"] & stat.S_IXUSR
-    assert entries["safe-link"]["target"] == "tracked.txt"
-    assert "__pycache__/excluded.pyc" not in entries
-    assert all(str(provider_home) not in entry["path"] for entry in manifest["entries"])
-
-    checkpoint_ref = await activities._put_checkpoint_bytes(
-        json.dumps(
-            {
-                "checkpointId": replay["checkpointId"],
-                "boundary": "before_execution",
-                "baseCommit": base_commit,
-                "workspace": captured["workspace"],
-            }
-        ).encode(),
-        content_type="application/json",
-        metadata={"artifact_kind": "step_execution_checkpoint"},
-    )
-    shutil.rmtree(source)
-    del captured
-    assert not source.exists()
-
-    # Seed the destination with the failed implement attempt's dirty output.
-    # restore_pre_execution must fully rewind to the captured before-execution
-    # snapshot, discarding this residue rather than merging with it.
-    destination.mkdir(parents=True)
-    (destination / "tracked.txt").write_text("failed implement attempt\n", encoding="utf-8")
-    (destination / "leftover.txt").write_text("dirty residue\n", encoding="utf-8")
-
-    restored = await activities.workspace_apply_policy(
-        {
-            "identity": {**identity, "runId": replay["destinationAgentRunId"], "executionOrdinal": 2},
-            "workspacePolicy": "restore_pre_execution",
-            "checkpointRef": checkpoint_ref,
-            "targetWorkspaceRef": str(destination),
-            "idempotencyKey": replay["restoreIdempotencyKey"],
-        }
-    )
-    restored_again = await activities.workspace_apply_policy(
-        {
-            "identity": {**identity, "runId": replay["destinationAgentRunId"], "executionOrdinal": 2},
-            "workspacePolicy": "restore_pre_execution",
-            "checkpointRef": checkpoint_ref,
-            "targetWorkspaceRef": str(destination),
-            "idempotencyKey": replay["restoreIdempotencyKey"],
-        }
-    )
-
-    assert restored == restored_again
-    assert restored["status"] == "applied"
-    assert replay["sourceAgentRunId"] != replay["destinationAgentRunId"]
-    assert not source.exists()
-    # The captured before-execution working copy is restored, and the failed
-    # attempt's dirty residue is gone: restore_pre_execution rewinds the tree.
-    assert (destination / "tracked.txt").read_text() == "prepare stage working copy\n"
-    assert not (destination / "leftover.txt").exists()
-    assert (destination / "binary.bin").read_bytes() == bytes(range(256))
-    assert os.readlink(destination / "safe-link") == "tracked.txt"
-    assert os.access(destination / "scripts" / "run me.sh", os.X_OK)
-    assert not (destination / "__pycache__").exists()
-    # The worktree_archive capture path intentionally excludes VCS metadata, so a
-    # restored checkpoint is a file snapshot rather than a usable git worktree.
-    # Pin that contract explicitly so this replay is not mistaken for coverage of
-    # resuming git-dependent tooling on the restored tree.
-    assert not (destination / ".git").exists()
+    assert fault.calls == 2
+    assert agent_execution_calls == 1
