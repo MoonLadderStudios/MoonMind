@@ -763,7 +763,10 @@ class DockerContainerJobBackend:
         name = self._name(request)
         ownership = await self._reject_ownership_collision(request, name)
         if ownership is None:
-            return ContainerJobActivityResult(containerRef=name, running=False)
+            # Absence must remain absence across the workflow boundary.  A
+            # synthetic ref here makes the workflow treat the container as a
+            # reconciled prior attempt and skip the authoritative create step.
+            return ContainerJobActivityResult(running=False)
         code, stdout, _ = await self._runner(
             ("inspect", "--format", "{{.State.Running}}", name)
         )
