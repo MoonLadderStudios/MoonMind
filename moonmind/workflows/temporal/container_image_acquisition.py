@@ -39,7 +39,7 @@ _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 _TERMINAL_IMAGE_FAILURES: frozenset[ContainerJobFailureClass] = frozenset(
     {
         ContainerJobFailureClass.IMAGE_NOT_FOUND,
-        ContainerJobFailureClass.IMAGE_AUTH_FAILED,
+        ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED,
         ContainerJobFailureClass.IMAGE_PLATFORM_MISMATCH,
     }
 )
@@ -166,7 +166,7 @@ def classify_pull_failure(stderr: str) -> ContainerJobFailureClass:
         token in text
         for token in ("unauthorized", "authentication required", "docker login", "denied")
     ):
-        return ContainerJobFailureClass.IMAGE_AUTH_FAILED
+        return ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
     if any(
         token in text
         for token in (
@@ -260,6 +260,7 @@ class FilesystemImageAcquisitionLock:
                 try:
                     os.unlink(path)
                 except FileNotFoundError:
+                    # Another contender already reclaimed the expired lease.
                     pass
                 try:
                     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -280,6 +281,7 @@ class FilesystemImageAcquisitionLock:
                 try:
                     os.unlink(path)
                 except FileNotFoundError:
+                    # Another worker already released or reclaimed this lease.
                     pass
 
         await asyncio.to_thread(_attempt)
@@ -295,7 +297,12 @@ class FilesystemImageAcquisitionLock:
     def _lease_active(cls, path: Path, now: float) -> bool:
         record = cls._read(path)
         if record is None:
-            return False
+            try:
+                # A creator may have made the file but not written its payload.
+                # Preserve that atomic claim during this short initialization gap.
+                return (now - path.stat().st_mtime) < 10.0
+            except OSError:
+                return False
         try:
             return float(record.get("expiresAt", 0)) > now
         except (TypeError, ValueError):

@@ -34,7 +34,7 @@ _IMAGE_FAILURE_TYPES = frozenset(
         ContainerJobFailureClass.IMAGE.value,
         ContainerJobFailureClass.IMAGE_NOT_FOUND.value,
         ContainerJobFailureClass.IMAGE_PULL_TIMEOUT.value,
-        ContainerJobFailureClass.IMAGE_AUTH_FAILED.value,
+        ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED.value,
         ContainerJobFailureClass.IMAGE_PLATFORM_MISMATCH.value,
         ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE.value,
         ContainerJobFailureClass.WORKSPACE.value,

@@ -73,7 +73,7 @@ def test_digest_parsing_prefers_repo_digest_then_id() -> None:
     [
         ("manifest unknown", ContainerJobFailureClass.IMAGE_NOT_FOUND),
         ("repository does not exist", ContainerJobFailureClass.IMAGE_NOT_FOUND),
-        ("unauthorized: authentication required", ContainerJobFailureClass.IMAGE_AUTH_FAILED),
+        ("unauthorized: authentication required", ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED),
         ("net/http: request canceled (timeout)", ContainerJobFailureClass.IMAGE_PULL_TIMEOUT),
         ("no matching manifest for linux/arm64", ContainerJobFailureClass.IMAGE_PLATFORM_MISMATCH),
         ("Cannot connect to the Docker daemon", ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE),
@@ -112,6 +112,18 @@ async def test_expired_lease_is_reclaimed_without_permanent_block(tmp_path) -> N
     assert await lock.try_acquire("k", ttl_seconds=10, owner_id="later")
 
 
+@pytest.mark.asyncio
+async def test_recent_empty_lease_preserves_creator_claim(tmp_path) -> None:
+    now = 100.0
+    lease = tmp_path / "k.lease"
+    lease.touch()
+    lease.chmod(0o600)
+    lock = FilesystemImageAcquisitionLock(tmp_path, clock=lambda: now)
+
+    # Simulate the gap between O_EXCL creation and writing the lease payload.
+    assert not await lock.try_acquire("k", ttl_seconds=10, owner_id="contender")
+
+
 # --------------------------------------------------------------------------- #
 # Backend acquisition scenarios.
 # --------------------------------------------------------------------------- #
@@ -134,10 +146,10 @@ def _request(
                 "spec": {
                     "image": image,
                     "pullPolicy": policy,
-                    "workspaceRef": {
-                        "kind": "artifact-workspace",
-                        "artifactRef": "art_workspace",
-                    },
+                        "workspaceRef": {
+                            "kind": "sandbox",
+                            "workspaceId": "art_workspace",
+                        },
                     "resources": {"cpuMillis": 1000, "memoryMiB": 512},
                 },
             },
@@ -224,6 +236,24 @@ async def test_never_without_image_fails_image_not_found_without_pull(tmp_path) 
     assert excinfo.value.failure_class == ContainerJobFailureClass.IMAGE_NOT_FOUND
     assert excinfo.value.terminal is True
     assert daemon.pulls == []
+
+
+@pytest.mark.asyncio
+async def test_never_preserves_backend_inspect_failure(tmp_path) -> None:
+    async def unavailable(args):
+        return 1, b"", b"Cannot connect to the Docker daemon"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=unavailable,
+        image_lock_root=tmp_path / "locks",
+    )
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(_request("python:3.13", policy="never"))
+    assert (
+        excinfo.value.failure_class
+        == ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE
+    )
 
 
 @pytest.mark.asyncio
@@ -363,3 +393,22 @@ async def test_activity_marks_transient_image_error_retryable() -> None:
         await activities.container_job_acquire_image(payload)
     assert excinfo.value.type == "image_backend_unavailable"
     assert excinfo.value.non_retryable is False
+
+
+@pytest.mark.asyncio
+async def test_activity_preserves_image_diagnostics_reference() -> None:
+    class Backend:
+        async def acquire_image(self, request):
+            raise ImageAcquisitionError(
+                "pull failed",
+                failure_class=ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED,
+                diagnostics_ref="artifact://pull-diagnostics",
+            )
+
+    activities = TemporalAgentRuntimeActivities(container_job_backend=Backend())
+    payload = _request("python:3.13").model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities.container_job_acquire_image(payload)
+    assert excinfo.value.details == ({"diagnosticsRef": "artifact://pull-diagnostics"},)

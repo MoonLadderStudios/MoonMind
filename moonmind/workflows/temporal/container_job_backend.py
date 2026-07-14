@@ -185,7 +185,7 @@ class DockerContainerJobBackend:
         projection_writer: ProjectionWriter | None = None,
         image_lock: ImageAcquisitionLock | None = None,
         image_lock_root: str | Path | None = None,
-        pull_lease_ttl_seconds: float = 1800.0,
+        pull_lease_ttl_seconds: float = 240.0,
         pull_lock_poll_seconds: float = 2.0,
         pull_lock_max_wait_seconds: float = 280.0,
         secret_resolver: SecretResolver | None = None,
@@ -205,7 +205,7 @@ class DockerContainerJobBackend:
         lock_root = (
             Path(image_lock_root)
             if image_lock_root is not None
-            else self._workspace_root / ".moonmind-image-acquisition-locks"
+            else self._workspace_root.parent / ".moonmind-image-acquisition-locks"
         )
         self._image_lock = image_lock or FilesystemImageAcquisitionLock(lock_root)
         self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
@@ -386,10 +386,19 @@ class DockerContainerJobBackend:
         container launches the observed content, not a mutable tag.
         """
 
-        code, stdout, _ = await self._runner(
+        code, stdout, stderr = await self._runner(
             ("image", "inspect", "--format", _INSPECT_FORMAT, image)
         )
         if code:
+            detail = stderr.decode(errors="replace")
+            if "no such image" not in detail.lower() and "not found" not in detail.lower():
+                failure = classify_pull_failure(detail)
+                if failure == ContainerJobFailureClass.IMAGE:
+                    failure = ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE
+                raise ImageAcquisitionError(
+                    "docker image inspection failed",
+                    failure_class=failure,
+                )
             return False, image, None
         text = stdout.decode(errors="replace").strip()
         image_id, _, repo_digests = text.partition("\t")

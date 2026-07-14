@@ -91,7 +91,7 @@ class ContainerJobFailureClass(StrEnum):
     IMAGE = "image"
     IMAGE_NOT_FOUND = "image_not_found"
     IMAGE_PULL_TIMEOUT = "image_pull_timeout"
-    IMAGE_AUTH_FAILED = "image_auth_failed"
+    IMAGE_PULL_AUTH_FAILED = "image_pull_auth_failed"
     IMAGE_PLATFORM_MISMATCH = "image_platform_mismatch"
     IMAGE_BACKEND_UNAVAILABLE = "image_backend_unavailable"
     LAUNCH = "launch"

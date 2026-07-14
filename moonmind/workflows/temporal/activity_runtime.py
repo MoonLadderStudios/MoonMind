@@ -7896,6 +7896,7 @@ class TemporalAgentRuntimeActivities:
             # ApplicationError type so the durable terminal outcome is exact.
             raise ApplicationError(
                 str(exc),
+                *([{"diagnosticsRef": exc.diagnostics_ref}] if exc.diagnostics_ref else []),
                 type=exc.failure_class.value,
                 non_retryable=exc.terminal,
             ) from exc
