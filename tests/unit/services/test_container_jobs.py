@@ -52,10 +52,11 @@ class _FakeArtifactReader:
             raise KeyError(artifact_id)
         return self._artifacts.get(artifact_id, _FakeArtifact()), self._blobs[artifact_id]
 
-    async def get_artifact(self, artifact_id):
+    async def get_metadata(self, *, artifact_id, principal):
+        self.read_principals.append(principal)
         if artifact_id not in self._artifacts:
             raise KeyError(artifact_id)
-        return self._artifacts[artifact_id]
+        return self._artifacts[artifact_id], [], False, None
 
 
 @pytest_asyncio.fixture
@@ -320,6 +321,19 @@ async def test_logs_return_bounded_owner_scoped_pages(session_factory, temporal)
         # Reads use the same artifact principal the workflow published under.
         assert reader.read_principals == [owner_artifact_principal(owner)] * 2
 
+        with pytest.raises(ValueError, match="valid offset"):
+            await service.logs(
+                owner=owner,
+                job_id=accepted.job_id,
+                query=ContainerJobLogQuery(cursor="abc"),
+            )
+        with pytest.raises(ValueError, match="non-negative"):
+            await service.logs(
+                owner=owner,
+                job_id=accepted.job_id,
+                query=ContainerJobLogQuery(cursor="-1"),
+            )
+
         with pytest.raises(ContainerJobNotFoundError):
             await service.logs(
                 owner=OwnerIdentity(principalId="intruder", principalType="user"),
@@ -357,6 +371,7 @@ async def test_artifacts_return_references_and_publication(session_factory, temp
         assert entry.artifact_ref == "artifact://outputs"
         assert entry.size_bytes == 42 and entry.sha256 == sha
         assert entry.name == "outputs.tar.gz"
+        assert reader.read_principals == [owner_artifact_principal(owner)]
 
 
 @pytest.mark.asyncio

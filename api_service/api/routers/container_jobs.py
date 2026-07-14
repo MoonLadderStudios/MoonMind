@@ -10,8 +10,9 @@ trusted worker.
 from __future__ import annotations
 
 import logging
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -91,17 +92,18 @@ def _audit(request: Request, user: User, action: str, job_id: str | None) -> Non
 
 @router.post("", response_model=ContainerJobAccepted, response_model_by_alias=True)
 async def submit_container_job(
-    payload: ContainerJobSubmitRequest,
+    payload: Annotated[Any, Body()],
     request: Request,
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobAccepted:
     """Create-or-replay a durable container job and start its Temporal workflow."""
 
-    _require_ready()
-    service = _build_service(session)
     try:
-        accepted = await service.submit(owner=_owner(user), request=payload)
+        validated = ContainerJobSubmitRequest.model_validate(payload)
+        _require_ready()
+        service = _build_service(session)
+        accepted = await service.submit(owner=_owner(user), request=validated)
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc
     _audit(request, user, "submit", accepted.job_id)

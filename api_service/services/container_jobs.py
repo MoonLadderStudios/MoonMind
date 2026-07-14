@@ -86,7 +86,9 @@ class ContainerJobArtifactReader(Protocol):
     never resolves raw host paths and only reads bounded durable references.
     """
 
-    async def get_artifact(self, artifact_id: str) -> Any:
+    async def get_metadata(
+        self, *, artifact_id: str, principal: str
+    ) -> tuple[Any, Any, bool, Any]:
         pass
 
     async def read(
@@ -325,7 +327,11 @@ class ContainerJobService:
         artifacts: list[ContainerJobArtifact] = []
         if record.artifacts_ref:
             artifacts.append(
-                await self._describe_artifact(job_id=job_id, artifact_ref=record.artifacts_ref)
+                await self._describe_artifact(
+                    owner=owner,
+                    job_id=job_id,
+                    artifact_ref=record.artifacts_ref,
+                )
             )
         offset = self._decode_cursor(cursor)
         limit = min(max(1, limit), MAX_ARTIFACT_PAGE_ENTRIES)
@@ -343,9 +349,9 @@ class ContainerJobService:
         try:
             value = int(cursor)
         except ValueError as exc:
-            raise ContainerJobEvidenceUnavailableError("cursor is not a valid offset") from exc
+            raise ValueError("cursor is not a valid offset") from exc
         if value < 0:
-            raise ContainerJobEvidenceUnavailableError("cursor must be non-negative")
+            raise ValueError("cursor must be non-negative")
         return value
 
     async def _read_evidence_text(self, *, owner: OwnerIdentity, artifact_ref: str) -> str:
@@ -364,11 +370,16 @@ class ContainerJobService:
             ) from exc
         return payload.decode("utf-8", errors="replace")
 
-    async def _describe_artifact(self, *, job_id: str, artifact_ref: str) -> ContainerJobArtifact:
+    async def _describe_artifact(
+        self, *, owner: OwnerIdentity, job_id: str, artifact_ref: str
+    ) -> ContainerJobArtifact:
         if self._artifacts is None:
             raise ContainerJobEvidenceUnavailableError("artifact store is not configured")
         try:
-            artifact = await self._artifacts.get_artifact(artifact_ref)
+            artifact, _links, _pinned, _read_policy = await self._artifacts.get_metadata(
+                artifact_id=artifact_ref,
+                principal=owner_artifact_principal(owner),
+            )
         except Exception as exc:  # noqa: BLE001 - normalized to a stable evidence error
             raise ContainerJobEvidenceUnavailableError(
                 "artifact evidence is not available"

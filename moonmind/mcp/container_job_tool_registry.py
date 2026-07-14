@@ -51,6 +51,7 @@ def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
 
     # Imported lazily to avoid a hard import cycle with the API service layer.
     from api_service.services.container_jobs import (
+        ContainerJobAuthorizationError,
         ContainerJobEvidenceUnavailableError,
         ContainerJobIdempotencyConflictError,
         ContainerJobNotFoundError,
@@ -60,7 +61,15 @@ def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
         return exc
     if isinstance(exc, (ValidationError, ToolArgumentsValidationError, ValueError)):
         return ContainerJobToolError(
-            code="invalid_request", message=str(exc), http_status=422
+            code="invalid_request",
+            message="Container-job request validation failed.",
+            http_status=422,
+        )
+    if isinstance(exc, ContainerJobAuthorizationError):
+        return ContainerJobToolError(
+            code="permission_denied",
+            message="Container-job authorization denied.",
+            http_status=403,
         )
     if isinstance(exc, ContainerJobNotFoundError):
         return ContainerJobToolError(
@@ -289,7 +298,9 @@ class ContainerJobToolRegistry:
                 )
                 return result.model_dump(mode="json", by_alias=True, exclude_none=True)
         except ValidationError as exc:
-            raise ToolArgumentsValidationError(tool, detail=str(exc)) from exc
+            raise ToolArgumentsValidationError(
+                tool, detail="Container-job request validation failed."
+            ) from exc
         raise ToolNotFoundError(tool)
 
     @staticmethod

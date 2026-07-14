@@ -19,10 +19,12 @@ from api_service.api.routers import container_jobs as http_router
 from api_service.api.routers import mcp_tools as mcp_tools_router
 from api_service.auth_providers import get_current_user
 from api_service.services.container_jobs import (
+    ContainerJobAuthorizationError,
     ContainerJobIdempotencyConflictError,
     ContainerJobNotFoundError,
 )
 from moonmind.mcp.tool_registry import QueueToolRegistry
+from moonmind.mcp.container_job_tool_registry import classify_container_job_error
 from moonmind.schemas.container_job_models import (
     AuxiliaryOutcome,
     ContainerJobAccepted,
@@ -30,6 +32,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobCancelResult,
     ContainerJobLogPage,
     ContainerJobStatus,
+    RegistryAuthorization,
 )
 
 pytestmark = [pytest.mark.asyncio]
@@ -258,6 +261,47 @@ async def test_mcp_invalid_request_is_classified(mcp_app, monkeypatch, enabled) 
     assert service.calls == []
 
 
+async def test_mcp_invalid_request_redacts_rejected_secret(
+    mcp_app, monkeypatch, enabled
+) -> None:
+    service = _FakeService()
+    _install_fake_service(monkeypatch, mcp_tools_router, service)
+    secret = "should-not-be-reflected"
+    bad = _submit_arguments("mcp")
+    bad["spec"]["environment"] = [{"name": "API_KEY", "value": secret}]
+    async with AsyncClient(
+        transport=ASGITransport(app=mcp_app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/mcp",
+            headers=_mcp_headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "container.submit", "arguments": bad},
+            },
+        )
+    result = response.json()["result"]
+    assert result["structuredContent"]["code"] == "invalid_request"
+    assert secret not in response.text
+
+
+async def test_authorization_denial_is_permission_denied() -> None:
+    error = ContainerJobAuthorizationError(
+        RegistryAuthorization(
+            authorized=False,
+            registry="ghcr.io",
+            repository="org/private",
+            reference="ghcr.io/org/private:latest",
+            failureClass="image_use_denied",
+        )
+    )
+    normalized = classify_container_job_error(error)
+    assert normalized.code == "permission_denied"
+    assert normalized.http_status == 403
+
+
 # -------------------------------------------------------------------------- HTTP
 
 
@@ -340,6 +384,24 @@ async def test_http_invalid_submit_maps_to_422(http_app, monkeypatch, enabled) -
     ) as client:
         response = await client.post("/api/v1/container-jobs", json=bad)
     assert response.status_code == 422
+    assert service.calls == []
+
+
+async def test_http_invalid_submit_redacts_rejected_secret(
+    http_app, monkeypatch, enabled
+) -> None:
+    service = _FakeService()
+    _install_fake_service(monkeypatch, http_router, service)
+    secret = "should-not-be-reflected"
+    bad = _submit_arguments("http")
+    bad["spec"]["environment"] = [{"name": "API_KEY", "value": secret}]
+    async with AsyncClient(
+        transport=ASGITransport(app=http_app), base_url="http://testserver"
+    ) as client:
+        response = await client.post("/api/v1/container-jobs", json=bad)
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_request"
+    assert secret not in response.text
     assert service.calls == []
 
 
