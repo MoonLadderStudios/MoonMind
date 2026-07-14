@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base
@@ -30,6 +31,14 @@ async def session_factory(tmp_path):
     await engine.dispose()
 
 
+@pytest.fixture
+def temporal():
+    adapter = AsyncMock()
+    adapter.start_container_job.return_value = None
+    adapter.signal_container_job_cancel.return_value = None
+    return adapter
+
+
 def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmitRequest:
     return ContainerJobSubmitRequest(
         idempotencyKey=key,
@@ -43,13 +52,17 @@ def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmit
 
 
 @pytest.mark.asyncio
-async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory) -> None:
+async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory, temporal) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session)
+        service = ContainerJobService(session, temporal=temporal)
         owner = OwnerIdentity(principalId="user-1", principalType="user")
         first = await service.submit(owner=owner, request=submission())
         second = await service.submit(owner=owner, request=submission())
         assert first.job_id == second.job_id and second.replayed
+        assert temporal.start_container_job.await_count == 2
+        started = temporal.start_container_job.await_args_list[0].args[0]
+        assert started.job_id == first.job_id
+        assert started.owner == owner
         with pytest.raises(ContainerJobIdempotencyConflictError):
             await service.submit(owner=owner, request=submission(image="busybox"))
         assert (await service.status(owner=owner, job_id=first.job_id)).state == "queued"
@@ -58,9 +71,9 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory)
 
 
 @pytest.mark.asyncio
-async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_factory) -> None:
+async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_factory, temporal) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session)
+        service = ContainerJobService(session, temporal=temporal)
         user = OwnerIdentity(principalId="shared", principalType="user")
         system = OwnerIdentity(principalId="shared", principalType="system")
         user_job = await service.submit(owner=user, request=submission())
@@ -71,12 +84,12 @@ async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_fact
 
 
 @pytest.mark.asyncio
-async def test_concurrent_duplicate_submission_has_one_durable_identity(session_factory) -> None:
+async def test_concurrent_duplicate_submission_has_one_durable_identity(session_factory, temporal) -> None:
     owner = OwnerIdentity(principalId="concurrent-owner", principalType="service")
 
     async def submit_once():
         async with session_factory() as session:
-            result = await ContainerJobService(session).submit(owner=owner, request=submission())
+            result = await ContainerJobService(session, temporal=temporal).submit(owner=owner, request=submission())
             await session.commit()
             return result
 
@@ -86,9 +99,9 @@ async def test_concurrent_duplicate_submission_has_one_durable_identity(session_
 
 
 @pytest.mark.asyncio
-async def test_terminal_observations_and_auxiliary_failures_project_independently(session_factory) -> None:
+async def test_terminal_observations_and_auxiliary_failures_project_independently(session_factory, temporal) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session)
+        service = ContainerJobService(session, temporal=temporal)
         accepted = await service.submit(
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
@@ -117,9 +130,9 @@ async def test_terminal_observations_and_auxiliary_failures_project_independentl
 
 
 @pytest.mark.asyncio
-async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory) -> None:
+async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temporal) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session)
+        service = ContainerJobService(session, temporal=temporal)
         accepted = await service.submit(
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
@@ -128,6 +141,7 @@ async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory) -> N
         first = await service.cancel(owner=owner, job_id=accepted.job_id, request=request)
         second = await service.cancel(owner=owner, job_id=accepted.job_id, request=request)
         assert first.accepted and second.replayed and second.state == "canceling"
+        temporal.signal_container_job_cancel.assert_awaited_once_with(accepted.job_id)
         await service.repository.record_observation(
             owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED
         )
