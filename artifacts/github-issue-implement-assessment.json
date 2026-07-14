@@ -1,0 +1,56 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3328",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3328",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "github-issue-implement-6e33a66d",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "The default branch retains the existing independent push-triggered Docker publisher. It has no exact-SHA required-results gate, still reruns frontend/generated-contract validation with Python and Node setup, performs no image-level smoke verification, and its contract tests assert the duplicate validation remains. Existing production frontend construction inside the Dockerfile and digest-based multiarchitecture publication satisfy only portions of the issue. No recent merge referencing #3328 or its distinctive title was found. No long test suite was run because the decisive workflow and contract-test evidence is static and directly inspectable.",
+  "requirements": [
+    {
+      "description": "No app-image build or publication job starts until the same commit SHA has successful ci-required, test-frontend, check-generated-contracts, and migration-gate results; missing, cancelled, stale, or mismatched-SHA evidence fails closed.",
+      "status": "not_met"
+    },
+    {
+      "description": "The approved immutable SHA is passed explicitly into checkout and image metadata.",
+      "status": "not_met"
+    },
+    {
+      "description": "Docker publishing no longer reruns frontend typecheck, lint, frontend unit tests, or generated-contract validation, and removes Python/Node setup used only by those checks.",
+      "status": "not_met"
+    },
+    {
+      "description": "The production frontend assets remain built inside the Docker image.",
+      "status": "met"
+    },
+    {
+      "description": "The exact image to be published receives a bounded image-level smoke verification covering startup/entrypoint, Vite assets, build ID and OCI revision, runtime binaries, and non-empty per-platform digest.",
+      "status": "not_met"
+    },
+    {
+      "description": "Multiarchitecture images continue to be assembled and published from per-platform digests.",
+      "status": "met"
+    },
+    {
+      "description": "Package-write permissions are confined to trusted exact-commit post-CI jobs.",
+      "status": "not_met"
+    },
+    {
+      "description": "Workflow summaries record the approved SHA and verified required-result check/run evidence.",
+      "status": "not_met"
+    },
+    {
+      "description": "The Docker build remains separate from cross-workflow dashboard-dist consumption.",
+      "status": "met"
+    },
+    {
+      "description": "Workflow contract tests enforce the exact-SHA gate, approved SHA propagation, image smoke verification, trusted package permissions, and absence of duplicate validation/setup while preserving digest publication.",
+      "status": "not_met"
+    },
+    {
+      "description": "The selected exact-SHA publication orchestration model is documented.",
+      "status": "not_met"
+    }
+  ]
+}
