@@ -36,6 +36,7 @@ fall open.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -143,6 +144,7 @@ class ContainerJobWorkspaceAuthorizer:
                 primary_field="session_id",
                 primary_trusted={source.managed_session_id},
                 secondary={"agent_run_id": {source.agent_run_id}},
+                require_principal=True,
             )
             return
 
@@ -199,8 +201,14 @@ class ContainerJobWorkspaceAuthorizer:
         primary_field: str,
         primary_trusted: set[str | None],
         secondary: dict[str, set[str | None]] | None = None,
+        require_principal: bool = False,
     ) -> None:
         # Owner principal correlation when the record persists one.
+        if require_principal and not record.principal_id:
+            raise ContainerJobWorkspaceAuthorizationError(
+                CONTAINER_WORKSPACE_PERMISSION_DENIED,
+                "workspace ownership record does not contain principal proof",
+            )
         if record.principal_id and record.principal_id != owner.principal_id:
             raise ContainerJobWorkspaceAuthorizationError(
                 CONTAINER_WORKSPACE_PERMISSION_DENIED,
@@ -218,7 +226,7 @@ class ContainerJobWorkspaceAuthorizer:
                 "authenticated source does not identify the referenced workspace",
             )
         record_primary = getattr(record, primary_field)
-        if record_primary is not None and record_primary not in trusted:
+        if record_primary is None or record_primary not in trusted:
             raise ContainerJobWorkspaceAuthorizationError(
                 CONTAINER_WORKSPACE_PERMISSION_DENIED,
                 "workspace reference does not correlate with the owning record",
@@ -267,12 +275,13 @@ def managed_session_ownership_lookup(store) -> OwnershipLookup:
     )
 
     async def lookup(session_id: str) -> WorkspaceOwnershipRecord | None:
-        record = store.load(session_id)
+        record = await asyncio.to_thread(store.load, session_id)
         if record is None:
             return None
         return WorkspaceOwnershipRecord(
             session_id=record.session_id,
             agent_run_id=record.agent_run_id,
+            principal_id=record.metadata.get("principalId"),
             is_terminal=record.status in TERMINAL_MANAGED_SESSION_STATUSES,
         )
 

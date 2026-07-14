@@ -45,11 +45,16 @@ def temporal():
 
 
 def managed_session_authorizer(
-    *, session_id: str = "run", record: WorkspaceOwnershipRecord | None = None
+    *,
+    session_id: str = "run",
+    principal_id: str = "user-1",
+    record: WorkspaceOwnershipRecord | None = None,
 ) -> ContainerJobWorkspaceAuthorizer:
     """Authorizer whose managed-session store holds one live owned record."""
 
-    live = record if record is not None else WorkspaceOwnershipRecord(session_id=session_id)
+    live = record if record is not None else WorkspaceOwnershipRecord(
+        session_id=session_id, principal_id=principal_id
+    )
 
     async def lookup(identity: str) -> WorkspaceOwnershipRecord | None:
         return live if identity == session_id else None
@@ -82,7 +87,9 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory,
         first = await service.submit(owner=owner, request=submission())
         second = await service.submit(owner=owner, request=submission())
         assert first.job_id == second.job_id and second.replayed
-        assert temporal.start_container_job.await_count == 2
+        # Exact idempotent replays return the durable job without starting a
+        # duplicate workflow or reauthorizing mutable workspace state.
+        assert temporal.start_container_job.await_count == 1
         started = temporal.start_container_job.await_args_list[0].args[0]
         assert started.job_id == first.job_id
         assert started.owner == owner
@@ -96,7 +103,11 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory,
 @pytest.mark.asyncio
 async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            workspace_authorizer=managed_session_authorizer(principal_id="shared"),
+        )
         user = OwnerIdentity(principalId="shared", principalType="user")
         system = OwnerIdentity(principalId="shared", principalType="system")
         user_job = await service.submit(owner=user, request=submission())
@@ -113,7 +124,11 @@ async def test_concurrent_duplicate_submission_has_one_durable_identity(session_
     async def submit_once():
         async with session_factory() as session:
             result = await ContainerJobService(
-                session, temporal=temporal, workspace_authorizer=managed_session_authorizer()
+                session,
+                temporal=temporal,
+                workspace_authorizer=managed_session_authorizer(
+                    principal_id="concurrent-owner"
+                ),
             ).submit(owner=owner, request=submission())
             await session.commit()
             return result
@@ -126,7 +141,11 @@ async def test_concurrent_duplicate_submission_has_one_durable_identity(session_
 @pytest.mark.asyncio
 async def test_terminal_observations_and_auxiliary_failures_project_independently(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            workspace_authorizer=managed_session_authorizer(principal_id="u"),
+        )
         accepted = await service.submit(
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
@@ -157,7 +176,11 @@ async def test_terminal_observations_and_auxiliary_failures_project_independentl
 @pytest.mark.asyncio
 async def test_owner_scoped_idempotent_and_terminal_cancel(session_factory, temporal, authorizer) -> None:
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal, workspace_authorizer=authorizer)
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            workspace_authorizer=managed_session_authorizer(principal_id="u"),
+        )
         accepted = await service.submit(
             owner=OwnerIdentity(principalId="u", principalType="user"), request=submission()
         )
@@ -224,6 +247,37 @@ async def test_submit_terminally_deleted_record_fails_closed(session_factory, te
             )
     assert excinfo.value.code == "workspace_not_found"
     temporal.start_container_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_exact_replay_survives_workspace_record_deletion(
+    session_factory, temporal
+) -> None:
+    available = True
+
+    async def lookup(identity):
+        if not available:
+            return None
+        return WorkspaceOwnershipRecord(
+            session_id=identity, principal_id="user-1"
+        )
+
+    owner = OwnerIdentity(principalId="user-1", principalType="user")
+    request = submission()
+    async with session_factory() as session:
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            workspace_authorizer=ContainerJobWorkspaceAuthorizer(
+                managed_session_lookup=lookup
+            ),
+        )
+        first = await service.submit(owner=owner, request=request)
+        available = False
+        replay = await service.submit(owner=owner, request=request)
+        assert replay.replayed is True
+        assert replay.job_id == first.job_id
+    assert temporal.start_container_job.await_count == 1
 
 
 @pytest.mark.asyncio

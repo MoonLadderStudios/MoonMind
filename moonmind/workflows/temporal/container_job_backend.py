@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import tarfile
+import shutil
 from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Sequence
@@ -127,7 +128,9 @@ class DockerContainerJobBackend:
         artifacts_marker = Path(plan.artifacts_source) / marker
         name = f"{self._name(request)}-probe"
         try:
-            workspace_marker.write_text(expected, encoding="utf-8")
+            await asyncio.to_thread(workspace_marker.write_text, expected, encoding="utf-8")
+            workspace_mount = next(m for m in plan.mounts if m.target == "/workspace")
+            artifacts_mount = next(m for m in plan.mounts if m.target == "/artifacts")
             code, stdout, stderr = await self._runner(
                 (
                     "run",
@@ -137,9 +140,9 @@ class DockerContainerJobBackend:
                     "--network",
                     "none",
                     "--mount",
-                    f"type=bind,src={plan.workspace_source},dst=/workspace,readonly",
+                    workspace_mount.to_mount_arg() + ",readonly",
                     "--mount",
-                    f"type=bind,src={plan.artifacts_source},dst=/artifacts",
+                    artifacts_mount.to_mount_arg(),
                     self._probe_image,
                     "sh",
                     "-c",
@@ -158,7 +161,10 @@ class DockerContainerJobBackend:
                     CONTAINER_WORKSPACE_NOT_VISIBLE,
                     "selected Docker daemon cannot read the resolved workspace",
                 )
-            if artifacts_marker.read_text(encoding="utf-8").strip() != expected:
+            artifact_observed = await asyncio.to_thread(
+                artifacts_marker.read_text, encoding="utf-8"
+            )
+            if artifact_observed.strip() != expected:
                 raise ContainerWorkspaceError(
                     CONTAINER_WORKSPACE_NOT_VISIBLE,
                     "selected Docker daemon cannot write the resolved artifacts area",
@@ -176,7 +182,9 @@ class DockerContainerJobBackend:
                 try:
                     path.unlink()
                 except FileNotFoundError:
-                    pass
+                    # Probe cleanup is idempotent; either side may not have
+                    # created its marker after a partial daemon failure.
+                    continue
         return ContainerJobActivityResult(
             resolvedWorkspaceRef=self._resolver.opaque_handle(request)
         )
@@ -251,7 +259,12 @@ class DockerContainerJobBackend:
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
-        await self._checked(*args)
+        code, _, _ = await self._runner(args)
+        if code:
+            raise ContainerWorkspaceError(
+                CONTAINER_WORKSPACE_NOT_VISIBLE,
+                "selected Docker daemon rejected the resolved workspace mounts",
+            )
         return ContainerJobActivityResult(containerRef=name)
 
     async def start_container(self, request: ContainerJobActivityRequest):
@@ -304,15 +317,19 @@ class DockerContainerJobBackend:
             # Outputs are collected only from the approved, job-owned artifact
             # root (/artifacts), never from the writable repository workspace.
             artifacts_root = Path(self._plan(request).artifacts_source).resolve()
-            archive = BytesIO()
-            with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
-                for output in request.request.spec.outputs:
-                    path = (artifacts_root / output.relative_path).resolve()
-                    if artifacts_root not in path.parents and path != artifacts_root:
-                        raise RuntimeError("declared output escapes the artifact root")
-                    if not path.exists():
-                        raise RuntimeError(f"declared output is missing: {output.name}")
-                    bundle.add(path, arcname=output.name, recursive=True)
+            def create_archive() -> BytesIO:
+                archive = BytesIO()
+                with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+                    for output in request.request.spec.outputs:
+                        path = (artifacts_root / output.relative_path).resolve()
+                        if artifacts_root not in path.parents and path != artifacts_root:
+                            raise RuntimeError("declared output escapes the artifact root")
+                        if not path.exists():
+                            raise RuntimeError(f"declared output is missing: {output.name}")
+                        bundle.add(path, arcname=output.name, recursive=True)
+                return archive
+
+            archive = await asyncio.to_thread(create_archive)
             artifacts_ref = await self._publish(
                 request, f"{request.job_id}-outputs.tar.gz", archive.getvalue()
             )
@@ -330,4 +347,7 @@ class DockerContainerJobBackend:
         return await self.project_status(request)
 
     async def cleanup(self, request: ContainerJobActivityRequest):
+        digest = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:20]
+        job_dir = self._resolver.mapping.job_scratch_root / digest
+        await asyncio.to_thread(shutil.rmtree, job_dir, True)
         return ContainerJobActivityResult()

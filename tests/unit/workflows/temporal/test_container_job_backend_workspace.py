@@ -184,3 +184,40 @@ async def test_activity_boundary_maps_workspace_error_to_application_error(
         await activities.container_job_resolve_workspace(payload)
     assert excinfo.value.type == "workspace_not_found"
     assert excinfo.value.non_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_create_failure_redacts_resolved_mount_source(tmp_path) -> None:
+    (tmp_path / OWNER_ID / "art" / "repo").mkdir(parents=True)
+
+    async def runner(args):
+        if args[0] == "create":
+            return 1, b"", f"invalid mount src={tmp_path}".encode()
+        return 0, b"", b""
+
+    backend = _backend(tmp_path, runner)
+    request = _request().model_copy(
+        update={
+            "resolved_workspace_ref": "container-workspace://opaque",
+            "resolved_image_ref": "sha256:image",
+        }
+    )
+    with pytest.raises(ContainerWorkspaceError) as excinfo:
+        await backend.create_container(request)
+    assert str(tmp_path) not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_job_owned_scratch_tree(tmp_path) -> None:
+    (tmp_path / OWNER_ID / "art" / "repo").mkdir(parents=True)
+
+    async def runner(args):
+        return 0, b"", b""
+
+    backend = _backend(tmp_path, runner)
+    request = _request()
+    await backend.resolve_workspace(request)
+    scratch_root = tmp_path / ".container-job-scratch"
+    assert any(scratch_root.iterdir())
+    await backend.cleanup(request)
+    assert not any(scratch_root.iterdir())

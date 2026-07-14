@@ -27,6 +27,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote
 
 from moonmind.schemas.container_job_models import (
     DEFAULT_CONTAINER_JOB_PRINCIPAL_ID,
@@ -94,13 +95,17 @@ class WorkspaceMount:
     target: str
     read_only: bool
     mount_class: str  # "workspace" | "artifacts" | "scratch" | "cache"
+    source_type: str = "bind"
+    volume_subpath: str | None = None
 
     def to_mount_arg(self) -> str:
         parts = [
-            "type=bind",
+            f"type={self.source_type}",
             f"src={self.source}",
             f"dst={self.target}",
         ]
+        if self.volume_subpath:
+            parts.append(f"volume-subpath={self.volume_subpath}")
         if self.read_only:
             parts.append("readonly")
         return ",".join(parts)
@@ -197,11 +202,9 @@ def _sanitize_identity(identity: str) -> str:
     name a direct child of an approved root.
     """
 
-    safe = "".join(ch if ch.isalnum() or ch in "_.-" else "_" for ch in identity)
-    safe = safe.strip("._") or "_"
-    if safe in {".", ".."}:
-        safe = "_"
-    return safe
+    # Percent-encoding is reversible and collision-free while preserving the
+    # existing on-disk layout for already-safe identifiers.
+    return quote(identity, safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 
 
 def _require(condition: bool, code: str, message: str) -> None:
@@ -268,7 +271,7 @@ class ContainerWorkspaceResolver:
             approved_root = (
                 approved_root / _sanitize_identity(request.owner.principal_id)
             ).resolve()
-        identity, relative_path = _identity_and_relative(locator)
+        identity, relative_path = _identity_and_relative(locator, request)
         workspace_source = self._contained_source(
             approved_root, identity, relative_path
         )
@@ -282,20 +285,20 @@ class ContainerWorkspaceResolver:
         scratch_source = self._job_owned_dir(request, "scratch")
 
         mounts = [
-            WorkspaceMount(
-                source=str(workspace_source),
+            self._daemon_mount(
+                source=workspace_source,
                 target=WORKSPACE_TARGET,
                 read_only=False,
                 mount_class="workspace",
             ),
-            WorkspaceMount(
-                source=str(artifacts_source),
+            self._daemon_mount(
+                source=artifacts_source,
                 target=ARTIFACTS_TARGET,
                 read_only=False,
                 mount_class="artifacts",
             ),
-            WorkspaceMount(
-                source=str(scratch_source),
+            self._daemon_mount(
+                source=scratch_source,
                 target=SCRATCH_TARGET,
                 read_only=False,
                 mount_class="scratch",
@@ -309,6 +312,21 @@ class ContainerWorkspaceResolver:
             artifacts_source=str(artifacts_source),
             scratch_source=str(scratch_source),
             mounts=tuple(mounts),
+        )
+
+    def _daemon_mount(self, *, source: Path, **kwargs) -> WorkspaceMount:
+        """Use the daemon-visible named volume for agent workspace paths."""
+
+        root = self._mapping.run_root.resolve()
+        try:
+            relative = source.resolve().relative_to(root)
+        except ValueError:
+            return WorkspaceMount(source=str(source), **kwargs)
+        return WorkspaceMount(
+            source=self._mapping.agent_workspaces_volume,
+            source_type="volume",
+            volume_subpath=relative.as_posix(),
+            **kwargs,
         )
 
     # -- authorization ----------------------------------------------------
@@ -369,11 +387,12 @@ class ContainerWorkspaceResolver:
     def _contained_source(
         self, approved_root: Path, identity: str, relative_path: str
     ) -> Path:
-        base = (approved_root / _sanitize_identity(identity)).resolve()
+        lexical_base = approved_root / _sanitize_identity(identity)
+        base = lexical_base.resolve()
         _require(
-            base == approved_root or approved_root in base.parents,
+            base == lexical_base or lexical_base in base.parents,
             CONTAINER_WORKSPACE_PERMISSION_DENIED,
-            "workspace identity escapes its approved root",
+            "workspace identity resolves outside its authorized directory",
         )
         candidate = (base / relative_path).resolve()
         _require(
@@ -384,11 +403,11 @@ class ContainerWorkspaceResolver:
         # Symlink escape: the real (symlink-followed) path must remain under the
         # approved root even when intermediate components are symlinks.
         real = Path(os.path.realpath(candidate))
-        real_root = Path(os.path.realpath(approved_root))
+        real_base = Path(os.path.realpath(base))
         _require(
-            real == real_root or real_root in real.parents,
+            real == real_base or real_base in real.parents,
             CONTAINER_WORKSPACE_PERMISSION_DENIED,
-            "workspace path resolves outside its approved root via symlink",
+            "workspace path resolves outside its authorized base via symlink",
         )
         return candidate
 
@@ -408,8 +427,8 @@ class ContainerWorkspaceResolver:
             safe = _sanitize_identity(cache.cache_ref)
             source = self._job_owned_dir(request, f"cache/{safe}-{index}")
             mounts.append(
-                WorkspaceMount(
-                    source=str(source),
+                self._daemon_mount(
+                    source=source,
                     target=cache.target,
                     read_only=cache.read_only,
                     mount_class="cache",
@@ -426,12 +445,16 @@ class ContainerWorkspaceResolver:
         return f"{_VISIBILITY_MARKER_PREFIX}{digest}"
 
 
-def _identity_and_relative(locator) -> tuple[str, str]:
+def _identity_and_relative(locator, request: ContainerJobActivityRequest) -> tuple[str, str]:
     if isinstance(locator, ContainerArtifactWorkspaceLocator):
         return locator.artifact_ref, locator.relative_path
     if isinstance(locator, ContainerRunWorkspaceLocator):
         return locator.run_id, locator.relative_path
-    # managed-session and omnigent-session both key on session_id.
+    if isinstance(locator, ContainerManagedSessionWorkspaceLocator):
+        # Managed sessions live in their owning agent-run workspace, not in a
+        # directory named after the provider/runtime session id.
+        return request.request.source.agent_run_id or locator.session_id, locator.relative_path
+    # Omnigent sessions key on session_id.
     return locator.session_id, locator.relative_path
 
 

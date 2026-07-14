@@ -79,6 +79,19 @@ class ContainerJobRepository:
         result = await self._session.execute(select(ContainerJobRecord).where(ContainerJobRecord.owner_id == owner.principal_id, ContainerJobRecord.owner_type == owner.principal_type, ContainerJobRecord.idempotency_key == key))
         return result.scalar_one_or_none()
 
+    async def find_exact_replay(
+        self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest
+    ) -> ContainerJobRecord | None:
+        existing = await self._by_idempotency(owner, request.idempotency_key)
+        if existing is None:
+            return None
+        request_json = request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if existing.request_json != request_json:
+            raise ContainerJobIdempotencyConflictError(
+                "idempotency key was already used with a different request"
+            )
+        return existing
+
     async def get_for_owner(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobRecord | None:
         result = await self._session.execute(select(ContainerJobRecord).where(ContainerJobRecord.job_id == job_id, ContainerJobRecord.owner_id == owner.principal_id, ContainerJobRecord.owner_type == owner.principal_type))
         return result.scalar_one_or_none()
@@ -127,6 +140,12 @@ class ContainerJobService:
         self._workspace_authorizer = workspace_authorizer
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
+        existing = await self.repository.find_exact_replay(owner=owner, request=request)
+        if existing is not None:
+            created_at = existing.created_at or datetime.now(timezone.utc)
+            return ContainerJobAccepted(
+                jobId=existing.job_id, replayed=True, createdAt=created_at
+            )
         # Authorize the logical workspace reference against its canonical
         # durable ownership record before any durable job identity or workflow
         # is created (MoonMind#3255). Absent, terminally deleted, cross-user,

@@ -24,6 +24,13 @@ from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
 )
 
+
+@pytest.fixture(autouse=True)
+def _enable_current_workflow_patches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct workflow unit calls model histories created by current code."""
+
+    monkeypatch.setattr("moonmind.workflows.temporal.workflows.container_job.workflow.patched", lambda _: True)
+
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
 
 

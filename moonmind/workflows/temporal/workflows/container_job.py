@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
 
 CATALOG = build_default_activity_catalog()
 _TERMINAL = frozenset({"succeeded", "failed", "canceled", "timed_out"})
+CONTAINER_JOB_WORKSPACE_PROBE_PATCH = "container_job_workspace_probe_v1"
 
 # Stable workspace classifications mapped onto the durable failure taxonomy so
 # a terminal outcome carries the right class regardless of whether the error
@@ -161,7 +162,8 @@ class MoonMindContainerJobWorkflow:
                 # any (potentially large) image is acquired. A workspace visible
                 # to the API/agent but not the daemon fails workspace_not_visible
                 # here, before image acquisition.
-                await self._activity("container_job.probe_workspace", request)
+                if workflow.patched(CONTAINER_JOB_WORKSPACE_PROBE_PATCH):
+                    await self._activity("container_job.probe_workspace", request)
             if not self._cancel_requested:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
                 image = await self._activity("container_job.acquire_image", request)

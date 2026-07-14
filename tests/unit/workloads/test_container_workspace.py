@@ -141,6 +141,62 @@ def test_symlink_escape_is_rejected(tmp_path) -> None:
     assert excinfo.value.code == CONTAINER_WORKSPACE_PERMISSION_DENIED
 
 
+def test_identity_symlink_to_sibling_workspace_is_rejected(tmp_path) -> None:
+    root = tmp_path / "root"
+    victim = root / "victim"
+    (victim / "repo").mkdir(parents=True)
+    os.symlink(victim, root / "attacker")
+    resolver = ContainerWorkspaceResolver(
+        mapping=ApprovedWorkspaceMapping(
+            run_root=root,
+            managed_session_root=root,
+            omnigent_worktree_root=root,
+            artifact_workspace_root=root,
+            job_scratch_root=tmp_path / "scratch",
+        )
+    )
+    request = _request(
+        workspace_ref={"kind": "moonmind-run", "runId": "attacker"},
+        source={"source": "workflow", "runId": "attacker"},
+    )
+    with pytest.raises(ContainerWorkspaceError) as excinfo:
+        resolver.resolve(request)
+    assert excinfo.value.code == CONTAINER_WORKSPACE_PERMISSION_DENIED
+
+
+def test_identity_encoding_is_collision_free(tmp_path) -> None:
+    (tmp_path / "user%3Aa" / "repo").mkdir(parents=True)
+    (tmp_path / "user_a" / "repo").mkdir(parents=True)
+    resolver = _resolver(tmp_path)
+    colon = resolver.resolve(
+        _request(
+            workspace_ref={"kind": "moonmind-run", "runId": "user:a"},
+            source={"source": "workflow", "runId": "user:a"},
+        )
+    )
+    underscore = resolver.resolve(
+        _request(
+            workspace_ref={"kind": "moonmind-run", "runId": "user_a"},
+            source={"source": "workflow", "runId": "user_a"},
+        )
+    )
+    assert colon.workspace_source != underscore.workspace_source
+
+
+def test_agent_workspace_mounts_use_daemon_visible_named_volume(tmp_path) -> None:
+    (tmp_path / "run-1" / "repo").mkdir(parents=True)
+    plan = _resolver(tmp_path, agent_workspaces_volume="moonmind_agent_workspaces").resolve(
+        _request(
+            workspace_ref={"kind": "moonmind-run", "runId": "run-1"},
+            source={"source": "workflow", "runId": "run-1"},
+        )
+    )
+    workspace = next(m for m in plan.mounts if m.target == WORKSPACE_TARGET)
+    assert workspace.source_type == "volume"
+    assert workspace.source == "moonmind_agent_workspaces"
+    assert workspace.volume_subpath == "run-1/repo"
+
+
 def test_cache_target_collision_with_reserved_target_is_rejected(tmp_path) -> None:
     (tmp_path / OWNER["principalId"] / "art" / "repo").mkdir(parents=True)
     resolver = _resolver(tmp_path)
@@ -174,7 +230,8 @@ def test_cache_mounts_get_distinct_job_owned_sources(tmp_path) -> None:
     assert cache_mounts[1].read_only is True
     # No cache source escapes the job-owned scratch root.
     for mount in cache_mounts:
-        assert str((tmp_path / ".container-job-scratch").resolve()) in mount.source
+        assert mount.source_type == "volume"
+        assert mount.volume_subpath.startswith(".container-job-scratch/")
 
 
 def test_artifact_workspace_default_owner_is_permission_denied(tmp_path) -> None:

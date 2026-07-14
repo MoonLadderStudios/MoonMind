@@ -40,6 +40,7 @@ def _record(*, session_id: str, agent_run_id: str, status: str = "ready") -> Cod
         imageRef="img:1",
         controlUrl="http://control",
         status=status,
+        metadata={"principalId": OWNER.principal_id},
         workspacePath="/w",
         sessionWorkspacePath="/w/s",
         artifactSpoolPath="/w/a",
