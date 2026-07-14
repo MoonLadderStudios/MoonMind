@@ -296,7 +296,7 @@ Provider-native publishing may supply pull request metadata directly when the pr
 
 Workflows that include MoonSpec verification gates must use the latest structured verification verdict to decide publication eligibility.
 
-`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, a workflow whose publish mode is `pr` opens a draft pull request annotated with the remaining-work verdict and verification report, completes with `attention_required: true`, and skips downstream promotion or trusted handoff steps. This preserves reviewable work without representing it as verified or ready.
+`FULLY_IMPLEMENTED` permits PR publication and downstream trusted side effects. `ADDITIONAL_WORK_NEEDED` keeps the workflow in the bounded remediation loop while a later MoonSpec remediation step remains. Once that retry budget is exhausted, a workflow whose publish mode is `pr` opens a draft pull request annotated with the remaining-work verdict and verification report, then fails with `attention_required: true` and skips downstream promotion or trusted handoff steps. The draft is recoverability evidence, not a successful terminal outcome. A pushed branch or created draft pull request must never be classified as `no_commit`.
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 

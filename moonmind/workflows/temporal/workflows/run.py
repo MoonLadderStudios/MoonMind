@@ -597,6 +597,7 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -1147,6 +1148,7 @@ class MoonMindRunWorkflow:
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
         self._canonical_no_commit_outcome_enabled: bool = False
+        self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
@@ -7761,6 +7763,9 @@ class MoonMindRunWorkflow:
         self._canonical_no_commit_outcome_enabled = workflow.patched(
             RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
         )
+        self._authoritative_publish_outcome_enabled = workflow.patched(
+            RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
+        )
         self._get_logger().info(
             "Starting MoonMind.UserWorkflow workflow",
             extra={"workflow_type": workflow_type},
@@ -13513,6 +13518,18 @@ class MoonMindRunWorkflow:
 
     def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if self._authoritative_publish_outcome_enabled and push_status == "pushed":
+            stale_no_commit = self._publish_context.pop("noCommitPublish", None)
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
+                "not_required",
+                "skipped",
+            }:
+                self._publish_status = None
+                self._publish_reason = None
+            return
         if push_status == "no_commits":
             self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
@@ -14162,6 +14179,30 @@ class MoonMindRunWorkflow:
                 )
 
         publish_mode = self._publish_mode(parameters)
+        if (
+            self._authoritative_publish_outcome_enabled
+            and self._moonspec_draft_publication_reason is not None
+        ):
+            pull_request_url = self._coerce_text(
+                self._pull_request_url
+                or self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+            if pull_request_url:
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification; incomplete work was "
+                    f"preserved in draft pull request {pull_request_url}. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
+            return (
+                "failed",
+                "Workflow failed MoonSpec verification and draft pull request "
+                "publication did not complete. "
+                f"{self._moonspec_draft_publication_reason}",
+                True,
+            )
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
