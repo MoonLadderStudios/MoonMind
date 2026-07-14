@@ -156,6 +156,7 @@ class MoonMindContainerJobWorkflow:
                         timeout=timedelta(seconds=inp.observe_interval_seconds),
                     )
                 except TimeoutError:
+                    # The interval elapsed normally; continue polling the container.
                     pass
             if self._cancel_requested:
                 terminal_state = ContainerJobState.CANCELED
