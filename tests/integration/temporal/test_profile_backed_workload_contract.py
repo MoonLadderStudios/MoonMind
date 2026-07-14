@@ -484,6 +484,7 @@ async def test_unrestricted_run_docker_preserves_artifact_classes_and_publicatio
         registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
         launcher=launcher,
         workflow_docker_mode="unrestricted",
+        raw_cli_enabled=True,
     )
 
     result = await execute_tool_activity(
@@ -529,6 +530,7 @@ async def test_unrestricted_run_docker_preserves_shared_workload_metadata() -> N
         registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
         launcher=launcher,
         workflow_docker_mode="unrestricted",
+        raw_cli_enabled=True,
     )
 
     result = await execute_tool_activity(

@@ -45,7 +45,7 @@ def submission(*, key: str = "key", image: str = "alpine") -> ContainerJobSubmit
         source={"source": "mcp", "callerRequestId": "r"},
         spec={
             "image": image,
-            "workspaceRef": {"kind": "moonmind-session", "sessionId": "run"},
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
             "resources": {"cpuMillis": 100, "memoryMiB": 64},
         },
     )
@@ -59,7 +59,7 @@ async def test_create_or_replay_conflict_and_owner_scoped_reads(session_factory,
         first = await service.submit(owner=owner, request=submission())
         second = await service.submit(owner=owner, request=submission())
         assert first.job_id == second.job_id and second.replayed
-        assert temporal.start_container_job.await_count == 2
+        assert temporal.start_container_job.await_count == 1
         started = temporal.start_container_job.await_args_list[0].args[0]
         assert started.job_id == first.job_id
         assert started.owner == owner

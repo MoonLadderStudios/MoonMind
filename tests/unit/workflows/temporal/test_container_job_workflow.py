@@ -9,6 +9,7 @@ from temporalio.exceptions import ApplicationError
 
 from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import (
+    ContainerJobActivityRequest,
     ContainerJobActivityResult,
     ContainerJobWorkflowInput,
     ImageObservation,
@@ -40,7 +41,7 @@ def _input(*, timeout: int = 60) -> ContainerJobWorkflowInput:
                 "spec": {
                     "image": "python:3.13",
                     "workspaceRef": {
-                        "kind": "artifact-workspace",
+                        "kind": "external_state",
                         "artifactRef": "art_workspace",
                     },
                     "command": ["python", "-V"],
@@ -119,7 +120,9 @@ async def test_production_backend_makes_every_registered_activity_callable(
         if args[:2] == ("image", "inspect"):
             return 0, b"sha256:" + b"a" * 64, b""
         if args[:2] == ("inspect", "--format"):
-            if "json" in args[2]:
+            if args[2] == "{{json .Config.Labels}}":
+                return 1, b"", b"missing"
+            if args[2] == "{{json .State}}":
                 return 0, b'{"Running":false,"ExitCode":0}', b""
             return 1, b"", b"missing"
         if args[0] == "logs":
@@ -145,9 +148,9 @@ async def test_production_backend_makes_every_registered_activity_callable(
     payload["resolvedWorkspaceRef"] = resolved["resolvedWorkspaceRef"]
     image = await activities.container_job_acquire_image(payload)
     payload["resolvedImageRef"] = image["resolvedImageRef"]
-    assert not (await activities.container_job_reconcile_container(payload)).get(
-        "containerRef"
-    )
+    reconciliation = await activities.container_job_reconcile_container(payload)
+    assert reconciliation["containerRef"].startswith("moonmind-container-job-")
+    assert reconciliation["running"] is False
     created = await activities.container_job_create_container(payload)
     payload["containerRef"] = created["containerRef"]
     await activities.container_job_start_container(payload)
@@ -169,6 +172,26 @@ async def test_production_backend_makes_every_registered_activity_callable(
     assert "python:3.13" not in create
     assert all("DOCKER_HOST" not in " ".join(command) for command in commands)
     assert project.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_backend_resolves_sandbox_relative_path(tmp_path) -> None:
+    workspace = tmp_path / "temporal_sandbox" / "run-1" / "repo" / "nested"
+    workspace.mkdir(parents=True)
+    raw = _input().model_dump(mode="json", by_alias=True)
+    raw["request"]["spec"]["workspaceRef"] = {
+        "kind": "sandbox", "workspaceId": "run-1", "relativePath": "repo/nested"
+    }
+    inp = ContainerJobWorkflowInput.model_validate(raw)
+    backend = DockerContainerJobBackend(workspace_root=tmp_path)
+    result = await backend.resolve_workspace(
+        ContainerJobActivityRequest(
+            jobId=JOB_ID,
+            ownershipToken=inp.ownership_token,
+            request=inp.request,
+        )
+    )
+    assert result.resolved_workspace_ref == str(workspace.resolve())
 
 
 def _result_for(name: str) -> ContainerJobActivityResult:
