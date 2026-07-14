@@ -28,6 +28,10 @@ CATALOG = build_default_activity_catalog()
 _TERMINAL = frozenset({"succeeded", "failed", "canceled", "timed_out"})
 
 
+class _WorkspaceNotVisible(Exception):
+    """Internal marker: workspace resolution failed before any container work."""
+
+
 @workflow.defn(name="MoonMind.ContainerJob")
 class MoonMindContainerJobWorkflow:
     """Own one bounded job from acquisition through evidence and cleanup."""
@@ -115,15 +119,25 @@ class MoonMindContainerJobWorkflow:
         async def execute_lifecycle() -> None:
             nonlocal terminal_state, exit_code, failure_class
             if not self._cancel_requested:
-                await self._project(request, ContainerJobState.PREPARING)
-                resolved = await self._activity(
-                    "container_job.resolve_workspace", request
-                )
+                await self._project(request, ContainerJobState.RESOLVING_WORKSPACE)
+                try:
+                    resolved = await self._activity(
+                        "container_job.resolve_workspace", request
+                    )
+                except Exception as exc:
+                    # Resolution/probe failures are workspace-visibility failures;
+                    # surface the distinct phase and failure class (AC1/AC9).
+                    await self._project(
+                        request, ContainerJobState.WORKSPACE_NOT_VISIBLE
+                    )
+                    raise _WorkspaceNotVisible(str(exc)[:2048])
                 request.resolved_workspace_ref = resolved.resolved_workspace_ref
             if not self._cancel_requested:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
                 image = await self._activity("container_job.acquire_image", request)
                 request.resolved_image_ref = image.resolved_image_ref
+                if image.image is not None:
+                    request.image = image.image
             if not self._cancel_requested:
                 reconciled = await self._activity(
                     "container_job.reconcile_container", request
@@ -134,6 +148,7 @@ class MoonMindContainerJobWorkflow:
                         "container_job.create_container", request
                     )
                     request.container_ref = created.container_ref
+                await self._project(request, ContainerJobState.STARTING)
                 if not reconciled.running:
                     await self._activity("container_job.start_container", request)
             while not self._cancel_requested and request.container_ref:
@@ -141,6 +156,12 @@ class MoonMindContainerJobWorkflow:
                 observed = await self._activity(
                     "container_job.observe_container", request
                 )
+                if observed.log_sequence is not None:
+                    # Thread the live-log capture cursor forward so each cycle
+                    # only forwards unseen, ordered output (AC2).
+                    request.log_sequence = observed.log_sequence
+                    request.log_stdout_offset = observed.log_stdout_offset or 0
+                    request.log_stderr_offset = observed.log_stderr_offset or 0
                 if observed.terminal_state is not None:
                     terminal_state = observed.terminal_state
                     exit_code = observed.exit_code
@@ -169,6 +190,10 @@ class MoonMindContainerJobWorkflow:
             terminal_state = ContainerJobState.TIMED_OUT
             failure_class = ContainerJobFailureClass.TIMEOUT
             message = "container job exceeded its timeout"
+        except _WorkspaceNotVisible as exc:
+            terminal_state = ContainerJobState.FAILED
+            failure_class = ContainerJobFailureClass.WORKSPACE
+            message = str(exc)[:2048]
         except Exception as exc:
             terminal_state = ContainerJobState.FAILED
             failure_class = ContainerJobFailureClass.INFRASTRUCTURE
@@ -185,6 +210,7 @@ class MoonMindContainerJobWorkflow:
         logs_ref: str | None = None
         artifacts_ref: str | None = None
         request.publication_token = f"{inp.ownership_token}:publication"
+        await self._project(request, ContainerJobState.PUBLISHING_ARTIFACTS)
         published = await self._best_effort("container_job.publish_evidence", request)
         if published is None:
             publication = AuxiliaryOutcome(state="failed")
@@ -193,6 +219,7 @@ class MoonMindContainerJobWorkflow:
             logs_ref = published.logs_ref
             artifacts_ref = published.artifacts_ref
 
+        await self._project(request, ContainerJobState.CLEANING_UP)
         removed = await self._best_effort("container_job.remove_container", request)
         cleaned = await self._best_effort("container_job.cleanup", request)
         cleanup = AuxiliaryOutcome(

@@ -78,6 +78,60 @@ def test_status_accepts_every_canonical_state(state: ContainerJobState) -> None:
     assert ContainerJobStatus(jobId=JOB_ID, state=state, updatedAt=NOW).state == state.value
 
 
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "resolving_workspace",
+        "workspace_not_visible",
+        "starting",
+        "publishing_artifacts",
+        "cleaning_up",
+    ],
+)
+def test_status_exposes_new_canonical_phases(phase: str) -> None:
+    # MoonMind#3258 AC1: the granular preparation/publication/cleanup phases.
+    assert ContainerJobStatus(jobId=JOB_ID, state=phase, updatedAt=NOW).state == phase
+
+
+def test_evidence_manifest_round_trips_required_fields() -> None:
+    # MoonMind#3258 AC5: size, digest, media type, relative path, collection status.
+    from moonmind.schemas.container_job_models import (
+        ContainerJobEvidenceEntry,
+        ContainerJobEvidenceManifest,
+        EvidenceCollectionStatus,
+    )
+
+    manifest = ContainerJobEvidenceManifest(
+        jobId=JOB_ID,
+        entries=[
+            ContainerJobEvidenceEntry(
+                name="report",
+                kind="output",
+                relativePath="out/report.txt",
+                artifactRef="art:bundle",
+                sizeBytes=4,
+                sha256="a" * 64,
+                mediaType="text/plain",
+                collectionStatus=EvidenceCollectionStatus.COLLECTED,
+            )
+        ],
+    )
+    decoded = ContainerJobEvidenceManifest.model_validate_json(
+        manifest.model_dump_json(by_alias=True, exclude_none=True)
+    )
+    entry = decoded.entries[0]
+    assert entry.relative_path == "out/report.txt"
+    assert entry.collection_status == EvidenceCollectionStatus.COLLECTED
+    with pytest.raises(ValidationError):
+        ContainerJobEvidenceEntry(
+            name="bad",
+            kind="output",
+            mediaType="text/plain",
+            sha256="nothex",
+            collectionStatus=EvidenceCollectionStatus.COLLECTED,
+        )
+
+
 @pytest.mark.parametrize("failure", list(ContainerJobFailureClass))
 def test_terminal_accepts_every_failure_class(failure: ContainerJobFailureClass) -> None:
     assert TerminalOutcome(failureClass=failure).failure_class == failure.value

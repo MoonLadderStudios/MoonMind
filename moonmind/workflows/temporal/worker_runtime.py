@@ -2293,11 +2293,21 @@ def _pentest_runner_image_overrides() -> dict[str, str]:
     }
 
 def _container_job_evidence_publisher(artifact_service: TemporalArtifactService):
-    async def publish(request, name: str, payload: bytes) -> str:
+    from moonmind.utils.logging import redact_sensitive_text
+
+    async def publish(
+        request, name: str, payload: bytes, content_type: str = "text/plain"
+    ) -> str:
         principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        # Final redaction gate before durable persistence for text-shaped evidence
+        # (binary bundles are pre-collected from the approved artifact root) (AC11).
+        if content_type.startswith("text/") or content_type == "application/json":
+            payload = redact_sensitive_text(
+                payload.decode("utf-8", errors="replace")
+            ).encode("utf-8")
         artifact, _ = await artifact_service.create(
             principal=principal,
-            content_type="text/plain",
+            content_type=content_type,
             metadata_json={
                 "artifact_type": "container_job.evidence",
                 "name": name,
@@ -2308,9 +2318,43 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             artifact_id=artifact.artifact_id,
             principal=principal,
             payload=payload,
-            content_type="text/plain",
+            content_type=content_type,
         )
         return artifact.artifact_id
+    return publish
+
+
+def _container_job_live_log_publisher(workspace_root: str):
+    """Forward bounded container-job log entries onto the shared Live Logs spool.
+
+    Reuses the managed-runtime ``SpoolLogPublisher`` transport (#2558) rather than
+    creating a container-only stream; delivery is best-effort and never overrides
+    the durable terminal artifacts published at completion (AC2/AC12).
+    """
+
+    from pathlib import Path
+
+    from moonmind.observability.transport import SpoolLogPublisher
+    from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
+
+    async def publish(request, entries) -> None:
+        if not entries:
+            return
+        workspace = request.resolved_workspace_ref or str(
+            Path(workspace_root) / "container_jobs" / request.job_id
+        )
+        spool = SpoolLogPublisher(workspace)
+        for entry in entries:
+            spool.publish(
+                RunObservabilityEvent(
+                    runId=request.job_id,
+                    sequence=entry.sequence,
+                    stream=entry.stream,
+                    timestamp=entry.timestamp.isoformat(),
+                    text=entry.text,
+                )
+            )
+
     return publish
 
 async def _container_job_projection_writer(request) -> None:
@@ -2328,7 +2372,13 @@ async def _container_job_projection_writer(request) -> None:
         ) or record.state
         record.backend_kind = "docker-engine"
         record.backend_ref = "system"
-        if request.resolved_image_ref:
+        if request.image is not None:
+            # Prefer the observed image acquisition evidence threaded from the
+            # acquire_image activity (real cache/pull observations) (AC9).
+            record.image_observation_json = request.image.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        elif request.resolved_image_ref:
             record.image_observation_json = {
                 "requestedReference": request.request.spec.image,
                 "resolvedDigest": request.resolved_image_ref
@@ -2618,6 +2668,11 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         or "tcp://docker-proxy:2375"
                     ),
                     evidence_publisher=_container_job_evidence_publisher(artifact_service),
+                    live_log_publisher=_container_job_live_log_publisher(
+                        os.environ.get(
+                            "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+                        )
+                    ),
                     projection_writer=_container_job_projection_writer,
                     managed_run_store=run_store,
                 ),

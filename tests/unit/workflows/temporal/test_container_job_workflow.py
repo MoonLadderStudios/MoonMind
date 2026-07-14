@@ -284,6 +284,61 @@ async def test_primary_success_survives_publication_and_cleanup_failures(
 
 
 @pytest.mark.asyncio
+async def test_canonical_status_phases_are_projected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#3258 AC1: distinct preparation/execution/publication phases."""
+    job = MoonMindContainerJobWorkflow()
+    states: list[str] = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            states.append(request.state)
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "succeeded"
+    for phase in (
+        "resolving_workspace",
+        "acquiring_image",
+        "starting",
+        "running",
+        "publishing_artifacts",
+        "cleaning_up",
+        "succeeded",
+    ):
+        assert phase in states, f"missing canonical phase: {phase}"
+
+
+@pytest.mark.asyncio
+async def test_workspace_resolution_failure_projects_not_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#3258 AC1/AC9: workspace failures surface a distinct phase/class."""
+    job = MoonMindContainerJobWorkflow()
+    states: list[str] = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            states.append(request.state)
+        if name == "container_job.resolve_workspace":
+            raise RuntimeError("authorized container-job workspace is unavailable")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert "workspace_not_visible" in states
+    assert result["state"] == "failed"
+    assert result["terminal"]["failureClass"] == "workspace"
+    # Auxiliary publication/cleanup still run so partial evidence is preserved.
+    assert "publishing_artifacts" in states
+    assert "cleaning_up" in states
+
+
+@pytest.mark.asyncio
 async def test_terminal_projection_carries_authoritative_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

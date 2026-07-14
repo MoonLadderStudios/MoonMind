@@ -21,6 +21,15 @@ CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
 MAX_LOG_PAGE_ENTRIES = 500
 MAX_ARTIFACT_PAGE_ENTRIES = 200
+# Per-event and total live-retention limits for incremental log capture (AC2/AC4).
+MAX_LIVE_LOG_EVENT_BYTES = 8192
+MAX_LIVE_LOG_TOTAL_BYTES = 1 * 1024 * 1024
+# Terminal durable log fallback bound per stream (AC3/AC4); tail is preserved.
+MAX_TERMINAL_LOG_BYTES = 5 * 1024 * 1024
+# Declared-output collection ceilings enforced after launch (AC6).
+MAX_OUTPUT_FILE_BYTES = 256 * 1024 * 1024
+MAX_OUTPUT_TOTAL_BYTES = 1024 * 1024 * 1024
+MAX_OUTPUT_ENTRIES = 4096
 _JOB_ID = re.compile(r"^container-job:[0-9a-f]{32}$")
 _SECRET_KEY = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|auth|credential|docker_host|registry_auth)", re.I)
 _FORBIDDEN_KEYS = {
@@ -73,10 +82,18 @@ class TemporalContractModel(ContractModel):
 
 class ContainerJobState(StrEnum):
     QUEUED = "queued"
+    # ``preparing`` predates the canonical phase set below; it is retained only so
+    # persisted records/histories written before the #3258 phase split remain
+    # decodable. New submissions project the granular phases instead.
     PREPARING = "preparing"
+    RESOLVING_WORKSPACE = "resolving_workspace"
+    WORKSPACE_NOT_VISIBLE = "workspace_not_visible"
     ACQUIRING_IMAGE = "acquiring_image"
+    STARTING = "starting"
     RUNNING = "running"
     CANCELING = "canceling"
+    PUBLISHING_ARTIFACTS = "publishing_artifacts"
+    CLEANING_UP = "cleaning_up"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
@@ -291,6 +308,44 @@ class ContainerJobArtifactPage(ContractModel):
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 
 
+class EvidenceCollectionStatus(StrEnum):
+    COLLECTED = "collected"
+    TRUNCATED = "truncated"
+    EMPTY = "empty"
+    MISSING = "missing"
+    REJECTED = "rejected"
+
+
+class ContainerJobEvidenceEntry(ContractModel):
+    """One deterministic durable-evidence artifact recorded in the manifest (AC5)."""
+
+    name: str = Field(max_length=255)
+    kind: Literal["stdout", "stderr", "diagnostics", "output"]
+    relative_path: str | None = Field(None, alias="relativePath", max_length=1000)
+    artifact_ref: str | None = Field(None, alias="artifactRef", max_length=1024)
+    size_bytes: int = Field(0, alias="sizeBytes", ge=0)
+    sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    media_type: str = Field(alias="mediaType", max_length=255)
+    collection_status: EvidenceCollectionStatus = Field(alias="collectionStatus")
+    detail: str | None = Field(None, max_length=512)
+
+
+class ContainerJobEvidenceManifest(ContractModel):
+    """Deterministic durable-evidence manifest published as an artifact (AC3/AC5).
+
+    The compact durable record stores only bounded refs; the full enumeration of
+    stdout/stderr/diagnostics/declared-output artifacts (with size, digest, media
+    type, relative path and collection status) lives here in artifact storage.
+    """
+
+    job_id: str = Field(alias="jobId")
+    entries: list[ContainerJobEvidenceEntry] = Field(
+        default_factory=list, max_length=MAX_OUTPUT_ENTRIES + 8
+    )
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
+
+
 class ContainerJobCancelRequest(TemporalContractModel):
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=255)
     reason: str | None = Field(None, max_length=512)
@@ -409,6 +464,12 @@ class ContainerJobActivityRequest(TemporalContractModel):
     cleanup_outcome: AuxiliaryOutcome | None = Field(None, alias="cleanup")
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    manifest_ref: str | None = Field(None, alias="manifestRef", max_length=1024)
+    image: ImageObservation | None = None
+    # Monotonic live-log capture cursor threaded across observe cycles (AC2).
+    log_stdout_offset: int = Field(0, alias="logStdoutOffset", ge=0)
+    log_stderr_offset: int = Field(0, alias="logStderrOffset", ge=0)
+    log_sequence: int = Field(0, alias="logSequence", ge=0)
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 
@@ -429,9 +490,15 @@ class ContainerJobActivityResult(TemporalContractModel):
     exit_code: int | None = Field(None, alias="exitCode")
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    manifest_ref: str | None = Field(None, alias="manifestRef", max_length=1024)
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
     )
+    image: ImageObservation | None = None
+    # Updated live-log capture cursor returned to the workflow (AC2).
+    log_stdout_offset: int | None = Field(None, alias="logStdoutOffset", ge=0)
+    log_stderr_offset: int | None = Field(None, alias="logStderrOffset", ge=0)
+    log_sequence: int | None = Field(None, alias="logSequence", ge=0)
 
 
 class ContainerJobWorkflowResult(TemporalContractModel):
