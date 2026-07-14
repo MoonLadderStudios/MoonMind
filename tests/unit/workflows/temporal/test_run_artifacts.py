@@ -79,6 +79,25 @@ def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
         "idempotencyKey": checkpoint_id,
     }
 
+
+def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
+    normalized = _normalize_payload(payload)
+    return {
+        "status": "captured",
+        "workspace": {
+            "kind": "worktree_archive",
+            "baseCommit": "abc123",
+            "archiveRef": "artifact://managed/archive",
+            "archiveDigest": "sha256:" + ("a" * 64),
+            "manifestRef": "artifact://managed/manifest",
+            "manifestDigest": "sha256:" + ("b" * 64),
+            "includesUntracked": True,
+            "includesIgnoredFiles": False,
+        },
+        "diagnosticRefs": ["artifact://managed/manifest"],
+        "idempotencyKey": normalized["idempotencyKey"],
+    }
+
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],
     **_kwargs: Any,
@@ -243,6 +262,8 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "provider_profile.list":
             return {"profiles": []}
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         if activity_type == "artifact.read":
@@ -380,6 +401,8 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -483,6 +506,8 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -612,6 +637,8 @@ async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_2"}, {"upload_url": "unused"})
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -959,6 +986,8 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
                     "edges": [{"from": "check-blockers", "to": "implement"}],
                 }
             ).encode("utf-8")
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity {activity_type}")
@@ -1202,6 +1231,8 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
                     },
                 }
             return {"status": "COMPLETED", "outputs": {"summary": "Implemented."}}
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity {activity_type}")
@@ -3652,6 +3683,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
@@ -3800,6 +3833,8 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
@@ -4004,6 +4039,8 @@ async def test_run_execution_stage_does_not_retry_permanent_agent_runtime_failur
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
