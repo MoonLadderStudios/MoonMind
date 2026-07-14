@@ -1,5 +1,7 @@
 """Docker-backed workload contract helpers."""
 
+from typing import TYPE_CHECKING
+
 from moonmind.schemas.workload_models import (
     RunnerProfile,
     ValidatedWorkloadRequest,
@@ -25,6 +27,14 @@ _TOOL_BRIDGE_EXPORTS = frozenset(
         "is_container_job_tool",
     }
 )
+
+if TYPE_CHECKING:
+    from moonmind.workloads.tool_bridge import (
+        CONTAINER_JOB_TOOL_NAMES,
+        CONTAINER_RUN_JOB_TOOL,
+        build_container_job_tool_definition_payload,
+        is_container_job_tool,
+    )
 
 def __getattr__(name: str) -> object:
     if name in _TOOL_BRIDGE_EXPORTS:
