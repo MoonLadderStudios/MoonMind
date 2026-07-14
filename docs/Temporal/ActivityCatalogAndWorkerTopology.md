@@ -472,11 +472,13 @@ Worker queue: `mm.activity.integrations`
 
 ## 8.9 Managed runtime activities (`agent_runtime.*`)
 
-Purpose: managed runtime launch, supervision support, result collection, artifact publication, and cancellation.
+Purpose: managed runtime launch, supervision support, owner-authorized workspace
+checkpoint capture, result collection, artifact publication, and cancellation.
 
 Current implemented activities:
 
 - `agent_runtime.launch`
+- `agent_runtime.capture_workspace_checkpoint`
 - `agent_runtime.launch_session`
 - `agent_runtime.prepare_turn_instructions`
 - `agent_runtime.publish_artifacts`
@@ -500,6 +502,7 @@ Worker queue: `mm.activity.agent_runtime`
 ### Contract expectations
 
 - `agent_runtime.status(...) -> AgentRunStatus`
+- `agent_runtime.capture_workspace_checkpoint(...) -> compact worktree archive and manifest refs`
 - `agent_runtime.fetch_result(...) -> AgentRunResult`
 - `agent_runtime.cancel(...) -> AgentRunStatus`
 - `agent_runtime.launch_session(...) -> ManagedSessionHandle`
@@ -517,6 +520,11 @@ Worker queue: `mm.activity.agent_runtime`
 - `agent_runtime.evaluate_terminal_evidence(...) -> AgentRunResult`
 
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
+
+`agent_runtime.capture_workspace_checkpoint` accepts only a typed managed-runtime
+locator, resolves it through the managed run store, and supports Codex CLI
+`worktree_archive` capture. Archive and manifest bodies remain in artifact
+storage. Capture support does not imply restore support or Resume eligibility.
 
 `agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
 

@@ -74,6 +74,26 @@ def test_same_session_capability_is_enforced() -> None:
         )
 
 
+def test_codex_capture_does_not_claim_restore_or_resume() -> None:
+    codex = resolve_runtime_execution_capabilities("codex_cli")
+    assert codex.checkpoint_capture_kinds == ("worktree_archive",)
+    assert codex.checkpoint_capture_activity == (
+        "agent_runtime.capture_workspace_checkpoint"
+    )
+    assert codex.checkpoint_restore_kinds == ()
+    assert codex.checkpoint_restore_activity is None
+
+
+def test_codex_after_execution_selects_its_supported_archive_kind() -> None:
+    capabilities = resolve_runtime_execution_capabilities("codex_cli")
+
+    policy = resolve_checkpoint_policy(
+        boundary="after_execution", capabilities=capabilities
+    )
+
+    assert policy.checkpoint_kind == "worktree_archive"
+
+
 def test_checkpoint_matrix_never_defaults_external_runtime_to_local_capture() -> None:
     for runtime_id in RUNTIME_EXECUTION_CAPABILITIES.runtime_ids:
         capabilities = resolve_runtime_execution_capabilities(runtime_id)
