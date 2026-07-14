@@ -6765,89 +6765,83 @@ class TemporalAgentRuntimeActivities:
             record_root.mkdir(parents=True, exist_ok=True)
             record_name = hashlib.sha256(model.idempotency_key.encode()).hexdigest()
             lock_file = (record_root / f"{record_name}.lock").open("a+b")
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            record_path = record_root / f"{record_name}.json"
-            immutable = model.model_dump(by_alias=True, mode="json")
-            immutable_digest = hashlib.sha256(_json_bytes(immutable)).hexdigest()
-            if record_path.exists():
-                saved = json.loads(record_path.read_text(encoding="utf-8"))
-                if saved.get("immutableDigest") != immutable_digest:
-                    lock_file.close()
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                record_path = record_root / f"{record_name}.json"
+                immutable = model.model_dump(by_alias=True, mode="json")
+                immutable_digest = hashlib.sha256(_json_bytes(immutable)).hexdigest()
+                if record_path.exists():
+                    saved = json.loads(record_path.read_text(encoding="utf-8"))
+                    if saved.get("immutableDigest") != immutable_digest:
+                        raise temporal_exceptions.ApplicationError(
+                            "immutable capture inputs changed",
+                            type="CHECKPOINT_IDEMPOTENCY_CONFLICT",
+                            non_retryable=True,
+                        )
+                    result = dict(saved["result"])
+                    logger.info("managed_checkpoint_capture_reused")
+                    return result
+
+                expected = resolve_runtime_execution_capabilities("codex_cli")
+                if model.capability_digest != expected.capability_digest:
                     raise temporal_exceptions.ApplicationError(
-                        "immutable capture inputs changed",
-                        type="CHECKPOINT_IDEMPOTENCY_CONFLICT",
+                        "capability snapshot is stale",
+                        type="CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
                         non_retryable=True,
                     )
-                result = dict(saved["result"])
-                logger.info("managed_checkpoint_capture_reused")
-                lock_file.close()
+                record = self._run_store.load(locator.agent_run_id)
+                if record is None:
+                    raise temporal_exceptions.ApplicationError(
+                        "managed run record was not found",
+                        type=WORKSPACE_IDENTITY_MISMATCH,
+                        non_retryable=True,
+                    )
+                correlation = {
+                    "ownerRunId": record.owner_run_id,
+                    "logicalStepId": record.logical_step_id,
+                    "executionOrdinal": record.execution_ordinal,
+                }
+                expected_correlation = {
+                    "ownerRunId": model.identity.run_id,
+                    "logicalStepId": model.identity.logical_step_id,
+                    "executionOrdinal": model.identity.execution_ordinal,
+                }
+                if correlation != expected_correlation:
+                    logger.warning("managed_checkpoint_capture_authority_rejected")
+                    raise temporal_exceptions.ApplicationError(
+                        "managed run record does not belong to the source Step Execution",
+                        type=WORKSPACE_IDENTITY_MISMATCH,
+                        non_retryable=True,
+                    )
+                try:
+                    workspace = resolve_managed_workspace_locator(
+                        locator,
+                        store=self._run_store,
+                        current_agent_run_id=locator.agent_run_id,
+                        current_runtime_id=model.expected_runtime_id,
+                    )
+                except WorkspaceLocatorResolutionError as exc:
+                    raise temporal_exceptions.ApplicationError(
+                        str(exc), type=exc.code, non_retryable=True
+                    ) from exc
+                result = await self._capture_managed_worktree(model, workspace, record)
+                temporary = record_path.with_suffix(".tmp")
+                temporary.write_text(
+                    json.dumps(
+                        {"immutableDigest": immutable_digest, "result": result},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, record_path)
+                logger.info(
+                    "managed_checkpoint_capture_succeeded duration_ms=%s",
+                    int((time.monotonic() - capture_started) * 1000),
+                )
                 return result
-
-            expected = resolve_runtime_execution_capabilities("codex_cli")
-            if model.capability_digest != expected.capability_digest:
-                raise temporal_exceptions.ApplicationError(
-                    "capability snapshot is stale",
-                    type="CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
-                    non_retryable=True,
-                )
-            record = self._run_store.load(locator.agent_run_id)
-            if record is None:
-                raise temporal_exceptions.ApplicationError(
-                    "managed run record was not found",
-                    type=WORKSPACE_IDENTITY_MISMATCH,
-                    non_retryable=True,
-                )
-            if record.workflow_id != model.identity.workflow_id:
-                raise temporal_exceptions.ApplicationError(
-                    "managed run record does not belong to the source workflow",
-                    type=WORKSPACE_IDENTITY_MISMATCH,
-                    non_retryable=True,
-                )
-            correlation = {
-                "ownerRunId": record.owner_run_id,
-                "logicalStepId": record.logical_step_id,
-                "executionOrdinal": record.execution_ordinal,
-            }
-            expected_correlation = {
-                "ownerRunId": model.identity.run_id,
-                "logicalStepId": model.identity.logical_step_id,
-                "executionOrdinal": model.identity.execution_ordinal,
-            }
-            if correlation != expected_correlation:
-                logger.warning("managed_checkpoint_capture_authority_rejected")
-                raise temporal_exceptions.ApplicationError(
-                    "managed run record does not belong to the source Step Execution",
-                    type=WORKSPACE_IDENTITY_MISMATCH,
-                    non_retryable=True,
-                )
-            try:
-                workspace = resolve_managed_workspace_locator(
-                    locator,
-                    store=self._run_store,
-                    current_agent_run_id=locator.agent_run_id,
-                    current_runtime_id=model.expected_runtime_id,
-                )
-            except WorkspaceLocatorResolutionError as exc:
-                raise temporal_exceptions.ApplicationError(
-                    str(exc), type=exc.code, non_retryable=True
-                ) from exc
-            result = await self._capture_managed_worktree(model, workspace, record)
-            temporary = record_path.with_suffix(".tmp")
-            temporary.write_text(
-                json.dumps(
-                    {"immutableDigest": immutable_digest, "result": result},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                encoding="utf-8",
-            )
-            os.replace(temporary, record_path)
-            logger.info(
-                "managed_checkpoint_capture_succeeded duration_ms=%s",
-                int((time.monotonic() - capture_started) * 1000),
-            )
-            lock_file.close()
-            return result
+            finally:
+                lock_file.close()
 
     async def _capture_managed_worktree(
         self,
@@ -6867,12 +6861,14 @@ class TemporalAgentRuntimeActivities:
         excluded_names = {".env", ".env.local", "credentials", "credentials.json"}
         excluded_parts = {
             ".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
-            ".cache", ".docker", "managed_runs", "managed_sessions",
+            ".cache", ".docker", "credentials", "managed_runs", "managed_sessions",
         }
         selected = [
             path for path in paths
             if Path(path).name not in excluded_names
             and not any(part in excluded_parts for part in Path(path).parts)
+            and Path(path).parts[:2]
+            not in {(".agents", "skills"), (".gemini", "skills")}
         ]
         if len(selected) > policy.max_file_count:
             raise temporal_exceptions.ApplicationError(
@@ -6882,13 +6878,17 @@ class TemporalAgentRuntimeActivities:
         entries: list[ManagedCheckpointEntry] = []
         total = 0
         output = BytesIO()
-        with tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        with tarfile.open(
+            fileobj=output, mode="w:gz", format=tarfile.PAX_FORMAT
+        ) as archive:
             for relative_text in selected:
                 if temporal_activity.in_activity():
                     temporal_activity.heartbeat(
                         {"phase": "archive", "filesCaptured": len(entries)}
                     )
                 path = workspace / relative_text
+                if not path.exists() and not path.is_symlink():
+                    continue
                 info_stat = path.lstat()
                 if stat.S_ISLNK(info_stat.st_mode):
                     target = os.readlink(path)
@@ -6913,6 +6913,10 @@ class TemporalAgentRuntimeActivities:
                     payload = None
                     target = None
                     entry_type = "file"
+                elif stat.S_ISDIR(info_stat.st_mode):
+                    # Gitlinks are represented by repository metadata and should not
+                    # recursively capture another repository's worktree.
+                    continue
                 else:
                     raise temporal_exceptions.ApplicationError(
                         f"unsupported file type: {relative_text}",
@@ -7012,11 +7016,11 @@ class TemporalAgentRuntimeActivities:
         self, payload: bytes, content_type: str, artifact_kind: str
     ) -> str:
         artifact, _ = await self._artifact_service.create(
-            principal="system:agent_runtime", content_type=content_type,
+            principal="system", content_type=content_type,
             size_bytes=len(payload), metadata_json={"artifact_kind": artifact_kind},
         )
         completed = await self._artifact_service.write_complete(
-            artifact_id=artifact.artifact_id, principal="system:agent_runtime",
+            artifact_id=artifact.artifact_id, principal="system",
             payload=payload, content_type=content_type,
         )
         return _compact_artifact_ref_text(build_artifact_ref(completed))

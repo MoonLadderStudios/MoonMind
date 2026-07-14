@@ -90,10 +90,87 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
     first = await activities.agent_runtime_capture_workspace_checkpoint(request)
     (repo / "binary.bin").write_bytes(b"changed after capture")
     assert await activities.agent_runtime_capture_workspace_checkpoint(request) == first
-    with tarfile.open(fileobj=BytesIO(artifacts[first["workspace"]["archiveRef"]]), mode="r:") as archive:
+    with tarfile.open(
+        fileobj=BytesIO(artifacts[first["workspace"]["archiveRef"]]),
+        mode="r:gz",
+    ) as archive:
         assert archive.extractfile("binary.bin").read() == b"\x00\xff\x01"
         assert archive.getmember("tracked.sh").mode & 0o111
         assert archive.getmember("safe-link").issym()
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_path) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "kept.txt").write_text("kept")
+    (repo / "deleted.txt").write_text("deleted")
+    subprocess.run(["git", "add", "kept.txt", "deleted.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c",
+            "user.email=test@example.invalid", "commit", "-qm", "base",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "deleted.txt").unlink()
+    (repo / "credentials").mkdir()
+    (repo / "credentials" / "token.json").write_text("secret")
+    (repo / ".agents" / "skills").mkdir(parents=True)
+    (repo / ".agents" / "skills" / "runtime.txt").write_text("runtime")
+    (repo / "nested-repo").mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo / "nested-repo", check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c",
+            "user.email=test@example.invalid", "commit", "--allow-empty",
+            "-qm", "base",
+        ],
+        cwd=repo / "nested-repo",
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git", "-c", "protocol.file.allow=always", "submodule", "add",
+            "./nested-repo", "module",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1", workflowId="agent-child-wf", agentId="codex_cli",
+            ownerRunId="run-1", logicalStepId="implement", executionOrdinal=1,
+            runtimeId="codex_cli", status="completed", startedAt=datetime.now(UTC),
+            finishedAt=datetime.now(UTC), workspacePath=str(repo),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+    artifacts: dict[str, bytes] = {}
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        ref = "artifact://" + hashlib.sha256(payload).hexdigest()
+        artifacts[ref] = payload
+        return ref
+
+    activities._put_managed_checkpoint_artifact = put
+    result = await activities.agent_runtime_capture_workspace_checkpoint(
+        _request(
+            digest=resolve_runtime_execution_capabilities(
+                "codex_cli"
+            ).capability_digest
+        )
+    )
+    with tarfile.open(
+        fileobj=BytesIO(artifacts[result["workspace"]["archiveRef"]]),
+        mode="r:gz",
+    ) as archive:
+        assert set(archive.getnames()) == {".gitmodules", "kept.txt"}
 
 
 @pytest.mark.asyncio
