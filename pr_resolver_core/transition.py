@@ -19,8 +19,12 @@ def reduce_resolver_state(
     snapshot: CanonicalPullRequestSnapshot,
     policy: ResolverPolicy,
     event: ResolverEvent,
+    known_ci_failures_precede_degraded: bool = True,
 ) -> ResolverTransition:
-    decision = classify_snapshot(snapshot)
+    decision = classify_snapshot(
+        snapshot,
+        known_ci_failures_precede_degraded=known_ci_failures_precede_degraded,
+    )
     state = previous_state
     metadata: dict[str, str | int | bool | None] = {}
 

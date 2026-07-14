@@ -247,6 +247,68 @@ async def test_completed_batch_no_op_replays_through_production_activity_route(
     assert result.metadata["queuedChildCount"] == 0
 
 
+async def test_successful_batch_without_publication_skips_prepublication_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the false-failure incident through the finalization boundary."""
+
+    replay_id = "batch-fanout-no-publish-checkpoint"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=timezone.utc)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": manifest["logicalStepId"],
+                "inputs": {"title": "Queue GitHub issue workflows"},
+            }
+        ],
+        dependency_map={manifest["logicalStepId"]: []},
+        updated_at=now,
+    )
+    row = workflow._step_ledger_row_for(manifest["logicalStepId"])
+    assert row is not None
+    row["executionOutcome"] = manifest["executionOutcome"]
+    workflow._publish_status = "not_required"
+    workflow._publish_reason = (
+        f"queued {manifest['queuedChildCount']} child workflows"
+    )
+    checkpoint_calls: list[str] = []
+
+    async def checkpoint(
+        _logical_step_id: str,
+        *,
+        boundary: str,
+        updated_at: datetime,
+    ) -> str:
+        checkpoint_calls.append(boundary)
+        raise AssertionError("publishMode none has no pre-publication boundary")
+
+    monkeypatch.setattr(
+        workflow,
+        "_record_canonical_step_checkpoint",
+        checkpoint,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _id: True)
+
+    checkpoint_failed = await workflow._record_prepublication_checkpoint(
+        manifest["logicalStepId"],
+        publish_mode=manifest["publishMode"],
+        updated_at=now,
+    )
+    completion = workflow._determine_publish_completion(
+        parameters={"publishMode": manifest["publishMode"]}
+    )
+
+    assert checkpoint_failed is False
+    assert len(checkpoint_calls) == expected["prepublicationCheckpointCalls"]
+    assert completion[0] == expected["completionStatus"]
+    assert completion[2] is False
+    assert workflow._attention_required is expected["attentionRequired"]
+    assert expected["parentState"] == "completed"
+
+
 def _materialize_workspace_fixture(replay_id: str, workspace: Path) -> None:
     manifest = load_replay(replay_id, "workspace-manifest.json")
     for item in manifest["artifacts"]:

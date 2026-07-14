@@ -687,6 +687,7 @@ def _is_security_check(check: dict) -> bool:
 def summarize_ci_checks(checks: list[dict]) -> dict:
     is_running = False
     has_failures = False
+    has_authoritative_failures = False
     failed_checks: list[dict] = []
     degraded_reasons: list[str] = []
     security_check_count = 0
@@ -707,6 +708,7 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
             is_running = True
         elif state in _FAILURE_CHECK_STATES:
             has_failures = True
+            has_authoritative_failures = True
             failed_checks.append(
                 {
                     "name": name,
@@ -725,6 +727,7 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
     return {
         "isRunning": is_running,
         "hasFailures": has_failures,
+        "hasAuthoritativeFailures": has_authoritative_failures,
         "failedChecks": failed_checks,
         "totalCheckCount": len(checks),
         "securityCheckCount": security_check_count,
@@ -901,6 +904,7 @@ def main():
             "nonSecurityCheckCount": 0,
             "isRunning": False,
             "hasFailures": False,
+            "hasAuthoritativeFailures": False,
         }
         head_non_sec = int(head_summary.get("nonSecurityCheckCount", 0))
         rollup_non_sec = int(ci_summary.get("nonSecurityCheckCount", 0))
@@ -911,6 +915,7 @@ def main():
             # resolver waits instead of merging.
             ci_summary["isRunning"] = True
             ci_summary["signalQuality"] = "degraded"
+            ci_summary["hasAuthoritativeFailures"] = False
             degraded = list(ci_summary.get("degradedReasons") or [])
             degraded.append("rollup_stale_head_sha_has_no_non_security_checks")
             ci_summary["degradedReasons"] = sorted(dict.fromkeys(degraded))
@@ -919,6 +924,9 @@ def main():
             # the authoritative source for running / failure state.
             ci_summary["isRunning"] = bool(head_summary.get("isRunning"))
             ci_summary["hasFailures"] = bool(head_summary.get("hasFailures"))
+            ci_summary["hasAuthoritativeFailures"] = bool(
+                head_summary.get("hasAuthoritativeFailures")
+            )
             head_failed = head_summary.get("failedChecks") or []
             if head_failed:
                 ci_summary["failedChecks"] = head_failed
