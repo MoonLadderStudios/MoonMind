@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
+import gzip
 from email.message import EmailMessage
 import hashlib
 import httpx
@@ -6912,10 +6913,31 @@ class TemporalAgentRuntimeActivities:
             model.idempotency_key, asyncio.Lock()
         )
         async with lock:
-            if self._run_store is None or self._artifact_service is None:
-                raise TemporalActivityRuntimeError(
-                    "managed checkpoint capture requires run and artifact stores"
+            try:
+                if self._run_store is None or self._artifact_service is None:
+                    raise TemporalActivityRuntimeError(
+                        "managed checkpoint capture requires run and artifact stores"
+                    )
+                return await self._capture_managed_checkpoint_locked(
+                    model, locator, capture_started
                 )
+            except Exception as exc:
+                failure_type = getattr(exc, "type", type(exc).__name__)
+                logger.warning(
+                    "managed_checkpoint_capture_failed failure_code=%s duration_ms=%s",
+                    failure_type,
+                    int((time.monotonic() - capture_started) * 1000),
+                )
+                if failure_type == "CHECKPOINT_CAPTURE_LIMIT_EXCEEDED":
+                    logger.warning("managed_checkpoint_capture_limit_exceeded")
+                raise
+
+    async def _capture_managed_checkpoint_locked(
+        self,
+        model: ManagedWorkspaceCheckpointCaptureInput,
+        locator: ManagedWorkspaceLocator,
+        capture_started: float,
+    ) -> dict[str, Any]:
             record_root = self._run_store.store_root / "checkpoint_captures"
             record_root.mkdir(parents=True, exist_ok=True)
             record_name = hashlib.sha256(model.idempotency_key.encode()).hexdigest()
@@ -6934,7 +6956,7 @@ class TemporalAgentRuntimeActivities:
                             non_retryable=True,
                         )
                     result = dict(saved["result"])
-                    logger.info("managed_checkpoint_capture_reused")
+                    logger.info("managed_checkpoint_capture_reused_idempotently")
                     return result
 
                 expected = resolve_runtime_execution_capabilities("codex_cli")
@@ -6952,11 +6974,13 @@ class TemporalAgentRuntimeActivities:
                         non_retryable=True,
                     )
                 correlation = {
+                    "workflowId": record.workflow_id,
                     "ownerRunId": record.owner_run_id,
                     "logicalStepId": record.logical_step_id,
                     "executionOrdinal": record.execution_ordinal,
                 }
                 expected_correlation = {
+                    "workflowId": model.identity.workflow_id,
                     "ownerRunId": model.identity.run_id,
                     "logicalStepId": model.identity.logical_step_id,
                     "executionOrdinal": model.identity.execution_ordinal,
@@ -6991,7 +7015,8 @@ class TemporalAgentRuntimeActivities:
                 )
                 os.replace(temporary, record_path)
                 logger.info(
-                    "managed_checkpoint_capture_succeeded duration_ms=%s",
+                    "managed_checkpoint_capture_succeeded bytes=%s duration_ms=%s",
+                    result["workspace"].get("archiveBytes", 0),
                     int((time.monotonic() - capture_started) * 1000),
                 )
                 return result
@@ -7033,8 +7058,8 @@ class TemporalAgentRuntimeActivities:
         entries: list[ManagedCheckpointEntry] = []
         total = 0
         output = BytesIO()
-        with tarfile.open(
-            fileobj=output, mode="w:gz", format=tarfile.PAX_FORMAT
+        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
+            fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
             for relative_text in selected:
                 if temporal_activity.in_activity():
@@ -7175,6 +7200,8 @@ class TemporalAgentRuntimeActivities:
             "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "checkpoint_manifest",
         )
+        logger.info("managed_checkpoint_capture_files files=%s", len(entries))
+        logger.info("managed_checkpoint_capture_bytes bytes=%s", len(archive_payload))
         compact = ManagedWorkspaceCheckpointCaptureResult(
             status="captured",
             workspace={
