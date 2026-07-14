@@ -24,6 +24,15 @@ from moonmind.schemas.checkpoint_restore_models import (
 )
 from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator
 
+from .git_auth import build_github_token_git_environment
+from .managed_api_key_resolve import resolve_github_token_for_launch
+
+
+# Checkpoint archive/manifest artifacts are written by the capture path under the
+# ``system`` owner. The artifact service only grants cross-owner reads to
+# ``service:``-prefixed principals, so the restore reader must use one.
+_CHECKPOINT_RESTORE_PRINCIPAL = "service:checkpoint_restore"
+
 
 def _digest(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
@@ -57,7 +66,7 @@ class ManagedCheckpointRestoreService:
             if self.artifact_service is not None:
                 artifact, payload = await self.artifact_service.read(
                     artifact_id=ref,
-                    principal="system:checkpoint_restore",
+                    principal=_CHECKPOINT_RESTORE_PRINCIPAL,
                     allow_restricted_raw=True,
                 )
                 content_type = str(getattr(artifact, "content_type", ""))
@@ -85,13 +94,13 @@ class ManagedCheckpointRestoreService:
     async def _write(self, payload: bytes) -> str:
         if self.artifact_service is not None:
             artifact, _ = await self.artifact_service.create(
-                principal="system:checkpoint_restore",
+                principal=_CHECKPOINT_RESTORE_PRINCIPAL,
                 content_type=RESTORATION_EVIDENCE_CONTENT_TYPE,
                 metadata_json={"artifact_kind": "managed_workspace_restoration"},
             )
             completed = await self.artifact_service.write_complete(
                 artifact_id=artifact.artifact_id,
-                principal="system:checkpoint_restore",
+                principal=_CHECKPOINT_RESTORE_PRINCIPAL,
                 payload=payload,
                 content_type=RESTORATION_EVIDENCE_CONTENT_TYPE,
             )
@@ -118,6 +127,24 @@ class ManagedCheckpointRestoreService:
                 "CHECKPOINT_PATH_ESCAPE", ".git content cannot be restored"
             )
         return path
+
+    @staticmethod
+    def _expected_mode(item: Mapping[str, Any]) -> int:
+        """Parse a manifest entry's octal file mode, failing closed if malformed."""
+        try:
+            return int(str(item.get("mode", "0644")), 8) & 0o777
+        except (TypeError, ValueError) as exc:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED", "invalid file mode in manifest"
+            ) from exc
+
+    @staticmethod
+    def _clear_existing(target: Path) -> None:
+        """Remove any existing filesystem entry at ``target`` without following it."""
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.is_dir():
+            shutil.rmtree(target)
 
     def _extract(
         self, archive: bytes, staging: Path, manifest: Mapping[str, Any], *,
@@ -171,12 +198,16 @@ class ManagedCheckpointRestoreService:
                         raise CheckpointRestoreError(
                             "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file digest mismatch"
                         )
-                    target.write_bytes(payload)
-                    expected_mode = int(item["mode"], 8) & 0o777
+                    expected_mode = self._expected_mode(item)
                     if member.mode & 0o777 != expected_mode:
                         raise CheckpointRestoreError(
                             "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "archive mode mismatch"
                         )
+                    # Drop any entry the base checkout left here first. Writing over
+                    # a checked-out symlink would follow it and could materialize
+                    # (and chmod) a file outside the staging tree.
+                    self._clear_existing(target)
+                    target.write_bytes(payload)
                     os.chmod(target, expected_mode)
                 elif member.issym():
                     if item.get("type") != "symlink" or member.linkname != item.get(
@@ -191,6 +222,7 @@ class ManagedCheckpointRestoreService:
                             "CHECKPOINT_SYMLINK_ESCAPE",
                             "symlink target escapes workspace",
                         )
+                    self._clear_existing(target)
                     target.symlink_to(member.linkname)
                 else:
                     raise CheckpointRestoreError(
@@ -206,10 +238,14 @@ class ManagedCheckpointRestoreService:
 
     def _verify_materialized(self, staging: Path, manifest: Mapping[str, Any]) -> None:
         expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
+        # A symlink is a leaf entry even when it points at a directory, so exclude
+        # only real directories; ``is_dir()`` alone would follow directory symlinks
+        # and drop them from the set, spuriously failing valid restores.
         actual = {
             str(path.relative_to(staging))
             for path in staging.rglob("*")
-            if ".git" not in path.relative_to(staging).parts and not path.is_dir()
+            if ".git" not in path.relative_to(staging).parts
+            and not (path.is_dir() and not path.is_symlink())
         }
         if actual != set(expected):
             raise CheckpointRestoreError(
@@ -225,17 +261,44 @@ class ManagedCheckpointRestoreService:
             else:
                 if _digest(path.read_bytes()) != item.get("digest"):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file digest mismatch")
-                if path.stat().st_mode & 0o777 != int(item["mode"], 8) & 0o777:
+                if path.stat().st_mode & 0o777 != self._expected_mode(item):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
+
+    def _replay_deletions(self, staging: Path, manifest: Mapping[str, Any]) -> None:
+        """Drop worktree entries the checkpoint deleted relative to ``baseCommit``.
+
+        The base commit is checked out before the archive is overlaid, so a file
+        that existed at base but was removed in the checkpointed worktree stays on
+        disk and is absent from the manifest. Left in place it would fail
+        ``_verify_materialized`` as an extra path, so remove any non-``.git`` entry
+        that the manifest does not list. A symlink (even one pointing at a
+        directory) is treated as a leaf, matching ``_verify_materialized``.
+        """
+        expected = {entry["path"] for entry in manifest.get("entries", [])}
+        for path in staging.rglob("*"):
+            relative = path.relative_to(staging)
+            if ".git" in relative.parts:
+                continue
+            if path.is_dir() and not path.is_symlink():
+                continue
+            if str(relative) not in expected:
+                self._clear_existing(path)
 
     def _git(
         self,
         args: list[str],
         cwd: Path | None = None,
         code: str = "CHECKPOINT_BASE_COMMIT_UNAVAILABLE",
+        *,
+        env: Mapping[str, str] | None = None,
     ) -> str:
         result = subprocess.run(
-            ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
+            ["git", *args],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=dict(env) if env is not None else None,
         )
         if result.returncode:
             raise CheckpointRestoreError(
@@ -303,9 +366,13 @@ class ManagedCheckpointRestoreService:
             )
         if self.run_store is not None:
             managed_run = self.run_store.load(req.destination.agent_run_id)
-            if (
-                managed_run is None
-                or managed_run.runtime_id != "codex_cli"
+            # A cold restore is expected to run *before* ``agent_runtime.launch``
+            # creates the managed run record, so a missing record is normal and
+            # must not block the restore. Identity is bound at launch time by
+            # ``assert_ready_for_launch``. Only enforce the binding when a record
+            # already exists (e.g. an idempotent re-run after launch).
+            if managed_run is not None and (
+                managed_run.runtime_id != "codex_cli"
                 or managed_run.workflow_id != req.recovery_identity.workflow_id
                 or not managed_run.workspace_path
                 or Path(managed_run.workspace_path).resolve() != workspace.resolve()
@@ -332,6 +399,10 @@ class ManagedCheckpointRestoreService:
             raise CheckpointRestoreError(
                 "CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint is not valid JSON"
             ) from exc
+        if not isinstance(checkpoint, dict):
+            raise CheckpointRestoreError(
+                "CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint must be a JSON object"
+            )
         workspace_evidence = checkpoint.get("workspace", {})
         if checkpoint.get("contentType") != "application/vnd.moonmind.step-execution-checkpoint+json;version=1":
             raise CheckpointRestoreError("CHECKPOINT_ARTIFACT_CONTENT_TYPE_MISMATCH", "checkpoint schema content type mismatch")
@@ -393,12 +464,26 @@ class ManagedCheckpointRestoreService:
         workspace_parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=workspace_parent))
         try:
-            repo_url = (
-                str(self.repository_source_root)
-                if self.repository_source_root is not None
-                else f"https://github.com/{req.destination.repository}.git"
+            if self.repository_source_root is not None:
+                repo_url = str(self.repository_source_root)
+                clone_env: Mapping[str, str] | None = None
+            else:
+                repo_url = f"https://github.com/{req.destination.repository}.git"
+                # A private-repo checkpoint that the original run could clone must
+                # also be cloneable here. Reuse the launcher's authenticated git
+                # environment (in-memory credential helper, no token on disk or in
+                # argv) so the cold restore does not fail before extraction.
+                token = await resolve_github_token_for_launch()
+                clone_env = (
+                    build_github_token_git_environment(
+                        token, base_env=dict(os.environ)
+                    )
+                    if token
+                    else None
+                )
+            self._git(
+                ["clone", "--no-checkout", repo_url, str(staging)], env=clone_env
             )
-            self._git(["clone", "--no-checkout", repo_url, str(staging)])
             self._git(
                 ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
             )
@@ -407,6 +492,9 @@ class ManagedCheckpointRestoreService:
                 archive, staging, manifest,
                 max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,
             )
+            # The base checkout materializes files the checkpoint deleted; replay
+            # those deletions so the tree matches the manifest before verifying.
+            self._replay_deletions(staging, manifest)
             self._verify_materialized(staging, manifest)
             actual = self._git(
                 ["rev-parse", "HEAD"], staging, "CHECKPOINT_BASE_COMMIT_MISMATCH"
@@ -498,8 +586,18 @@ class ManagedCheckpointRestoreService:
         self, *, agent_run_id: str, checkpoint_ref: str, capability_digest: str
     ) -> None:
         for path in (self.root / "managed_restores").glob("*.json"):
-            record = json.loads(path.read_text())
-            result = record.get("result", {})
+            # A partially written, empty, or otherwise corrupted record must not
+            # crash the launch gate for every other run; skip it and keep looking
+            # for a valid ready restoration.
+            try:
+                record = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            result = record.get("result")
+            if not isinstance(result, dict):
+                result = {}
             if (
                 record.get("status") == "ready"
                 and record.get("agentRunId") == agent_run_id

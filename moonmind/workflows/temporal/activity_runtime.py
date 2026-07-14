@@ -3407,23 +3407,29 @@ class TemporalSandboxActivities:
                 content_type="application/vnd.moonmind.worktree-archive",
                 metadata={"artifact_kind": "checkpoint_archive"},
             )
-            status = await _run_command(
-                ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                cwd=str(workspace),
-            )
-            manifest_payload = _json_bytes(
-                {
-                    "schemaVersion": "v1",
-                    "kind": "worktree_archive",
-                    "baseCommit": model.base_commit,
-                    "archiveRef": archive_ref,
-                    "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
-                    "entries": entries,
-                    "pathCount": len(entries),
-                    "gitStatusDigest": "sha256:"
-                    + hashlib.sha256(status.stdout.encode("utf-8")).hexdigest(),
-                }
-            )
+            manifest_body: dict[str, Any] = {
+                "schemaVersion": "v1",
+                "kind": "worktree_archive",
+                "baseCommit": model.base_commit,
+                "archiveRef": archive_ref,
+                "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                "entries": entries,
+                "pathCount": len(entries),
+            }
+            # ``gitStatusDigest`` lets restore cross-check the worktree's staged and
+            # untracked state, but only a git worktree exposes one. A non-git
+            # workspace still produces a valid archive + manifest; it simply omits
+            # the optional digest (restore already treats it as optional).
+            if (workspace / ".git").exists():
+                status = await _run_command(
+                    ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                    cwd=str(workspace),
+                )
+                manifest_body["gitStatusDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(status.stdout.encode("utf-8")).hexdigest()
+                )
+            manifest_payload = _json_bytes(manifest_body)
             manifest_ref = await self._put_checkpoint_bytes(
                 manifest_payload,
                 content_type="application/json",
@@ -3478,9 +3484,13 @@ class TemporalSandboxActivities:
                 info.gid = _MANAGED_AGENT_GID
                 info.uname = "moonmind"
                 info.gname = "moonmind"
-                with path.open("rb") as file_handle:
-                    archive.addfile(info, file_handle)
+                # Read the file exactly once and reuse the bytes for both the
+                # archive payload and the manifest digest. Setting info.size from
+                # the read payload also keeps the tar header consistent if the
+                # file changed between gettarinfo() and this read.
                 payload = path.read_bytes()
+                info.size = len(payload)
+                archive.addfile(info, BytesIO(payload))
                 entries.append({
                     "path": str(relative), "type": "file",
                     "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
@@ -6763,7 +6773,34 @@ class TemporalAgentRuntimeActivities:
         self, request: Mapping[str, Any]
     ) -> dict[str, Any]:
         """Restore and verify a cold checkpoint before any agent is launched."""
-        return await self._checkpoint_restore.restore(request)
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+        try:
+            # Restore performs clone/extract/hash/rename work that can exceed the
+            # activity heartbeat timeout on large archives or slow clones.
+            # Heartbeat while it runs so Temporal does not time out and retry an
+            # attempt that may still be mutating the destination. Outside an
+            # activity context this simply awaits the coroutine.
+            return await _await_with_activity_heartbeats(
+                self._checkpoint_restore.restore(request),
+                heartbeat_payload={
+                    "activity": "agent_runtime.restore_workspace_checkpoint"
+                },
+            )
+        except CheckpointRestoreError as exc:
+            # CheckpointRestoreError is a plain RuntimeError, so Temporal would
+            # record type="CheckpointRestoreError" and the catalog's
+            # non_retryable_error_types (keyed on the stable failure codes) would
+            # never match, retrying deterministic failures up to the attempt cap.
+            # Re-raise as an ApplicationError whose type is the failure code and
+            # mark it non-retryable unless the envelope recommends a retry.
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.code,
+                non_retryable=(
+                    exc.failure_envelope.get("retryRecommendation") != "retry"
+                ),
+            ) from exc
 
     async def execution_notify_completion(
         self,
@@ -7230,12 +7267,17 @@ class TemporalAgentRuntimeActivities:
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
+        # Whether a resume must restore a workspace checkpoint is decided and
+        # enforced at the authoritative RunWorkflow ``before_recovery_restoration``
+        # boundary, which runs the restore activity before the failed step re-runs.
+        # The real resume payloads carry that decision under
+        # ``parameters["recoverySource"]`` / ``parameters["workflow"]["resume"]`` —
+        # never as a top-level ``recoveryMode == "resume_from_workspace_checkpoint"``
+        # sentinel (that value is produced nowhere), so the former sentinel gate
+        # was dead. When the restoration producer supplies verified evidence in the
+        # launch payload, verify it here as defense-in-depth before the agent
+        # starts.
         restoration_requirement = payload.get("restoration_requirement")
-        recovery_mode = request.parameters.get("recoveryMode")
-        if recovery_mode == "resume_from_workspace_checkpoint" and restoration_requirement is None:
-            raise TemporalActivityRuntimeError(
-                "resume_from_workspace_checkpoint requires verified restoration evidence"
-            )
         if restoration_requirement is not None:
             if not isinstance(restoration_requirement, Mapping):
                 raise TemporalActivityRuntimeError("restoration_requirement must be a mapping")
