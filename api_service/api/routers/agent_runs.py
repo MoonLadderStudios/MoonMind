@@ -1573,6 +1573,19 @@ async def control_agent_run_artifact_session(
         action=payload.action,
         capabilities=capabilities,
     )
+    if payload.expected_session_epoch != record.session_epoch:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "stale_session_state"},
+        )
+    if (
+        payload.expected_turn_id is not None
+        and payload.expected_turn_id != record.active_turn_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "active_turn_mismatch"},
+        )
     if record.status in _MANAGED_SESSION_TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1590,6 +1603,7 @@ async def control_agent_run_artifact_session(
             "SendFollowUp",
             {
                 "message": payload.message,
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1598,6 +1612,7 @@ async def control_agent_run_artifact_session(
             workflow_id,
             "ClearSession",
             {
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1607,6 +1622,7 @@ async def control_agent_run_artifact_session(
             "InterruptTurn",
             {
                 "sessionEpoch": record.session_epoch,
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1615,6 +1631,7 @@ async def control_agent_run_artifact_session(
             workflow_id,
             "CancelSession",
             {
+                "requestId": payload.control_request_id,
                 **({"reason": payload.reason} if payload.reason else {}),
             },
         )
@@ -1631,7 +1648,15 @@ async def control_agent_run_artifact_session(
     )
     if projection is None:
         _session_projection_not_found()
-    return ArtifactSessionControlResponse(action=payload.action, projection=projection)
+    return ArtifactSessionControlResponse(
+        action=payload.action,
+        controlRequestId=payload.control_request_id,
+        status="completed",
+        stableReasonCode=None,
+        controlEventRef=(record.latest_control_event_ref if record else None),
+        completedAt=datetime.now(UTC),
+        projection=projection,
+    )
 
 @router.get(
     "/{id}/observability/events",

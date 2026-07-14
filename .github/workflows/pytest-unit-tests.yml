@@ -29,6 +29,10 @@ jobs:
       integration_ci: ${{ steps.select.outputs.integration_ci }}
       reliability_journey: ${{ steps.select.outputs.reliability_journey }}
       full_backend: ${{ steps.select.outputs.full_backend }}
+      frontend_static: ${{ steps.select.outputs.frontend_static }}
+      frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
+      frontend_browser_firefox: ${{ steps.select.outputs.frontend_browser_firefox }}
+      full_frontend: ${{ steps.select.outputs.full_frontend }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -421,7 +425,9 @@ jobs:
 
           echo "All selected backend suites passed."
 
-  test-frontend:
+  frontend-static:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.frontend_static == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -440,19 +446,89 @@ jobs:
       run: npm ci
     - name: Run frontend CI
       run: npm run frontend:ci
-    - name: Install Playwright browsers for browser-computed style tests
-      # The real-browser suite (frontend/vitest.browser.config.ts) runs in both
-      # Chromium and Firefox, so both engines must be installed or Firefox fails
-      # to launch before any test runs.
-      run: npx playwright install --with-deps chromium firefox
-    - name: Run real-browser style regression suite
-      run: npm run ui:test:browser
-    - name: Upload dashboard dist artifact
-      uses: actions/upload-artifact@v7
+
+  frontend-browser:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.frontend_browser_chromium == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    env:
+      # GitHub overrides the container HOME with /github/home (owned by
+      # pwuser), but the job runs as root. Firefox refuses that mismatch.
+      HOME: /root
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox"]' || '["chromium"]') }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
       with:
-        name: dashboard-dist
-        path: api_service/static/workflow_console/dist/
-        if-no-files-found: error
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install Node dependencies
+      run: npm ci --no-audit --no-fund
+    - name: Report Playwright environment
+      run: npx playwright --version
+    - name: Run real-browser style regression suite
+      env:
+        MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
+      run: npm run ui:test:browser
+
+  test-frontend:
+    needs:
+      - select-test-suites
+      - frontend-static
+      - frontend-browser
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Verify frontend validation status
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        static_selected="${{ needs.select-test-suites.outputs.frontend_static }}"
+        browser_selected="${{ needs.select-test-suites.outputs.frontend_browser_chromium }}"
+        static_result="${{ needs.frontend-static.result }}"
+        browser_result="${{ needs.frontend-browser.result }}"
+
+        {
+          echo "## Frontend validation"
+          echo "| Check | Selected | Result |"
+          echo "|---|---:|---|"
+          echo "| Static | $static_selected | $static_result |"
+          echo "| Chromium | $browser_selected | $browser_result |"
+          echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
+          echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
+          exit 1
+        fi
+        if [[ "$static_selected" == "true" && "$static_result" != "success" ]]; then
+          echo "::error::frontend-static was selected but ended with result=$static_result"
+          exit 1
+        fi
+        if [[ "$browser_selected" == "true" && "$browser_result" != "success" ]]; then
+          echo "::error::frontend-browser was selected but ended with result=$browser_result"
+          exit 1
+        fi
+
+        if [[ "$static_selected" != "true" && "$browser_selected" != "true" ]]; then
+          echo "Known non-frontend change; frontend validation skipped intentionally."
+        else
+          echo "All selected frontend checks passed."
+        fi
 
   detect-openapi-contract-impact:
     runs-on: ubuntu-latest
