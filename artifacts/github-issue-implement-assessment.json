@@ -1,0 +1,52 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#2561",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/2561",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "github-issue-implement-beccf7d6",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "The checkout has 0 commits ahead of main, so assessment used main/trunk mode. Existing draft observability design, Temporal Prometheus telemetry, StatsD emitters, and domain telemetry are baseline partial evidence, but the production observability product requested by #2561 is absent: there is no MetricsAndDashboards.md contract, shared enforced registry, repo-owned Grafana provisioning/dashboards, SLO and recording/alert rules, observability runbook set, deployable combined stack, or the required CI/smoke quality gates. Recent history contains no #2561-linked implementing merge. New code, operational assets, documentation, and tests are required.",
+  "requirements": [
+    {
+      "description": "Canonical MetricsAndDashboards.md contract backed by machine-readable metric definitions",
+      "status": "not_met"
+    },
+    {
+      "description": "Shared metric registry with label allowlists, bounded normalization, cardinality budgets, no-op behavior, and trace correlation",
+      "status": "not_met"
+    },
+    {
+      "description": "Production-journey instrumentation across API, Temporal/workers, providers, Omnigent, artifacts/operator observability, and safety/governance",
+      "status": "partially_met"
+    },
+    {
+      "description": "Explicit SLOs, recording rules, and calibrated multi-window burn alerts",
+      "status": "not_met"
+    },
+    {
+      "description": "Seven repo-owned provisioned Grafana dashboards with bounded variables and authorized drill-down links",
+      "status": "not_met"
+    },
+    {
+      "description": "Actionable alert rules with owner/severity/dedupe/dashboard/runbook/recovery metadata and observability runbooks",
+      "status": "not_met"
+    },
+    {
+      "description": "Deployable Prometheus or OTel, Grafana, rules, routing, and combined-stack observability assets",
+      "status": "not_met"
+    },
+    {
+      "description": "CI gates for registry coverage, labels/cardinality/buckets, dashboards, rules, annotations, and runbook links",
+      "status": "not_met"
+    },
+    {
+      "description": "Combined-stack scrape, dashboard-input, and alert-evaluation smoke test",
+      "status": "not_met"
+    },
+    {
+      "description": "Legacy StatsD migration/tombstone mapping and rollout/calibration plan covering series count, overhead, retention, and rollback",
+      "status": "not_met"
+    }
+  ]
+}
