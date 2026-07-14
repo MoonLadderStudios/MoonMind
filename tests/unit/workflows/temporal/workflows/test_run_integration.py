@@ -33,7 +33,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityRoute,
     TemporalActivityTimeouts,
 )
-from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
+from moonmind.workloads.tool_bridge import build_container_job_tool_definition_payload
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
     import json
@@ -760,7 +760,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
+async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -787,8 +787,8 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
                 return json.dumps(
                     {
                         "skills": [
-                            build_dood_tool_definition_payload(
-                                name="container.run_workload",
+                            build_container_job_tool_definition_payload(
+                                name="container.run_job",
                             )
                         ]
                     }
@@ -799,28 +799,27 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
                         "id": "workload-step",
                         "tool": {
                             "type": "skill",
-                            "name": "container.run_workload",
+                            "name": "container.run_job",
                         },
                         "inputs": {
-                            "profileId": "local-python",
-                            "repoDir": "/work/agent_jobs/wf-1/repo",
-                            "artifactsDir": (
-                                "/work/agent_jobs/wf-1/artifacts/workload-step"
-                            ),
-                            "command": ["python", "-V"],
+                            "idempotencyKey": "wf-1:workload-step:1",
+                            "spec": {
+                                "image": "python:3.12",
+                                "workspaceRef": {"kind": "sandbox", "workspaceId": "ws-1"},
+                                "command": ["python", "-V"],
+                                "resources": {"cpuMillis": 100, "memoryMiB": 64},
+                            },
                         },
                     }
                 ]
             )
-        if activity_type == "mm.tool.execute":
+        if activity_type == "container_job.submit":
+            return {"jobId": "container-job:" + "1" * 32, "state": "queued"}
+        if activity_type == "container_job.status":
             return {
-                "status": "COMPLETED",
-                "outputs": {
-                    "workloadResult": {
-                        "status": "succeeded",
-                        "profileId": "local-python",
-                    }
-                },
+                "jobId": "container-job:" + "1" * 32,
+                "state": "succeeded",
+                "terminal": {"exitCode": 0},
             }
         return {"status": "COMPLETED", "outputs": {}}
 
@@ -878,18 +877,21 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
 
     await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
 
-    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
-    assert len(tool_calls) == 1
-    payload = tool_calls[0][1]
-    assert payload["invocation_payload"]["tool"] == {
-        "type": "skill",
-        "name": "container.run_workload",
+    submit_calls = [call for call in captured if call[0] == "container_job.submit"]
+    assert len(submit_calls) == 1
+    request = submit_calls[0][1]["request"]
+    assert request["source"] == {
+        "source": "workflow",
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "stepId": "workload-step",
     }
-    assert payload["context"]["workflow_id"] == "wf-1"
-    assert payload["context"]["node_id"] == "workload-step"
-    assert payload["principal"] == "owner-1"
-    assert payload["registry_snapshot_ref"] == "art:sha256:456"
-    assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
+    assert request["spec"]["workspaceRef"] == {
+        "kind": "sandbox",
+        "workspaceId": "ws-1",
+        "relativePath": "repo",
+    }
+    assert [call[0] for call in captured].count("container_job.status") == 1
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(

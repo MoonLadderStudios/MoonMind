@@ -19,14 +19,10 @@ from moonmind.workloads.registry import RunnerProfileRegistry, WorkloadPolicyErr
 
 _TOOL_BRIDGE_EXPORTS = frozenset(
     {
-        "CONTAINER_RUN_WORKLOAD_TOOL",
-        "DEFAULT_UNREAL_PROFILE_ID",
-        "DOOD_TOOL_NAMES",
-        "UNREAL_RUN_TESTS_TOOL",
-        "build_dood_tool_definition_payload",
-        "build_workload_tool_handler",
-        "is_dood_tool",
-        "register_workload_tool_handlers",
+        "CONTAINER_JOB_TOOL_NAMES",
+        "CONTAINER_RUN_JOB_TOOL",
+        "build_container_job_tool_definition_payload",
+        "is_container_job_tool",
     }
 )
 
@@ -40,16 +36,14 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
-    "CONTAINER_RUN_WORKLOAD_TOOL",
-    "DEFAULT_UNREAL_PROFILE_ID",
-    "DOOD_TOOL_NAMES",
+    "CONTAINER_JOB_TOOL_NAMES",
+    "CONTAINER_RUN_JOB_TOOL",
     "DockerContainerJanitor",
     "DockerWorkloadConcurrencyLimiter",
     "DockerWorkloadLauncher",
     "DockerWorkloadLauncherError",
     "RunnerProfile",
     "RunnerProfileRegistry",
-    "UNREAL_RUN_TESTS_TOOL",
     "ValidatedWorkloadRequest",
     "WorkloadCredentialMount",
     "WorkloadMount",
@@ -57,8 +51,6 @@ __all__ = [
     "WorkloadPolicyError",
     "WorkloadRequest",
     "WorkloadResult",
-    "build_dood_tool_definition_payload",
-    "build_workload_tool_handler",
-    "is_dood_tool",
-    "register_workload_tool_handlers",
+    "build_container_job_tool_definition_payload",
+    "is_container_job_tool",
 ]
