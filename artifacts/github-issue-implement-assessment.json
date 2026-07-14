@@ -1,0 +1,56 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3260",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3260",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "github-issue-implement-2df7b57d",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "The checkout is identical to origin/main at 704b636a1. The canonical container-job service, MoonMind.ContainerJob workflow, shared backend, and a default-off raw Docker CLI gate exist from prerequisite work, but workflow executable-tool dispatch still uses the legacy synchronous raw-path bridge: tool_bridge.py registers the old handlers and toolchain wrappers, calls DockerWorkloadLauncher.run(), activity_catalog.py retains workload.run with one attempt, and worker_runtime.py still registers that bridge. No #3260 merge/reference was found in recent history. New code work is required.",
+  "requirements": [
+    {
+      "description": "Workflow plans and skills can submit the same canonical container-job request used by HTTP/MCP callers.",
+      "status": "not_met"
+    },
+    {
+      "description": "A workflow step that waits for completion does so durably and retains a separately addressable `jobId`.",
+      "status": "not_met"
+    },
+    {
+      "description": "Job ownership/correlation includes user, workflow, run, step, and request identity without conflating container job, managed session, or `MoonMind.AgentRun`.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Legacy raw workspace/artifact path fields are no longer required by new workflow container calls.",
+      "status": "not_met"
+    },
+    {
+      "description": "`container.run_workload`, `container.run_container`, unrestricted `container.run_docker`, and unowned helper lifecycle methods are removed from normal agent/tool discovery and dispatch.",
+      "status": "not_met"
+    },
+    {
+      "description": "Any retained raw Docker escape hatch is disabled by default, trusted-internal only, audited, and unreachable through Omnigent/managed-session/public MCP.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Unreal, .NET, integration CI, and other examples use request builders/presets over the generic job service, not backend-specific code paths.",
+      "status": "not_met"
+    },
+    {
+      "description": "Existing safe runner-profile policy can be reused as optional presets without becoming the sole public image-selection mechanism.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Parent workflow cancellation propagates an idempotent job cancellation request and still preserves available child evidence.",
+      "status": "not_met"
+    },
+    {
+      "description": "Active Temporal-history analysis is documented; compatibility code exists only where replay/cutover evidence requires it and has a removal condition.",
+      "status": "not_met"
+    },
+    {
+      "description": "No new toolchain-specific worker queue or Docker daemon is introduced.",
+      "status": "met"
+    }
+  ]
+}
