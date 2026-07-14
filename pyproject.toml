@@ -45,7 +45,7 @@ nltk = ">=3.9.4,<3.11.0"
 PyYAML = ">=6.0.2"
 asyncpg = "~=0.31.0"
 SQLAlchemy = "~=2.0.49"
-docker = "~=7.1.0"
+docker = ">=7.1,<7.3"
 "fastapi-users" = { version = "~=15.0.5", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
 alembic = "~=1.18.4"
