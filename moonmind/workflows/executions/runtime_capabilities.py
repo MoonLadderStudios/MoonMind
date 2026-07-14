@@ -100,7 +100,9 @@ def _descriptor(**values: Any) -> RuntimeExecutionCapabilities:
 _DESCRIPTORS = (
     _descriptor(
         runtimeId="codex_cli", runtimeFamily="managed_cli",
-        workspaceAuthority="managed_runtime", checkpointCaptureKinds=(),
+        workspaceAuthority="managed_runtime",
+        checkpointCaptureKinds=("worktree_archive",),
+        checkpointCaptureActivity="agent_runtime.capture_workspace_checkpoint",
         checkpointRestoreKinds=(), supportsSameSessionContinuation=True,
         supportsActiveCommandIntrospection=True,
         activeCommandIntrospectionOwner="managed_agent.command_status",

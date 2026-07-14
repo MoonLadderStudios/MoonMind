@@ -393,13 +393,41 @@ async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority
     monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
 
-    async def unexpected_activity(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("managed workspace must not reach a sandbox activity")
+    activity_calls: list[str] = []
+
+    async def managed_checkpoint_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        activity_calls.append(activity_type)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "worktree_archive",
+                    "baseCommit": "abc123",
+                    "archiveRef": "artifact://managed/archive",
+                    "archiveDigest": "sha256:" + ("a" * 64),
+                    "manifestRef": "artifact://managed/manifest",
+                    "manifestDigest": "sha256:" + ("b" * 64),
+                    "includesUntracked": True,
+                    "includesIgnoredFiles": False,
+                },
+                "diagnosticRefs": ["artifact://managed/manifest"],
+                "idempotencyKey": payload["idempotencyKey"],
+            }
+        if activity_type == "step_checkpoint.create":
+            return {
+                "checkpointRef": "artifact://checkpoint/after_execution",
+                "checkpointId": payload["idempotencyKey"],
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "execute_activity",
-        unexpected_activity,
+        managed_checkpoint_activity,
     )
     parent = MoonMindRunWorkflow()
     now = datetime(2026, 7, 13, tzinfo=timezone.utc)
@@ -415,10 +443,11 @@ async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority
         "node-1", boundary="after_execution", updated_at=now
     )
 
-    assert checkpoint_ref is None
-    assert parent._step_checkpoint_capture_outcomes["node-1"] == (
-        expected["checkpointOutcome"]
-    )
+    assert checkpoint_ref == "artifact://checkpoint/after_execution"
+    assert activity_calls == [
+        "agent_runtime.capture_workspace_checkpoint",
+        "step_checkpoint.create",
+    ]
 
 
 async def test_codex_system_error_waits_for_delayed_oauth_failure_log(
