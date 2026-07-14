@@ -1610,6 +1610,15 @@ class GitHubService:
                     "source": "github",
                 }
             )
+        if has_failed_checks:
+            blockers.append(
+                {
+                    "kind": "checks_failed",
+                    "summary": "One or more required checks failed.",
+                    "retryable": False,
+                    "source": "github",
+                }
+            )
 
         return {
             "complete": not has_running_checks,

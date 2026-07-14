@@ -11,6 +11,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows import pr_resolver as resolver_module
 from moonmind.workflows.temporal.workflows.pr_resolver import (
     MoonMindPRResolverWorkflow,
+    PR_RESOLVER_CI_FAILURE_PRECEDENCE_PATCH,
     blocker_progress_signature,
     build_pr_resolver_start_input,
     classify_pr_resolver_snapshot,
@@ -281,6 +282,67 @@ async def test_repeated_blocker_without_remote_progress_stops_bounded(
     assert child_calls == 1
     assert result["metadata"]["mergeAutomationDisposition"] == "manual_review"
     assert result["failureClass"] == "execution_error"
+
+
+@pytest.mark.asyncio
+async def test_existing_history_keeps_legacy_degraded_ci_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child_calls = 0
+
+    async def execute_activity(name: str, payload: dict[str, Any], **kwargs: Any) -> Any:
+        if name == "pr_resolver.read_snapshot":
+            return {
+                "headSha": "abc",
+                "checksComplete": False,
+                "checksPassing": False,
+                "blockers": [
+                    {"kind": "checks_failed", "summary": "Tests failed"},
+                    {
+                        "kind": "checks_unavailable",
+                        "summary": "Some check evidence is unavailable",
+                    },
+                ],
+            }
+        if name == "pr_resolver.classify_gate":
+            return {
+                "classification": "manual_review",
+                "reasonCode": "ci_signal_degraded",
+            }
+        if name == "pr_resolver.write_terminal_result":
+            assert payload["terminalResult"]["reasonCode"] == "ci_signal_degraded"
+            return {"resultRef": "result-ref", "publishEvidenceRef": "publish-ref"}
+        raise AssertionError(name)
+
+    async def execute_child(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal child_calls
+        child_calls += 1
+        return {}
+
+    monkeypatch.setattr(resolver_module.workflow, "execute_activity", execute_activity)
+    monkeypatch.setattr(
+        resolver_module.workflow, "execute_child_workflow", execute_child
+    )
+    monkeypatch.setattr(
+        resolver_module,
+        "_workflow_patch_enabled",
+        lambda patch_id: patch_id != PR_RESOLVER_CI_FAILURE_PRECEDENCE_PATCH,
+    )
+    monkeypatch.setattr(
+        resolver_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="resolver-1", run_id="run-1", namespace="default"
+        ),
+    )
+    monkeypatch.setattr(
+        resolver_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+
+    result = await MoonMindPRResolverWorkflow().run(_workflow_payload())
+
+    assert child_calls == 0
+    assert result["metadata"]["mergeAutomationDisposition"] == "manual_review"
 
 
 @pytest.mark.asyncio

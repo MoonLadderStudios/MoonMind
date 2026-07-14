@@ -74,7 +74,11 @@ def normalize_temporal_snapshot(
         ),
         checks_failed=(
             "checks_failed" in kinds
-            or (checks_complete is True and checks_passing is False)
+            or (
+                not ready
+                and _bool(checks_complete)
+                and not _bool(checks_passing)
+            )
         ),
         checks_degraded=bool(degraded_kinds & set(kinds)),
         checks_signal_available=isinstance(checks_complete, bool),
@@ -138,6 +142,9 @@ def normalize_portable_snapshot(
     mergeable = pr.get("mergeable")
     mergeable_text = _text(mergeable).upper()
     signal_quality = _text(ci.get("signalQuality")).lower()
+    authoritative_failures = _bool(ci.get("hasAuthoritativeFailures")) or (
+        _bool(ci.get("hasFailures")) and signal_quality in {"", "ok"}
+    )
     grace = comments_summary.get("codexReviewGrace")
     grace_active = isinstance(grace, Mapping) and grace.get("active") is True
     required_shapes_present = bool(pr) and bool(ci) and bool(comments_fetch)
@@ -165,7 +172,7 @@ def normalize_portable_snapshot(
             and not _bool(ci.get("isRunning"))
             and signal_quality in {"", "ok"}
         ),
-        checks_failed=_bool(ci.get("hasFailures")),
+        checks_failed=authoritative_failures,
         checks_degraded=signal_quality not in {"", "ok"},
         checks_signal_available=bool(ci),
         actionable_comments=_bool(comments_summary.get("hasActionableComments")),
