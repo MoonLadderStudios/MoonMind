@@ -558,6 +558,7 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
@@ -4905,13 +4906,25 @@ class MoonMindRunWorkflow:
                 else None
             ),
         )
-        if resolved_policy.capture_activity != "workspace.capture_checkpoint":
+        managed_capture_enabled = workflow.patched(RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH)
+        supported_capture_activities = {"workspace.capture_checkpoint"}
+        if managed_capture_enabled:
+            supported_capture_activities.add(
+                "agent_runtime.capture_workspace_checkpoint"
+            )
+        if resolved_policy.capture_activity not in supported_capture_activities:
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "unsupported",
                 "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
                 "boundary": str(boundary),
                 "captureAuthority": resolved_policy.capture_authority,
-                "captureActivity": resolved_policy.capture_activity,
+                "captureActivity": (
+                    None
+                    if resolved_policy.capture_activity
+                    == "agent_runtime.capture_workspace_checkpoint"
+                    and not managed_capture_enabled
+                    else resolved_policy.capture_activity
+                ),
                 "capabilityCriticality": resolved_policy.criticality,
             }
             return None
@@ -4936,15 +4949,35 @@ class MoonMindRunWorkflow:
             )
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "workspace.capture_checkpoint"
+            resolved_policy.capture_activity
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": claimed_kind or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
+        if resolved_policy.capture_activity == "agent_runtime.capture_workspace_checkpoint":
+            capabilities = RuntimeExecutionCapabilities.model_validate(
+                capture_input["runtimeCapabilities"]
+            )
+            payload.update(
+                {
+                    "schemaVersion": "v1",
+                    "checkpointKind": claimed_kind or resolved_policy.checkpoint_kind,
+                    "expectedRuntimeId": capabilities.runtime_id,
+                    "capabilitySetVersion": capabilities.capability_set_version,
+                    "capabilityDigest": capabilities.capability_digest,
+                    "capturePolicy": {
+                        "includeTracked": True,
+                        "includeUntracked": True,
+                        "includeIgnored": False,
+                        "redactionProfile": "managed-code-workspace-v1",
+                    },
+                }
+            )
+        else:
+            payload["kind"] = claimed_kind or resolved_policy.checkpoint_kind
         if isinstance(capture_input.get("workspaceLocator"), Mapping):
             payload["workspaceLocator"] = dict(capture_input["workspaceLocator"])
         if capture_input.get("workspacePath"):
