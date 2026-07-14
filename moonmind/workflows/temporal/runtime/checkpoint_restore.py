@@ -41,6 +41,7 @@ class ManagedCheckpointRestoreService:
         artifact_service: Any = None,
         artifact_store: Any = None,
         repository_source_root: str | Path | None = None,
+        run_store: Any = None,
     ) -> None:
         self.root = Path(authority_root).resolve()
         self.artifact_service = artifact_service
@@ -48,18 +49,30 @@ class ManagedCheckpointRestoreService:
         self.repository_source_root = (
             Path(repository_source_root).resolve() if repository_source_root else None
         )
+        self.run_store = run_store
         self._locks: dict[str, asyncio.Lock] = {}
 
-    async def _read(self, ref: str) -> bytes:
+    async def _read(self, ref: str, *, content_types: set[str]) -> bytes:
         try:
             if self.artifact_service is not None:
-                _artifact, payload = await self.artifact_service.read(
+                artifact, payload = await self.artifact_service.read(
                     artifact_id=ref,
                     principal="system:checkpoint_restore",
                     allow_restricted_raw=True,
                 )
-                return payload
-            return self.artifact_store.get_bytes(ref)
+                content_type = str(getattr(artifact, "content_type", ""))
+            else:
+                payload = self.artifact_store.get_bytes(ref)
+                artifact = getattr(self.artifact_store, "_meta", {}).get(ref)
+                content_type = str(getattr(artifact, "content_type", ""))
+            if content_type not in content_types:
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ARTIFACT_CONTENT_TYPE_MISMATCH",
+                    "artifact has an incompatible content type",
+                )
+            return payload
+        except CheckpointRestoreError:
+            raise
         except Exception as exc:
             name = type(exc).__name__.lower()
             code = (
@@ -107,13 +120,18 @@ class ManagedCheckpointRestoreService:
         return path
 
     def _extract(
-        self, archive: bytes, staging: Path, manifest: Mapping[str, Any]
+        self, archive: bytes, staging: Path, manifest: Mapping[str, Any], *,
+        max_entries: int = 100_000, max_bytes: int = 2 * 1024 * 1024 * 1024,
     ) -> tuple[int, int]:
         expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
         seen: set[str] = set()
         total = 0
         with tarfile.open(fileobj=BytesIO(archive), mode="r:*") as tar:
             for member in tar:
+                if len(seen) >= max_entries:
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_RESTORE_LIMIT_EXCEEDED", "archive entry limit exceeded"
+                    )
                 path = self._safe_name(member.name)
                 name = str(path)
                 if name in seen or name not in expected:
@@ -138,14 +156,28 @@ class ManagedCheckpointRestoreService:
                         raise CheckpointRestoreError(
                             "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "entry type mismatch"
                         )
-                    payload = tar.extractfile(member).read()  # type: ignore[union-attr]
+                    if member.size < 0 or member.size > max_bytes - total:
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_RESTORE_LIMIT_EXCEEDED", "archive byte limit exceeded"
+                        )
+                    stream = tar.extractfile(member)
+                    payload = stream.read(member.size + 1)  # type: ignore[union-attr]
+                    if len(payload) != member.size:
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "archive member size mismatch"
+                        )
                     total += len(payload)
                     if _digest(payload) != item.get("digest"):
                         raise CheckpointRestoreError(
                             "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file digest mismatch"
                         )
                     target.write_bytes(payload)
-                    os.chmod(target, int(item["mode"], 8) & 0o777)
+                    expected_mode = int(item["mode"], 8) & 0o777
+                    if member.mode & 0o777 != expected_mode:
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "archive mode mismatch"
+                        )
+                    os.chmod(target, expected_mode)
                 elif member.issym():
                     if item.get("type") != "symlink" or member.linkname != item.get(
                         "target"
@@ -171,6 +203,30 @@ class ManagedCheckpointRestoreService:
                 "manifest entry missing from archive",
             )
         return len(seen), total
+
+    def _verify_materialized(self, staging: Path, manifest: Mapping[str, Any]) -> None:
+        expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
+        actual = {
+            str(path.relative_to(staging))
+            for path in staging.rglob("*")
+            if ".git" not in path.relative_to(staging).parts and not path.is_dir()
+        }
+        if actual != set(expected):
+            raise CheckpointRestoreError(
+                "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "materialized path set mismatch"
+            )
+        for name, item in expected.items():
+            path = staging.joinpath(*PurePosixPath(name).parts)
+            if item.get("type") == "symlink":
+                if not path.is_symlink() or os.readlink(path) != item.get("target"):
+                    raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "symlink mismatch")
+            elif path.is_symlink() or not path.is_file():
+                raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file type mismatch")
+            else:
+                if _digest(path.read_bytes()) != item.get("digest"):
+                    raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file digest mismatch")
+                if path.stat().st_mode & 0o777 != int(item["mode"], 8) & 0o777:
+                    raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
 
     def _git(
         self,
@@ -245,6 +301,19 @@ class ManagedCheckpointRestoreService:
                 "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
                 "destination escaped managed authority",
             )
+        if self.run_store is not None:
+            managed_run = self.run_store.load(req.destination.agent_run_id)
+            if (
+                managed_run is None
+                or managed_run.runtime_id != "codex_cli"
+                or managed_run.workflow_id != req.recovery_identity.workflow_id
+                or not managed_run.workspace_path
+                or Path(managed_run.workspace_path).resolve() != workspace.resolve()
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                    "destination is not bound to the authoritative managed run record",
+                )
         record = {
             "status": "preparing_restore",
             "immutableDigest": immutable,
@@ -253,7 +322,10 @@ class ManagedCheckpointRestoreService:
         }
         record_path.write_text(json.dumps(record, sort_keys=True))
 
-        checkpoint_bytes = await self._read(req.source.checkpoint_ref)
+        checkpoint_bytes = await self._read(
+            req.source.checkpoint_ref,
+            content_types={"application/vnd.moonmind.step-execution-checkpoint+json;version=1"},
+        )
         try:
             checkpoint = json.loads(checkpoint_bytes)
         except Exception as exc:
@@ -261,6 +333,10 @@ class ManagedCheckpointRestoreService:
                 "CHECKPOINT_MANIFEST_CORRUPTED", "checkpoint is not valid JSON"
             ) from exc
         workspace_evidence = checkpoint.get("workspace", {})
+        if checkpoint.get("contentType") != "application/vnd.moonmind.step-execution-checkpoint+json;version=1":
+            raise CheckpointRestoreError("CHECKPOINT_ARTIFACT_CONTENT_TYPE_MISMATCH", "checkpoint schema content type mismatch")
+        if workspace_evidence.get("kind") != "worktree_archive":
+            raise CheckpointRestoreError("CHECKPOINT_KIND_UNSUPPORTED", "checkpoint is not a worktree archive")
         source_identity = checkpoint.get("source", {})
         expected_source = req.source.model_dump(
             by_alias=True, mode="json", exclude_none=True
@@ -278,13 +354,16 @@ class ManagedCheckpointRestoreService:
         for key, supplied in (
             ("archiveRef", req.checkpoint.archive_ref),
             ("manifestRef", req.checkpoint.manifest_ref),
+            ("archiveDigest", req.checkpoint.archive_digest),
+            ("manifestDigest", req.checkpoint.manifest_digest),
+            ("baseCommit", req.checkpoint.base_commit),
         ):
             if workspace_evidence.get(key) != supplied:
                 raise CheckpointRestoreError(
                     "CHECKPOINT_SOURCE_IDENTITY_MISMATCH", f"checkpoint {key} mismatch"
                 )
-        archive = await self._read(req.checkpoint.archive_ref)
-        manifest_bytes = await self._read(req.checkpoint.manifest_ref)
+        archive = await self._read(req.checkpoint.archive_ref, content_types={"application/vnd.moonmind.worktree-archive"})
+        manifest_bytes = await self._read(req.checkpoint.manifest_ref, content_types={"application/json"})
         if _digest(archive) != req.checkpoint.archive_digest:
             raise CheckpointRestoreError(
                 "CHECKPOINT_ARCHIVE_CORRUPTED", "archive digest mismatch"
@@ -303,6 +382,13 @@ class ManagedCheckpointRestoreService:
             raise CheckpointRestoreError(
                 "CHECKPOINT_BASE_COMMIT_MISMATCH", "manifest base commit mismatch"
             )
+        if manifest.get("schemaVersion") != "v1" or manifest.get("kind") != "worktree_archive":
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest schema or kind mismatch")
+        if manifest.get("archiveRef") != req.checkpoint.archive_ref or manifest.get("archiveDigest") != req.checkpoint.archive_digest:
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest archive identity mismatch")
+        entries = manifest.get("entries")
+        if not isinstance(entries, list) or manifest.get("pathCount") != len(entries):
+            raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest entry count mismatch")
 
         workspace_parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=workspace_parent))
@@ -317,7 +403,11 @@ class ManagedCheckpointRestoreService:
                 ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
             )
             self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
-            count, size = self._extract(archive, staging, manifest)
+            count, size = self._extract(
+                archive, staging, manifest,
+                max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,
+            )
+            self._verify_materialized(staging, manifest)
             actual = self._git(
                 ["rev-parse", "HEAD"], staging, "CHECKPOINT_BASE_COMMIT_MISMATCH"
             )
@@ -335,9 +425,18 @@ class ManagedCheckpointRestoreService:
                 raise CheckpointRestoreError(
                     "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch"
                 )
+            backup = workspace_parent / ".restore-previous"
+            if backup.exists():
+                shutil.rmtree(backup)
             if workspace.exists():
-                shutil.rmtree(workspace)
-            os.replace(staging, workspace)
+                os.replace(workspace, backup)
+            try:
+                os.replace(staging, workspace)
+            except BaseException:
+                if backup.exists() and not workspace.exists():
+                    os.replace(backup, workspace)
+                raise
+            shutil.rmtree(backup, ignore_errors=True)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise

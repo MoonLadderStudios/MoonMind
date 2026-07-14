@@ -62,6 +62,10 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
     capability_set_version: str = Field(alias="capabilitySetVersion", min_length=1)
     capability_digest: str = Field(alias="capabilityDigest", min_length=1)
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1)
+    max_entry_count: int = Field(100_000, alias="maxEntryCount", ge=1, le=1_000_000)
+    max_restored_bytes: int = Field(
+        2 * 1024 * 1024 * 1024, alias="maxRestoredBytes", ge=1
+    )
 
     @model_validator(mode="after")
     def validate_distinct_identities(self) -> "ManagedWorkspaceRestoreRequest":
@@ -104,4 +108,13 @@ class CheckpointRestoreError(RuntimeError):
 
     def __init__(self, code: str, message: str) -> None:
         self.code = code
+        self.failure_envelope = {
+            "schemaVersion": "v1",
+            "failureClass": "recovery_restoration",
+            "failureCode": code,
+            "retryRecommendation": (
+                "retry" if code in {"CHECKPOINT_ARTIFACT_MISSING"} else "do_not_retry"
+            ),
+            "message": message[:500],
+        }
         super().__init__(f"{code}: {message}")

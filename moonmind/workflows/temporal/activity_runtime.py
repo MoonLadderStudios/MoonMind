@@ -6749,6 +6749,7 @@ class TemporalAgentRuntimeActivities:
         self._checkpoint_restore = ManagedCheckpointRestoreService(
             authority_root=os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
             artifact_service=artifact_service,
+            run_store=run_store,
         )
         # Pentest-specific activity logic lives in a dedicated module/class.
         # Imported lazily to avoid an import cycle (that module imports this one).
@@ -7230,6 +7231,11 @@ class TemporalAgentRuntimeActivities:
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
         restoration_requirement = payload.get("restoration_requirement")
+        recovery_mode = request.parameters.get("recoveryMode")
+        if recovery_mode == "resume_from_workspace_checkpoint" and restoration_requirement is None:
+            raise TemporalActivityRuntimeError(
+                "resume_from_workspace_checkpoint requires verified restoration evidence"
+            )
         if restoration_requirement is not None:
             if not isinstance(restoration_requirement, Mapping):
                 raise TemporalActivityRuntimeError("restoration_requirement must be a mapping")
