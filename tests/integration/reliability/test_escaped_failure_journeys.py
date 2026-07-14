@@ -563,7 +563,11 @@ async def test_source_destroying_cold_resume_restores_durable_workspace_once(
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=source, check=True)
     base_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
 
-    (source / "tracked.txt").write_text("implementation evidence\n", encoding="utf-8")
+    # Uncommitted working-tree state that exists *before* the implement step
+    # runs. A restore_pre_execution retry must rewind the workspace to exactly
+    # this snapshot so the failed step reruns from its clean starting point, not
+    # from the failed attempt's dirty output.
+    (source / "tracked.txt").write_text("prepare stage working copy\n", encoding="utf-8")
     (source / "untracked file.txt").write_text("untracked\n", encoding="utf-8")
     (source / "binary.bin").write_bytes(bytes(range(256)))
     executable = source / "scripts" / "run me.sh"
@@ -625,6 +629,13 @@ async def test_source_destroying_cold_resume_restores_durable_workspace_once(
     del captured
     assert not source.exists()
 
+    # Seed the destination with the failed implement attempt's dirty output.
+    # restore_pre_execution must fully rewind to the captured before-execution
+    # snapshot, discarding this residue rather than merging with it.
+    destination.mkdir(parents=True)
+    (destination / "tracked.txt").write_text("failed implement attempt\n", encoding="utf-8")
+    (destination / "leftover.txt").write_text("dirty residue\n", encoding="utf-8")
+
     restored = await activities.workspace_apply_policy(
         {
             "identity": {**identity, "runId": replay["destinationAgentRunId"], "executionOrdinal": 2},
@@ -648,8 +659,16 @@ async def test_source_destroying_cold_resume_restores_durable_workspace_once(
     assert restored["status"] == "applied"
     assert replay["sourceAgentRunId"] != replay["destinationAgentRunId"]
     assert not source.exists()
-    assert (destination / "tracked.txt").read_text() == "implementation evidence\n"
+    # The captured before-execution working copy is restored, and the failed
+    # attempt's dirty residue is gone: restore_pre_execution rewinds the tree.
+    assert (destination / "tracked.txt").read_text() == "prepare stage working copy\n"
+    assert not (destination / "leftover.txt").exists()
     assert (destination / "binary.bin").read_bytes() == bytes(range(256))
     assert os.readlink(destination / "safe-link") == "tracked.txt"
     assert os.access(destination / "scripts" / "run me.sh", os.X_OK)
     assert not (destination / "__pycache__").exists()
+    # The worktree_archive capture path intentionally excludes VCS metadata, so a
+    # restored checkpoint is a file snapshot rather than a usable git worktree.
+    # Pin that contract explicitly so this replay is not mistaken for coverage of
+    # resuming git-dependent tooling on the restored tree.
+    assert not (destination / ".git").exists()

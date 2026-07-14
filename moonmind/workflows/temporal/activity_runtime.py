@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
+from typing import Any, Awaitable, BinaryIO, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
@@ -268,6 +268,31 @@ _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
+
+
+class _HashingArchiveReader:
+    """Wrap a file object so ``tarfile`` streaming also produces its digest.
+
+    ``tarfile.addfile`` copies the wrapped file into the archive one block at a
+    time via ``read``. Feeding those same blocks into the hash lets us record a
+    SHA-256 for each archived file in a single streaming pass, instead of
+    reading the whole file a second time. That avoids the duplicate disk I/O and
+    keeps peak memory bounded by the block size rather than the largest file in
+    the worktree.
+    """
+
+    def __init__(self, file_handle: BinaryIO) -> None:
+        self._file_handle = file_handle
+        self._hash = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._file_handle.read(size)
+        if chunk:
+            self._hash.update(chunk)
+        return chunk
+
+    def hexdigest(self) -> str:
+        return self._hash.hexdigest()
 
 
 class PentestWorkloadHandle(Protocol):
@@ -3472,13 +3497,14 @@ class TemporalSandboxActivities:
                 info.uname = "moonmind"
                 info.gname = "moonmind"
                 with path.open("rb") as file_handle:
-                    archive.addfile(info, file_handle)
+                    hashing_reader = _HashingArchiveReader(file_handle)
+                    archive.addfile(info, hashing_reader)
                 archived_entries.append(
                     {
                         "path": str(relative),
                         "kind": "file",
                         "mode": info.mode,
-                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "sha256": hashing_reader.hexdigest(),
                         "size": info.size,
                     }
                 )
