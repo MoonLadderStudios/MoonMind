@@ -600,6 +600,8 @@ def _build_unrestricted_run_args(
         "ALL",
         "--security-opt",
         "no-new-privileges",
+        "--pids-limit",
+        "1024",
     ]
     for key, value in _operational_labels(request).items():
         args.extend(["--label", f"{key}={value}"])
@@ -785,6 +787,8 @@ class DockerWorkloadLauncher:
             "ALL",
             "--security-opt",
             "no-new-privileges",
+            "--pids-limit",
+            "1024",
         ]
 
         for key, value in _operational_labels(request).items():
@@ -843,6 +847,8 @@ class DockerWorkloadLauncher:
             "ALL",
             "--security-opt",
             "no-new-privileges",
+            "--pids-limit",
+            "1024",
         ]
         for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])

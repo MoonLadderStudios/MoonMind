@@ -1040,7 +1040,7 @@ async def test_profiles_mode_denies_direct_unrestricted_container_invocation() -
     assert exc_info.value.details["workflowDockerMode"] == "profiles"
 
 @pytest.mark.asyncio
-async def test_unrestricted_mode_allows_unrestricted_docker_handler() -> None:
+async def test_raw_docker_handler_is_not_agent_callable_even_in_unrestricted_mode() -> None:
     launcher = _FakeLauncher()
     handler = build_workload_tool_handler(
         tool_name=CONTAINER_RUN_DOCKER_TOOL,
@@ -1049,16 +1049,15 @@ async def test_unrestricted_mode_allows_unrestricted_docker_handler() -> None:
         workflow_docker_mode="unrestricted",
     )
 
-    result = await handler(
-        {
-            "repoDir": "/work/agent_jobs/task-1/repo",
-            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
-            "command": ["docker", "ps"],
-        },
-        {"workflow_id": "task-1", "node_id": "step-test"},
-    )
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["docker", "ps"],
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
 
-    assert result.status == "COMPLETED"
-    assert launcher.validated.profile is None
-    assert launcher.validated.request.tool_name == CONTAINER_RUN_DOCKER_TOOL
-    assert result.outputs["workloadMetadata"]["workflowDockerMode"] == "unrestricted"
+    assert exc_info.value.error_code == "PERMISSION_DENIED"
+    assert launcher.validated is None

@@ -2980,6 +2980,7 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+    monkeypatch.setenv("SYSTEM_DOCKER_HOST", "tcp://docker-proxy:2375")
 
     (
         store,
@@ -2988,6 +2989,7 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
         _session_controller,
         workload_registry,
         workload_launcher,
+        container_job_backend,
         _session_store,
     ) = _build_agent_runtime_deps()
 
@@ -2996,6 +2998,7 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
     assert workload_registry.workspace_root == tmp_path
     assert "unreal-5_3-linux" in workload_registry.profile_ids
     assert workload_launcher is not None
+    assert container_job_backend.settings.endpoint == "tcp://docker-proxy:2375"
     assert artifacts_root.is_dir()
     assert not (artifacts_root / "artifacts").exists()
 
@@ -3009,6 +3012,7 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
     monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
     monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:8000")
+    monkeypatch.setenv("SYSTEM_DOCKER_HOST", "tcp://docker-proxy:2375")
 
     (
         _store,
@@ -3017,6 +3021,7 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
         session_controller,
         _workload_registry,
         _workload_launcher,
+        _container_job_backend,
         _session_store,
     ) = _build_agent_runtime_deps()
 
@@ -4004,6 +4009,8 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
     session_store = MagicMock()
+    container_job_backend = MagicMock()
+    container_job_backend.ready = AsyncMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -4011,6 +4018,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         session_controller,
         workload_registry,
         workload_launcher,
+        container_job_backend,
         session_store,
     )
     @asynccontextmanager
@@ -4152,6 +4160,8 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
     session_store = MagicMock()
+    container_job_backend = MagicMock()
+    container_job_backend.ready = AsyncMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -4159,6 +4169,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         session_controller,
         workload_registry,
         workload_launcher,
+        container_job_backend,
         session_store,
     )
 
@@ -4183,8 +4194,9 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         mock_settings.workflow.workflow_docker_mode = "profiles"
         resources, handlers = await _build_runtime_activities(topology)
 
-    assert handlers == [
-        "agent_runtime_handler",
+    assert handlers[0] == "agent_runtime_handler"
+    assert len(handlers) == 9
+    assert handlers[-4:] == [
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
@@ -4332,6 +4344,8 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
     session_store = MagicMock()
+    container_job_backend = MagicMock()
+    container_job_backend.ready = AsyncMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -4339,6 +4353,7 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
         session_controller,
         workload_registry,
         workload_launcher,
+        container_job_backend,
         session_store,
     )
     mock_settings.workflow.workflow_docker_mode = "unrestricted"

@@ -2299,6 +2299,7 @@ def _build_agent_runtime_deps(
     DockerCodexManagedSessionController,
     "RunnerProfileRegistry",
     "DockerWorkloadLauncher",
+    "DockerEngineAdapter",
     ManagedSessionStore,
 ]:
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
@@ -2307,6 +2308,8 @@ def _build_agent_runtime_deps(
     from moonmind.workloads import (
         DockerWorkloadConcurrencyLimiter,
         DockerWorkloadLauncher,
+        DockerBackendSettings,
+        DockerEngineAdapter,
         RunnerProfileRegistry,
     )
 
@@ -2430,6 +2433,9 @@ def _build_agent_runtime_deps(
             fleet_limit=workload_fleet_limit
         ),
     )
+    container_job_backend = DockerEngineAdapter(
+        DockerBackendSettings.from_environment()
+    )
     return (
         store,
         supervisor,
@@ -2437,6 +2443,7 @@ def _build_agent_runtime_deps(
         session_controller,
         workload_registry,
         workload_launcher,
+        container_job_backend,
         session_store,
     )
 
@@ -2484,6 +2491,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         session_controller = None
         workload_registry = None
         workload_launcher = None
+        container_job_backend = None
+        container_job_activity_handlers: tuple[object, ...] = ()
         session_store = None
         agent_runtime_activities = None
         if topology.fleet == AGENT_RUNTIME_FLEET:
@@ -2496,8 +2505,17 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 session_controller,
                 workload_registry,
                 workload_launcher,
+                container_job_backend,
                 session_store,
             ) = _build_agent_runtime_deps(artifact_service=artifact_service)
+            await container_job_backend.ready()
+            from moonmind.workflows.temporal.activities.container_job_activities import (
+                ContainerJobActivities,
+            )
+
+            container_job_activity_handlers = ContainerJobActivities(
+                container_job_backend
+            ).handlers
             reconciled = await run_supervisor.reconcile()
             if reconciled:
                 logger.info(
@@ -2595,7 +2613,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         )
         return resources, [
             binding.handler for binding in bindings
-        ] + [
+        ] + list(container_job_activity_handlers) + [
             resolve_adapter_metadata,
             get_activity_route,
             resolve_external_adapter,

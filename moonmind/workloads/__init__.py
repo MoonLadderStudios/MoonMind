@@ -15,6 +15,14 @@ from moonmind.workloads.docker_launcher import (
     DockerWorkloadLauncher,
     DockerWorkloadLauncherError,
 )
+from moonmind.workloads.docker_backend import (
+    ContainerExecution,
+    DockerBackendAdapter,
+    DockerBackendError,
+    DockerBackendPolicy,
+    DockerBackendSettings,
+    DockerEngineAdapter,
+)
 from moonmind.workloads.registry import RunnerProfileRegistry, WorkloadPolicyError
 
 _TOOL_BRIDGE_EXPORTS = frozenset(
@@ -44,6 +52,12 @@ __all__ = [
     "DEFAULT_UNREAL_PROFILE_ID",
     "DOOD_TOOL_NAMES",
     "DockerContainerJanitor",
+    "ContainerExecution",
+    "DockerBackendAdapter",
+    "DockerBackendError",
+    "DockerBackendPolicy",
+    "DockerBackendSettings",
+    "DockerEngineAdapter",
     "DockerWorkloadConcurrencyLimiter",
     "DockerWorkloadLauncher",
     "DockerWorkloadLauncherError",
