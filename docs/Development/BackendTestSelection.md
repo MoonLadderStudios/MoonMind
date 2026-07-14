@@ -143,7 +143,7 @@ The full backend path uses the canonical unit runner:
 Conditional GitHub Actions jobs are not suitable as individual branch-protection requirements because skipped jobs can leave required checks unresolved. MoonMind uses one always-running required summary job instead:
 
 - `select-test-suites` computes backend suite outputs.
-- `unit-fast`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey` run only when selected.
+- `unit-fast`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey-checkpoint-resume` run only when selected.
 - `ci-required` always runs and fails if any selected backend suite did not complete successfully.
 
 Branch protection must require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks. It must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
