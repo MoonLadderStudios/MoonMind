@@ -2,6 +2,7 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
   type KeyboardEvent,
   type Ref,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import {
   BrowserRouter,
@@ -845,6 +847,57 @@ function DashboardNavigation({
   );
 }
 
+/**
+ * The route shell owns `--mm-collection-workspace-block-size`: the visible
+ * block size below the dashboard chrome that a collection workspace (and its
+ * shared sidebar rail) should fill. It is measured from the panel's own top
+ * coordinate (which already accounts for banners, the masthead, and the alert
+ * strip above it, at any scroll offset) subtracted from the visual viewport
+ * height, then written onto the panel so descendants inherit it.
+ *
+ * This is the lower-risk alternative to restructuring the whole dashboard shell
+ * into a bounded two-row layout: it keeps every other route's `.panel` geometry
+ * untouched while giving the sidebar a definite, row-count-independent height.
+ */
+function useCollectionWorkspaceBlockSize(
+  rootRef: RefObject<HTMLElement | null>,
+  panelRef: RefObject<HTMLElement | null>,
+): void {
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof window === 'undefined') {
+      return undefined;
+    }
+    const measure = () => {
+      const rect = panel.getBoundingClientRect();
+      // `rect.top + scrollY` is the panel's layout offset from the top of the
+      // document, i.e. the chrome height, independent of the current scroll
+      // position. The workspace fills from there to the bottom of the viewport.
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      const chromeBlockSize = rect.top + scrollY;
+      const viewportBlockSize = window.visualViewport?.height ?? window.innerHeight;
+      const available = Math.max(0, viewportBlockSize - chromeBlockSize);
+      panel.style.setProperty('--mm-collection-workspace-block-size', `${available}px`);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    const viewport = window.visualViewport;
+    viewport?.addEventListener('resize', measure);
+    // Recompute when chrome above the panel changes height (a banner appears,
+    // the alert strip grows) — those reflow the panel's top coordinate.
+    let observer: ResizeObserver | undefined;
+    if (typeof ResizeObserver === 'function' && rootRef.current) {
+      observer = new ResizeObserver(() => measure());
+      observer.observe(rootRef.current);
+    }
+    return () => {
+      window.removeEventListener('resize', measure);
+      viewport?.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
+  }, [rootRef, panelRef]);
+}
+
 function AppShell({
   dataWidePanel,
   uiInfo,
@@ -873,9 +926,12 @@ function AppShell({
   const registrySkew = Boolean(
     uiInfo?.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations),
   );
+  const rootRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  useCollectionWorkspaceBlockSize(rootRef, panelRef);
   return (
     <DashboardLiveUpdateProvider uiInfo={uiInfo}>
-      <main className="dashboard-root">
+      <main className="dashboard-root" ref={rootRef}>
         {registrySkew ? (
           <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
             <p>
@@ -922,7 +978,11 @@ function AppShell({
               </div>
             </div>
           </div>
-          <section className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`} aria-live="polite">
+          <section
+            ref={panelRef}
+            className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
+            aria-live="polite"
+          >
             {children}
           </section>
         </div>
