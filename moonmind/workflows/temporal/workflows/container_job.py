@@ -8,6 +8,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.container_job_models import (
@@ -27,6 +28,30 @@ with workflow.unsafe.imports_passed_through():
 
 CATALOG = build_default_activity_catalog()
 _TERMINAL = frozenset({"succeeded", "failed", "canceled", "timed_out"})
+# Granular image-acquisition failure classes surfaced by the trusted backend
+# through the ApplicationError type, mapped back onto the durable outcome.
+_IMAGE_FAILURE_TYPES = frozenset(
+    {
+        ContainerJobFailureClass.IMAGE.value,
+        ContainerJobFailureClass.IMAGE_NOT_FOUND.value,
+        ContainerJobFailureClass.IMAGE_PULL_TIMEOUT.value,
+        ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED.value,
+        ContainerJobFailureClass.IMAGE_PLATFORM_MISMATCH.value,
+        ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE.value,
+        ContainerJobFailureClass.WORKSPACE.value,
+    }
+)
+
+
+def _acquisition_failure_class(exc: BaseException) -> ContainerJobFailureClass | None:
+    """Return the granular failure class carried by an acquisition error."""
+
+    error: BaseException | None = exc
+    if isinstance(error, ActivityError) and error.cause is not None:
+        error = error.cause
+    if isinstance(error, ApplicationError) and error.type in _IMAGE_FAILURE_TYPES:
+        return ContainerJobFailureClass(error.type)
+    return None
 
 
 @workflow.defn(name="MoonMind.ContainerJob")
@@ -126,6 +151,7 @@ class MoonMindContainerJobWorkflow:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
                 image = await self._activity("container_job.acquire_image", request)
                 request.resolved_image_ref = image.resolved_image_ref
+                request.image_observation = image.image_observation
             if not self._cancel_requested:
                 reconciled = await self._activity(
                     "container_job.reconcile_container", request
@@ -179,6 +205,8 @@ class MoonMindContainerJobWorkflow:
             # infrastructure only when no class is carried.
             failure_class = (
                 failure_class_from_exception(exc)
+                or
+                _acquisition_failure_class(exc)
                 or ContainerJobFailureClass.INFRASTRUCTURE
             )
             message = str(exc)[:2048]

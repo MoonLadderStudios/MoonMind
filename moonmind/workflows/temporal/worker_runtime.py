@@ -2336,7 +2336,13 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
             ) or record.state
             record.backend_kind = backend_kind
             record.backend_ref = backend_ref
-            if request.resolved_image_ref:
+            if request.image_observation is not None:
+                # Persist the exact, backend-scoped observation produced by the
+                # trusted acquisition service; never fabricate cache/pull evidence.
+                record.image_observation_json = request.image_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+            elif request.resolved_image_ref:
                 record.image_observation_json = {
                     "requestedReference": request.request.spec.image,
                     "resolvedDigest": request.resolved_image_ref
@@ -2640,6 +2646,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
                 ),
                 settings=container_backend_settings,
+                backend_ref=container_backend_settings.default_backend_ref,
                 docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
                 evidence_publisher=_container_job_evidence_publisher(artifact_service),
                 projection_writer=_container_job_projection_writer(
