@@ -132,7 +132,7 @@ class PrivateImageAuthorizationService:
         *,
         owner: OwnerIdentity,
         reference: NormalizedImageReference,
-        credential_ref: str | None,
+        credential_ref: str,
     ) -> RegistryAuthorization:
         grants = self._policy.grants_for(credential_ref)
         if not grants:
@@ -195,7 +195,7 @@ class PrivateImageAuthorizationService:
     @staticmethod
     def _deny(
         reference: NormalizedImageReference,
-        credential_ref: str,
+        credential_ref: str | None,
         failure_class: ContainerJobFailureClass,
         message: str,
     ) -> RegistryAuthorization:
