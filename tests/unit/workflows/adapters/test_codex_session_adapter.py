@@ -17,6 +17,7 @@ from temporalio.exceptions import (
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRuntimeStepExecutionLaunch,
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import (
@@ -472,6 +473,14 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     )
 
     request = _request(binding, workspace_path=str(workspace_path))
+    request.step_execution = AgentRuntimeStepExecutionLaunch(
+        workflowId="wf-user-1",
+        runId="run-user-1",
+        logicalStepId="queue-github-issues",
+        executionOrdinal=1,
+        stepExecutionId="wf-user-1:run-user-1:queue-github-issues:execution:1",
+        runtimeContextPolicy="fresh_agent_run",
+    )
     request.parameters["metadata"] = {
         "moonmind": {
             "latestContextPackRef": "artifacts/context/rag-context-abc123.json",
@@ -518,6 +527,9 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
+    assert persisted_record.owner_run_id == "run-user-1"
+    assert persisted_record.logical_step_id == "queue-github-issues"
+    assert persisted_record.execution_ordinal == 1
     assert persisted_record.workspace_path == str(workspace_path)
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
