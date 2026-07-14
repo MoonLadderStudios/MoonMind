@@ -64,7 +64,15 @@ from moonmind.integrations.pentest.models import (
     strictly_normalize_pentest_finding_set,
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    resolve_managed_workspace_locator,
+)
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
+from moonmind.schemas.managed_checkpoint_models import (
+    ManagedCheckpointEntry,
+    ManagedWorkspaceCheckpointCaptureInput,
+    ManagedWorkspaceCheckpointCaptureResult,
+)
 from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeCancelInput,
     AgentRuntimeFetchResultInput,
@@ -90,6 +98,7 @@ from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
     WORKSPACE_AUTHORITY_MISMATCH,
+    WORKSPACE_IDENTITY_MISMATCH,
     WORKSPACE_LOCATOR_UNSUPPORTED,
     WORKSPACE_LOCATOR_ADAPTER,
     WorkspaceLocatorResolutionError,
@@ -97,6 +106,9 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.checkpoint_branches import generate_checkpoint_branch_name
 from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.executions.prepared_context import (
     PreparedContextFailure,
     build_prepared_input_manifest,
@@ -1209,6 +1221,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_command": ("sandbox", "sandbox_run_command"),
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "workspace.capture_checkpoint": ("sandbox", "workspace_capture_checkpoint"),
+    "agent_runtime.capture_workspace_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_capture_workspace_checkpoint",
+    ),
     "workspace.apply_policy": ("sandbox", "workspace_apply_policy"),
     "workspace.classify_git_effect": ("sandbox", "workspace_classify_git_effect"),
     "provider_profile.list": ("artifacts", "provider_profile_list"),
@@ -6714,6 +6730,7 @@ class TemporalAgentRuntimeActivities:
             or TemporalPentestProviderLeaseManager(client_adapter)
         )
         self._supervision_tasks: set[asyncio.Task] = set()
+        self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
         # Pentest-specific activity logic lives in a dedicated module/class.
         # Imported lazily to avoid an import cycle (that module imports this one).
         from moonmind.workflows.temporal.activities.pentest_activities import (
@@ -6721,6 +6738,233 @@ class TemporalAgentRuntimeActivities:
         )
 
         self._pentest_activities = TemporalPentestActivities(self)
+
+    async def agent_runtime_capture_workspace_checkpoint(
+        self, request: Mapping[str, Any] | ManagedWorkspaceCheckpointCaptureInput
+    ) -> dict[str, Any]:
+        """Capture a Codex workspace through its owning managed-run store."""
+
+        model = (
+            request
+            if isinstance(request, ManagedWorkspaceCheckpointCaptureInput)
+            else ManagedWorkspaceCheckpointCaptureInput.model_validate(request)
+        )
+        locator = model.workspace_locator
+        lock = self._checkpoint_capture_locks.setdefault(
+            model.idempotency_key, asyncio.Lock()
+        )
+        async with lock:
+            if self._run_store is None or self._artifact_service is None:
+                raise TemporalActivityRuntimeError(
+                    "managed checkpoint capture requires run and artifact stores"
+                )
+            record_root = self._run_store.store_root / "checkpoint_captures"
+            record_root.mkdir(parents=True, exist_ok=True)
+            record_name = hashlib.sha256(model.idempotency_key.encode()).hexdigest()
+            record_path = record_root / f"{record_name}.json"
+            immutable = model.model_dump(by_alias=True, mode="json")
+            immutable_digest = hashlib.sha256(_json_bytes(immutable)).hexdigest()
+            if record_path.exists():
+                saved = json.loads(record_path.read_text(encoding="utf-8"))
+                if saved.get("immutableDigest") != immutable_digest:
+                    raise temporal_exceptions.ApplicationError(
+                        "immutable capture inputs changed",
+                        type="CHECKPOINT_IDEMPOTENCY_CONFLICT",
+                        non_retryable=True,
+                    )
+                return dict(saved["result"])
+
+            expected = resolve_runtime_execution_capabilities("codex_cli")
+            if model.capability_digest != expected.capability_digest:
+                raise temporal_exceptions.ApplicationError(
+                    "capability snapshot is stale",
+                    type="CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
+                    non_retryable=True,
+                )
+            record = self._run_store.load(locator.agent_run_id)
+            if record is None:
+                raise temporal_exceptions.ApplicationError(
+                    "managed run record was not found",
+                    type=WORKSPACE_IDENTITY_MISMATCH,
+                    non_retryable=True,
+                )
+            if record.workflow_id != model.identity.workflow_id:
+                raise temporal_exceptions.ApplicationError(
+                    "managed run record does not belong to the source workflow",
+                    type=WORKSPACE_IDENTITY_MISMATCH,
+                    non_retryable=True,
+                )
+            try:
+                workspace = resolve_managed_workspace_locator(
+                    locator,
+                    store=self._run_store,
+                    current_agent_run_id=locator.agent_run_id,
+                    current_runtime_id=model.expected_runtime_id,
+                )
+            except WorkspaceLocatorResolutionError as exc:
+                raise temporal_exceptions.ApplicationError(
+                    str(exc), type=exc.code, non_retryable=True
+                ) from exc
+            result = await self._capture_managed_worktree(model, workspace, record)
+            temporary = record_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    {"immutableDigest": immutable_digest, "result": result},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temporary, record_path)
+            return result
+
+    async def _capture_managed_worktree(
+        self,
+        model: ManagedWorkspaceCheckpointCaptureInput,
+        workspace: Path,
+        record: Any,
+    ) -> dict[str, Any]:
+        policy = model.capture_policy
+        enumerate_args = ["git", "ls-files", "-z", "--cached"]
+        if policy.include_untracked:
+            enumerate_args.extend(["--others", "--exclude-standard"])
+        git_files = await _run_command(
+            enumerate_args,
+            cwd=str(workspace),
+        )
+        paths = sorted(filter(None, git_files.stdout.split("\0")))
+        excluded_names = {".env", ".env.local", "credentials", "credentials.json"}
+        excluded_parts = {
+            ".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
+            ".cache", ".docker", "managed_runs", "managed_sessions",
+        }
+        selected = [
+            path for path in paths
+            if Path(path).name not in excluded_names
+            and not any(part in excluded_parts for part in Path(path).parts)
+        ]
+        if len(selected) > policy.max_file_count:
+            raise temporal_exceptions.ApplicationError(
+                "maximum file count exceeded", type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED",
+                non_retryable=True,
+            )
+        entries: list[ManagedCheckpointEntry] = []
+        total = 0
+        output = BytesIO()
+        with tarfile.open(fileobj=output, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for relative_text in selected:
+                if temporal_activity.in_activity():
+                    temporal_activity.heartbeat(
+                        {"phase": "archive", "filesCaptured": len(entries)}
+                    )
+                path = workspace / relative_text
+                info_stat = path.lstat()
+                if stat.S_ISLNK(info_stat.st_mode):
+                    target = os.readlink(path)
+                    resolved = (path.parent / target).resolve()
+                    if not resolved.is_relative_to(workspace):
+                        raise temporal_exceptions.ApplicationError(
+                            f"symlink escapes workspace: {relative_text}",
+                            type=WORKSPACE_AUTHORITY_MISMATCH, non_retryable=True,
+                        )
+                    payload = target.encode()
+                    entry_type = "symlink"
+                elif stat.S_ISREG(info_stat.st_mode):
+                    if info_stat.st_size > policy.max_file_bytes:
+                        raise temporal_exceptions.ApplicationError(
+                            "maximum per-file size exceeded",
+                            type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
+                        )
+                    payload = path.read_bytes()
+                    target = None
+                    entry_type = "file"
+                else:
+                    raise temporal_exceptions.ApplicationError(
+                        f"unsupported file type: {relative_text}",
+                        type="CHECKPOINT_CAPTURE_POLICY_INVALID", non_retryable=True,
+                    )
+                total += len(payload)
+                if total > policy.max_total_bytes:
+                    raise temporal_exceptions.ApplicationError(
+                        "maximum total size exceeded",
+                        type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
+                    )
+                tar_info = archive.gettarinfo(str(path), arcname=relative_text)
+                tar_info.uid = tar_info.gid = tar_info.mtime = 0
+                tar_info.uname = tar_info.gname = ""
+                if entry_type == "file":
+                    archive.addfile(tar_info, BytesIO(payload))
+                else:
+                    archive.addfile(tar_info)
+                entries.append(
+                    ManagedCheckpointEntry(
+                        path=relative_text,
+                        type=entry_type,
+                        mode=f"{stat.S_IMODE(info_stat.st_mode):06o}",
+                        size=len(payload),
+                        sha256=hashlib.sha256(payload).hexdigest(),
+                        linkTarget=target,
+                    )
+                )
+        archive_payload = output.getvalue()
+        archive_digest = "sha256:" + hashlib.sha256(archive_payload).hexdigest()
+        archive_ref = await self._put_managed_checkpoint_artifact(
+            archive_payload,
+            "application/vnd.moonmind.worktree-archive",
+            "checkpoint_archive",
+        )
+        async def _git(*args: str) -> str:
+            return (await _run_command(["git", *args], cwd=str(workspace))).stdout.strip()
+        head = await _git("rev-parse", "HEAD")
+        branch = await _git("branch", "--show-current")
+        status = await _git("status", "--porcelain=v1", "--untracked-files=normal")
+        created_at = (record.finished_at or record.started_at).isoformat()
+        manifest = {
+            "schemaVersion": "v1",
+            "contentType": "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+            "source": {**model.identity.model_dump(by_alias=True, mode="json"), "boundary": model.boundary},
+            "runtime": {"runtimeId": "codex_cli", "capabilitySetVersion": model.capability_set_version, "capabilityDigest": model.capability_digest},
+            "workspaceLocator": model.workspace_locator.model_dump(by_alias=True, mode="json"),
+            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "submodules": []},
+            "capturePolicy": policy.model_dump(by_alias=True, mode="json"),
+            "entries": [entry.model_dump(by_alias=True, mode="json", exclude_none=True) for entry in entries],
+            "archive": {"ref": archive_ref, "sha256": archive_digest, "size": len(archive_payload)},
+            "createdAt": created_at,
+        }
+        manifest_payload = _json_bytes(manifest)
+        manifest_digest = "sha256:" + hashlib.sha256(manifest_payload).hexdigest()
+        manifest_ref = await self._put_managed_checkpoint_artifact(
+            manifest_payload,
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+            "checkpoint_manifest",
+        )
+        compact = ManagedWorkspaceCheckpointCaptureResult(
+            status="captured",
+            workspace={
+                "kind": "worktree_archive", "baseCommit": head,
+                "archiveRef": archive_ref, "archiveDigest": archive_digest,
+                "manifestRef": manifest_ref, "manifestDigest": manifest_digest,
+                "includesUntracked": policy.include_untracked,
+                "includesIgnoredFiles": False,
+            },
+            sourceWorkspaceLocator=model.workspace_locator,
+            diagnosticRefs=[manifest_ref],
+            idempotencyKey=model.idempotency_key,
+        )
+        return compact.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+    async def _put_managed_checkpoint_artifact(
+        self, payload: bytes, content_type: str, artifact_kind: str
+    ) -> str:
+        artifact, _ = await self._artifact_service.create(
+            principal="system:agent_runtime", content_type=content_type,
+            size_bytes=len(payload), metadata_json={"artifact_kind": artifact_kind},
+        )
+        completed = await self._artifact_service.write_complete(
+            artifact_id=artifact.artifact_id, principal="system:agent_runtime",
+            payload=payload, content_type=content_type,
+        )
+        return _compact_artifact_ref_text(build_artifact_ref(completed))
 
     async def execution_notify_completion(
         self,
