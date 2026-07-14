@@ -7032,12 +7032,11 @@ class TemporalAgentRuntimeActivities:
         record: Any,
     ) -> dict[str, Any]:
         policy = model.capture_policy
-        enumerate_args = ["git", "ls-files", "-z", "--cached"]
+        enumerate_args = ["ls-files", "-z", "--cached"]
         if policy.include_untracked:
             enumerate_args.extend(["--others", "--exclude-standard"])
         git_files = await _run_command(
-            enumerate_args,
-            cwd=str(workspace),
+            self._workspace_git_command(str(workspace), *enumerate_args),
         )
         paths = sorted(filter(None, git_files.stdout.split("\0")))
         excluded_names = {".env", ".env.local", "credentials", "credentials.json"}
@@ -7143,19 +7142,19 @@ class TemporalAgentRuntimeActivities:
             "checkpoint_archive",
         )
         async def _git(*args: str) -> str:
-            return (await _run_command(["git", *args], cwd=str(workspace))).stdout.strip()
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout.strip()
         head = await _git("rev-parse", "HEAD")
         branch = await _git("branch", "--show-current")
         status = (
             await _run_command(
-                [
-                    "git",
+                self._workspace_git_command(
+                    str(workspace),
                     "status",
                     "--porcelain=v1",
                     "-z",
                     "--untracked-files=all",
-                ],
-                cwd=str(workspace),
+                ),
             )
         ).stdout
         created_at = (record.finished_at or record.started_at).isoformat()
