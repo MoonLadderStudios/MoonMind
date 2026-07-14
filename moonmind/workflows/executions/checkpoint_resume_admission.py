@@ -99,7 +99,7 @@ class CheckpointResumeReadiness(BaseModel):
 class AdmittedCheckpointResumeDecision(BaseModel):
     """Replay-safe snapshot passed to a recovery workflow."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     admitted: bool
     reason_code: str = Field(alias="reasonCode")
