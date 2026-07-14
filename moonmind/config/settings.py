@@ -786,7 +786,7 @@ class WorkflowSettings(BaseSettings):
             "with an environment-class outcome (verdict BLOCKED, or "
             "NO_DETERMINATION produced by a degraded/malformed gate payload): "
             "'fail' fails the run fail-closed; 'draft_pr' publishes a draft "
-            "pull request annotated as verification-incomplete and completes "
+            "pull request annotated as verification-incomplete, then fails "
             "the run with attention_required."
         ),
         json_schema_extra={
@@ -803,7 +803,7 @@ class WorkflowSettings(BaseSettings):
                 "title": "MoonSpec Environment-Blocked Publish Action",
                 "options": [
                     ("fail", "Fail the run (fail closed)"),
-                    ("draft_pr", "Publish draft PR with attention flag"),
+                    ("draft_pr", "Publish draft PR, then fail the run"),
                 ],
                 "applies_to": ["publishing"],
                 "order": 21,

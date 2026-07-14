@@ -393,6 +393,34 @@ async def test_update_github_issue_status_allows_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_declares_completed_close_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "finalize_after_pr_or_done",
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["sideEffect"] == {
+        "effectClass": "external_non_idempotent",
+        "kind": "github",
+        "operation": "github.issue.close",
+        "target": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
+        "summary": (
+            "Updated GitHub issue MoonLadderStudios/MoonMind#1067 with mode done."
+        ),
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("require_verification", [None, "", "   "])
 async def test_update_github_issue_status_requires_verification_for_blank_values(
     tmp_path,

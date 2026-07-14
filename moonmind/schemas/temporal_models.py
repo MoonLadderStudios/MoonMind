@@ -1602,6 +1602,9 @@ class WorkspacePolicyApplyInput(BaseModel):
     workspace_policy: WorkspacePolicy = Field(..., alias="workspacePolicy")
     checkpoint_ref: str = Field(..., alias="checkpointRef", min_length=1)
     checkpoint: dict[str, Any] = Field(default_factory=dict, alias="checkpoint")
+    target_workspace_locator: WorkspaceLocator | None = Field(
+        None, alias="targetWorkspaceLocator"
+    )
     target_workspace_ref: str | None = Field(None, alias="targetWorkspaceRef")
     expected_plan_ref: str | None = Field(None, alias="expectedPlanRef")
     expected_plan_digest: str | None = Field(None, alias="expectedPlanDigest")

@@ -1174,7 +1174,7 @@ Desired behavior:
 
 The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
 
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, completes with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft annotation and final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
+If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, fails with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft is a recoverability handoff rather than success evidence. Its annotation and the failed final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
 
 ### 20.2 Failed-step recovery
 

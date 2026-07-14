@@ -116,6 +116,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     managed_run_status_metadata,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -1374,6 +1375,23 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
+    **{
+        f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
+        for name in (
+            "resolve_workspace",
+            "acquire_image",
+            "create_container",
+            "start_container",
+            "observe_container",
+            "reconcile_container",
+            "stop_container",
+            "remove_container",
+            "publish_evidence",
+            "project_status",
+            "repair_projection",
+            "cleanup",
+        )
+    },
     "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
@@ -3232,6 +3250,8 @@ class TemporalSandboxActivities:
                     WORKSPACE_LOCATOR_UNSUPPORTED,
                     "filesystem workspace locator cannot be used as external state",
                 )
+            if model.workspace_locator is None and model.workspace_root_ref:
+                self._record_legacy_workspace_path_usage("capture_checkpoint")
             source_ref = (
                 model.workspace_locator.artifact_ref
                 if isinstance(model.workspace_locator, ExternalStateLocator)
@@ -3267,6 +3287,8 @@ class TemporalSandboxActivities:
                 WORKSPACE_LOCATOR_UNSUPPORTED,
                 "external state cannot be used by a local checkpoint operation",
             )
+        if model.workspace_locator is None:
+            self._record_legacy_workspace_path_usage("capture_checkpoint")
         workspace = (
             self._resolve_sandbox_locator(model.workspace_locator, must_exist=True)
             if isinstance(model.workspace_locator, SandboxWorkspaceLocator)
@@ -3587,7 +3609,21 @@ class TemporalSandboxActivities:
         return decoded
 
     def _policy_target_workspace(self, model: WorkspacePolicyApplyInput) -> Path:
+        locator = model.target_workspace_locator
+        if isinstance(locator, ManagedWorkspaceLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox worker cannot apply recovery to a managed-runtime workspace",
+            )
+        if isinstance(locator, ExternalStateLocator):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_LOCATOR_UNSUPPORTED,
+                "external state cannot be used as a local recovery target",
+            )
+        if isinstance(locator, SandboxWorkspaceLocator):
+            return self._resolve_sandbox_locator(locator, must_exist=False)
         if model.target_workspace_ref:
+            self._record_legacy_workspace_path_usage("apply_policy")
             return self._resolve_workspace(model.target_workspace_ref, must_exist=False)
         digest = hashlib.sha256(model.idempotency_key.encode("utf-8")).hexdigest()[:16]
         target = (
@@ -3956,6 +3992,8 @@ class TemporalSandboxActivities:
                 WORKSPACE_LOCATOR_UNSUPPORTED,
                 "external state cannot be used for git-effect classification",
             )
+        if locator is None:
+            self._record_legacy_workspace_path_usage("classify_git_effect")
         workspace = (
             self._resolve_sandbox_locator(locator, must_exist=True)
             if isinstance(locator, SandboxWorkspaceLocator)
@@ -3982,6 +4020,19 @@ class TemporalSandboxActivities:
             "summary": f"git workspace is {disposition}",
             "diagnosticRefs": refs,
         }
+
+    @staticmethod
+    def _record_legacy_workspace_path_usage(operation: str) -> None:
+        try:
+            get_metrics_emitter().increment(
+                "workspace_locator.compatibility_path_usage",
+                tags={"operation": operation},
+            )
+        except Exception:
+            logger.warning(
+                "Failed to emit legacy workspace path compatibility metric",
+                exc_info=True,
+            )
 
     def _resolve_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool
@@ -6691,6 +6742,7 @@ class TemporalAgentRuntimeActivities:
         session_store: "ManagedSessionStore | None" = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        container_job_backend: Any | None = None,
         workflow_docker_mode: str = "profiles",
         client_adapter: Any = None,
         pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
@@ -6703,6 +6755,7 @@ class TemporalAgentRuntimeActivities:
         self._session_store = session_store
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
+        self._container_job_backend = container_job_backend
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
@@ -7292,6 +7345,62 @@ class TemporalAgentRuntimeActivities:
         if not isinstance(result, WorkloadResult):
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
+
+    async def _container_job_call(
+        self, operation: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Validate and delegate one typed request to the trusted backend."""
+
+        if self._container_job_backend is None:
+            raise TemporalActivityRuntimeError(
+                f"container-job backend is required for container_job.{operation}"
+            )
+        from moonmind.schemas.container_job_models import (
+            ContainerJobActivityRequest,
+            ContainerJobActivityResult,
+        )
+
+        request = ContainerJobActivityRequest.model_validate(payload)
+        result = await getattr(self._container_job_backend, operation)(request)
+        return ContainerJobActivityResult.model_validate(result).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+
+    async def container_job_resolve_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("resolve_workspace", payload)
+
+    async def container_job_acquire_image(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("acquire_image", payload)
+
+    async def container_job_create_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("create_container", payload)
+
+    async def container_job_start_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("start_container", payload)
+
+    async def container_job_observe_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("observe_container", payload)
+
+    async def container_job_reconcile_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("reconcile_container", payload)
+
+    async def container_job_stop_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("stop_container", payload)
+
+    async def container_job_remove_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("remove_container", payload)
+
+    async def container_job_publish_evidence(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("publish_evidence", payload)
+
+    async def container_job_project_status(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("project_status", payload)
+
+    async def container_job_repair_projection(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("repair_projection", payload)
+
+    async def container_job_cleanup(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("cleanup", payload)
 
     async def security_pentest_execute(
         self,
