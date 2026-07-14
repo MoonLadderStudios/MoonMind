@@ -178,7 +178,24 @@ The plan contract defines these tool subtypes:
 
 | `tool.type` | Dispatch mechanism | Contract |
 |---|---|---|
-| `skill` | Legacy activity-backed executable tool contract; not dispatched by current `MoonMind.UserWorkflow` plans | `ToolDefinition` from registry snapshot |
+| `skill` | Typed executable tool contract. Ordinary tools dispatch through their declared Activity; `container.run_job` is durably coordinated by the parent workflow through the canonical container-job service. | `ToolDefinition` from registry snapshot |
+
+Containerized plan work uses the single `container.run_job` contract. The
+parent workflow injects owner plus workflow/run/step correlation, submits the
+canonical `ContainerJobSubmitRequest` through a trusted Activity, and polls the
+separately addressable job through bounded status Activities and durable
+workflow timers. Cancellation sends the job's idempotent cancellation request.
+The result returned to the plan contains only `jobId`, terminal state, exit and
+failure classification, and log/artifact references.
+
+Legacy `container.run_workload`, `container.run_container`, helper lifecycle,
+raw Docker, integration-CI, and Unreal wrapper names are absent from executable
+tool discovery and new dispatch. Their old `workload.run` Activity binding is
+retained only to let already-recorded Temporal commands replay; it has no
+registry entry or dispatcher registration and is removed after those histories
+drain. A payload translation adapter is intentionally unnecessary: recorded
+legacy commands keep their original Activity implementation, while new plans
+use a new canonical tool name and schema.
 | `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
 ---
