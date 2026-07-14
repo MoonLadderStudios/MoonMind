@@ -2979,6 +2979,8 @@ class MoonMindRunWorkflow:
 
     def _validate_recovery_source_for_execution(self) -> dict[str, Any] | None:
         recovery_source = self._recovery_source
+        if self._recovery_failed_step_id is not None:
+            return dict(recovery_source) if recovery_source is not None else None
         self._recovery_failed_step_id = None
         self._recovery_workspace = {}
         self._recovery_workspace_restored_ref = None
@@ -12013,12 +12015,20 @@ class MoonMindRunWorkflow:
         if self._codex_session_binding is not None:
             return self._codex_session_binding
 
+        recovery_agent_run_id = ""
+        if self._checkpoint_recovery_state is not None:
+            recovery_agent_run_id = str(
+                self._checkpoint_recovery_state.get("destinationAgentRunId") or ""
+            ).strip()
+        agent_run_id = recovery_agent_run_id or workflow.info().workflow_id
         session_input = CodexManagedSessionWorkflowInput(
-            agentRunId=workflow.info().workflow_id,
+            agentRunId=agent_run_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
         session_workflow_id = self._workflow_scoped_session_workflow_id(runtime_id)
+        if recovery_agent_run_id:
+            session_workflow_id = f"{session_workflow_id}:recovery"
         initial_binding = CodexManagedSessionBinding.from_input(
             workflow_id=session_workflow_id,
             session_input=session_input,

@@ -63,7 +63,7 @@ def test_valid_contract_and_deterministic_destination_identity() -> None:
         ({"restoreActivity": "workspace.apply_policy"}, CHECKPOINT_CAPABILITY_INVALID),
         ({"sourceCheckpointKind": "git_patch"}, CHECKPOINT_CAPABILITY_INVALID),
         ({"sideEffectDispositions": [{"disposition": "accepted", "idempotent": False}]}, CHECKPOINT_SIDE_EFFECT_UNSAFE),
-        ({"sourceCheckpointBoundary": "before_publication", "resumePhase": "resume_publication"}, CHECKPOINT_SIDE_EFFECT_UNSAFE),
+        ({"sourceCheckpointBoundary": "before_publication", "resumePhase": "resume_publication"}, CHECKPOINT_BOUNDARY_INCOMPATIBLE),
     ],
 )
 def test_preflight_fails_closed(updates: dict[str, object], code: str) -> None:
