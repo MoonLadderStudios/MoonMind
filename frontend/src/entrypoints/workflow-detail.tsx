@@ -712,6 +712,12 @@ const RecoveryEligibilitySchema = z
     checkpointRef: z.string().nullable().optional(),
     sourceWorkflowId: z.string().nullable().optional(),
     sourceRunId: z.string().nullable().optional(),
+    runtimeId: z.string().nullable().optional(),
+    deploymentGeneration: z.string().nullable().optional(),
+    capabilitySetVersion: z.string().nullable().optional(),
+    capabilityDigest: z.string().nullable().optional(),
+    checkpointKind: z.string().nullable().optional(),
+    promotionState: z.string().nullable().optional(),
     operatorGuidance: z.enum(['resume', 'full_retry', 'fix_environment', 'needs_human']),
     evidence: z.array(EvidenceRefStatusSchema).default([]),
   })
@@ -5985,6 +5991,24 @@ function RecoveryEvidencePanel({
         ) : null}
         {sourceRunId ? (
           <li><strong>Source run:</strong> <code className="text-xs break-all">{sourceRunId}</code></li>
+        ) : null}
+        {recovery?.checkpointKind ? (
+          <li><strong>Checkpoint kind:</strong> {formatStatusLabel(recovery.checkpointKind)}</li>
+        ) : null}
+        {recovery?.runtimeId ? (
+          <li><strong>Runtime:</strong> {formatStatusLabel(recovery.runtimeId)}</li>
+        ) : null}
+        {recovery?.deploymentGeneration ? (
+          <li><strong>Deployment generation:</strong> <code>{recovery.deploymentGeneration}</code></li>
+        ) : null}
+        {recovery?.promotionState ? (
+          <li><strong>Promotion state:</strong> {formatStatusLabel(recovery.promotionState)}</li>
+        ) : null}
+        {recovery?.capabilitySetVersion ? (
+          <li><strong>Capability set:</strong> <code>{recovery.capabilitySetVersion}</code></li>
+        ) : null}
+        {recovery?.capabilityDigest ? (
+          <li><strong>Capability digest:</strong> <code className="text-xs break-all">{recovery.capabilityDigest}</code></li>
         ) : null}
         {diagnosticsEvidence.map((item, index) => (
           <li key={`${item.category}-${item.artifactRef || item.reasonCode || index}`}>

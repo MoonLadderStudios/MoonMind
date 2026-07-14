@@ -113,6 +113,7 @@ from moonmind.schemas.temporal_models import (
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
     RecoverFromSelectedStepRequest,
+    RecoveryEligibilityDiagnosticModel,
     WorkflowInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -185,6 +186,17 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     workflow_is_already_authored,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.executions.checkpoint_resume_admission import (
+    CheckpointResumeReadiness,
+    evaluate_checkpoint_resume_admission,
+    rollout_policy_from_settings,
+)
+from moonmind.workflows.executions.checkpoint_promotion import (
+    bounded_checkpoint_metric_tags,
+)
 from moonmind.workflows.executions.runtime_inheritance import (
     RuntimeInheritanceError,
     apply_inherited_runtime_to_payload,
@@ -3432,6 +3444,53 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         memo=memo,
         finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
     )
+    recovery_eligibility = None
+    recovery_manifest_summary = _recovery_manifest_summary_from_record(record)
+    raw_recovery_eligibility = recovery_manifest_summary.get("recoveryEligibility")
+    if isinstance(raw_recovery_eligibility, Mapping):
+        projected = dict(raw_recovery_eligibility)
+        flags = settings.feature_flags
+        projected_runtime = normalize_runtime_id(target_runtime or "codex_cli")
+        try:
+            projected_capabilities = resolve_runtime_execution_capabilities(
+                projected_runtime
+            )
+        except ValueError:
+            projected_capabilities = None
+        projected.update(
+            runtimeId=projected_runtime,
+            deploymentGeneration=(
+                str(flags.checkpoint_resume_deployment_generation or "").strip()
+                or "unavailable"
+            ),
+            capabilitySetVersion=(
+                projected_capabilities.capability_set_version
+                if projected_capabilities else None
+            ),
+            capabilityDigest=(
+                projected_capabilities.capability_digest
+                if projected_capabilities else None
+            ),
+            checkpointKind="worktree_archive",
+            promotionState=flags.checkpoint_resume_promotion_state,
+        )
+        if (
+            flags.checkpoint_resume_promotion_state
+            in {"disabled", "shadow_capture", "shadow_restore", "paused"}
+            or not flags.checkpoint_resume_action_enabled
+        ):
+            projected.update(
+                eligible=False,
+                defaultAction="full_retry",
+                disabledReasonCode="rollout_action_hidden",
+                operatorGuidance="full_retry",
+            )
+        try:
+            recovery_eligibility = RecoveryEligibilityDiagnosticModel.model_validate(
+                projected
+            )
+        except ValidationError:
+            recovery_eligibility = None
 
     started_at = getattr(record, "started_at", None)
     updated_at = getattr(record, "updated_at", None) or started_at or datetime.now(UTC)
@@ -3954,6 +4013,7 @@ def _serialize_execution(
         steps_href=steps_href,
         actions=actions,
         resume=resume_summary,
+        recovery_eligibility=recovery_eligibility,
         related_runs=related_runs,
         recurrence=_execution_recurrence_provenance(params, memo),
         target_diagnostics=target_diagnostics,
@@ -14600,6 +14660,70 @@ def _reject_recovery_contract_mismatch(
         )
 
 
+def _checkpoint_resume_admission_for_request(
+    *, canonical: TemporalExecutionCanonicalRecord,
+    checkpoint_payload: Mapping[str, Any], repository: str | None,
+):
+    """Revalidate mutable rollout/readiness once, immediately before creation."""
+
+    params = canonical.parameters if isinstance(canonical.parameters, Mapping) else {}
+    workflow = params.get("workflow") if isinstance(params.get("workflow"), Mapping) else {}
+    runtime = workflow.get("runtime") if isinstance(workflow.get("runtime"), Mapping) else {}
+    runtime_id = normalize_runtime_id(
+        runtime.get("id") or runtime.get("runtimeId") or params.get("runtimeId") or ""
+    )
+    capabilities = resolve_runtime_execution_capabilities(runtime_id)
+    flags = settings.feature_flags
+    generation = str(flags.checkpoint_resume_deployment_generation or "").strip()
+    readiness = CheckpointResumeReadiness(
+        runtimeId=runtime_id,
+        deploymentGeneration=generation or "unavailable",
+        captureRouteReady=flags.checkpoint_resume_capture_route_ready,
+        restoreRouteReady=flags.checkpoint_resume_restore_route_ready,
+        artifactStoreReady=flags.checkpoint_resume_artifact_store_ready,
+        managedRunStoreReady=flags.checkpoint_resume_managed_run_store_ready,
+        capabilitySetVersion=capabilities.capability_set_version,
+        capabilityDigest=capabilities.capability_digest,
+        checkedAt=datetime.now(UTC),
+    )
+    workspace = checkpoint_payload.get("recoveryWorkspace")
+    workspace = workspace if isinstance(workspace, Mapping) else {}
+    raw_size = workspace.get("archiveBytes", checkpoint_payload.get("archiveBytes", 0))
+    try:
+        archive_bytes = int(raw_size)
+    except (TypeError, ValueError):
+        archive_bytes = 0
+    decision = evaluate_checkpoint_resume_admission(
+        capabilities=capabilities,
+        policy=rollout_policy_from_settings(flags),
+        readiness=readiness,
+        checkpoint_kind="worktree_archive",
+        checkpoint_boundary="before_recovery_restoration",
+        resume_phase="retry_restoration",
+        archive_bytes=archive_bytes,
+        owner_id=str(canonical.owner_id or "") or None,
+        repository=repository,
+    )
+    metric_tags = bounded_checkpoint_metric_tags(
+        runtime_id=runtime_id,
+        generation=readiness.deployment_generation,
+        outcome=decision.reason_code,
+    )
+    metrics = get_metrics_emitter()
+    metrics.increment("checkpoint_resume.eligibility_total", tags=metric_tags)
+    metrics.increment("checkpoint_resume.admission_total", tags=metric_tags)
+    if not decision.admitted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Checkpoint Resume is not admitted by current rollout readiness.",
+                "reason": decision.reason_code,
+            },
+        )
+    return decision
+
+
 @router.post(
     "/{workflow_id}/recover-from-failed-step",
     response_model=RecoverFromFailedStepResponse,
@@ -14660,6 +14784,11 @@ async def recover_execution_from_failed_step(
         canonical=canonical,
         checkpoint_payload=checkpoint_payload,
     )
+    admission = _checkpoint_resume_admission_for_request(
+        canonical=canonical,
+        checkpoint_payload=checkpoint_payload,
+        repository=str(getattr(canonical, "repository", "") or "") or None,
+    )
     try:
         result = await service.create_failed_step_recovery_execution(
             canonical,
@@ -14668,6 +14797,7 @@ async def recover_execution_from_failed_step(
             checkpoint_payload=checkpoint_payload,
             failed_run_recovery_manifest_ref=manifest_ref,
             failed_run_recovery_manifest=manifest_payload,
+            admitted_checkpoint_resume_decision=admission,
         )
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(
@@ -14770,6 +14900,11 @@ async def recover_execution_from_selected_step(
         canonical=canonical,
         checkpoint_payload=checkpoint_payload,
     )
+    admission = _checkpoint_resume_admission_for_request(
+        canonical=canonical,
+        checkpoint_payload=checkpoint_payload,
+        repository=str(getattr(canonical, "repository", "") or "") or None,
+    )
     try:
         result = await service.create_failed_step_recovery_execution(
             canonical,
@@ -14779,6 +14914,7 @@ async def recover_execution_from_selected_step(
             failed_run_recovery_manifest_ref=manifest_ref,
             failed_run_recovery_manifest=manifest_payload,
             selected_start_step_id=request.selected_start_step_id,
+            admitted_checkpoint_resume_decision=admission,
         )
     except TemporalExecutionRecoveryCheckpointError as exc:
         raise HTTPException(

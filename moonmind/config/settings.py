@@ -2209,6 +2209,79 @@ class FeatureFlagsSettings(BaseSettings):
             "CHECKPOINT_RESUME_ADMISSION_ENABLED",
         )
     )
+    checkpoint_resume_allowed_runtime_ids: str = Field(
+        "codex_cli", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ALLOWED_RUNTIME_IDS",
+            "CHECKPOINT_RESUME_ALLOWED_RUNTIME_IDS",
+        )
+    )
+    checkpoint_resume_allowed_owner_ids: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ALLOWED_OWNER_IDS",
+            "CHECKPOINT_RESUME_ALLOWED_OWNER_IDS",
+        )
+    )
+    checkpoint_resume_allowed_repositories: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ALLOWED_REPOSITORIES",
+            "CHECKPOINT_RESUME_ALLOWED_REPOSITORIES",
+        )
+    )
+    checkpoint_resume_deployment_generation: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_DEPLOYMENT_GENERATION",
+            "CHECKPOINT_RESUME_DEPLOYMENT_GENERATION",
+        )
+    )
+    checkpoint_resume_capture_route_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_CAPTURE_ROUTE_READY",
+            "CHECKPOINT_RESUME_CAPTURE_ROUTE_READY",
+        )
+    )
+    checkpoint_resume_restore_route_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_RESTORE_ROUTE_READY",
+            "CHECKPOINT_RESUME_RESTORE_ROUTE_READY",
+        )
+    )
+    checkpoint_resume_artifact_store_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_ARTIFACT_STORE_READY",
+            "CHECKPOINT_RESUME_ARTIFACT_STORE_READY",
+        )
+    )
+    checkpoint_resume_managed_run_store_ready: bool = Field(
+        False, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MANAGED_RUN_STORE_READY",
+            "CHECKPOINT_RESUME_MANAGED_RUN_STORE_READY",
+        )
+    )
+    checkpoint_resume_max_archive_bytes: int = Field(
+        0, ge=0, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MAX_ARCHIVE_BYTES",
+            "CHECKPOINT_RESUME_MAX_ARCHIVE_BYTES",
+        )
+    )
+    checkpoint_resume_promotion_evidence_json: str = Field(
+        "", validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_PROMOTION_EVIDENCE_JSON",
+            "CHECKPOINT_RESUME_PROMOTION_EVIDENCE_JSON",
+        ),
+        description="Recorded generation-bound CI, shadow restore, and live canary evidence.",
+    )
+    checkpoint_resume_minimum_shadow_samples: int = Field(
+        10, ge=1, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MINIMUM_SHADOW_SAMPLES",
+            "CHECKPOINT_RESUME_MINIMUM_SHADOW_SAMPLES",
+        )
+    )
+    checkpoint_resume_minimum_shadow_success_ratio: float = Field(
+        0.99, ge=0.0, le=1.0, validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CHECKPOINT_RESUME_MINIMUM_SHADOW_SUCCESS_RATIO",
+            "CHECKPOINT_RESUME_MINIMUM_SHADOW_SUCCESS_RATIO",
+        )
+    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",

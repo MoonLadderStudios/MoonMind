@@ -106,6 +106,9 @@ from moonmind.workflows.executions.preset_expansion import (
     has_unexpanded_task_template,
 )
 from moonmind.workflows.executions.title_derivation import synthesize_execution_title
+from moonmind.workflows.executions.checkpoint_resume_admission import (
+    AdmittedCheckpointResumeDecision,
+)
 from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
 from moonmind.workflows.temporal.title_search import tokenize_title
 
@@ -3291,6 +3294,7 @@ class TemporalExecutionService:
         failed_run_recovery_manifest_ref: str | None = None,
         failed_run_recovery_manifest: Mapping[str, Any] | None = None,
         selected_start_step_id: str | None = None,
+        admitted_checkpoint_resume_decision: AdmittedCheckpointResumeDecision | None = None,
     ) -> dict[str, Any]:
         """Create a linked follow-up execution for failed-step recovery."""
 
@@ -3301,6 +3305,13 @@ class TemporalExecutionService:
         if record.state is not MoonMindWorkflowState.FAILED:
             raise TemporalExecutionValidationError(
                 "Failed-step recovery is only available for failed executions."
+            )
+        if (
+            admitted_checkpoint_resume_decision is not None
+            and not admitted_checkpoint_resume_decision.admitted
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "Checkpoint Resume admission is not eligible."
             )
         source_run_id = str(record.run_id or "").strip()
         if not source_run_id:
@@ -3476,6 +3487,10 @@ class TemporalExecutionService:
         recovery_source_payload["selectedCheckpointBoundary"] = (
             recovery_manifest.validation.boundary
         )
+        if admitted_checkpoint_resume_decision is not None:
+            recovery_source_payload["admittedCheckpointResumeDecision"] = (
+                admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
+            )
         if recovery_mode == "last_failed_step":
             recovery_source_payload.pop("recoveryMode", None)
             recovery_source_payload.pop("selectedStartStepId", None)
@@ -3527,6 +3542,10 @@ class TemporalExecutionService:
             "dependencySignatures": dependency_signatures,
             "workspacePolicy": workspace_policy,
         }
+        if admitted_checkpoint_resume_decision is not None:
+            recover_ref["admittedCheckpointResumeDecision"] = (
+                admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
+            )
         recover_ref["failedRunRecoveryManifestRef"] = manifest_ref
         if recovery_mode == "selected_step":
             recover_ref["recoveryMode"] = recovery_mode

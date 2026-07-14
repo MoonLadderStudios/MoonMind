@@ -285,6 +285,18 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
     operator_guidance: RecoveryOperatorGuidance = Field(..., alias="operatorGuidance")
     evidence: list[EvidenceRefStatusModel] = Field(default_factory=list)
+    runtime_id: str | None = Field(None, alias="runtimeId", max_length=80)
+    deployment_generation: str | None = Field(
+        None, alias="deploymentGeneration", max_length=120
+    )
+    capability_set_version: str | None = Field(
+        None, alias="capabilitySetVersion", max_length=120
+    )
+    capability_digest: str | None = Field(
+        None, alias="capabilityDigest", max_length=160
+    )
+    checkpoint_kind: str | None = Field(None, alias="checkpointKind", max_length=80)
+    promotion_state: str | None = Field(None, alias="promotionState", max_length=40)
 
     @field_validator(
         "disabled_reason_code",
@@ -2536,6 +2548,9 @@ class RecoverySourceModel(BaseModel):
     selected_checkpoint_boundary: str | None = Field(
         None, alias="selectedCheckpointBoundary"
     )
+    admitted_checkpoint_resume_decision: dict[str, Any] | None = Field(
+        None, alias="admittedCheckpointResumeDecision"
+    )
     recovery_workspace: dict[str, Any] = Field(
         default_factory=dict, alias="recoveryWorkspace"
     )
@@ -3675,6 +3690,9 @@ class ExecutionModel(BaseModel):
         default_factory=ExecutionActionCapabilityModel, alias="actions"
     )
     resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
+    recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
+        None, alias="recoveryEligibility"
+    )
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"
     )
