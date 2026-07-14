@@ -3233,6 +3233,8 @@ class TemporalSandboxActivities:
                     WORKSPACE_LOCATOR_UNSUPPORTED,
                     "filesystem workspace locator cannot be used as external state",
                 )
+            if model.workspace_locator is None and model.workspace_root_ref:
+                self._record_legacy_workspace_path_usage("capture_checkpoint")
             source_ref = (
                 model.workspace_locator.artifact_ref
                 if isinstance(model.workspace_locator, ExternalStateLocator)
@@ -4004,10 +4006,16 @@ class TemporalSandboxActivities:
 
     @staticmethod
     def _record_legacy_workspace_path_usage(operation: str) -> None:
-        get_metrics_emitter().increment(
-            "workspace_locator.compatibility_path_usage",
-            tags={"operation": operation},
-        )
+        try:
+            get_metrics_emitter().increment(
+                "workspace_locator.compatibility_path_usage",
+                tags={"operation": operation},
+            )
+        except Exception:
+            logger.warning(
+                "Failed to emit legacy workspace path compatibility metric",
+                exc_info=True,
+            )
 
     def _resolve_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool

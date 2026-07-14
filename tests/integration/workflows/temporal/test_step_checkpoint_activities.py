@@ -360,7 +360,7 @@ async def test_workspace_locator_kinds_are_enforced_for_git_effect(
 ) -> None:
     store = InMemoryArtifactStore()
     root = _workspace_root(tmp_path)
-    repo = _repo(root, workspace_id="locator-workspace")
+    _repo(root, workspace_id="locator-workspace")
     sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
 
     result = await sandbox.workspace_classify_git_effect(
@@ -517,6 +517,59 @@ async def test_legacy_workspace_path_usage_emits_compatibility_metric(
         "workspace_locator.compatibility_path_usage",
         tags={"operation": "classify_git_effect"},
     )
+
+
+async def test_external_state_capture_counts_legacy_workspace_root_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    emitter = Mock()
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.get_metrics_emitter",
+        lambda: emitter,
+    )
+    sandbox = TemporalSandboxActivities(
+        workspace_root=_workspace_root(tmp_path), artifact_store=InMemoryArtifactStore()
+    )
+
+    result = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "external_state_ref",
+            "workspaceRootRef": "legacy-external-state",
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "legacy-external-state",
+        }
+    )
+
+    assert result["status"] == "captured"
+    emitter.increment.assert_called_once_with(
+        "workspace_locator.compatibility_path_usage",
+        tags={"operation": "capture_checkpoint"},
+    )
+
+
+async def test_legacy_workspace_metric_failure_does_not_block_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_metrics() -> object:
+        raise ValueError("invalid metrics configuration")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.get_metrics_emitter",
+        fail_metrics,
+    )
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(
+        workspace_root=root, artifact_store=InMemoryArtifactStore()
+    )
+
+    result = await sandbox.workspace_classify_git_effect(
+        {"workspacePath": str(repo)}
+    )
+
+    assert result["status"] == "dirty"
 
 
 async def test_workspace_apply_policy_handles_degraded_checkpoint_payload(
@@ -1292,6 +1345,54 @@ async def test_workflow_recovery_routes_checkpoint_validation_before_policy(
     policy_payload = calls[1][1]
     assert policy_payload["checkpointRef"] == "artifact-checkpoint"
     assert policy_payload["targetWorkspaceRef"] == "workspace-target"
+
+
+async def test_workflow_recovery_forwards_typed_target_workspace_locator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        calls.append((activity_type, payload))
+        if activity_type == "step_checkpoint.validate":
+            return {"valid": True}
+        if activity_type == "workspace.apply_policy":
+            return {"status": "applied", "workspaceRef": "typed-workspace"}
+        raise AssertionError(f"unexpected activity {activity_type}")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    workflow = MoonMindRunWorkflow()
+    workflow._recovery_source = _recovery_source_with_checkpoint_payload()
+    recovery_workspace = workflow._recovery_source["recoveryWorkspace"]
+    assert isinstance(recovery_workspace, dict)
+    recovery_workspace.pop("targetWorkspaceRef")
+    recovery_workspace["target_workspace_locator"] = {
+        "kind": "sandbox",
+        "workspaceId": "recovery-workspace",
+        "relativePath": "repo",
+    }
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "title": "Implement"}],
+        dependency_map={"implement": []},
+        updated_at=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+    )
+
+    restored_ref = await workflow._prepare_recovery_workspace_for_failed_step(
+        "implement"
+    )
+
+    assert restored_ref == "typed-workspace"
+    policy_payload = calls[1][1]
+    assert policy_payload["targetWorkspaceLocator"] == {
+        "kind": "sandbox",
+        "workspaceId": "recovery-workspace",
+        "relativePath": "repo",
+    }
+    assert "targetWorkspaceRef" not in policy_payload
 
 
 async def test_workflow_recovery_validation_failure_blocks_policy_application(
