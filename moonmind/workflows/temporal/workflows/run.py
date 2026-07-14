@@ -2981,7 +2981,7 @@ class MoonMindRunWorkflow:
             return None
         # Patch-gated so histories started before the explicit contract retain
         # their recorded validation path during replay.
-        if workflow.patched(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
+        if self._workflow_patch_enabled(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
             validate_recovery_contract(recovery_source)
 
         source_workflow_id = self._recovery_source_text(
