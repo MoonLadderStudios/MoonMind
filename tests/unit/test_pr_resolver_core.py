@@ -65,6 +65,21 @@ from pr_resolver_core import (
             ResolverAction.RUN_REMEDIATION,
         ),
         (
+            {"blockers": [{"kind": "merge_conflict"}]},
+            {
+                "pr": {
+                    "state": "OPEN",
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "BEHIND",
+                },
+                "ci": {"isRunning": False, "hasFailures": False},
+                "commentsFetch": {"succeeded": True},
+                "commentsSummary": {"includeBotReviewComments": True},
+            },
+            "merge_conflicts",
+            ResolverAction.RUN_REMEDIATION,
+        ),
+        (
             {"checksComplete": False, "checksPassing": False},
             {
                 "pr": {"state": "OPEN", "mergeStateStatus": "CLEAN"},

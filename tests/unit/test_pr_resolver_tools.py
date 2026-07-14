@@ -850,6 +850,25 @@ def test_finalize_prioritizes_merge_conflicts_before_comments_and_ci(
 
     assert decision == {"action": "blocked", "reason": "merge_conflicts"}
 
+def test_finalize_syncs_branch_when_pr_is_behind_base(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {"mergeable": "MERGEABLE", "mergeStateStatus": "BEHIND"},
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "blocked", "reason": "merge_conflicts"}
+
 def test_finalize_blocks_when_ci_running_and_comments_addressed(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:

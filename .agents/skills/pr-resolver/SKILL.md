@@ -102,7 +102,9 @@ metadata flag.
      evidence and stop. A successful `gh pr merge` request is not terminal
      evidence until a fresh `gh pr view` reports `state=MERGED`; merge-queue or
      still-open states remain transient.
-   - `merge_conflicts`: follow `fix-merge-conflicts` completely.
+   - `merge_conflicts`: the PR either conflicts with or is behind its base
+     branch; follow `fix-merge-conflicts` completely to merge the latest
+     `origin/main`, then push the synchronized branch.
    - `ci_failures`: follow `fix-ci` completely.
    - `actionable_comments`: follow `fix-comments` completely, including fresh
      comment retrieval, its disposition ledger, push verification, and resolving
@@ -167,7 +169,8 @@ When a delegated remediation step cannot publish, overwrite `var/pr_resolver/res
 
 ## Bounded remediation actions
 
-- `merge_conflicts` selects `fix-merge-conflicts` once.
+- `merge_conflicts`, including a conflict-free PR reported as `BEHIND`, selects
+  `fix-merge-conflicts` once.
 - `ci_failures` selects `fix-ci` once.
 - `actionable_comments` selects `fix-comments` once.
 - Transient waits and unknown/manual blockers never launch an agent remediation turn.
