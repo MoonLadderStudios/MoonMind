@@ -110,6 +110,10 @@ def enabled(monkeypatch):
     )
 
 
+def _empty_namespace() -> SimpleNamespace:
+    return SimpleNamespace()
+
+
 # --------------------------------------------------------------------------- MCP
 
 
@@ -121,9 +125,7 @@ def mcp_app(monkeypatch) -> FastAPI:
     monkeypatch.setattr(mcp_tools_router, "_queue_registry", QueueToolRegistry())
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
-    app.dependency_overrides[mcp_tools_router.get_async_session] = (
-        lambda: SimpleNamespace()
-    )
+    app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_namespace
     return app
 
 
@@ -264,9 +266,7 @@ def http_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.include_router(http_router.router)
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
-    app.dependency_overrides[http_router.get_async_session] = (
-        lambda: SimpleNamespace()
-    )
+    app.dependency_overrides[http_router.get_async_session] = _empty_namespace
     return app
 
 

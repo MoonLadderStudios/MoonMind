@@ -86,15 +86,17 @@ class ContainerJobArtifactReader(Protocol):
     never resolves raw host paths and only reads bounded durable references.
     """
 
-    async def get_artifact(self, artifact_id: str) -> Any: ...
+    async def get_artifact(self, artifact_id: str) -> Any:
+        pass
 
     async def read(
         self,
         *,
         artifact_id: str,
         principal: str,
-        allow_restricted_raw: bool = ...,
-    ) -> tuple[Any, bytes]: ...
+        allow_restricted_raw: bool = False,
+    ) -> tuple[Any, bytes]:
+        pass
 
 
 class ContainerJobRepository:
