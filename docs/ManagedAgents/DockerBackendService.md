@@ -304,8 +304,9 @@ A backend-neutral request is shaped approximately as follows:
 {
   "image": "registry.example/image@sha256:...",
   "workspaceRef": {
-    "kind": "omnigent-session",
-    "sessionId": "conv_..."
+    "kind": "managed_runtime",
+    "runtimeId": "rt_...",
+    "agentRunId": "conv_..."
   },
   "workdir": "/workspace",
   "command": ["program", "arg1"],
@@ -362,14 +363,20 @@ silently rewrite primary workload success.
 
 ## 10. Workspace resolution
 
-Workspaces are logical references, not raw host paths. Supported kinds include:
+Workspaces are logical references, not raw host paths. The `workspaceRef` field
+reuses the canonical cross-runtime workspace locator (#3147,
+`moonmind/schemas/workspace_locator_models.py`) rather than a competing locator
+vocabulary. Supported kinds are:
 
 ```text
-moonmind-run
-moonmind-session
-omnigent-session
-artifact-workspace
+sandbox
+managed_runtime
+external_state
 ```
+
+A managed or Omnigent session workspace is expressed as a `managed_runtime`
+locator (`runtimeId` + `agentRunId`); an artifact-backed workspace is expressed
+as an `external_state` locator (`artifactRef`).
 
 Resolution steps are:
 
@@ -573,7 +580,7 @@ It must not advertise a session-local `DOCKER_HOST`.
 ```json
 {
   "image": "mcr.microsoft.com/dotnet/sdk:8.0@sha256:...",
-  "workspaceRef": {"kind": "omnigent-session", "sessionId": "conv_..."},
+  "workspaceRef": {"kind": "managed_runtime", "runtimeId": "rt_...", "agentRunId": "conv_..."},
   "workdir": "/workspace",
   "command": ["dotnet", "test", "--logger", "trx;LogFileName=/artifacts/tests.trx"],
   "cacheMounts": [{"key": "nuget-v1", "target": "/root/.nuget/packages"}],
@@ -587,7 +594,7 @@ It must not advertise a session-local `DOCKER_HOST`.
 ```json
 {
   "image": "ghcr.io/example/unreal-runner@sha256:...",
-  "workspaceRef": {"kind": "omnigent-session", "sessionId": "conv_..."},
+  "workspaceRef": {"kind": "managed_runtime", "runtimeId": "rt_...", "agentRunId": "conv_..."},
   "workdir": "/workspace",
   "command": ["bash", "-lc", "./tools/run_unreal_validation.sh"],
   "cacheMounts": [

@@ -15,6 +15,7 @@ from typing import Awaitable, Callable, Sequence
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
+    workspace_locator_identity,
 )
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
@@ -69,8 +70,7 @@ class DockerContainerJobBackend:
         return f"moonmind-container-job-{suffix}"
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
-        ref = request.request.spec.workspace_ref
-        identity = ref.get("artifactRef") or ref.get("sessionId")
+        identity = workspace_locator_identity(request.request.spec.workspace_ref)
         # Logical identifiers never become arbitrary paths: sanitize and contain.
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(identity))
         workspace = (self._workspace_root / safe).resolve()

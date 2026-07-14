@@ -38,7 +38,7 @@ def _input(*, timeout: int = 60) -> ContainerJobWorkflowInput:
                 "spec": {
                     "image": "python:3.13",
                     "workspaceRef": {
-                        "kind": "artifact-workspace",
+                        "kind": "external_state",
                         "artifactRef": "art_workspace",
                     },
                     "command": ["python", "-V"],

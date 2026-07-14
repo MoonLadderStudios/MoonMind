@@ -20,6 +20,12 @@ from moonmind.schemas.container_job_models import (
     ResolvedContainerLaunchPlan,
     TerminalOutcome,
     ensure_temporal_safe,
+    workspace_locator_identity,
+)
+from moonmind.schemas.workspace_locator_models import (
+    ExternalStateLocator,
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
 )
 
 JOB_ID = "container-job:" + "a" * 32
@@ -32,7 +38,7 @@ def payload() -> dict:
         "source": {"source": "omnigent", "omnigentSessionId": "s"},
         "spec": {
             "image": "ubuntu:24.04",
-            "workspaceRef": {"kind": "omnigent-session", "sessionId": "ws"},
+            "workspaceRef": {"kind": "external_state", "artifactRef": "ws"},
             "resources": {"cpuMillis": 1000, "memoryMiB": 512},
         },
     }
@@ -46,8 +52,8 @@ def test_submit_has_deterministic_shared_golden_serialization() -> None:
         b'"command":[],"entrypoint":[],"environment":[],"image":"ubuntu:24.04",'
         b'"networkMode":"none","outputs":[],"pullPolicy":"if-missing","resources":'
         b'{"cpuMillis":1000,"memoryMiB":512,"pids":256},"timeoutSeconds":1800,'
-        b'"workdir":"/workspace","workspaceRef":{"kind":"omnigent-session",'
-        b'"sessionId":"ws"}}}'
+        b'"workdir":"/workspace","workspaceRef":{"artifactRef":"ws",'
+        b'"kind":"external_state"}}}'
     )
     assert ensure_temporal_safe(model) == expected
     # HTTP, MCP, and Temporal consume this one alias-preserving model dump.
@@ -131,6 +137,60 @@ def test_secret_values_outputs_and_credential_references_are_validated() -> None
 def test_workdir_rejects_traversal(workdir: str) -> None:
     data = payload()
     data["spec"]["workdir"] = workdir
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "locator,expected_identity,expected_type",
+    [
+        (
+            {"kind": "sandbox", "workspaceId": "ws-1"},
+            "ws-1",
+            SandboxWorkspaceLocator,
+        ),
+        (
+            {
+                "kind": "managed_runtime",
+                "runtimeId": "rt-1",
+                "agentRunId": "agent-run:1",
+            },
+            "rt-1-agent-run:1",
+            ManagedWorkspaceLocator,
+        ),
+        (
+            {"kind": "external_state", "artifactRef": "art://ws"},
+            "art://ws",
+            ExternalStateLocator,
+        ),
+    ],
+)
+def test_workspace_ref_consumes_canonical_3147_locator(
+    locator: dict, expected_identity: str, expected_type: type
+) -> None:
+    data = payload()
+    data["spec"]["workspaceRef"] = locator
+    spec = ContainerJobSubmitRequest.model_validate(data).spec
+    assert isinstance(spec.workspace_ref, expected_type)
+    assert spec.workspace_ref.kind == locator["kind"]
+    assert workspace_locator_identity(spec.workspace_ref) == expected_identity
+
+
+@pytest.mark.parametrize(
+    "workspace_ref",
+    [
+        {"kind": "omnigent-session", "sessionId": "ws"},
+        {"kind": "moonmind-session", "sessionId": "ws"},
+        {"kind": "artifact-workspace", "artifactRef": "ws"},
+        {"kind": "sandbox"},
+        {"kind": "external_state", "artifactRef": "ws", "hostPath": "/tmp"},
+    ],
+)
+def test_workspace_ref_rejects_incompatible_or_unsafe_locators(
+    workspace_ref: dict,
+) -> None:
+    data = payload()
+    data["spec"]["workspaceRef"] = workspace_ref
     with pytest.raises(ValidationError):
         ContainerJobSubmitRequest.model_validate(data)
 
