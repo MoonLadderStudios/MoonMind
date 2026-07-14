@@ -27,6 +27,8 @@ def _policy(**updates):
     evidence = CheckpointPromotionEvidence(
         deploymentGeneration="generation-1", coldResumeCiPassed=True,
         shadowRestoreSamples=100, shadowRestoreSuccesses=100,
+        captureSamples=100, sourceDestroyingRestoreSamples=50,
+        internalResumeSamples=20,
         integrityFailures=0, duplicateSideEffects=0, liveCanaryPassed=True,
         recordedAt=datetime.now(UTC),
     )
@@ -82,6 +84,9 @@ def test_promotion_evidence_is_generation_bound_and_objective() -> None:
             "coldResumeCiPassed": True,
             "shadowRestoreSamples": 100,
             "shadowRestoreSuccesses": 100,
+            "captureSamples": 100,
+            "sourceDestroyingRestoreSamples": 50,
+            "internalResumeSamples": 20,
             "integrityFailures": 0,
             "duplicateSideEffects": 0,
             "liveCanaryPassed": True,
@@ -89,6 +94,20 @@ def test_promotion_evidence_is_generation_bound_and_objective() -> None:
         }
     )
     assert _decision(mismatched).reason_code == "promotion_evidence_missing"
+
+
+def test_promotion_requires_capture_destructive_restore_and_resume_samples() -> None:
+    for field in (
+        "captureSamples",
+        "sourceDestroyingRestoreSamples",
+        "internalResumeSamples",
+    ):
+        evidence = _policy().promotion_evidence.model_dump(by_alias=True)
+        evidence[field] = 0
+        assert (
+            _decision(_policy(promotionEvidence=evidence)).reason_code
+            == "promotion_evidence_missing"
+        )
 
 
 def test_only_codex_cli_declares_managed_checkpoint_support() -> None:

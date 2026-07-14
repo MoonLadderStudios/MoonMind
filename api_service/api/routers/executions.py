@@ -3444,53 +3444,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         memo=memo,
         finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
     )
-    recovery_eligibility = None
-    recovery_manifest_summary = _recovery_manifest_summary_from_record(record)
-    raw_recovery_eligibility = recovery_manifest_summary.get("recoveryEligibility")
-    if isinstance(raw_recovery_eligibility, Mapping):
-        projected = dict(raw_recovery_eligibility)
-        flags = settings.feature_flags
-        projected_runtime = normalize_runtime_id(target_runtime or "codex_cli")
-        try:
-            projected_capabilities = resolve_runtime_execution_capabilities(
-                projected_runtime
-            )
-        except ValueError:
-            projected_capabilities = None
-        projected.update(
-            runtimeId=projected_runtime,
-            deploymentGeneration=(
-                str(flags.checkpoint_resume_deployment_generation or "").strip()
-                or "unavailable"
-            ),
-            capabilitySetVersion=(
-                projected_capabilities.capability_set_version
-                if projected_capabilities else None
-            ),
-            capabilityDigest=(
-                projected_capabilities.capability_digest
-                if projected_capabilities else None
-            ),
-            checkpointKind="worktree_archive",
-            promotionState=flags.checkpoint_resume_promotion_state,
-        )
-        if (
-            flags.checkpoint_resume_promotion_state
-            in {"disabled", "shadow_capture", "shadow_restore", "paused"}
-            or not flags.checkpoint_resume_action_enabled
-        ):
-            projected.update(
-                eligible=False,
-                defaultAction="full_retry",
-                disabledReasonCode="rollout_action_hidden",
-                operatorGuidance="full_retry",
-            )
-        try:
-            recovery_eligibility = RecoveryEligibilityDiagnosticModel.model_validate(
-                projected
-            )
-        except ValidationError:
-            recovery_eligibility = None
+    recovery_eligibility = _project_recovery_eligibility(record, target_runtime)
 
     started_at = getattr(record, "started_at", None)
     updated_at = getattr(record, "updated_at", None) or started_at or datetime.now(UTC)
@@ -3931,6 +3885,7 @@ def _serialize_execution(
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
     scheduled_for = getattr(record, "scheduled_for", None)
 
+    recovery_eligibility = _project_recovery_eligibility(record, target_runtime)
     return ExecutionModel(
         task_id=None,
         agent_run_id=agent_run_id,
@@ -4465,6 +4420,49 @@ def _recovery_manifest_summary_from_record(record) -> Mapping[str, Any]:
     if not isinstance(recovery_manifest, Mapping):
         recovery_manifest = finish_summary.get("recovery_manifest")
     return recovery_manifest if isinstance(recovery_manifest, Mapping) else {}
+
+
+def _project_recovery_eligibility(
+    record, target_runtime: str | None
+) -> RecoveryEligibilityDiagnosticModel | None:
+    raw = _recovery_manifest_summary_from_record(record).get("recoveryEligibility")
+    if not isinstance(raw, Mapping):
+        return None
+    projected = dict(raw)
+    flags = settings.feature_flags
+    projected_runtime = normalize_runtime_id(target_runtime or "codex_cli")
+    try:
+        capabilities = resolve_runtime_execution_capabilities(projected_runtime)
+    except ValueError:
+        capabilities = None
+    projected.update(
+        runtimeId=projected_runtime,
+        deploymentGeneration=(
+            str(flags.checkpoint_resume_deployment_generation or "").strip()
+            or "unavailable"
+        ),
+        capabilitySetVersion=(
+            capabilities.capability_set_version if capabilities else None
+        ),
+        capabilityDigest=(capabilities.capability_digest if capabilities else None),
+        checkpointKind="worktree_archive",
+        promotionState=flags.checkpoint_resume_promotion_state,
+    )
+    if (
+        flags.checkpoint_resume_promotion_state
+        in {"disabled", "shadow_capture", "shadow_restore", "paused"}
+        or not flags.checkpoint_resume_action_enabled
+    ):
+        projected.update(
+            eligible=False,
+            defaultAction="full_retry",
+            disabledReasonCode="rollout_action_hidden",
+            operatorGuidance="full_retry",
+        )
+    try:
+        return RecoveryEligibilityDiagnosticModel.model_validate(projected)
+    except ValidationError:
+        return None
 
 
 def _nested_recovery_manifest_text(
@@ -14673,7 +14671,12 @@ def _checkpoint_resume_admission_for_request(
     workflow = params.get("workflow") if isinstance(params.get("workflow"), Mapping) else {}
     runtime = workflow.get("runtime") if isinstance(workflow.get("runtime"), Mapping) else {}
     runtime_id = normalize_runtime_id(
-        runtime.get("id") or runtime.get("runtimeId") or params.get("runtimeId") or ""
+        params.get("targetRuntime")
+        or runtime.get("mode")
+        or runtime.get("id")
+        or runtime.get("runtimeId")
+        or params.get("runtimeId")
+        or ""
     )
     capabilities = resolve_runtime_execution_capabilities(runtime_id)
     flags = settings.feature_flags
@@ -14725,6 +14728,16 @@ def _checkpoint_resume_admission_for_request(
             },
         )
     return decision
+
+
+def _canonical_execution_repository(
+    canonical: TemporalExecutionCanonicalRecord,
+) -> str | None:
+    params = canonical.parameters if isinstance(canonical.parameters, Mapping) else {}
+    task = params.get("task") if isinstance(params.get("task"), Mapping) else {}
+    value = params.get("repository") or task.get("repository")
+    candidate = str(value or "").strip()
+    return candidate or None
 
 
 @router.post(
@@ -14790,7 +14803,7 @@ async def recover_execution_from_failed_step(
     admission = _checkpoint_resume_admission_for_request(
         canonical=canonical,
         checkpoint_payload=checkpoint_payload,
-        repository=str(getattr(canonical, "repository", "") or "") or None,
+        repository=_canonical_execution_repository(canonical),
     )
     try:
         result = await service.create_failed_step_recovery_execution(
@@ -14906,7 +14919,7 @@ async def recover_execution_from_selected_step(
     admission = _checkpoint_resume_admission_for_request(
         canonical=canonical,
         checkpoint_payload=checkpoint_payload,
-        repository=str(getattr(canonical, "repository", "") or "") or None,
+        repository=_canonical_execution_repository(canonical),
     )
     try:
         result = await service.create_failed_step_recovery_execution(

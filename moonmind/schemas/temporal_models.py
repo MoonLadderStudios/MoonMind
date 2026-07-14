@@ -1084,6 +1084,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     patch_ref: str | None = Field(None, alias="patchRef")
     archive_ref: str | None = Field(None, alias="archiveRef")
     archive_digest: str | None = Field(None, alias="archiveDigest")
+    archive_bytes: int | None = Field(None, alias="archiveBytes", ge=1)
     workspace_ref: str | None = Field(None, alias="workspaceRef")
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")

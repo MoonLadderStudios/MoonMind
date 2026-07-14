@@ -30,6 +30,11 @@ class CheckpointPromotionEvidence(BaseModel):
     cold_resume_ci_passed: bool = Field(False, alias="coldResumeCiPassed")
     shadow_restore_samples: int = Field(0, ge=0, alias="shadowRestoreSamples")
     shadow_restore_successes: int = Field(0, ge=0, alias="shadowRestoreSuccesses")
+    capture_samples: int = Field(0, ge=0, alias="captureSamples")
+    source_destroying_restore_samples: int = Field(
+        0, ge=0, alias="sourceDestroyingRestoreSamples"
+    )
+    internal_resume_samples: int = Field(0, ge=0, alias="internalResumeSamples")
     integrity_failures: int = Field(0, ge=0, alias="integrityFailures")
     duplicate_side_effects: int = Field(0, ge=0, alias="duplicateSideEffects")
     live_canary_passed: bool = Field(False, alias="liveCanaryPassed")
@@ -42,6 +47,9 @@ class CheckpointPromotionEvidence(BaseModel):
         return bool(
             self.cold_resume_ci_passed
             and ratio >= minimum_success_ratio
+            and self.capture_samples >= 100
+            and self.source_destroying_restore_samples >= 50
+            and self.internal_resume_samples >= 20
             and self.integrity_failures == 0
             and self.duplicate_side_effects == 0
         )

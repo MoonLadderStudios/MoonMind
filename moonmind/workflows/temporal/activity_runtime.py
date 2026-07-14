@@ -7059,6 +7059,7 @@ class TemporalAgentRuntimeActivities:
             workspace={
                 "kind": "worktree_archive", "baseCommit": head,
                 "archiveRef": archive_ref, "archiveDigest": archive_digest,
+                "archiveBytes": len(archive_payload),
                 "manifestRef": manifest_ref, "manifestDigest": manifest_digest,
                 "includesUntracked": policy.include_untracked,
                 "includesIgnoredFiles": False,
