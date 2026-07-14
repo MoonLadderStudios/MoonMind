@@ -6976,18 +6976,35 @@ class TemporalAgentRuntimeActivities:
                         non_retryable=True,
                     )
                 correlation = {
-                    "workflowId": record.workflow_id,
+                    "agentRunId": record.run_id,
                     "ownerRunId": record.owner_run_id,
                     "logicalStepId": record.logical_step_id,
                     "executionOrdinal": record.execution_ordinal,
                 }
                 expected_correlation = {
-                    "workflowId": model.identity.workflow_id,
+                    # ManagedRunRecord.workflow_id identifies the AgentRun child
+                    # that executed the current turn.  It is intentionally not
+                    # the parent UserWorkflow identity carried by the source
+                    # Step Execution.  The workspace owner key plus the
+                    # Temporal run-scoped Step Execution fields are the durable
+                    # authority binding for checkpoint capture.
+                    "agentRunId": locator.agent_run_id,
                     "ownerRunId": model.identity.run_id,
                     "logicalStepId": model.identity.logical_step_id,
                     "executionOrdinal": model.identity.execution_ordinal,
                 }
-                if correlation != expected_correlation:
+                executor_workflow_id = str(record.workflow_id or "").strip()
+                source_workflow_id = model.identity.workflow_id
+                executor_belongs_to_source = (
+                    executor_workflow_id == source_workflow_id
+                    or executor_workflow_id.startswith(
+                        f"{source_workflow_id}:agent:"
+                    )
+                )
+                if (
+                    correlation != expected_correlation
+                    or not executor_belongs_to_source
+                ):
                     logger.warning("managed_checkpoint_capture_authority_rejected")
                     raise temporal_exceptions.ApplicationError(
                         "managed run record does not belong to the source Step Execution",
