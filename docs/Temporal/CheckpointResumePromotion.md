@@ -55,7 +55,7 @@ Record it with cold-resume CI and shadow counts in
 Set capture, shadow restore, action exposure, and admission independently only
 after review. Also set generation, maximum archive size, explicit allowlists,
 and all route/store readiness controls. Workflow Detail shows the stable reason,
-runtime, checkpoint kind, promotion state, generation, capability version, and
+runtime, checkpoint kind, promotion state, generation, capability set, and
 digest.
 
 ## Metrics and pause conditions
