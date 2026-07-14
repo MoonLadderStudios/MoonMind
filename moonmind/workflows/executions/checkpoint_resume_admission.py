@@ -7,7 +7,7 @@ MoonLadderStudios/MoonMind#3278.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import json
 from typing import Literal
 
@@ -240,7 +240,7 @@ def unavailable_checkpoint_resume_decision(
             managedRunStoreReady=False,
             capabilitySetVersion=capabilities.capability_set_version,
             capabilityDigest=capabilities.capability_digest,
-            checkedAt=datetime.now(UTC),
+            checkedAt=datetime.now(timezone.utc),
         ),
         checkpointKind=checkpoint_kind,
         checkpointBoundary=checkpoint_boundary,

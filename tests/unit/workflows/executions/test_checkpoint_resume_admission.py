@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from moonmind.workflows.executions.checkpoint_resume_admission import (
     CheckpointPromotionEvidence,
@@ -19,7 +19,7 @@ def _readiness():
         captureRouteReady=True, restoreRouteReady=True, artifactStoreReady=True,
         managedRunStoreReady=True,
         capabilitySetVersion=capabilities.capability_set_version,
-        capabilityDigest=capabilities.capability_digest, checkedAt=datetime.now(UTC),
+        capabilityDigest=capabilities.capability_digest, checkedAt=datetime.now(timezone.utc),
     )
 
 
@@ -30,7 +30,7 @@ def _policy(**updates):
         captureSamples=100, sourceDestroyingRestoreSamples=50,
         internalResumeSamples=20,
         integrityFailures=0, duplicateSideEffects=0, liveCanaryPassed=True,
-        recordedAt=datetime.now(UTC),
+        recordedAt=datetime.now(timezone.utc),
     )
     values = dict(
         promotionState="internal", captureEnabled=True, shadowRestoreEnabled=True,
@@ -102,7 +102,7 @@ def test_promotion_evidence_is_generation_bound_and_objective() -> None:
             "integrityFailures": 0,
             "duplicateSideEffects": 0,
             "liveCanaryPassed": True,
-            "recordedAt": datetime.now(UTC),
+            "recordedAt": datetime.now(timezone.utc),
         }
     )
     assert _decision(mismatched).reason_code == "promotion_evidence_missing"
