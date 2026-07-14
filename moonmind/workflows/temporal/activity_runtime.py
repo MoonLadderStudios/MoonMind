@@ -1380,6 +1380,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_cleanup_managed_runtime_files",
     ),
+    "agent_runtime.restore_workspace_checkpoint": (
+        "agent_runtime",
+        "agent_runtime_restore_workspace_checkpoint",
+    ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.publish_terminal_checkpoint": (
@@ -3440,33 +3444,47 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
-            archive_payload, archived_paths = self._build_worktree_archive(workspace)
+            archive_payload, entries = self._build_worktree_archive(workspace)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
                 metadata={"artifact_kind": "checkpoint_archive"},
             )
+            status = await _run_command(
+                ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                cwd=str(workspace),
+            )
+            manifest_payload = _json_bytes(
+                {
+                    "schemaVersion": "v1",
+                    "kind": "worktree_archive",
+                    "baseCommit": model.base_commit,
+                    "archiveRef": archive_ref,
+                    "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                    "entries": entries,
+                    "pathCount": len(entries),
+                    "gitStatusDigest": "sha256:"
+                    + hashlib.sha256(status.stdout.encode("utf-8")).hexdigest(),
+                }
+            )
             manifest_ref = await self._put_checkpoint_bytes(
-                _json_bytes(
-                    {
-                        "kind": "worktree_archive",
-                        "archiveRef": archive_ref,
-                        "pathCount": len(archived_paths),
-                    }
-                ),
+                manifest_payload,
                 content_type="application/json",
                 metadata={"artifact_kind": "checkpoint_manifest"},
             )
             return WorkspaceCheckpointEvidenceModel(
                 kind="worktree_archive",
+                baseCommit=model.base_commit,
                 archiveRef=archive_ref,
+                archiveDigest="sha256:" + hashlib.sha256(archive_payload).hexdigest(),
                 manifestRef=manifest_ref,
+                manifestDigest="sha256:" + hashlib.sha256(manifest_payload).hexdigest(),
                 createdAt=datetime.now(UTC),
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[str]]:
-        archived_paths: list[str] = []
+    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[dict[str, Any]]]:
+        entries: list[dict[str, Any]] = []
         output = BytesIO()
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for path in sorted(workspace.rglob("*")):
@@ -3492,7 +3510,11 @@ class TemporalSandboxActivities:
                     info.uname = "moonmind"
                     info.gname = "moonmind"
                     archive.addfile(info)
-                    archived_paths.append(str(relative))
+                    entries.append({
+                        "path": str(relative), "type": "symlink",
+                        "target": os.readlink(path),
+                        "mode": format(stat.S_IMODE(path.lstat().st_mode), "04o"),
+                    })
                     continue
                 info = archive.gettarinfo(str(path), arcname=str(relative))
                 info.uid = _MANAGED_AGENT_UID
@@ -3501,8 +3523,14 @@ class TemporalSandboxActivities:
                 info.gname = "moonmind"
                 with path.open("rb") as file_handle:
                     archive.addfile(info, file_handle)
-                archived_paths.append(str(relative))
-        return output.getvalue(), archived_paths
+                payload = path.read_bytes()
+                entries.append({
+                    "path": str(relative), "type": "file",
+                    "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+                    "bytes": len(payload),
+                    "mode": format(stat.S_IMODE(path.stat().st_mode), "04o"),
+                })
+        return output.getvalue(), entries
 
     async def workspace_apply_policy(
         self,
@@ -6789,6 +6817,14 @@ class TemporalAgentRuntimeActivities:
         )
         self._supervision_tasks: set[asyncio.Task] = set()
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
+        )
+
+        self._checkpoint_restore = ManagedCheckpointRestoreService(
+            authority_root=os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+            artifact_service=artifact_service,
+        )
         # Pentest-specific activity logic lives in a dedicated module/class.
         # Imported lazily to avoid an import cycle (that module imports this one).
         from moonmind.workflows.temporal.activities.pentest_activities import (
@@ -7081,6 +7117,12 @@ class TemporalAgentRuntimeActivities:
             payload=payload, content_type=content_type,
         )
         return _compact_artifact_ref_text(build_artifact_ref(completed))
+
+    async def agent_runtime_restore_workspace_checkpoint(
+        self, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Restore and verify a cold checkpoint before any agent is launched."""
+        return await self._checkpoint_restore.restore(request)
 
     async def execution_notify_completion(
         self,
@@ -7547,6 +7589,25 @@ class TemporalAgentRuntimeActivities:
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
+        restoration_requirement = payload.get("restoration_requirement")
+        if restoration_requirement is not None:
+            if not isinstance(restoration_requirement, Mapping):
+                raise TemporalActivityRuntimeError("restoration_requirement must be a mapping")
+            self._checkpoint_restore.assert_ready_for_launch(
+                agent_run_id=str(run_id),
+                checkpoint_ref=str(restoration_requirement.get("checkpointRef") or ""),
+                capability_digest=str(restoration_requirement.get("capabilityDigest") or ""),
+            )
+            expected_workspace = (
+                self._checkpoint_restore.root / str(run_id) / "repo"
+            ).resolve()
+            if workspace_path is None or Path(workspace_path).resolve() != expected_workspace:
+                from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
+                    "launch workspace does not match the verified restored destination",
+                )
 
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else {}
         ref = env_overrides.pop("MANAGED_API_KEY_REF", None)
