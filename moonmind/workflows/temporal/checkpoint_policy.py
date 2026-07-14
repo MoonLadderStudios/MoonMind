@@ -23,6 +23,7 @@ _LEGACY_SANDBOX_CAPABILITIES = RuntimeExecutionCapabilities(
     checkpointRestoreKinds=("git_patch", "worktree_archive"),
     checkpointCaptureActivity="workspace.capture_checkpoint",
     checkpointRestoreActivity="workspace.apply_checkpoint",
+    checkpointArtifactContractVersion="legacy-workspace-checkpoint-v1",
     supportsSameSessionContinuation=False,
     terminalContractIds=("legacy_step_execution_result_v1",),
     postExecutionCheckpointCriticality="recoverability_only",

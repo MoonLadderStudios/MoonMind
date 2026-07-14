@@ -6641,6 +6641,7 @@ export interface components {
             reportProjection?: components["schemas"]["ExecutionReportProjectionModel"] | null;
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
             resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
+            recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
             recurrence?: components["schemas"]["ExecutionRecurrenceProvenanceModel"] | null;
@@ -9121,6 +9122,12 @@ export interface components {
             operatorGuidance: "continue_same_session" | "resume_from_workspace_checkpoint" | "full_retry" | "fix_environment" | "manual_intervention";
             /** Evidence */
             evidence?: components["schemas"]["EvidenceRefStatusModel"][];
+            /** Runtimeid */
+            runtimeId?: string | null;
+            /** Deploymentgeneration */
+            deploymentGeneration?: string | null;
+            /** Promotionstate */
+            promotionState?: string | null;
         };
         /**
          * RecurringWorkflowActionPermissionsModel

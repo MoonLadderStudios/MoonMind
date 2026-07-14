@@ -13943,6 +13943,10 @@ def _valid_failed_run_recovery_manifest_payload(
 def test_failed_step_recovery_hydrates_checkpoint_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -13992,6 +13996,7 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
             "branch": "feature/resume",
             "commit": "abc123",
             "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -14043,6 +14048,10 @@ def test_failed_step_recovery_hydrates_checkpoint_artifact(
 def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -14096,6 +14105,7 @@ def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
         ],
         "recoveryWorkspace": {
             "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(
@@ -14146,6 +14156,10 @@ def test_failed_step_recovery_hydrates_checkpoint_from_manifest_summary(
 def test_selected_step_recovery_pins_source_and_selected_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._checkpoint_resume_admission_for_request",
+        lambda **_kwargs: SimpleNamespace(admitted=True),
+    )
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -14190,7 +14204,8 @@ def test_selected_step_recovery_pins_source_and_selected_step(
             }
         ],
         "recoveryWorkspace": {
-            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1"
+            "checkpointRef": "artifact://resume-checkpoints/source/checkpoint-v1",
+            "archiveBytes": 100,
         },
     }
     manifest_payload = _valid_failed_run_recovery_manifest_payload(

@@ -336,6 +336,18 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     )
     operator_guidance: RecoveryOperatorGuidance = Field(..., alias="operatorGuidance")
     evidence: list[EvidenceRefStatusModel] = Field(default_factory=list)
+    runtime_id: str | None = Field(None, alias="runtimeId", max_length=80)
+    deployment_generation: str | None = Field(
+        None, alias="deploymentGeneration", max_length=120
+    )
+    capability_set_version: str | None = Field(
+        None, alias="capabilitySetVersion", max_length=120
+    )
+    capability_digest: str | None = Field(
+        None, alias="capabilityDigest", max_length=160
+    )
+    checkpoint_kind: str | None = Field(None, alias="checkpointKind", max_length=80)
+    promotion_state: str | None = Field(None, alias="promotionState", max_length=40)
 
     @model_validator(mode="before")
     @classmethod
@@ -1072,6 +1084,7 @@ class WorkspaceCheckpointEvidenceModel(BaseModel):
     patch_ref: str | None = Field(None, alias="patchRef")
     archive_ref: str | None = Field(None, alias="archiveRef")
     archive_digest: str | None = Field(None, alias="archiveDigest")
+    archive_bytes: int | None = Field(None, alias="archiveBytes", ge=1)
     workspace_ref: str | None = Field(None, alias="workspaceRef")
     workspace_artifact_ref: str | None = Field(None, alias="workspaceArtifactRef")
     external_state_ref: str | None = Field(None, alias="externalStateRef")
@@ -2670,6 +2683,9 @@ class RecoverySourceModel(BaseModel):
     selected_checkpoint_boundary: str | None = Field(
         None, alias="selectedCheckpointBoundary"
     )
+    admitted_checkpoint_resume_decision: dict[str, Any] | None = Field(
+        None, alias="admittedCheckpointResumeDecision"
+    )
     recovery_workspace: dict[str, Any] = Field(
         default_factory=dict, alias="recoveryWorkspace"
     )
@@ -3818,6 +3834,9 @@ class ExecutionModel(BaseModel):
         default_factory=ExecutionActionCapabilityModel, alias="actions"
     )
     resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
+    recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
+        None, alias="recoveryEligibility"
+    )
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"
     )
