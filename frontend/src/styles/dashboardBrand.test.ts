@@ -27,11 +27,13 @@ function cssRuleBlock(selector: string): string {
   return blocks.join('\n');
 }
 
-describe('dashboard masthead brand styles', () => {
+describe('dashboard page layout styles', () => {
   it('centers the create page title', () => {
     expect(cssRuleBlock('.workflow-start-heading')).toContain('text-align: center;');
   });
+});
 
+describe('dashboard masthead brand styles', () => {
   it('keeps Moon white and renders the MoonMind header at the compact size', () => {
     expect(cssRuleBlock('.masthead-brand')).toContain('color: rgb(var(--mm-ink));');
     expect(cssRuleBlock('.masthead-brand')).toContain('text-decoration: none;');
