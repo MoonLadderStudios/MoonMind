@@ -42,10 +42,7 @@ def _request(
                 "source": {"source": "workflow"},
                 "spec": {
                     "image": image,
-                    "workspaceRef": {
-                        "kind": "artifact-workspace",
-                        "artifactRef": "art_workspace",
-                    },
+                    "workspaceRef": {"kind": "sandbox", "workspaceId": "workspace"},
                     "registryCredentialRef": "db://ghcr",
                     "pullPolicy": pull_policy,
                     "resources": {"cpuMillis": 1000, "memoryMiB": 512},
@@ -261,10 +258,7 @@ async def test_public_image_never_materializes_auth(tmp_path: Path) -> None:
                 "source": {"source": "workflow"},
                 "spec": {
                     "image": "alpine",
-                    "workspaceRef": {
-                        "kind": "artifact-workspace",
-                        "artifactRef": "art_workspace",
-                    },
+                    "workspaceRef": {"kind": "sandbox", "workspaceId": "workspace"},
                     "resources": {"cpuMillis": 1000, "memoryMiB": 512},
                 },
             },
