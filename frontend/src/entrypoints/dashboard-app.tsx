@@ -850,10 +850,17 @@ function DashboardNavigation({
 /**
  * The route shell owns `--mm-collection-workspace-block-size`: the visible
  * block size below the dashboard chrome that a collection workspace (and its
- * shared sidebar rail) should fill. It is measured from the panel's own top
- * coordinate (which already accounts for banners, the masthead, and the alert
- * strip above it, at any scroll offset) subtracted from the visual viewport
- * height, then written onto the panel so descendants inherit it.
+ * shared sidebar rail) should fill. It is measured from the panel's current
+ * viewport-relative top (which accounts for banners, the masthead, and the
+ * alert strip above it) subtracted from the visual viewport height, then
+ * written onto the panel so descendants inherit it.
+ *
+ * The sidebar rail is `position: sticky; top: 0`, so once the document scrolls
+ * the chrome above the panel out of view the rail should grow to the full
+ * visible viewport. Clamping the subtracted chrome to `>= 0` (instead of
+ * freezing it at the panel's document offset, `rect.top + scrollY`) makes the
+ * rail track that sticky position rather than leaving a persistent gap at the
+ * bottom while scrolling.
  *
  * This is the lower-risk alternative to restructuring the whole dashboard shell
  * into a bounded two-row layout: it keeps every other route's `.panel` geometry
@@ -868,31 +875,58 @@ function useCollectionWorkspaceBlockSize(
     if (!panel || typeof window === 'undefined') {
       return undefined;
     }
-    const measure = () => {
+    // A layout read (`getBoundingClientRect`) followed by a style write, guarded
+    // so an unchanged value never touches the DOM. The guard keeps
+    // high-frequency resize/scroll/observer callbacks from thrashing layout or
+    // driving a ResizeObserver feedback loop.
+    const update = () => {
       const rect = panel.getBoundingClientRect();
-      // `rect.top + scrollY` is the panel's layout offset from the top of the
-      // document, i.e. the chrome height, independent of the current scroll
-      // position. The workspace fills from there to the bottom of the viewport.
-      const scrollY = window.scrollY || window.pageYOffset || 0;
-      const chromeBlockSize = rect.top + scrollY;
+      const chromeBlockSize = Math.max(0, rect.top);
       const viewportBlockSize = window.visualViewport?.height ?? window.innerHeight;
       const available = Math.max(0, viewportBlockSize - chromeBlockSize);
-      panel.style.setProperty('--mm-collection-workspace-block-size', `${available}px`);
+      const nextValue = `${available}px`;
+      if (
+        panel.style.getPropertyValue('--mm-collection-workspace-block-size') !== nextValue
+      ) {
+        panel.style.setProperty('--mm-collection-workspace-block-size', nextValue);
+      }
     };
-    measure();
+    // Batch event-driven updates into a single animation frame so a burst of
+    // callbacks coalesces into one read+write. The initial mount measures
+    // synchronously to avoid a flash of an unsized rail.
+    let frameId: number | null = null;
+    const measure = () => {
+      if (frameId !== null) {
+        return;
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        update();
+      });
+    };
+    update();
     window.addEventListener('resize', measure);
+    // The sticky rail's visible height changes as the document scrolls the
+    // chrome past the top of the viewport, so recompute on scroll too.
+    window.addEventListener('scroll', measure, { passive: true });
     const viewport = window.visualViewport;
     viewport?.addEventListener('resize', measure);
+    viewport?.addEventListener('scroll', measure);
     // Recompute when chrome above the panel changes height (a banner appears,
     // the alert strip grows) — those reflow the panel's top coordinate.
     let observer: ResizeObserver | undefined;
     if (typeof ResizeObserver === 'function' && rootRef.current) {
-      observer = new ResizeObserver(() => measure());
+      observer = new ResizeObserver(measure);
       observer.observe(rootRef.current);
     }
     return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
       window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure);
       viewport?.removeEventListener('resize', measure);
+      viewport?.removeEventListener('scroll', measure);
       observer?.disconnect();
     };
   }, [rootRef, panelRef]);
