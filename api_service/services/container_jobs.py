@@ -1,8 +1,16 @@
-"""Owner-scoped durable container-job operations for MoonMind#3252."""
+"""Owner-scoped durable container-job operations for MoonMind#3259.
+
+This module is the single API-owned service that both the authenticated HTTP
+router and the MCP transport call. Neither transport executes Docker or waits
+for terminal completion; Temporal owns long-running execution. Reads and cancel
+are always owner-scoped, and log/artifact evidence is returned as bounded pages
+over durable references, never as an unbounded daemon stream.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, Protocol
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -11,10 +19,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ContainerJobRecord
 from moonmind.schemas.container_job_models import (
+    MAX_ARTIFACT_PAGE_ENTRIES,
+    MAX_LOG_PAGE_ENTRIES,
     AuxiliaryOutcome,
     ContainerJobAccepted,
+    ContainerJobArtifact,
+    ContainerJobArtifactPage,
     ContainerJobCancelRequest,
     ContainerJobCancelResult,
+    ContainerJobLogEntry,
+    ContainerJobLogPage,
+    ContainerJobLogQuery,
     ContainerJobState,
     ContainerJobStatus,
     ContainerJobSubmitRequest,
@@ -25,6 +40,8 @@ from moonmind.schemas.container_job_models import (
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
+_STDERR_MARKER = "[stderr]"
+
 
 class ContainerJobNotFoundError(RuntimeError):
     pass
@@ -32,6 +49,34 @@ class ContainerJobNotFoundError(RuntimeError):
 
 class ContainerJobIdempotencyConflictError(RuntimeError):
     pass
+
+
+class ContainerJobEvidenceUnavailableError(RuntimeError):
+    """Raised when a durable log/artifact reference cannot be resolved."""
+
+
+def owner_artifact_principal(owner: OwnerIdentity) -> str:
+    """Return the artifact-store principal a job's evidence was published under."""
+
+    return f"{owner.principal_type}:{owner.principal_id}"
+
+
+class ContainerJobArtifactReader(Protocol):
+    """Minimal read surface the service needs from the artifact store.
+
+    ``TemporalArtifactService`` satisfies this protocol directly; the service
+    never resolves raw host paths and only reads bounded durable references.
+    """
+
+    async def get_artifact(self, artifact_id: str) -> Any: ...
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = ...,
+    ) -> tuple[Any, bytes]: ...
 
 
 class ContainerJobRepository:
@@ -112,9 +157,16 @@ class ContainerJobRepository:
 
 
 class ContainerJobService:
-    def __init__(self, session: AsyncSession, *, temporal: TemporalClientAdapter | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        temporal: TemporalClientAdapter | None = None,
+        artifacts: ContainerJobArtifactReader | None = None,
+    ) -> None:
         self.repository = ContainerJobRepository(session)
         self._temporal = temporal or TemporalClientAdapter()
+        self._artifacts = artifacts
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
         record, replayed = await self.repository.create_or_replay(owner=owner, request=request)
@@ -148,3 +200,122 @@ class ContainerJobService:
             await self.repository._session.flush()
             await self._temporal.signal_container_job_cancel(job_id)
         return ContainerJobCancelResult(jobId=job_id, state=record.state, accepted=not terminal, replayed=replayed)
+
+    async def logs(
+        self, *, owner: OwnerIdentity, job_id: str, query: ContainerJobLogQuery | None = None
+    ) -> ContainerJobLogPage:
+        """Return one bounded log page over the job's durable log reference."""
+
+        query = query or ContainerJobLogQuery()
+        record = await self.repository.get_for_owner(owner=owner, job_id=job_id)
+        if record is None:
+            raise ContainerJobNotFoundError(job_id)
+        if not record.logs_ref:
+            # Evidence is not published yet (or the job produced none): the
+            # bounded contract is an empty page, not an unbounded daemon stream.
+            return ContainerJobLogPage(jobId=job_id, entries=[], nextCursor=None)
+
+        text = await self._read_evidence_text(owner=owner, artifact_ref=record.logs_ref)
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+
+        offset = self._decode_cursor(query.cursor)
+        limit = min(query.limit, MAX_LOG_PAGE_ENTRIES)
+        timestamp = record.updated_at or record.created_at or datetime.now(timezone.utc)
+
+        stream = "stdout"
+        entries: list[ContainerJobLogEntry] = []
+        for index, line in enumerate(lines):
+            if line.strip() == _STDERR_MARKER:
+                stream = "stderr"
+            if index < offset or len(entries) >= limit:
+                continue
+            entries.append(
+                ContainerJobLogEntry(
+                    sequence=index,
+                    timestamp=timestamp,
+                    stream=stream,
+                    text=line[:8192],
+                )
+            )
+        next_index = offset + len(entries)
+        next_cursor = str(next_index) if next_index < len(lines) else None
+        return ContainerJobLogPage(jobId=job_id, entries=entries, nextCursor=next_cursor)
+
+    async def artifacts(
+        self, *, owner: OwnerIdentity, job_id: str, cursor: str | None = None, limit: int = MAX_ARTIFACT_PAGE_ENTRIES
+    ) -> ContainerJobArtifactPage:
+        """Return authorized output references plus publication diagnostics."""
+
+        record = await self.repository.get_for_owner(owner=owner, job_id=job_id)
+        if record is None:
+            raise ContainerJobNotFoundError(job_id)
+        publication = AuxiliaryOutcome.model_validate(
+            record.publication_outcome_json or {"state": "not_attempted"}
+        )
+        artifacts: list[ContainerJobArtifact] = []
+        if record.artifacts_ref:
+            artifacts.append(
+                await self._describe_artifact(job_id=job_id, artifact_ref=record.artifacts_ref)
+            )
+        offset = self._decode_cursor(cursor)
+        limit = min(max(1, limit), MAX_ARTIFACT_PAGE_ENTRIES)
+        page = artifacts[offset : offset + limit]
+        next_index = offset + len(page)
+        next_cursor = str(next_index) if next_index < len(artifacts) else None
+        return ContainerJobArtifactPage(
+            jobId=job_id, artifacts=page, nextCursor=next_cursor, publication=publication
+        )
+
+    @staticmethod
+    def _decode_cursor(cursor: str | None) -> int:
+        if not cursor:
+            return 0
+        try:
+            value = int(cursor)
+        except ValueError as exc:
+            raise ContainerJobEvidenceUnavailableError("cursor is not a valid offset") from exc
+        if value < 0:
+            raise ContainerJobEvidenceUnavailableError("cursor must be non-negative")
+        return value
+
+    async def _read_evidence_text(self, *, owner: OwnerIdentity, artifact_ref: str) -> str:
+        if self._artifacts is None:
+            raise ContainerJobEvidenceUnavailableError("artifact store is not configured")
+        try:
+            _artifact, payload = await self._artifacts.read(
+                artifact_id=artifact_ref,
+                principal=owner_artifact_principal(owner),
+            )
+        except ContainerJobEvidenceUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalized to a stable evidence error
+            raise ContainerJobEvidenceUnavailableError(
+                "log evidence is not available"
+            ) from exc
+        return payload.decode("utf-8", errors="replace")
+
+    async def _describe_artifact(self, *, job_id: str, artifact_ref: str) -> ContainerJobArtifact:
+        if self._artifacts is None:
+            raise ContainerJobEvidenceUnavailableError("artifact store is not configured")
+        try:
+            artifact = await self._artifacts.get_artifact(artifact_ref)
+        except Exception as exc:  # noqa: BLE001 - normalized to a stable evidence error
+            raise ContainerJobEvidenceUnavailableError(
+                "artifact evidence is not available"
+            ) from exc
+        sha256 = getattr(artifact, "sha256", None)
+        size_bytes = getattr(artifact, "size_bytes", None)
+        metadata = getattr(artifact, "metadata_json", None) or {}
+        if not sha256 or size_bytes is None:
+            raise ContainerJobEvidenceUnavailableError(
+                "artifact evidence is incomplete"
+            )
+        name = str(metadata.get("name") or f"{job_id}-outputs")
+        return ContainerJobArtifact(
+            name=name[:255],
+            artifactRef=artifact_ref,
+            sizeBytes=int(size_bytes),
+            sha256=str(sha256),
+        )

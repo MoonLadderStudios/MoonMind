@@ -2174,6 +2174,21 @@ class FeatureFlagsSettings(BaseSettings):
             "AgentRun managed-session APIs."
         ),
     )
+    container_jobs_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "MOONMIND_CONTAINER_JOBS_ENABLED",
+            "FEATURE_FLAGS__CONTAINER_JOBS_ENABLED",
+            "CONTAINER_JOBS_ENABLED",
+        ),
+        description=(
+            "Expose the authenticated asynchronous container-job lifecycle over "
+            "HTTP and MCP (container.submit/status/logs/artifacts/cancel). "
+            "Disabled by default because the surface starts Docker-backed "
+            "execution and requires a configured, reachable backend and worker "
+            "routes; enable it once the Docker backend service is provisioned."
+        ),
+    )
     checkpoint_resume_promotion_state: Literal[
         "disabled", "shadow_capture", "shadow_restore", "internal", "limited",
         "broad", "ga", "paused",
