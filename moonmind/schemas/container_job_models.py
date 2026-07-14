@@ -308,6 +308,91 @@ class ResolvedContainerLaunchPlan(TemporalContractModel):
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 
 
+class ContainerJobWorkflowInput(TemporalContractModel):
+    """Compact input for the versioned ``MoonMind.ContainerJob`` workflow."""
+
+    contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    job_id: str = Field(alias="jobId")
+    request: ContainerJobSubmitRequest
+    observe_interval_seconds: int = Field(
+        10, alias="observeIntervalSeconds", ge=1, le=300
+    )
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
+
+    @property
+    def ownership_token(self) -> str:
+        return f"{self.job_id}:{self.contract_version}"
+
+
+class ContainerJobActivityRequest(TemporalContractModel):
+    """Typed, retry-safe request crossing a container-job Activity boundary."""
+
+    contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    job_id: str = Field(alias="jobId")
+    ownership_token: str = Field(alias="ownershipToken", min_length=1, max_length=300)
+    request: ContainerJobSubmitRequest
+    state: ContainerJobState | None = None
+    resolved_workspace_ref: str | None = Field(
+        None, alias="resolvedWorkspaceRef", max_length=1024
+    )
+    resolved_image_ref: str | None = Field(
+        None, alias="resolvedImageRef", max_length=1024
+    )
+    container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
+    terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
+    projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
+    publication_token: str | None = Field(
+        None, alias="publicationToken", max_length=300
+    )
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
+
+
+class ContainerJobActivityResult(TemporalContractModel):
+    """Bounded result returned by trusted container-job Activities."""
+
+    contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    resolved_workspace_ref: str | None = Field(
+        None, alias="resolvedWorkspaceRef", max_length=1024
+    )
+    resolved_image_ref: str | None = Field(
+        None, alias="resolvedImageRef", max_length=1024
+    )
+    container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
+    running: bool | None = None
+    terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
+    exit_code: int | None = Field(None, alias="exitCode")
+    logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
+    artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    diagnostics_ref: str | None = Field(
+        None, alias="diagnosticsRef", max_length=1024
+    )
+
+
+class ContainerJobWorkflowResult(TemporalContractModel):
+    """Authoritative terminal snapshot; auxiliary failures cannot replace outcome."""
+
+    contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    job_id: str = Field(alias="jobId")
+    state: ContainerJobState
+    terminal: TerminalOutcome
+    publication: AuxiliaryOutcome
+    cleanup: AuxiliaryOutcome
+    logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
+    artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    projection_sequence: int = Field(alias="projectionSequence", ge=0)
+    projection_repair_required: bool = Field(alias="projectionRepairRequired")
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
+
+
+def container_job_workflow_id(job_id: str) -> str:
+    """Return stable start-or-attach identity for a durable container job."""
+
+    return f"container-job-workflow:{_validate_job_id(job_id)}"
+
+
 def _reject_forbidden(value: Any, path: str = "request") -> None:
     if isinstance(value, dict):
         for raw_key, nested in value.items():

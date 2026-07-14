@@ -21,6 +21,10 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.config.settings import settings
 from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel
+from moonmind.schemas.container_job_models import (
+    ContainerJobWorkflowInput,
+    container_job_workflow_id,
+)
 from moonmind.workflows.temporal.workers import (
     WORKFLOW_FLEET,
     TemporalWorkerTopology,
@@ -414,6 +418,22 @@ class TemporalClientAdapter:
                 workflow_id=err.workflow_id,
                 run_id=err.run_id,
             )
+
+    async def start_container_job(
+        self, request: ContainerJobWorkflowInput | Mapping[str, Any]
+    ) -> WorkflowStartResult:
+        """Start or attach to one asynchronous ``MoonMind.ContainerJob``."""
+
+        model = (
+            request
+            if isinstance(request, ContainerJobWorkflowInput)
+            else ContainerJobWorkflowInput.model_validate(request)
+        )
+        return await self.start_workflow(
+            workflow_type="MoonMind.ContainerJob",
+            workflow_id=container_job_workflow_id(model.job_id),
+            input_args=model.model_dump(mode="json", by_alias=True),
+        )
 
     async def get_workflow_handle(self, workflow_id: str) -> Any:
         """Get a handle to an existing workflow execution."""
