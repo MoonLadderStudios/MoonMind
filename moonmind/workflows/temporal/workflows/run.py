@@ -544,6 +544,9 @@ RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH = (
     "run-prepublication-failure-blocks-repair-v1"
 )
+RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH = (
+    "run-prepublication-failure-blocks-publish-v1"
+)
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
@@ -10896,6 +10899,13 @@ class MoonMindRunWorkflow:
         await self._wait_if_paused_at_safe_boundary()
         if self._cancel_requested:
             return
+
+        if (
+            workflow.patched(RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH)
+            and self._publish_status == "failed"
+        ):
+            require_pull_request_url = False
+            pull_request_url = None
 
         if (
             workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH)
