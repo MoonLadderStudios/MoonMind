@@ -6995,8 +6995,16 @@ class TemporalAgentRuntimeActivities:
                         type=WORKSPACE_IDENTITY_MISMATCH,
                         non_retryable=True,
                     )
+                # Session-backed records keep workflowId bound to the AgentRun
+                # child so live task/run lookups remain authoritative. Their
+                # stable runId is the managed-session binding's parent task
+                # workflow ID. Non-session records bind the parent directly in
+                # workflowId.
+                step_workflow_id = (
+                    record.run_id if record.session_id is not None else record.workflow_id
+                )
                 correlation = {
-                    "workflowId": record.workflow_id,
+                    "workflowId": step_workflow_id,
                     "ownerRunId": record.owner_run_id,
                     "logicalStepId": record.logical_step_id,
                     "executionOrdinal": record.execution_ordinal,

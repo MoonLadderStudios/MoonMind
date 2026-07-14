@@ -454,6 +454,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
         slot_releaser=_async_noop,
         cooldown_reporter=_async_noop,
         workflow_id="wf-agent-run-1",
+        task_workflow_id="wf-user-1",
         runtime_id="codex_cli",
         run_store=run_store,
         load_session_snapshot=_load_snapshot,
