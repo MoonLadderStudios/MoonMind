@@ -103,6 +103,46 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_managed_capture_archive_digest_is_deterministic(tmp_path) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "tracked.txt").write_text("stable\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"],
+        cwd=repo,
+        check=True,
+    )
+    now = datetime.now(UTC)
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1", workflowId="wf-1", agentId="codex_cli",
+            ownerRunId="run-1", logicalStepId="implement", executionOrdinal=1,
+            runtimeId="codex_cli", status="completed", startedAt=now,
+            finishedAt=now, workspacePath=str(repo),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        return "artifact://" + hashlib.sha256(payload).hexdigest()
+
+    activities._put_managed_checkpoint_artifact = put
+    digest = resolve_runtime_execution_capabilities("codex_cli").capability_digest
+    first = await activities.agent_runtime_capture_workspace_checkpoint(
+        _request(digest=digest)
+    )
+    second_request = _request(digest=digest)
+    second_request["idempotencyKey"] = "checkpoint-2:capture"
+    second = await activities.agent_runtime_capture_workspace_checkpoint(second_request)
+    assert first["workspace"]["archiveDigest"] == second["workspace"]["archiveDigest"]
+
+
+@pytest.mark.asyncio
 async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_path) -> None:
     repo = tmp_path / "agent-run-1" / "repo"
     repo.mkdir(parents=True)
@@ -145,7 +185,7 @@ async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_pat
     store = ManagedRunStore(tmp_path / "managed_runs")
     store.save(
         ManagedRunRecord(
-            runId="agent-run-1", workflowId="agent-child-wf", agentId="codex_cli",
+            runId="agent-run-1", workflowId="wf-1", agentId="codex_cli",
             ownerRunId="run-1", logicalStepId="implement", executionOrdinal=1,
             runtimeId="codex_cli", status="completed", startedAt=datetime.now(UTC),
             finishedAt=datetime.now(UTC), workspacePath=str(repo),
@@ -180,6 +220,7 @@ async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_pat
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("workflowId", "other-workflow"),
         ("ownerRunId", "other-run"),
         ("logicalStepId", "other-step"),
         ("executionOrdinal", 2),
