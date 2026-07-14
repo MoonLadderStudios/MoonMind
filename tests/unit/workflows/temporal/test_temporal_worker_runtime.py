@@ -3862,6 +3862,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.agent_session import (
         MoonMindAgentSessionWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.container_job import (
+        MoonMindContainerJobWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     from moonmind.workflows.temporal.workflows.merge_automation import (
@@ -3881,6 +3884,7 @@ async def test_main_async_workflow_fleet(
     )
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
+        MoonMindContainerJobWorkflow,
         MoonMindManifestIngest,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,
@@ -4210,6 +4214,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
         workflow_docker_mode="profiles",
+        container_job_backend=ANY,
     )
     mock_build_bindings.assert_called_once_with(
         fleet=AGENT_RUNTIME_FLEET,

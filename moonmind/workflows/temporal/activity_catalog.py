@@ -1357,6 +1357,48 @@ def build_default_activity_catalog(
                 non_retryable=NON_RETRYABLE_ERRORS,
             ),
         ),
+        *(
+            TemporalActivityDefinition(
+                activity_type=f"container_job.{name}",
+                family="container_job",
+                capability_class="docker_workload",
+                task_queue=cfg.activity_agent_runtime_task_queue,
+                fleet=AGENT_RUNTIME_FLEET,
+                timeouts=TemporalActivityTimeouts(
+                    300 if name in {"acquire_image", "create_container"} else 60,
+                    300,
+                ),
+                retries=_activity_retries(
+                    max_attempts=(
+                        1
+                        if name
+                        in {
+                            "create_container",
+                            "start_container",
+                            "stop_container",
+                            "remove_container",
+                        }
+                        else 3
+                    ),
+                    max_interval_seconds=30,
+                    non_retryable=NON_RETRYABLE_ERRORS,
+                ),
+            )
+            for name in (
+                "resolve_workspace",
+                "acquire_image",
+                "create_container",
+                "start_container",
+                "observe_container",
+                "reconcile_container",
+                "stop_container",
+                "remove_container",
+                "publish_evidence",
+                "project_status",
+                "repair_projection",
+                "cleanup",
+            )
+        ),
         TemporalActivityDefinition(
             activity_type="security.pentest.execute",
             family="security",

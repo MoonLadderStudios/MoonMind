@@ -1392,6 +1392,23 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
+    **{
+        f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
+        for name in (
+            "resolve_workspace",
+            "acquire_image",
+            "create_container",
+            "start_container",
+            "observe_container",
+            "reconcile_container",
+            "stop_container",
+            "remove_container",
+            "publish_evidence",
+            "project_status",
+            "repair_projection",
+            "cleanup",
+        )
+    },
     "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
@@ -6742,6 +6759,7 @@ class TemporalAgentRuntimeActivities:
         session_store: "ManagedSessionStore | None" = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        container_job_backend: Any | None = None,
         workflow_docker_mode: str = "profiles",
         client_adapter: Any = None,
         pentest_provider_lease_manager: PentestProviderLeaseManager | None = None,
@@ -6754,6 +6772,7 @@ class TemporalAgentRuntimeActivities:
         self._session_store = session_store
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
+        self._container_job_backend = container_job_backend
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
@@ -7629,6 +7648,62 @@ class TemporalAgentRuntimeActivities:
         if not isinstance(result, WorkloadResult):
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
+
+    async def _container_job_call(
+        self, operation: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Validate and delegate one typed request to the trusted backend."""
+
+        if self._container_job_backend is None:
+            raise TemporalActivityRuntimeError(
+                f"container-job backend is required for container_job.{operation}"
+            )
+        from moonmind.schemas.container_job_models import (
+            ContainerJobActivityRequest,
+            ContainerJobActivityResult,
+        )
+
+        request = ContainerJobActivityRequest.model_validate(payload)
+        result = await getattr(self._container_job_backend, operation)(request)
+        return ContainerJobActivityResult.model_validate(result).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+
+    async def container_job_resolve_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("resolve_workspace", payload)
+
+    async def container_job_acquire_image(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("acquire_image", payload)
+
+    async def container_job_create_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("create_container", payload)
+
+    async def container_job_start_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("start_container", payload)
+
+    async def container_job_observe_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("observe_container", payload)
+
+    async def container_job_reconcile_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("reconcile_container", payload)
+
+    async def container_job_stop_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("stop_container", payload)
+
+    async def container_job_remove_container(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("remove_container", payload)
+
+    async def container_job_publish_evidence(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("publish_evidence", payload)
+
+    async def container_job_project_status(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("project_status", payload)
+
+    async def container_job_repair_projection(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("repair_projection", payload)
+
+    async def container_job_cleanup(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("cleanup", payload)
 
     async def security_pentest_execute(
         self,
