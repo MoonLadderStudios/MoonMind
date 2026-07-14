@@ -27,7 +27,7 @@ metadata:
    - `git fetch` from `origin` and checkout/reset local `<branch>` from `origin/<branch>`
    - `git pull --ff-only origin <branch>`
    - optionally `docker compose pull` (unless `noComposePull` is set)
-  - detect files changed between pre-pull and post-pull commits and restart only those changed containers
+  - detect files changed between pre-pull and post-pull commits and force-recreate only those changed containers so bind-mounted source updates are loaded by new processes
   - restart services with image drift or stopped service state so runtime stays healthy
   - run a final reconciliation pass for services flagged for restart so updates stay targeted
 4. By default, do not restart the `orchestrator` container, even when it changed.

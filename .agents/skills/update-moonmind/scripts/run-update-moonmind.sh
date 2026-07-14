@@ -587,7 +587,12 @@ else
   else
     say "Restarting changed services (excluding orchestrator): ${SERVICES_TO_RESTART[*]}"
   fi
-  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps "${SERVICES_TO_RESTART[@]}"
+  # Most MoonMind application sources are bind-mounted into long-lived
+  # containers. A plain `compose up` treats those containers as unchanged even
+  # after git updates the mounted files, leaving already-imported Python modules
+  # running until some unrelated restart. Recreate every selected service so
+  # the refreshed source is loaded by a new process.
+  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "${SERVICES_TO_RESTART[@]}"
 fi
 
 if [[ ${#SERVICES_TO_RESTART[@]} -eq 0 ]]; then
