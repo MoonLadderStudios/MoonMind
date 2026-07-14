@@ -44,6 +44,9 @@ with workflow.unsafe.imports_passed_through():
 WORKFLOW_NAME = "MoonMind.PRResolver"
 PR_RESOLVER_IMPLEMENTATION_IDENTITY_PATCH = "pr-resolver-implementation-identity-v1"
 PR_RESOLVER_SHARED_CORE_PATCH = "pr-resolver-shared-core-v1"
+PR_RESOLVER_CI_FAILURE_PRECEDENCE_PATCH = (
+    "pr-resolver-ci-failure-precedence-v1"
+)
 ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
@@ -522,6 +525,9 @@ class MoonMindPRResolverWorkflow:
                         event=ResolverEvent(
                             kind="snapshot",
                             progress_signature=progress_signature,
+                        ),
+                        known_ci_failures_precede_degraded=_workflow_patch_enabled(
+                            PR_RESOLVER_CI_FAILURE_PRECEDENCE_PATCH
                         ),
                     )
                     self._classification = transition.decision.classification
