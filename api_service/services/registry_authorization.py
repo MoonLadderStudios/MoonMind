@@ -109,7 +109,7 @@ class PrivateImageAuthorizationService:
             if self._policy.protects(reference):
                 return self._deny(
                     reference,
-                    "",
+                    None,
                     ContainerJobFailureClass.IMAGE_USE_DENIED,
                     "a registry credential reference is required for this private image",
                 )
@@ -132,7 +132,7 @@ class PrivateImageAuthorizationService:
         *,
         owner: OwnerIdentity,
         reference: NormalizedImageReference,
-        credential_ref: str,
+        credential_ref: str | None,
     ) -> RegistryAuthorization:
         grants = self._policy.grants_for(credential_ref)
         if not grants:
