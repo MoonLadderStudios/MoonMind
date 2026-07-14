@@ -7064,15 +7064,38 @@ class TemporalAgentRuntimeActivities:
             return (await _run_command(["git", *args], cwd=str(workspace))).stdout.strip()
         head = await _git("rev-parse", "HEAD")
         branch = await _git("branch", "--show-current")
-        status = await _git("status", "--porcelain=v1", "--untracked-files=normal")
+        status = (
+            await _run_command(
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                cwd=str(workspace),
+            )
+        ).stdout
         created_at = (record.finished_at or record.started_at).isoformat()
+        staged_paths = []
+        records = status.split("\0")
+        index = 0
+        while index < len(records):
+            line = records[index]
+            index += 1
+            if len(line) < 4:
+                continue
+            if line[0] not in {" ", "?"}:
+                staged_paths.append(line[3:])
+            if line[0] in {"R", "C"} and index < len(records):
+                index += 1
         manifest = {
             "schemaVersion": "v1",
             "contentType": "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "source": {**model.identity.model_dump(by_alias=True, mode="json"), "boundary": model.boundary},
             "runtime": {"runtimeId": "codex_cli", "capabilitySetVersion": model.capability_set_version, "capabilityDigest": model.capability_digest},
             "workspaceLocator": model.workspace_locator.model_dump(by_alias=True, mode="json"),
-            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "submodules": []},
+            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "stagedPaths": staged_paths, "submodules": []},
             "capturePolicy": policy.model_dump(by_alias=True, mode="json"),
             "entries": [entry.model_dump(by_alias=True, mode="json", exclude_none=True) for entry in entries],
             "archive": {"ref": archive_ref, "sha256": archive_digest, "size": len(archive_payload)},
@@ -7138,7 +7161,9 @@ class TemporalAgentRuntimeActivities:
             # attempt that may still be mutating the destination. Outside an
             # activity context this simply awaits the coroutine.
             return await _await_with_activity_heartbeats(
-                self._checkpoint_restore.restore(request),
+                asyncio.to_thread(
+                    lambda: asyncio.run(self._checkpoint_restore.restore(request))
+                ),
                 heartbeat_payload={
                     "activity": "agent_runtime.restore_workspace_checkpoint"
                 },

@@ -3366,14 +3366,48 @@ class MoonMindRunWorkflow:
             "restoreIdempotencyKey": idempotency_key,
         })
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
+        workspace = dict(self._recovery_workspace)
+        source_locator = workspace.get("sourceWorkspaceLocator") or workspace.get(
+            "workspaceLocator"
+        )
+        checkpoint = workspace.get("workspace") or workspace.get("checkpoint") or workspace
         result = await workflow.execute_activity(
             route.activity_type,
             {
-                "checkpointRef": contract.source_checkpoint_ref,
-                "checkpointKind": contract.source_checkpoint_kind,
+                "schemaVersion": "v1",
+                "recoveryIdentity": {
+                    "workflowId": workflow.info().workflow_id,
+                    "runId": workflow.info().run_id,
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal + 1,
+                },
+                "source": {
+                    "workflowId": self._recovery_source_text(self._recovery_source or {}, "sourceWorkflowId", "source_workflow_id"),
+                    "runId": self._recovery_source_text(self._recovery_source or {}, "sourceRunId", "source_run_id"),
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal,
+                    "checkpointRef": contract.source_checkpoint_ref,
+                    "checkpointBoundary": contract.source_checkpoint_boundary,
+                    **({"sourceWorkspaceLocator": dict(source_locator)} if isinstance(source_locator, Mapping) else {}),
+                },
+                "checkpoint": {
+                    "kind": contract.source_checkpoint_kind,
+                    "baseCommit": checkpoint.get("baseCommit"),
+                    "archiveRef": checkpoint.get("archiveRef"),
+                    "archiveDigest": checkpoint.get("archiveDigest"),
+                    "manifestRef": checkpoint.get("manifestRef"),
+                    "manifestDigest": checkpoint.get("manifestDigest"),
+                },
+                "destination": {
+                    "runtimeId": contract.capabilities.runtime_id,
+                    "agentRunId": destination_id,
+                    "repository": self._repo,
+                    "relativePath": "repo",
+                },
                 "workspacePolicy": contract.workspace_policy,
-                "targetRuntimeId": contract.capabilities.runtime_id,
-                "destinationAgentRunId": destination_id,
+                "resumePhase": contract.resume_phase,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
                 "idempotencyKey": idempotency_key,
             },
             **self._execute_kwargs_for_route(route),
@@ -9244,6 +9278,9 @@ class MoonMindRunWorkflow:
                                     self._checkpoint_recovery_state[
                                         "sourceCheckpointRef"
                                     ]
+                                )
+                                recovered_workspace["capabilityDigest"] = (
+                                    self._checkpoint_recovery_state["capabilityDigest"]
                                 )
                                 request = request.model_copy(
                                     update={"workspace_spec": recovered_workspace}

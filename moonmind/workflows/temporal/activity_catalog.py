@@ -1336,7 +1336,6 @@ def build_default_activity_catalog(
                     "CHECKPOINT_ARCHIVE_CORRUPTED",
                     "CHECKPOINT_MANIFEST_CORRUPTED",
                     "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
-                    "CHECKPOINT_BASE_COMMIT_UNAVAILABLE",
                     "CHECKPOINT_BASE_COMMIT_MISMATCH",
                     "CHECKPOINT_PATH_ESCAPE",
                     "CHECKPOINT_SYMLINK_ESCAPE",
