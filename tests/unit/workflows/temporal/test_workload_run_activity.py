@@ -336,7 +336,7 @@ async def test_workload_run_activity_denies_unrestricted_tool_when_mode_is_profi
 
 
 @pytest.mark.asyncio
-async def test_workload_run_activity_honors_raw_docker_cli_policy() -> None:
+async def test_workload_run_activity_rejects_raw_docker_even_when_legacy_flag_enabled() -> None:
     registry = RunnerProfileRegistry(
         [RunnerProfile.model_validate(_profile_payload())],
         workspace_root=WORKSPACE_ROOT,
@@ -355,10 +355,11 @@ async def test_workload_run_activity_honors_raw_docker_cli_policy() -> None:
     request = _request_payload(toolName="container.run_docker")
     request.pop("profileId")
     request["command"] = ["docker", "ps"]
-    result = await activities.workload_run({"request": request})
-    assert capturing_registry.calls[0][0].tool_name == "container.run_docker"
-    assert launcher.validated is validated
-    assert result["status"] == "succeeded"
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.workload_run({"request": request})
+    assert exc_info.value.type == "docker_workflow_mode_forbidden"
+    assert capturing_registry.calls == []
+    assert launcher.validated is None
 
 class _CapturingRegistry:
     def __init__(self, validated: object) -> None:

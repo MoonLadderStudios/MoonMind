@@ -829,7 +829,7 @@ async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
     skills = payload.get("skills")
     assert skills == []
 
-async def test_default_skill_registry_payload_uses_dood_tool_definitions():
+async def test_default_skill_registry_payload_uses_generic_container_job_definition():
     payload = _default_skill_registry_payload(
         parameters={
             "workflow": {
@@ -837,13 +837,7 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
                     {
                         "tool": {
                             "type": "skill",
-                            "name": "container.run_workload",
-                        }
-                    },
-                    {
-                        "tool": {
-                            "type": "skill",
-                            "name": "unreal.run_tests",
+                            "name": "container.run_job",
                         }
                     },
                 ]
@@ -854,14 +848,12 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
     skills = payload.get("skills")
     assert isinstance(skills, list)
     tools = {item["name"]: item for item in skills}
-    assert tools["container.run_workload"]["requirements"]["capabilities"] == [
-        "docker_workload"
-    ]
-    assert tools["unreal.run_tests"]["requirements"]["capabilities"] == [
+    assert set(tools) == {"container.run_job"}
+    assert tools["container.run_job"]["requirements"]["capabilities"] == [
         "docker_workload"
     ]
     assert (
-        tools["container.run_workload"]["executor"]["activity_type"]
+        tools["container.run_job"]["executor"]["activity_type"]
         == "mm.tool.execute"
     )
 
