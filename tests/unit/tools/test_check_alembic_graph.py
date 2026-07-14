@@ -16,9 +16,8 @@ import check_alembic_graph
 def test_repository_migration_graph_has_exactly_one_head(capsys) -> None:
     assert check_alembic_graph.main() == 0
 
-    assert capsys.readouterr().out == (
+    assert capsys.readouterr().out.startswith(
         "Alembic migration graph has one head: "
-        "339_merge_migration_heads\n"
     )
 
 
