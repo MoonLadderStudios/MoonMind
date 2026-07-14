@@ -1,0 +1,52 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3276",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3276",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "github-issue-implement-a2de504a",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "Current HEAD equals origin/main. Merged PR #3288 added a source-destroying sandbox worktree-archive replay, selector coverage, CI wiring, a replay manifest, and developer commands, but it explicitly did not implement the required production-composed managed Codex cold-resume journey. The current repository still lacks that primary Temporal/UserWorkflow/AgentRun recovery journey, the required continuation-phase journeys, the adversarial/fault-injection matrix, and the dedicated replay corpus. No residual issue-content truncation remains.",
+  "requirements": [
+    {
+      "description": "Hermetic source-destroying archive capture/restore coverage exists for the production archive and artifact boundary, with manifest integrity and restore idempotency evidence.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Primary cold Resume journey composes the Temporal test server, real UserWorkflow recovery creation, real AgentRun, real managed-agent adapter/run store, managed capture/restore activities, Step Execution ledger, and boundary-aware continuation.",
+      "status": "not_met"
+    },
+    {
+      "description": "The primary journey proves source session/container/runtime/workspace destruction, a distinct destination agent-run identity and typed locator, durable-only recovery, preserved prepare provenance, exactly-once recovered implement, and downstream verify ordering.",
+      "status": "not_met"
+    },
+    {
+      "description": "Workspace fidelity covers and verifies all required file types, modes, symlinks, exclusions, Git base commit, and canonical Git status digest through the managed recovery journey.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Composed journeys cover before_execution, after_execution, after_gate, before_publication, and before_recovery_restoration/restore-retry continuation semantics.",
+      "status": "not_met"
+    },
+    {
+      "description": "Permanent adversarial and fault-injection coverage proves stable authority, artifact-integrity, filesystem-safety, Git-consistency, capability, side-effect, replay, and idempotent-reconciliation failures.",
+      "status": "not_met"
+    },
+    {
+      "description": "A deterministic dedicated cold-resume replay corpus records the required identities, phase/capability data, artifact digests, routes, invocation counts, lineage, terminal codes, and incident references.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Test selection emits reliability_journey and over-selects relevant backend/runtime/checkpoint/recovery/worker/CI paths.",
+      "status": "met"
+    },
+    {
+      "description": "Required hermetic CI runs the reliability journey with bounded timeout, uploads bounded diagnostics on failure, runs for main/schedule/manual events, and the always-running summary rejects an unsuccessful selected job.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Developer documentation provides canonical full-suite, selector, and fixture-specific replay commands and accurately states the production boundary still missing.",
+      "status": "met"
+    }
+  ]
+}
