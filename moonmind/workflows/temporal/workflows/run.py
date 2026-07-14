@@ -541,6 +541,9 @@ GATED_CONTINUATION_GATE_REGISTRY: Mapping[str, frozenset[str]] = {
     "merge_automation": MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS,
 }
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
+RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH = (
+    "run-prepublication-failure-blocks-repair-v1"
+)
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
@@ -5479,6 +5482,8 @@ class MoonMindRunWorkflow:
                 "Execution succeeded; finalization failed during the "
                 "pre-publication checkpoint."
             )
+            self._publish_status = "failed"
+            self._publish_reason = self._summary
             self._attention_required = True
             self._update_memo()
             return True
@@ -7287,6 +7292,11 @@ class MoonMindRunWorkflow:
         return "\n".join(lines)
 
     def _publish_repair_is_available(self, *, parameters: Mapping[str, Any]) -> bool:
+        if (
+            workflow.patched(RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH)
+            and self._publish_status == "failed"
+        ):
+            return False
         if self._publish_repair_attempts >= 1:
             return False
         if self._publish_mode(parameters) != "pr":
