@@ -73,7 +73,7 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     run_store.save(
         ManagedRunRecord(
             runId="source-agent-run",
-            workflowId="source-agent-workflow",
+            workflowId="source",
             ownerRunId="source-run",
             logicalStepId="implement",
             executionOrdinal=1,
