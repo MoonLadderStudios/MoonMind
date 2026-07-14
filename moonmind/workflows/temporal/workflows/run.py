@@ -289,6 +289,7 @@ _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _PR_OPTIONAL_TASK_SKILLS = frozenset(
     {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}
 )
+_CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset({"github-issue-implement"})
 _EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"codex_cloud", "jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {
@@ -511,6 +512,7 @@ RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = (
     "run-handoff-accepted-disposition-gate-v1"
 )
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
     "run-ungated-continuation-disposition-v1"
 )
@@ -596,6 +598,7 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -1145,6 +1148,8 @@ class MoonMindRunWorkflow:
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        self._canonical_no_commit_outcome_enabled: bool = False
+        self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
@@ -3224,13 +3229,24 @@ class MoonMindRunWorkflow:
                 f"recovery checkpoint validation failed: {failure_code}"
             )
 
+        target_workspace_locator = self._recovery_workspace.get(
+            "targetWorkspaceLocator"
+        )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = self._recovery_workspace.get(
+                "target_workspace_locator"
+            )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = None
         target_workspace_ref = self._recovery_source_text(
             self._recovery_workspace,
             "targetWorkspaceRef",
             "target_workspace_ref",
             "workspaceRef",
             "workspace_ref",
-        ) or checkpoint_ref
+        )
+        if target_workspace_locator is None:
+            target_workspace_ref = target_workspace_ref or checkpoint_ref
         apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("workspace.apply_policy")
         apply_payload = {
             "identity": {
@@ -3242,11 +3258,14 @@ class MoonMindRunWorkflow:
             "workspacePolicy": workspace_policy,
             "checkpointRef": checkpoint_ref,
             "checkpoint": dict(checkpoint_payload),
-            "targetWorkspaceRef": target_workspace_ref,
             "expectedPlanRef": source_plan_ref or None,
             "expectedPlanDigest": source_plan_digest or None,
             "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
         }
+        if target_workspace_locator is not None:
+            apply_payload["targetWorkspaceLocator"] = dict(target_workspace_locator)
+        if target_workspace_ref:
+            apply_payload["targetWorkspaceRef"] = target_workspace_ref
         policy = await workflow.execute_activity(
             apply_route.activity_type,
             apply_payload,
@@ -3534,20 +3553,77 @@ class MoonMindRunWorkflow:
                 disposition = self._coerce_text(record.get("disposition"), max_chars=40)
                 if not operation and not disposition:
                     continue
+                provider_kind = self._coerce_text(
+                    record.get("providerKind"),
+                    max_chars=80,
+                )
+                summary = self._coerce_text(record.get("summary"), max_chars=300)
                 side_effects.append(
                     {
-                        "kind": self._coerce_text(
-                            record.get("class") or record.get("kind"),
-                            max_chars=80,
+                        "kind": provider_kind
+                        or self._coerce_text(
+                            record.get("class") or record.get("kind"), max_chars=80
                         )
                         or "external",
                         "status": "completed"
                         if disposition == "accepted"
                         else (disposition or "recorded"),
-                        "summary": operation or "Side effect recorded.",
+                        "summary": summary or operation or "Side effect recorded.",
                     }
                 )
         return side_effects[:20]
+
+    def _record_declared_side_effect(
+        self,
+        *,
+        logical_step_id: str,
+        outputs: Mapping[str, Any],
+    ) -> None:
+        if not self._canonical_no_commit_outcome_enabled:
+            return
+        declaration = outputs.get("sideEffect") or outputs.get("side_effect")
+        if not isinstance(declaration, Mapping):
+            return
+        effect_class = self._coerce_text(
+            declaration.get("effectClass") or declaration.get("effect_class"),
+            max_chars=80,
+        )
+        if effect_class not in {
+            "external_idempotent",
+            "external_non_idempotent",
+            "publication",
+            "provider_account",
+        }:
+            return
+        operation = self._coerce_text(declaration.get("operation"), max_chars=120)
+        if not operation:
+            return
+        idempotency_key = self._coerce_text(
+            declaration.get("idempotencyKey") or declaration.get("idempotency_key"),
+            max_chars=200,
+        )
+        if effect_class == "external_idempotent" and not idempotency_key:
+            return
+        record = self._record_step_side_effect(
+            logical_step_id,
+            effect_class=effect_class,
+            operation=operation,
+            target=self._coerce_text(declaration.get("target"), max_chars=500),
+            idempotency_key=idempotency_key,
+            workflow_state_accepted=True,
+            reason=self._coerce_text(declaration.get("summary"), max_chars=300),
+        )
+        if record is None:
+            return
+        provider_kind = self._coerce_text(
+            declaration.get("kind") or declaration.get("provider"),
+            max_chars=80,
+        )
+        summary = self._coerce_text(declaration.get("summary"), max_chars=300)
+        if provider_kind:
+            record["providerKind"] = provider_kind
+        if summary:
+            record["summary"] = summary
 
     def _is_jira_orchestrate_external_handoff_node(
         self,
@@ -7179,7 +7255,7 @@ class MoonMindRunWorkflow:
         }
         self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
             if not self._unresolved_dependency_ids and self._dependency_failure is None:
                 self._dependency_resolution = DEPENDENCY_RESOLUTION_SATISFIED
@@ -7217,7 +7293,7 @@ class MoonMindRunWorkflow:
         ):
             return
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             # Idempotency: stale completed signals after already satisfied are no-ops.
             if existing_resolution in (
                 DEPENDENCY_RESOLUTION_SATISFIED,
@@ -7403,13 +7479,13 @@ class MoonMindRunWorkflow:
             )
             return
 
-        # Normalize "succeeded" to "completed" so the outcome recorder
-        # (which only treats "completed" as success) can satisfy the gate.
+        # Normalize "succeeded" to "completed" so the outcome recorder can
+        # satisfy the gate with either canonical successful terminal state.
         terminal_state = signal.terminal_state
         if terminal_state == "succeeded":
             terminal_state = "completed"
 
-        is_terminal_failure = terminal_state != "completed"
+        is_terminal_failure = terminal_state not in {STATE_COMPLETED, STATE_NO_COMMIT}
         if is_terminal_failure:
             self._get_logger().warning(
                 "DependencyResolved signal indicates non-success terminal state %s for %s",
@@ -7556,7 +7632,7 @@ class MoonMindRunWorkflow:
                 )
                 continue
 
-            if state == STATE_COMPLETED:
+            if state in {STATE_COMPLETED, STATE_NO_COMMIT}:
                 self._record_dependency_outcome(
                     prerequisite_workflow_id=dependency_id,
                     terminal_state=state,
@@ -7717,6 +7793,12 @@ class MoonMindRunWorkflow:
                 str(exc),
                 non_retryable=True,
             ) from exc
+        self._canonical_no_commit_outcome_enabled = workflow.patched(
+            RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
+        )
+        self._authoritative_publish_outcome_enabled = workflow.patched(
+            RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
+        )
         self._get_logger().info(
             "Starting MoonMind.UserWorkflow workflow",
             extra={"workflow_type": workflow_type},
@@ -10082,6 +10164,12 @@ class MoonMindRunWorkflow:
                 or self._summary,
                 last_error=None,
             )
+            outputs = self._effective_result_outputs(execution_result)
+            if isinstance(outputs, Mapping):
+                self._record_declared_side_effect(
+                    logical_step_id=node_id,
+                    outputs=outputs,
+                )
             self._record_downstream_dependency_effects(
                 node_id,
                 updated_at=workflow.now(),
@@ -12732,8 +12820,11 @@ class MoonMindRunWorkflow:
         self._record_publish_metadata_context(outputs)
 
         if push_status == "no_commits":
-            if publish_mode == "pr" and self._pr_publish_optional_for_task(
-                parameters, include_applied_templates=True
+            if publish_mode == "pr" and (
+                self._pr_publish_optional_for_task(
+                    parameters, include_applied_templates=True
+                )
+                or self._is_canonical_no_commit_task(parameters)
             ):
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_commit_publish_reason(
@@ -13460,6 +13551,18 @@ class MoonMindRunWorkflow:
 
     def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if self._authoritative_publish_outcome_enabled and push_status == "pushed":
+            stale_no_commit = self._publish_context.pop("noCommitPublish", None)
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
+                "not_required",
+                "skipped",
+            }:
+                self._publish_status = None
+                self._publish_reason = None
+            return
         if push_status == "no_commits":
             self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
@@ -13542,6 +13645,20 @@ class MoonMindRunWorkflow:
         if not skill_names:
             return False
         return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
+
+    def _is_canonical_no_commit_task(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        return bool(
+            self._task_applied_template_slugs(parameters, task_payload)
+            & _CANONICAL_NO_COMMIT_TASK_PRESETS
+        )
 
     def _task_skill_names(
         self,
@@ -13735,7 +13852,8 @@ class MoonMindRunWorkflow:
         parts: list[str] = []
         if publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "No pull request was required because this Jira-oriented workflow "
+                "No pull request was required because this issue implementation "
+                "workflow "
                 "completed without repository changes"
             )
         elif publish_mode == "pr":
@@ -13758,7 +13876,7 @@ class MoonMindRunWorkflow:
             parts.append(f"final agent report: {operator_summary}")
         elif publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "no structured agent report confirmed whether the Jira issue was "
+                "no structured agent report confirmed whether the issue was "
                 "already implemented"
             )
 
@@ -14094,6 +14212,30 @@ class MoonMindRunWorkflow:
                 )
 
         publish_mode = self._publish_mode(parameters)
+        if (
+            self._authoritative_publish_outcome_enabled
+            and self._moonspec_draft_publication_reason is not None
+        ):
+            pull_request_url = self._coerce_text(
+                self._pull_request_url
+                or self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+            if pull_request_url:
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification; incomplete work was "
+                    f"preserved in draft pull request {pull_request_url}. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
+            return (
+                "failed",
+                "Workflow failed MoonSpec verification and draft pull request "
+                "publication did not complete. "
+                f"{self._moonspec_draft_publication_reason}",
+                True,
+            )
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
@@ -14118,6 +14260,15 @@ class MoonMindRunWorkflow:
                     "failed",
                     "reportOutput requested but no final report was created",
                     True,
+                )
+            if self._is_canonical_no_commit_outcome(parameters):
+                return (
+                    "no_commit",
+                    self._compose_success_completion_message(
+                        publish_detail=self._publish_reason,
+                        publish_mode=publish_mode,
+                    ),
+                    False,
                 )
             return (
                 "success",
@@ -14193,6 +14344,20 @@ class MoonMindRunWorkflow:
             self._compose_success_completion_message(publish_mode=publish_mode),
             False,
         )
+
+    def _is_canonical_no_commit_outcome(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        if self._publish_mode(parameters) not in {"pr", "branch"}:
+            return False
+        if self._report_requested(parameters):
+            return False
+        if not self._has_no_commit_publish_evidence():
+            return False
+        return not self._pull_request_created() and not self._branch_published()
 
     def _missing_required_outcome_reason(
         self,
@@ -17748,7 +17913,11 @@ class MoonMindRunWorkflow:
                             or "No repository changes were available to commit or publish."
                         )
                     elif self._publish_status == "not_required":
-                        code = "NO_COMMIT" if publish_mode == "auto" else "PUBLISH_DISABLED"
+                        code = (
+                            "NO_COMMIT"
+                            if self._is_canonical_no_commit_outcome(parameters)
+                            else "PUBLISH_DISABLED"
+                        )
                         publish_status = "skipped"
                         publish_reason = (
                             self._publish_reason or "publish output not required"
