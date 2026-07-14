@@ -114,6 +114,24 @@ def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
     }
 
 
+def _managed_checkpoint_capture_result(payload: Any) -> dict[str, Any]:
+    return {
+        "status": "captured",
+        "workspace": {
+            "kind": "worktree_archive",
+            "baseCommit": "abc123",
+            "archiveRef": "artifact://managed/archive",
+            "archiveDigest": "sha256:" + ("a" * 64),
+            "manifestRef": "artifact://managed/manifest",
+            "manifestDigest": "sha256:" + ("b" * 64),
+            "includesUntracked": True,
+            "includesIgnoredFiles": False,
+        },
+        "diagnosticRefs": ["artifact://managed/manifest"],
+        "idempotencyKey": payload["idempotencyKey"],
+    }
+
+
 def _resilience_policy_compile_result(payload: Any) -> dict[str, Any]:
     return compile_resilience_policy(
         compiled_at=datetime.fromisoformat(payload["compiledAt"]),
@@ -3308,6 +3326,103 @@ async def test_managed_checkpoint_capability_gap_reaches_finalization_outcome(
     }
 
 
+@pytest.mark.asyncio
+async def test_managed_checkpoint_defers_until_runtime_locator_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 5, 25, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Investigate"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("node-1", updated_at=now, summary="Investigating")
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+        },
+    )
+
+    async def unexpected_activity(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("capture must wait for the AgentRun workspace locator")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", unexpected_activity)
+
+    checkpoint_ref = await workflow._record_canonical_step_checkpoint(
+        "node-1", boundary="after_prepare", updated_at=now
+    )
+
+    assert checkpoint_ref is None
+    assert workflow._step_checkpoint_capture_outcomes["node-1"] == {
+        "status": "deferred",
+        "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+        "boundary": "after_prepare",
+        "captureAuthority": "managed_runtime",
+        "captureActivity": "agent_runtime.capture_workspace_checkpoint",
+        "capabilityCriticality": "recoverability_only",
+    }
+
+
+@pytest.mark.asyncio
+async def test_managed_checkpoint_locator_guard_replays_previous_activity_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        != run_module.RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._record_step_workspace_capture_input(
+        "node-1",
+        {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+        },
+    )
+    captured: list[dict[str, Any]] = []
+
+    async def previous_capture_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity_type, "payload": payload})
+        return {
+            "status": "captured",
+            "workspace": {"kind": "worktree_archive"},
+            "diagnosticRefs": [],
+        }
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        previous_capture_activity,
+    )
+    identity = StepExecutionIdentityModel(
+        workflowId="workflow-1",
+        runId="run-1",
+        logicalStepId="node-1",
+        executionOrdinal=1,
+    )
+
+    await workflow._capture_canonical_step_checkpoint_workspace(
+        "node-1", identity=identity, boundary="after_prepare"
+    )
+
+    assert [call["activity"] for call in captured] == [
+        "agent_runtime.capture_workspace_checkpoint"
+    ]
+    assert "workspaceLocator" not in captured[0]["payload"]
+
+
 def test_run_derives_managed_authority_from_agent_id() -> None:
     workflow = MoonMindRunWorkflow()
 
@@ -4264,6 +4379,8 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
                 "feedback": None,
                 "issues": [],
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4452,6 +4569,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4633,6 +4752,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4809,6 +4930,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -4960,6 +5083,8 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -5108,6 +5233,8 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
         if activity_type == "step_checkpoint.create":
             return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")

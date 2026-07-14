@@ -1952,6 +1952,9 @@ class ManagedRunRecord(BaseModel):
 
     run_id: str = Field(..., alias="runId", min_length=1)
     workflow_id: str | None = Field(None, alias="workflowId")
+    owner_run_id: str | None = Field(None, alias="ownerRunId")
+    logical_step_id: str | None = Field(None, alias="logicalStepId")
+    execution_ordinal: int | None = Field(None, alias="executionOrdinal", ge=1)
     agent_id: str = Field(..., alias="agentId", min_length=1)
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
     status: AgentRunState = Field(..., alias="status")
@@ -1988,6 +1991,14 @@ class ManagedRunRecord(BaseModel):
             self.workflow_id = require_non_blank(
                 self.workflow_id, field_name="workflowId"
             )
+        for field_name in ("owner_run_id", "logical_step_id"):
+            value = getattr(self, field_name)
+            if value is not None:
+                setattr(
+                    self,
+                    field_name,
+                    require_non_blank(value, field_name=field_name),
+                )
         if self.observability_events_ref is not None:
             self.observability_events_ref = require_non_blank(
                 self.observability_events_ref,

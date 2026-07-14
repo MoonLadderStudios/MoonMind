@@ -1123,6 +1123,10 @@ class ManagedAgentAdapter:
         elif self._run_store is not None:
             record = ManagedRunRecord(
                 run_id=run_id,
+                workflow_id=self._workflow_id,
+                owner_run_id=(request.step_execution.run_id if request.step_execution else None),
+                logical_step_id=(request.step_execution.logical_step_id if request.step_execution else None),
+                execution_ordinal=(request.step_execution.execution_ordinal if request.step_execution else None),
                 agent_id=request.agent_id,
                 runtime_id=self._runtime_id or request.agent_id,
                 status="launching",

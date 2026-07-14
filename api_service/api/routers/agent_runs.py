@@ -596,7 +596,7 @@ def _require_session_control_capability(
     capabilities: dict[str, bool],
 ) -> None:
     capability_by_action = {
-        "send_follow_up": "sendFollowUp",
+        "continue_same_session": "sendFollowUp",
         "clear_session": "clearSession",
         "interrupt_turn": "interruptTurn",
         "cancel_session": "cancelSession",
@@ -1584,7 +1584,7 @@ async def control_agent_run_artifact_session(
         agent_run_id=agent_run_id,
         runtime_id=record.runtime_id,
     )
-    if payload.action == "send_follow_up":
+    if payload.action == "continue_same_session":
         await client.update_workflow(
             workflow_id,
             "SendFollowUp",

@@ -29,6 +29,9 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
 )
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 
 _NOW = datetime(2026, 6, 24, 12, 0, tzinfo=UTC)
 
@@ -64,6 +67,9 @@ def _build(**overrides):
             "run-tests": {"before_execution": "artifact://checkpoint/before"}
         },
         side_effect_records={},
+        checkpoint_kind="external_state_ref",
+        runtime_capabilities=resolve_runtime_execution_capabilities("omnigent"),
+        restore_route_registered=True,
         failure_diagnostic={
             "stepId": "run-tests",
             "stage": "executing",
@@ -94,7 +100,9 @@ def test_manifest_names_all_required_fields_and_allows_resume() -> None:
     assert manifest.resume_allowed is True
     assert manifest.blocked_reason is None
     assert manifest.recovery_eligibility.eligible is True
-    assert manifest.recovery_eligibility.default_action == "resume_from_checkpoint"
+    assert manifest.recovery_eligibility.default_action == (
+        "resume_from_workspace_checkpoint"
+    )
     # failure provenance
     assert manifest.failure_stage == "executing"
     assert manifest.failure_category == "execution_error"
@@ -184,7 +192,7 @@ def test_environment_failure_routes_to_fix_environment_guidance() -> None:
     )
 
     assert manifest.resume_allowed is False
-    assert manifest.recovery_eligibility.default_action == "environment_fix"
+    assert manifest.recovery_eligibility.default_action == "fix_environment"
     assert manifest.recovery_eligibility.operator_guidance == "fix_environment"
 
 
@@ -260,10 +268,7 @@ def test_uncompensated_side_effect_blocks_resume_despite_valid_checkpoint() -> N
     assert manifest.resume_allowed is False
     assert manifest.blocked_reason == "side_effect_needs_compensation"
     assert manifest.recovery_eligibility.eligible is False
-    assert (
-        manifest.recovery_eligibility.disabled_reason_code
-        == "side_effect_needs_compensation"
-    )
+    assert manifest.recovery_eligibility.disabled_reason_code == "CHECKPOINT_SIDE_EFFECT_UNSAFE"
     assert manifest.recovery_eligibility.default_action == "full_retry"
 
 
@@ -399,7 +404,7 @@ def test_blocked_manifest_requires_blocked_reason() -> None:
     ineligible = RecoveryEligibilityDiagnosticModel(
         eligible=False,
         defaultAction="full_retry",
-        disabledReasonCode="no_checkpoint_evidence",
+        disabledReasonCode="CHECKPOINT_ARTIFACT_INVALID",
         operatorGuidance="full_retry",
     )
     with pytest.raises(ValidationError):

@@ -455,6 +455,13 @@ def build_incident_reconstruction_manifest(
         checkpoint = recovery_manifest.recovery_eligibility.model_dump(
             by_alias=True, mode="json", exclude_none=True
         )
+        if recovery_manifest.blocked_reason:
+            # Incident reconstruction is the operator-facing replay projection.
+            # Keep its established specific reason (missing evidence,
+            # authorization, side-effect compensation, and so on) while the
+            # recoveryEligibility object remains the authority for the newer
+            # typed capability decision on the recovery manifest itself.
+            checkpoint["disabledReasonCode"] = recovery_manifest.blocked_reason
 
     normalized_policy_ref = _normalize_policy_ref(policy_ref)
     provider = _build_provider_context(

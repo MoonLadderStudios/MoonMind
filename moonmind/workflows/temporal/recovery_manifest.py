@@ -23,11 +23,13 @@ from typing import Any
 from moonmind.schemas.temporal_models import (
     EvidenceRefStatusModel,
     FailedRunRecoveryManifestModel,
-    RecoveryCheckpointValidationModel,
     RecoveryEligibilityDiagnosticModel,
+    RecoveryCheckpointValidationModel,
     RecoverySideEffectDispositionModel,
     RecoveryStepRefModel,
 )
+from moonmind.workflows.executions.runtime_capabilities import RuntimeExecutionCapabilities
+from moonmind.workflows.temporal.recovery_decision import decide_checkpoint_recovery
 
 # Checkpoint boundaries a failed step can resume from, most-progressed first.
 # A resumable checkpoint restores workspace state so the failed logical step can
@@ -296,6 +298,9 @@ def build_failed_run_recovery_manifest(
     failure_diagnostic: Mapping[str, Any] | None = None,
     recovery_failed_step_id: str | None = None,
     checkpoint_validation_failure: Mapping[str, Any] | None = None,
+    checkpoint_kind: str | None = None,
+    runtime_capabilities: RuntimeExecutionCapabilities | None = None,
+    restore_route_registered: bool = False,
 ) -> FailedRunRecoveryManifestModel:
     """Build a fail-closed recovery manifest for a failed run.
 
@@ -416,24 +421,34 @@ def build_failed_run_recovery_manifest(
     side_effect_block_reason = _side_effect_resume_block_reason(
         side_effect_dispositions
     )
-    resume_allowed = bool(
-        validation.result == "valid"
-        and resume_ref
-        and failed_step_id
-        and side_effect_block_reason is None
+    eligibility = decide_checkpoint_recovery(
+        checkpoint_ref=resume_ref,
+        checkpoint_boundary=resume_boundary,
+        checkpoint_kind=checkpoint_kind,
+        capabilities=runtime_capabilities,
+        restore_route_registered=restore_route_registered,
+        artifact_valid=validation.result == "valid" and bool(failed_step_id),
+        side_effect_safe=side_effect_block_reason is None,
+        source_workflow_id=workflow_id,
+        source_run_id=run_id,
+        evidence=checkpoint_evidence,
     )
-
-    if resume_allowed:
+    if not eligibility.eligible and failure_category == "system_error":
         eligibility = RecoveryEligibilityDiagnosticModel(
-            eligible=True,
-            defaultAction="resume_from_checkpoint",
-            requiredBoundary=resume_boundary,
+            eligible=False,
+            requestedAction="resume_from_workspace_checkpoint",
+            defaultAction="fix_environment",
+            disabledReasonCode="environment_invalid",
+            checkpointBoundary=resume_boundary,
             checkpointRef=resume_ref,
             sourceWorkflowId=workflow_id,
             sourceRunId=run_id,
-            operatorGuidance="resume",
+            operatorGuidance="fix_environment",
             evidence=checkpoint_evidence,
         )
+    resume_allowed = eligibility.eligible
+
+    if resume_allowed:
         blocked_reason = None
     else:
         if not failed_step_id:
@@ -452,20 +467,8 @@ def build_failed_run_recovery_manifest(
             # Checkpoint evidence is valid; resume is blocked solely by a
             # blocked or uncompensated non-idempotent side effect.
             blocked_reason = side_effect_block_reason or "checkpoint_not_validated"
-        environment_failure = failure_category == "system_error"
-        eligibility = RecoveryEligibilityDiagnosticModel(
-            eligible=False,
-            defaultAction="environment_fix" if environment_failure else "full_retry",
-            disabledReasonCode=blocked_reason,
-            requiredBoundary=resume_boundary,
-            checkpointRef=resume_ref,
-            sourceWorkflowId=workflow_id,
-            sourceRunId=run_id,
-            operatorGuidance=(
-                "fix_environment" if environment_failure else "full_retry"
-            ),
-            evidence=checkpoint_evidence,
-        )
+        # recoveryEligibility carries the stable machine code. Keep the
+        # existing compact blockedReason projection during the replay window.
 
     return FailedRunRecoveryManifestModel(
         workflowId=workflow_id,

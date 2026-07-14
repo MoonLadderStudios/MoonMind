@@ -6425,7 +6425,8 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
     if diagnostics and _is_environment_blocked_manifest(manifest):
         return {
             "eligible": False,
-            "defaultAction": "environment_fix",
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "defaultAction": "fix_environment",
             "disabledReasonCode": "environment_invalid",
             "requiredBoundary": required_boundary,
             "checkpointRef": None,
@@ -6447,14 +6448,15 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         }
     if checkpoint_ref:
         return {
-            "eligible": True,
-            "defaultAction": "resume_from_checkpoint",
-            "disabledReasonCode": None,
-            "requiredBoundary": required_boundary,
+            "eligible": False,
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "defaultAction": "full_retry",
+            "disabledReasonCode": "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING",
+            "checkpointBoundary": required_boundary,
             "checkpointRef": checkpoint_ref,
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
-            "operatorGuidance": "resume",
+            "operatorGuidance": "full_retry",
             "evidence": [
                 _evidence_ref_status(
                     category="checkpoint",
@@ -6467,9 +6469,10 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         }
     return {
         "eligible": False,
+        "requestedAction": "resume_from_workspace_checkpoint",
         "defaultAction": "full_retry",
-        "disabledReasonCode": "missing_required_checkpoint_boundary",
-        "requiredBoundary": required_boundary,
+        "disabledReasonCode": "CHECKPOINT_ARTIFACT_INVALID",
+        "checkpointBoundary": required_boundary,
         "checkpointRef": None,
         "sourceWorkflowId": source_workflow_id,
         "sourceRunId": source_run_id,

@@ -292,6 +292,10 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
     catalog = build_default_activity_catalog()
 
     expected = {
+        "agent_runtime.capture_workspace_checkpoint": (
+            AGENT_RUNTIME_FLEET,
+            AGENT_RUNTIME_TASK_QUEUE,
+        ),
         "workspace.capture_checkpoint": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "workspace.apply_policy": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
         "workspace.classify_git_effect": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
@@ -307,5 +311,9 @@ def test_checkpoint_activity_routes_stay_on_allowed_fleets():
         assert route.retries.max_attempts >= 1
 
     fleets = {fleet.fleet: fleet for fleet in catalog.fleets}
+    assert (
+        "agent_runtime.capture_workspace_checkpoint"
+        in fleets[AGENT_RUNTIME_FLEET].activity_types
+    )
     assert "workspace.capture_checkpoint" in fleets[SANDBOX_FLEET].activity_types
     assert "step_checkpoint.create" in fleets[ARTIFACTS_FLEET].activity_types
