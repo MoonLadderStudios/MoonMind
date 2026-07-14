@@ -2,24 +2,47 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentTerminalContract,
+)
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
+from moonmind.provider_profiles.lease_client import (
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
+)
 from moonmind.workflows.adapters.codex_session_adapter import _pr_resolver_terminal_contract
+from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
 )
+from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.runtime.codex_session_runtime import (
+    CodexManagedSessionRuntime,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
-from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
+from tests.integration.reliability.helpers import (
+    FinalizationFaultInjector,
+    NestedYieldProcess,
+    load_replay,
+)
+from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
     _pr_resolver_request,
@@ -37,6 +60,54 @@ pytestmark = [
     pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
+
+
+async def test_oauth_maintenance_lease_replays_through_activity_update_boundary() -> (
+    None
+):
+    manifest = load_replay("oauth-maintenance-external-update", "manifest.json")
+    expected = load_replay(
+        "oauth-maintenance-external-update", "expected-outcome.json"
+    )
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.update_name = ""
+            self.payload: dict[str, object] = {}
+
+        async def get_client(self):
+            return self
+
+        async def start_workflow(self, *_args, **_kwargs):
+            return None
+
+        async def update_workflow(self, _workflow_id, update_name, payload):
+            self.update_name = update_name
+            self.payload = payload
+            return {
+                "profile_id": manifest["profileId"],
+                "lease_id": payload["owner_id"],
+            }
+
+    route = build_default_activity_catalog().resolve_activity(
+        manifest["expectedActivityType"]
+    )
+    adapter = Adapter()
+    lease = await ProviderProfileLeaseClient(adapter).acquire_maintenance_lease(
+        runtime_id=manifest["runtimeId"],
+        profile_id=manifest["profileId"],
+        owner_id=manifest["leaseRequest"]["ownerId"],
+        purpose=CredentialLeasePurpose(manifest["leaseRequest"]["purpose"]),
+        metadata={"oauthSessionId": "oas-replay"},
+        owner_is_workflow=True,
+    )
+
+    assert route.task_queue == manifest["expectedTaskQueue"]
+    assert lease.lease_id == manifest["leaseRequest"]["ownerId"]
+    assert adapter.update_name == expected["acknowledgedBy"]
+    assert adapter.payload["metadata"]["ownerIsWorkflow"] is expected[
+        "ownerIsWorkflow"
+    ]
 
 
 async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
@@ -228,6 +299,136 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
 
 
+@pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+async def test_nested_yield_continuation_replays_through_production_agent_run_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recover: bool
+) -> None:
+    """MoonLadderStudios/MoonMind#3145 continuation journey across the agent route.
+
+    AgentRun owns capability-aware bounded continuation. Replay the incident at
+    the production activity-routing and terminal-evidence boundaries: every
+    continuation activity must resolve through the real catalog to the managed
+    agent-runtime queue, evaluate real workspace evidence, and preserve a stable
+    session/thread/epoch identity across bounded continuation turns.
+    """
+    replay_id = "incomplete-terminal-contract"
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / "repo"
+    _materialize_workspace_fixture(replay_id, workspace)
+
+    # AgentRun evaluates terminal evidence and drives continuation outside a live
+    # Temporal event loop here; enable the continuation patch gates and provide a
+    # workflow info stub so the production helper runs in-process.
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="reliability-3145:agent:node-1",
+        run_id="reliability-3145-run",
+        search_attributes={},
+        parent=None,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+
+    binding = _binding()
+    execution_ref = "mm:reliability-3145:terminal-contract"
+    container_id = "ctr-reliability-3145"
+    thread_id = "thread-terminal-contract"
+    request = _pr_resolver_request(binding, workspace).model_copy(
+        update={
+            "terminal_contract": AgentTerminalContract(
+                contractId="pr_resolver_terminal.v1",
+                relativePath="var/pr_resolver/result.json",
+                expectedSchemaVersion="moonmind.pr-resolver-result.v1",
+                executionRef=execution_ref,
+            )
+        }
+    )
+
+    turns: list[SendCodexManagedSessionTurnRequest] = []
+    routed_queues: set[str] = set()
+
+    async def execute_activity(name: str, payload: object, **kwargs: object) -> object:
+        # Keep AgentRun's production catalog lookup and route construction in the
+        # replay; only the Temporal SDK handoff is doubled, so catalog drift that
+        # sent continuation activities to the wrong worker cannot be hidden.
+        routed_queues.add(kwargs["task_queue"])
+        if name == "agent_runtime.evaluate_terminal_evidence":
+            activities = TemporalAgentRuntimeActivities(client_adapter=object())
+            evaluated = await activities.agent_runtime_evaluate_terminal_evidence(
+                payload
+            )
+            return evaluated.model_dump(mode="json", by_alias=True)
+        if name == "agent_runtime.load_session_snapshot":
+            return {
+                "sessionId": binding.session_id,
+                "sessionEpoch": binding.session_epoch,
+                "containerId": container_id,
+                "threadId": thread_id,
+            }
+        if name == "agent_runtime.send_turn":
+            turns.append(payload)
+            if recover and len(turns) == 1:
+                # A recovered continuation writes satisfied terminal evidence:
+                # a merged disposition whose executionRef matches the contract,
+                # plus the required auto-publish artifact.
+                result_path = workspace / "var/pr_resolver/result.json"
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                result_path.write_text(
+                    json.dumps(
+                        {
+                            "executionRef": execution_ref,
+                            "mergeAutomationDisposition": "merged",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                publish_path = workspace / "artifacts/publish_result.json"
+                publish_path.parent.mkdir(parents=True, exist_ok=True)
+                publish_path.write_text(
+                    json.dumps({"status": "merged"}), encoding="utf-8"
+                )
+            return _turn_response(
+                session_id=payload.session_id,
+                session_epoch=payload.session_epoch,
+                container_id=payload.container_id,
+                thread_id=payload.thread_id,
+                turn_id=f"continuation-{len(turns)}",
+            ).model_dump(mode="json", by_alias=True)
+        if name == "agent_runtime.fetch_result":
+            return AgentRunResult(
+                summary="continuation completed",
+                metadata={"workspacePath": str(workspace)},
+            ).model_dump(mode="json", by_alias=True)
+        raise AssertionError(f"unexpected activity: {name}")
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+
+    result = await MoonMindAgentRun()._evaluate_terminal_contract(
+        request=request,
+        result=AgentRunResult(
+            summary="wrapper completed while inner process remained active",
+            metadata={"workspacePath": str(workspace)},
+        ),
+    )
+
+    # Every terminal-contract continuation activity crosses the production
+    # managed agent-runtime route, never a per-test task queue.
+    assert routed_queues == {"mm.activity.agent_runtime"}
+    expected_turns = 1 if recover else expected["continuationCount"]
+    assert len(turns) == expected_turns
+    assert {
+        (turn.session_id, turn.session_epoch, turn.thread_id) for turn in turns
+    } == {(binding.session_id, binding.session_epoch, thread_id)}
+    assert result.metadata["terminalContractContinuationCount"] == expected_turns
+    if recover:
+        assert result.failure_class is None
+        assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    else:
+        assert result.failure_class == expected["failureClass"]
+        assert result.metadata["failureCode"] == expected["failureCode"]
+        assert result.metadata["terminalContractRecoveryOutcome"] == "incomplete"
+
+
 async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -267,6 +468,257 @@ async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_pa
     assert sandbox_calls == expected["sandboxResolverCalls"] == 0
 
 
+async def test_managed_checkpoint_waits_for_authoritative_locator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:8a09888d before the AgentRun workspace exists."""
+    replay_id = "managed-checkpoint-missing-locator"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    parent_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["runId"],
+        task_queue="mm.workflow.merge_automation",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+
+    activity_calls: list[str] = []
+
+    async def capture_activity(
+        activity_type: str,
+        _payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        activity_calls.append(activity_type)
+        raise AssertionError("managed capture ran without an authoritative locator")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        capture_activity,
+    )
+    now = datetime(2026, 7, 14, 5, 25, tzinfo=timezone.utc)
+    parent._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Investigate"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    parent._mark_step_running("node-1", updated_at=now, summary="Investigating")
+    parent._record_step_workspace_capture_input("node-1", manifest["stepInputs"])
+
+    checkpoint_ref = await parent._record_canonical_step_checkpoint(
+        "node-1",
+        boundary=manifest["boundary"],
+        updated_at=now,
+    )
+
+    assert checkpoint_ref is None
+    assert activity_calls == expected["activityCalls"]
+    assert parent._step_checkpoint_capture_outcomes["node-1"] == expected[
+        "captureOutcome"
+    ]
+
+
+async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:28dae38e through the child-to-parent authority handoff."""
+    replay_id = "codex-oauth-checkpoint-masking"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    classified = classify_provider_failure(manifest["providerLog"])
+
+    assert classified is not None
+    assert classified.failure_class == expected["failureClass"]
+    assert classified.provider_error_code == expected["providerErrorCode"]
+    assert classified.retry_recommendation == expected["retryRecommendation"]
+
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=f"{manifest['incidentWorkflowId']}:agent:node-1",
+        run_id="replay-run",
+        search_attributes={},
+        parent=None,
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        executionProfileRef="codex-default",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:replay",
+        managedSession={
+            "workflowId": f"{manifest['incidentWorkflowId']}:session:codex_cli",
+            "agentRunId": manifest["incidentWorkflowId"],
+            "sessionId": f"sess:{manifest['incidentWorkflowId']}:codex_cli",
+            "sessionEpoch": 1,
+            "runtimeId": "codex_cli",
+            "executionProfileRef": "codex-default",
+        },
+    )
+    result = MoonMindAgentRun()._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(
+            summary=manifest["providerLog"],
+            failureClass=classified.failure_class,
+            providerErrorCode=classified.provider_error_code,
+            retryRecommendation=classified.retry_recommendation,
+            metadata={"workspacePath": manifest["legacyWorkspacePath"]},
+        ),
+    )
+
+    assert result is not None
+    assert result.metadata["workspaceLocator"] == expected["workspaceLocator"]
+    assert "workspacePath" not in result.metadata
+
+    parent_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id="replay-parent-run",
+        task_queue="mm.workflow",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: parent_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+
+    activity_calls: list[str] = []
+
+    async def managed_checkpoint_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        activity_calls.append(activity_type)
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "worktree_archive",
+                    "baseCommit": "abc123",
+                    "archiveRef": "artifact://managed/archive",
+                    "archiveDigest": "sha256:" + ("a" * 64),
+                    "manifestRef": "artifact://managed/manifest",
+                    "manifestDigest": "sha256:" + ("b" * 64),
+                    "includesUntracked": True,
+                    "includesIgnoredFiles": False,
+                },
+                "diagnosticRefs": ["artifact://managed/manifest"],
+                "idempotencyKey": payload["idempotencyKey"],
+            }
+        if activity_type == "step_checkpoint.create":
+            return {
+                "checkpointRef": "artifact://checkpoint/after_execution",
+                "checkpointId": payload["idempotencyKey"],
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        managed_checkpoint_activity,
+    )
+    parent = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 13, tzinfo=timezone.utc)
+    parent._initialize_step_ledger(
+        ordered_nodes=[{"id": "node-1", "inputs": {"title": "Replay"}}],
+        dependency_map={"node-1": []},
+        updated_at=now,
+    )
+    parent._mark_step_running("node-1", updated_at=now, summary="Running")
+    parent._record_step_workspace_capture_input("node-1", result.metadata)
+
+    checkpoint_ref = await parent._record_canonical_step_checkpoint(
+        "node-1", boundary="after_execution", updated_at=now
+    )
+
+    assert checkpoint_ref == "artifact://checkpoint/after_execution"
+    assert activity_calls == [
+        "agent_runtime.capture_workspace_checkpoint",
+        "step_checkpoint.create",
+    ]
+
+
+async def test_codex_system_error_waits_for_delayed_oauth_failure_log(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:32a5549d through the real managed-session runtime boundary."""
+
+    replay_id = "codex-oauth-log-settle-race"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = launch_request(tmp_path)
+    transcript_path = Path(request.codex_home_path) / manifest["rolloutRelativePath"]
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    script = write_fake_app_server(
+        tmp_path,
+        assistant_text="",
+        omit_turns_on_read=True,
+        thread_status_type=manifest["threadStatusType"],
+        start_thread_path=str(transcript_path),
+        rollout_entries_on_read=[manifest["terminalRolloutEvent"]],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    log_path = Path(request.codex_home_path) / "logs_1.sqlite"
+    with sqlite3.connect(log_path) as connection:
+        connection.execute(
+            "CREATE TABLE logs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts INTEGER, "
+            "feedback_log_body TEXT"
+            ")"
+        )
+
+    def commit_provider_failure_after_terminal_event() -> None:
+        time.sleep(manifest["providerLogDelaySeconds"])
+        with sqlite3.connect(log_path) as connection:
+            connection.execute(
+                "INSERT INTO logs (ts, feedback_log_body) VALUES (?, ?)",
+                (int(time.time()), manifest["providerLog"]),
+            )
+
+    writer = threading.Thread(
+        target=commit_provider_failure_after_terminal_event,
+        daemon=True,
+    )
+    writer.start()
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+    writer.join(timeout=2)
+
+    assert not writer.is_alive()
+    assert response.status == "failed"
+    assert response.metadata["failureClass"] == expected["runtimeFailureClass"]
+    assert response.metadata["reason"] == expected["reason"]
+    assert "retryRecommendedAction" not in response.metadata
+    classified = classify_provider_failure(response.metadata["reason"])
+    assert classified is not None
+    assert classified.failure_class == expected["failureClass"]
+    assert classified.provider_error_code == expected["providerErrorCode"]
+    assert classified.retry_recommendation == expected["retryRecommendation"]
+
+
 async def test_checkpoint_finalization_fault_is_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -276,16 +728,27 @@ async def test_checkpoint_finalization_fault_is_retryable(
     repo.mkdir(parents=True)
     activities = TemporalSandboxActivities(workspace_root=workspace_root)
 
-    durable_execution_result = load_replay(replay_id, "execution-result.json")
+    agent_execution_calls = 0
+    durable_execution_result: dict[str, object] | None = None
+
+    async def execute_agent_once() -> dict[str, object]:
+        """Primary agent execution is exactly-once and durable across retries."""
+        nonlocal agent_execution_calls, durable_execution_result
+        if durable_execution_result is None:
+            agent_execution_calls += 1
+            durable_execution_result = load_replay(replay_id, "execution-result.json")
+        return durable_execution_result
+
     original_capture = activities._capture_workspace_evidence
-    calls = 0
+    fault = FinalizationFaultInjector()
 
     async def fail_once(model: object, workspace: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("injected finalization failure")
-        return await original_capture(model, workspace)
+        # The retried finalization path must reuse the durable primary execution
+        # result, never re-run the agent. If a regression re-executed the agent on
+        # each finalization attempt, ``agent_execution_calls`` would exceed one.
+        execution = await execute_agent_once()
+        assert execution["status"] == "completed"
+        return await fault.invoke(original_capture, model, workspace)
 
     monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
     payload = {
@@ -307,4 +770,5 @@ async def test_checkpoint_finalization_fault_is_retryable(
     second = await activities.workspace_capture_checkpoint(payload)
     assert second["status"] == "captured"
     assert durable_execution_result["status"] == "completed"
-    assert calls == 2
+    assert fault.calls == 2
+    assert agent_execution_calls == 1

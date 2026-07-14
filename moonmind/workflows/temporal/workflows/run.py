@@ -158,6 +158,12 @@ from moonmind.workflows.temporal.step_executions import (
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
 )
+from moonmind.workflows.temporal.recovery_state import (
+    CheckpointRecoveryContract,
+    deterministic_recovery_identity,
+    validate_restore_result,
+)
+from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
 from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
@@ -206,6 +212,7 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 
 
 def bounded_story_loop_step_effects(
@@ -289,6 +296,7 @@ _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _PR_OPTIONAL_TASK_SKILLS = frozenset(
     {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}
 )
+_CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset({"github-issue-implement"})
 _EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"codex_cloud", "jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {
@@ -330,6 +338,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
     }
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
+RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH = "run-checkpoint-recovery-state-machine-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = (
     "run-pr-resolver-continuation-identity-v1"
@@ -511,6 +520,7 @@ RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = (
     "run-handoff-accepted-disposition-gate-v1"
 )
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH = "run-canonical-no-commit-outcome-v1"
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
     "run-ungated-continuation-disposition-v1"
 )
@@ -556,6 +566,10 @@ RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1"
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
+RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
+RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
+    "run-managed-checkpoint-locator-guard-v1"
+)
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
@@ -595,6 +609,7 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
@@ -616,6 +631,29 @@ RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v
 # correlated under one trace id. Gated so in-flight histories that predate the
 # trace-ref stamp / incident-manifest writes keep replaying deterministically.
 RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
+RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = (
+    "run-plan-routed-moonspec-remediation-v1"
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class MoonSpecRemediationSuccessor:
+    """One exact, plan-authored remediation destination."""
+
+    logical_step_id: str
+    attempt: int
+    max_attempts: int
+    node_index: int
+
+
+@dataclasses.dataclass(frozen=True)
+class GateTransitionDecision:
+    """Workflow-owned routing for a valid verifier semantic result."""
+
+    disposition: str
+    routing_disposition: str
+    reason_code: str
+    successor: MoonSpecRemediationSuccessor | None = None
 # Replay-stable patch id for the status-only memo update emitted from
 # _update_search_attributes. Histories that already recorded the prior ungated
 # memo command require a reset/versioning cutover; see
@@ -1121,6 +1159,8 @@ class MoonMindRunWorkflow:
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        self._canonical_no_commit_outcome_enabled: bool = False
+        self._authoritative_publish_outcome_enabled: bool = False
         self._publish_repair_attempts: int = 0
         self._operator_summary: Optional[str] = None
         self._last_step_id: Optional[str] = None
@@ -1130,6 +1170,9 @@ class MoonMindRunWorkflow:
         self._moonspec_gate_reason: Optional[str] = None
         self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
+        # A valid verifier can stop workflow routing without fabricating a
+        # failed execution.  This compact evidence is added to incident output.
+        self._workflow_control_stop: dict[str, Any] | None = None
         self._last_diagnostics_ref: Optional[str] = None
         # Bounded, redacted structured failure diagnostic captured at the
         # failure boundary. Surfaced in reports/run_summary.json and reused by
@@ -1189,6 +1232,8 @@ class MoonMindRunWorkflow:
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
         self._recovery_workspace_restored_ref: str | None = None
+        self._checkpoint_recovery_contract: CheckpointRecoveryContract | None = None
+        self._checkpoint_recovery_state: dict[str, Any] | None = None
         # Compact record of a resume-path checkpoint validation/restoration
         # failure (failureCode + checkpointRef), captured before the failure is
         # raised so the failed-run recovery manifest reports the real degraded
@@ -2942,15 +2987,23 @@ class MoonMindRunWorkflow:
 
     def _validate_recovery_source_for_execution(self) -> dict[str, Any] | None:
         recovery_source = self._recovery_source
+        if self._recovery_failed_step_id is not None:
+            return dict(recovery_source) if recovery_source is not None else None
         self._recovery_failed_step_id = None
         self._recovery_workspace = {}
         self._recovery_workspace_restored_ref = None
+        self._checkpoint_recovery_contract = None
+        self._checkpoint_recovery_state = None
         if recovery_source is None:
             return None
         if not isinstance(recovery_source, Mapping):
             raise ValueError("Recovery source must be a compact mapping.")
         if not recovery_source:
             return None
+        # Patch-gated so histories started before the explicit contract retain
+        # their recorded validation path during replay.
+        if self._workflow_patch_enabled(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
+            validate_recovery_contract(recovery_source)
 
         source_workflow_id = self._recovery_source_text(
             recovery_source,
@@ -3071,6 +3124,33 @@ class MoonMindRunWorkflow:
                     f"preserved step {logical_step_id} requires a state checkpoint ref"
                 )
 
+        explicit_contract = recovery_source.get("checkpointRecovery")
+        if explicit_contract is None:
+            explicit_contract = recovery_source.get("checkpoint_recovery")
+        if explicit_contract is not None:
+            contract = CheckpointRecoveryContract.model_validate(explicit_contract)
+            restore_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                contract.restore_activity
+            )
+            if restore_route.fleet != "agent_runtime":
+                raise ValueError(
+                    "CHECKPOINT_CAPABILITY_INVALID: restore activity must run on "
+                    "the agent_runtime fleet"
+                )
+            self._checkpoint_recovery_contract = contract
+            self._checkpoint_recovery_state = {
+                "status": "recovery_preflight_validated",
+                "recoveryAction": contract.recovery_action,
+                "resumePhase": contract.resume_phase,
+                "sourceCheckpointRef": contract.source_checkpoint_ref,
+                "sourceCheckpointBoundary": contract.source_checkpoint_boundary,
+                "sourceCheckpointKind": contract.source_checkpoint_kind,
+                "targetRuntimeId": contract.capabilities.runtime_id,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
+                "restoreActivity": contract.restore_activity,
+            }
+
         self._recovery_failed_step_id = failed_step_id
         self._recovery_workspace = dict(workspace)
         return dict(recovery_source)
@@ -3105,6 +3185,12 @@ class MoonMindRunWorkflow:
             return self._recovery_workspace_restored_ref
         if not isinstance(self._recovery_source, Mapping):
             return None
+
+        if (
+            self._checkpoint_recovery_contract is not None
+            and workflow.patched(RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH)
+        ):
+            return await self._restore_checkpoint_recovery_workspace(logical_step_id)
 
         checkpoint_ref = self._recovery_workspace_checkpoint_ref(self._recovery_workspace)
         if not checkpoint_ref:
@@ -3197,13 +3283,24 @@ class MoonMindRunWorkflow:
                 f"recovery checkpoint validation failed: {failure_code}"
             )
 
+        target_workspace_locator = self._recovery_workspace.get(
+            "targetWorkspaceLocator"
+        )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = self._recovery_workspace.get(
+                "target_workspace_locator"
+            )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = None
         target_workspace_ref = self._recovery_source_text(
             self._recovery_workspace,
             "targetWorkspaceRef",
             "target_workspace_ref",
             "workspaceRef",
             "workspace_ref",
-        ) or checkpoint_ref
+        )
+        if target_workspace_locator is None:
+            target_workspace_ref = target_workspace_ref or checkpoint_ref
         apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("workspace.apply_policy")
         apply_payload = {
             "identity": {
@@ -3215,11 +3312,14 @@ class MoonMindRunWorkflow:
             "workspacePolicy": workspace_policy,
             "checkpointRef": checkpoint_ref,
             "checkpoint": dict(checkpoint_payload),
-            "targetWorkspaceRef": target_workspace_ref,
             "expectedPlanRef": source_plan_ref or None,
             "expectedPlanDigest": source_plan_digest or None,
             "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
         }
+        if target_workspace_locator is not None:
+            apply_payload["targetWorkspaceLocator"] = dict(target_workspace_locator)
+        if target_workspace_ref:
+            apply_payload["targetWorkspaceRef"] = target_workspace_ref
         policy = await workflow.execute_activity(
             apply_route.activity_type,
             apply_payload,
@@ -3240,6 +3340,59 @@ class MoonMindRunWorkflow:
         workspace_ref = str(policy.get("workspaceRef") or target_workspace_ref).strip()
         self._recovery_workspace_restored_ref = workspace_ref or checkpoint_ref
         return self._recovery_workspace_restored_ref
+
+    async def _restore_checkpoint_recovery_workspace(self, logical_step_id: str) -> str:
+        """Invoke the frozen runtime-owned restore route exactly once per history."""
+        contract = self._checkpoint_recovery_contract
+        state = self._checkpoint_recovery_state
+        if contract is None or state is None:
+            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: recovery preflight missing")
+        if state.get("status") == "recovery_workspace_restored":
+            return str(state["restorationEvidenceRef"])
+
+        source_ordinal = self._recovery_source_int(
+            self._recovery_source or {}, "failedStepExecution", "failed_step_execution"
+        ) or 1
+        destination_id, idempotency_key = deterministic_recovery_identity(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=source_ordinal,
+            checkpoint_ref=contract.source_checkpoint_ref,
+        )
+        state.update({
+            "status": "recovery_restoring_workspace",
+            "destinationAgentRunId": destination_id,
+            "restoreIdempotencyKey": idempotency_key,
+        })
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
+        result = await workflow.execute_activity(
+            route.activity_type,
+            {
+                "checkpointRef": contract.source_checkpoint_ref,
+                "checkpointKind": contract.source_checkpoint_kind,
+                "workspacePolicy": contract.workspace_policy,
+                "targetRuntimeId": contract.capabilities.runtime_id,
+                "destinationAgentRunId": destination_id,
+                "idempotencyKey": idempotency_key,
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(result, Mapping):
+            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: invalid restore result")
+        locator, evidence_ref, evidence_digest = validate_restore_result(
+            result,
+            runtime_id=contract.capabilities.runtime_id,
+            destination_agent_run_id=destination_id,
+        )
+        state.update({
+            "status": "recovery_workspace_restored",
+            "destinationWorkspaceLocator": locator,
+            "restorationEvidenceRef": evidence_ref,
+            "restorationEvidenceDigest": evidence_digest,
+        })
+        self._recovery_workspace_restored_ref = evidence_ref
+        return evidence_ref
 
     def _preserved_outputs_for_step(
         self,
@@ -3507,20 +3660,77 @@ class MoonMindRunWorkflow:
                 disposition = self._coerce_text(record.get("disposition"), max_chars=40)
                 if not operation and not disposition:
                     continue
+                provider_kind = self._coerce_text(
+                    record.get("providerKind"),
+                    max_chars=80,
+                )
+                summary = self._coerce_text(record.get("summary"), max_chars=300)
                 side_effects.append(
                     {
-                        "kind": self._coerce_text(
-                            record.get("class") or record.get("kind"),
-                            max_chars=80,
+                        "kind": provider_kind
+                        or self._coerce_text(
+                            record.get("class") or record.get("kind"), max_chars=80
                         )
                         or "external",
                         "status": "completed"
                         if disposition == "accepted"
                         else (disposition or "recorded"),
-                        "summary": operation or "Side effect recorded.",
+                        "summary": summary or operation or "Side effect recorded.",
                     }
                 )
         return side_effects[:20]
+
+    def _record_declared_side_effect(
+        self,
+        *,
+        logical_step_id: str,
+        outputs: Mapping[str, Any],
+    ) -> None:
+        if not self._canonical_no_commit_outcome_enabled:
+            return
+        declaration = outputs.get("sideEffect") or outputs.get("side_effect")
+        if not isinstance(declaration, Mapping):
+            return
+        effect_class = self._coerce_text(
+            declaration.get("effectClass") or declaration.get("effect_class"),
+            max_chars=80,
+        )
+        if effect_class not in {
+            "external_idempotent",
+            "external_non_idempotent",
+            "publication",
+            "provider_account",
+        }:
+            return
+        operation = self._coerce_text(declaration.get("operation"), max_chars=120)
+        if not operation:
+            return
+        idempotency_key = self._coerce_text(
+            declaration.get("idempotencyKey") or declaration.get("idempotency_key"),
+            max_chars=200,
+        )
+        if effect_class == "external_idempotent" and not idempotency_key:
+            return
+        record = self._record_step_side_effect(
+            logical_step_id,
+            effect_class=effect_class,
+            operation=operation,
+            target=self._coerce_text(declaration.get("target"), max_chars=500),
+            idempotency_key=idempotency_key,
+            workflow_state_accepted=True,
+            reason=self._coerce_text(declaration.get("summary"), max_chars=300),
+        )
+        if record is None:
+            return
+        provider_kind = self._coerce_text(
+            declaration.get("kind") or declaration.get("provider"),
+            max_chars=80,
+        )
+        summary = self._coerce_text(declaration.get("summary"), max_chars=300)
+        if provider_kind:
+            record["providerKind"] = provider_kind
+        if summary:
+            record["summary"] = summary
 
     def _is_jira_orchestrate_external_handoff_node(
         self,
@@ -4803,10 +5013,42 @@ class MoonMindRunWorkflow:
                 else None
             ),
         )
-        if resolved_policy.capture_activity != "workspace.capture_checkpoint":
+        managed_capture_enabled = workflow.patched(RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH)
+        supported_capture_activities = {"workspace.capture_checkpoint"}
+        if managed_capture_enabled:
+            supported_capture_activities.add(
+                "agent_runtime.capture_workspace_checkpoint"
+            )
+        if resolved_policy.capture_activity not in supported_capture_activities:
             self._step_checkpoint_capture_outcomes[logical_step_id] = {
                 "status": "unsupported",
                 "failureCode": "CHECKPOINT_CAPABILITY_UNSUPPORTED",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": (
+                    None
+                    if resolved_policy.capture_activity
+                    == "agent_runtime.capture_workspace_checkpoint"
+                    and not managed_capture_enabled
+                    else resolved_policy.capture_activity
+                ),
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        if (
+            resolved_policy.capture_activity
+            == "agent_runtime.capture_workspace_checkpoint"
+            and workflow.patched(RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH)
+            and not isinstance(capture_input.get("workspaceLocator"), Mapping)
+        ):
+            # The parent cannot address a managed workspace until AgentRun returns
+            # the runtime-owned locator. In particular, after_prepare and
+            # before_execution run before the child exists. Defer capture instead
+            # of sending a payload the strict activity contract must reject.
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "deferred",
+                "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
                 "boundary": str(boundary),
                 "captureAuthority": resolved_policy.capture_authority,
                 "captureActivity": resolved_policy.capture_activity,
@@ -4834,15 +5076,35 @@ class MoonMindRunWorkflow:
             )
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "workspace.capture_checkpoint"
+            resolved_policy.capture_activity
         )
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
-            "kind": claimed_kind or resolved_policy.checkpoint_kind,
             "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
             "idempotencyKey": f"{checkpoint_id}:capture",
         }
+        if resolved_policy.capture_activity == "agent_runtime.capture_workspace_checkpoint":
+            capabilities = RuntimeExecutionCapabilities.model_validate(
+                capture_input["runtimeCapabilities"]
+            )
+            payload.update(
+                {
+                    "schemaVersion": "v1",
+                    "checkpointKind": claimed_kind or resolved_policy.checkpoint_kind,
+                    "expectedRuntimeId": capabilities.runtime_id,
+                    "capabilitySetVersion": capabilities.capability_set_version,
+                    "capabilityDigest": capabilities.capability_digest,
+                    "capturePolicy": {
+                        "includeTracked": True,
+                        "includeUntracked": True,
+                        "includeIgnored": False,
+                        "redactionProfile": "managed-code-workspace-v1",
+                    },
+                }
+            )
+        else:
+            payload["kind"] = claimed_kind or resolved_policy.checkpoint_kind
         if isinstance(capture_input.get("workspaceLocator"), Mapping):
             payload["workspaceLocator"] = dict(capture_input["workspaceLocator"])
         if capture_input.get("workspacePath"):
@@ -4953,12 +5215,20 @@ class MoonMindRunWorkflow:
             max_chars=400,
         )
         capture_input = self._step_workspace_capture_inputs.get(logical_step_id, {})
-        workspace_locator = self._coerce_text(
-            capture_input.get("workspaceRootRef")
-            or capture_input.get("workspacePath")
-            or capture_input.get("externalStateRef"),
-            max_chars=500,
-        )
+        raw_workspace_locator = capture_input.get("workspaceLocator")
+        if isinstance(raw_workspace_locator, Mapping):
+            # Preserve ownership/authority. Never collapse a new typed locator
+            # to a path-like legacy projection.
+            workspace_locator: dict[str, Any] | str | None = dict(raw_workspace_locator)
+        else:
+            # Read/write fallback retained only for histories whose capture
+            # input predates typed locators.
+            workspace_locator = self._coerce_text(
+                capture_input.get("workspaceRootRef")
+                or capture_input.get("workspacePath")
+                or capture_input.get("externalStateRef"),
+                max_chars=500,
+            )
         result_ref = next(
             (
                 compact_refs[key]
@@ -5276,6 +5546,52 @@ class MoonMindRunWorkflow:
             return True
         return attempt <= max_attempts
 
+    def _moonspec_remediation_budget_metadata(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_attempt: int | None,
+        max_attempts: int | None,
+    ) -> dict[str, Any]:
+        """Project remediation consumption from actual active step-ledger rows."""
+        remediation_ids = [
+            str(candidate.get("id") or "")
+            for candidate in ordered_nodes
+            if self._is_moonspec_remediation_step(candidate)
+            and self._moonspec_remediation_attempt_within_budget(candidate)
+        ]
+        attempts_started = sum(
+            1
+            for step_id in remediation_ids
+            if step_id and (self._step_execution_for(step_id) or 0) > 0
+        )
+        attempts_completed = sum(
+            1
+            for step_id in remediation_ids
+            if step_id
+            and str((self._step_ledger_row_for(step_id) or {}).get("status") or "")
+            == "completed"
+        )
+        return {
+            "maxAttempts": max_attempts,
+            "currentAttempt": current_attempt,
+            "attemptsStarted": attempts_started,
+            "attemptsCompleted": attempts_completed,
+            "remainingAttempts": (
+                max(0, max_attempts - attempts_started)
+                if max_attempts is not None
+                else None
+            ),
+            "exhausted": bool(
+                max_attempts is not None and attempts_started >= max_attempts
+            ),
+        }
+
+    @staticmethod
+    def _accepted_verifier_semantic_verdict(verdict: str) -> str:
+        """Preserve the verifier-owned semantic result in control evidence."""
+        return verdict
+
     def _is_moonspec_remediation_step(self, node: Mapping[str, Any]) -> bool:
         node_inputs = self._node_inputs_mapping(node)
         if self._moonspec_step_role(node) == "moonspec-remediation":
@@ -5316,6 +5632,218 @@ class MoonMindRunWorkflow:
             ) and self._moonspec_remediation_attempt_within_budget(node):
                 return True
         return False
+
+    def _resolve_next_moonspec_remediation_step(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> tuple[MoonSpecRemediationSuccessor | None, str]:
+        """Resolve one exact successor after validating the annotated topology."""
+        if current_index < 0 or current_index >= len(ordered_nodes):
+            return None, "no_remediation_successor"
+        current = ordered_nodes[current_index]
+        current_role = self._moonspec_step_role(current)
+        current_inputs = self._node_inputs_mapping(current)
+        current_tool = self._plan_node_tool_mapping(current) or {}
+        current_tool_name = str(
+            current_tool.get("name") or current_tool.get("id") or ""
+        )
+        if current_role != "moonspec-verification-gate" and not (
+            not current_role
+            and self._is_moonspec_verify_step(
+                tool_name=current_tool_name,
+                node_inputs=current_inputs,
+            )
+        ):
+            return None, "not_explicit_remediation_chain"
+        current_attempt, current_max = self._moonspec_remediation_attempt_metadata(
+            current
+        )
+        if current_attempt is None and current_role != "moonspec-verification-gate":
+            current_attempt = 0
+        if current_max is None and current_attempt == 0:
+            declared_maxima = {
+                maximum
+                for candidate in ordered_nodes[current_index + 1 :]
+                if self._moonspec_step_role(candidate)
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+                for _, maximum in [
+                    self._moonspec_remediation_attempt_metadata(candidate)
+                ]
+                if maximum is not None
+            }
+            if len(declared_maxima) == 1:
+                current_max = next(iter(declared_maxima))
+        if current_attempt is None or current_max is None:
+            return None, "no_remediation_successor"
+        if current_attempt >= current_max:
+            return None, "remediation_budget_exhausted"
+
+        expected_attempt = current_attempt + 1
+        candidates: list[MoonSpecRemediationSuccessor] = []
+        seen_attempts: set[int] = set()
+        attempts_by_role: dict[str, set[int]] = {
+            "moonspec-remediation": set(),
+            "moonspec-verification-gate": set(),
+        }
+        final_gate_attempts: set[int] = set()
+        malformed = False
+        for node_index, candidate in enumerate(ordered_nodes):
+            role = self._moonspec_step_role(candidate)
+            if role not in {"moonspec-remediation", "moonspec-verification-gate"}:
+                continue
+            attempt, max_attempts = self._moonspec_remediation_attempt_metadata(
+                candidate
+            )
+            if attempt is None or max_attempts != current_max:
+                malformed = True
+                continue
+            if attempt > current_max:
+                continue
+            identity = (0 if role == "moonspec-remediation" else current_max) + attempt
+            if identity in seen_attempts:
+                malformed = True
+            seen_attempts.add(identity)
+            attempts_by_role[role].add(attempt)
+            if (
+                role == "moonspec-verification-gate"
+                and self._node_annotations_mapping(candidate).get(
+                    "moonSpecFinalRemediationGate"
+                )
+                is True
+            ):
+                final_gate_attempts.add(attempt)
+            if role == "moonspec-remediation" and attempt == expected_attempt:
+                candidates.append(
+                    MoonSpecRemediationSuccessor(
+                        logical_step_id=str(candidate.get("id") or ""),
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        node_index=node_index,
+                    )
+                )
+        expected_attempts = set(range(1, current_max + 1))
+        if (
+            malformed
+            or len(candidates) != 1
+            or attempts_by_role["moonspec-remediation"] != expected_attempts
+            or attempts_by_role["moonspec-verification-gate"] != expected_attempts
+            or final_gate_attempts != {current_max}
+        ):
+            return None, "no_remediation_successor"
+        successor = candidates[0]
+        if successor.node_index != current_index + 1 or not successor.logical_step_id:
+            return None, "no_remediation_successor"
+        return successor, "verification_requested_remediation"
+
+    def _resolve_gate_transition(
+        self,
+        *,
+        verdict: Any,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> GateTransitionDecision:
+        """Keep verifier semantics advisory and make plan routing authoritative."""
+        normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
+        explicit_chain = False
+        if 0 <= current_index < len(ordered_nodes):
+            current = ordered_nodes[current_index]
+            current_role = self._moonspec_step_role(current)
+            current_tool = self._plan_node_tool_mapping(current) or {}
+            explicit_chain = current_role == "moonspec-verification-gate" or (
+                not current_role
+                and self._is_moonspec_verify_step(
+                    tool_name=str(
+                        current_tool.get("name") or current_tool.get("id") or ""
+                    ),
+                    node_inputs=self._node_inputs_mapping(current),
+                )
+                and any(
+                    self._moonspec_step_role(candidate) == "moonspec-remediation"
+                    for candidate in ordered_nodes[current_index + 1 :]
+                )
+            )
+        if not explicit_chain:
+            return GateTransitionDecision(
+                "generic", "existing_gate_policy", "not_explicit_remediation_chain"
+            )
+        if bool(getattr(verdict, "invalid", False)) or bool(
+            getattr(verdict, "degraded", False)
+        ):
+            return GateTransitionDecision(
+                "invalid", "fail_invalid_result", "invalid_gate_result"
+            )
+        if normalized == "FULLY_IMPLEMENTED":
+            return GateTransitionDecision(
+                "accept", "exit_remediation_loop", "verification_passed"
+            )
+        if normalized == "ADDITIONAL_WORK_NEEDED":
+            successor, reason = self._resolve_next_moonspec_remediation_step(
+                ordered_nodes=ordered_nodes,
+                current_index=current_index,
+            )
+            if successor is not None:
+                return GateTransitionDecision(
+                    "accept", "advance_to_next_remediation", reason, successor
+                )
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", reason
+            )
+        if normalized == "NO_DETERMINATION":
+            if bool(getattr(verdict, "recoverable_in_current_runtime", False)):
+                return GateTransitionDecision(
+                    "retry", "retry_current_verifier", "recoverable_no_determination"
+                )
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", "unrecoverable_no_determination"
+            )
+        if normalized in {
+            "BLOCKED",
+            "FAILED_UNRECOVERABLE",
+            "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+        }:
+            return GateTransitionDecision(
+                "accept", "stop_at_control_gate", "terminal_gate_verdict"
+            )
+        return GateTransitionDecision(
+            "invalid", "fail_invalid_result", "invalid_gate_result"
+        )
+
+    def _record_moonspec_gate_transition_event(
+        self,
+        *,
+        logical_step_id: str,
+        node: Mapping[str, Any],
+        verdict: str,
+        transition: GateTransitionDecision,
+        review_retries_consumed: int,
+    ) -> None:
+        """Emit one compact structured event for each plan-routed verifier result."""
+        remediation_attempt, remediation_max = (
+            self._moonspec_remediation_attempt_metadata(node)
+        )
+        self._get_logger().info(
+            "moonspec_gate_transition %s",
+            json.dumps(
+                {
+                    "event": "moonspec_gate_transition",
+                    "logicalStepId": logical_step_id,
+                    "verdict": verdict,
+                    "disposition": transition.routing_disposition,
+                    "reasonCode": transition.reason_code,
+                    "nextLogicalStepId": (
+                        transition.successor.logical_step_id
+                        if transition.successor is not None
+                        else None
+                    ),
+                    "reviewRetriesConsumed": review_retries_consumed,
+                    "remediationAttempt": remediation_attempt,
+                    "remediationMaxAttempts": remediation_max,
+                },
+                sort_keys=True,
+            ),
+        )
 
     def _moonspec_remediation_loop_skip_reason(
         self,
@@ -5729,14 +6257,54 @@ class MoonMindRunWorkflow:
         gate_result_ref: str | None,
         ordered_nodes: Sequence[Mapping[str, Any]],
         current_index: int,
+        plan_routed_moonspec_remediation_enabled: bool = True,
     ) -> dict[str, Any]:
         remediation_gate = current_index > 1 and self._is_moonspec_remediation_step(
             ordered_nodes[current_index - 2]
         )
-        has_remaining_remediation_step = self._has_remaining_moonspec_remediation_step(
-            ordered_nodes=ordered_nodes,
-            current_index=current_index,
-        )
+        successor: MoonSpecRemediationSuccessor | None = None
+        successor_reason = "legacy_remaining_remediation_scan"
+        if not plan_routed_moonspec_remediation_enabled:
+            has_remaining_remediation_step = (
+                self._has_remaining_moonspec_remediation_step(
+                    ordered_nodes=ordered_nodes,
+                    current_index=current_index,
+                )
+            )
+        else:
+            successor, successor_reason = self._resolve_next_moonspec_remediation_step(
+                ordered_nodes=ordered_nodes,
+                current_index=current_index,
+            )
+            annotated_topology_declared = any(
+                self._coerce_positive_int(
+                    self._node_annotations_mapping(candidate).get(
+                        "moonSpecRemediationAttempt"
+                    )
+                )
+                is not None
+                and self._coerce_positive_int(
+                    self._node_annotations_mapping(candidate).get(
+                        "moonSpecRemediationMaxAttempts"
+                    )
+                )
+                is not None
+                for candidate in ordered_nodes
+                if self._moonspec_step_role(candidate)
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+            )
+            if successor_reason == "not_explicit_remediation_chain" or (
+                successor_reason == "no_remediation_successor"
+                and not annotated_topology_declared
+            ):
+                has_remaining_remediation_step = (
+                    self._has_remaining_moonspec_remediation_step(
+                        ordered_nodes=ordered_nodes,
+                        current_index=current_index,
+                    )
+                )
+            else:
+                has_remaining_remediation_step = successor is not None
         progress_budget_enabled = self._patched_or_false_outside_workflow(
             RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH
         )
@@ -5752,6 +6320,7 @@ class MoonMindRunWorkflow:
         )
         loop_context = self._publish_context.get("boundedStoryLoop")
         prior_progress_signature = None
+        prior_no_progress_attempts = 0
         if isinstance(loop_context, Mapping):
             prior_decision = loop_context.get("continuationDecision")
             if isinstance(prior_decision, Mapping):
@@ -5760,10 +6329,23 @@ class MoonMindRunWorkflow:
                     prior_progress_signature = str(
                         prior_gate.get("progressSignature") or ""
                     ).strip() or None
+                prior_budget = prior_decision.get("budget")
+                if isinstance(prior_budget, Mapping):
+                    prior_consumed = prior_budget.get("consumed")
+                    if isinstance(prior_consumed, Mapping):
+                        prior_no_progress_attempts = int(
+                            prior_consumed.get(
+                                "consecutiveNoProgressAttempts", 0
+                            )
+                            or 0
+                        )
         repeated_progress = bool(
             progress_budget_enabled
             and gate.progress_signature
             and prior_progress_signature == gate.progress_signature
+        )
+        consecutive_no_progress_attempts = (
+            prior_no_progress_attempts + 1 if repeated_progress else 0
         )
         max_no_progress_attempts = 1
         if progress_budget_enabled and isinstance(loop_context, Mapping):
@@ -5780,7 +6362,9 @@ class MoonMindRunWorkflow:
                 "maxUnsafeOrPolicyDeniedAttempts": 1,
                 "consumed": {
                     "attempts": 0 if has_remaining_remediation_step else 1,
-                    "consecutiveNoProgressAttempts": 1 if repeated_progress else 0,
+                    "consecutiveNoProgressAttempts": (
+                        consecutive_no_progress_attempts
+                    ),
                     "repeated_failed_commands": 0,
                     "unsafe_or_policy_denied_attempts": 0,
                 },
@@ -5795,6 +6379,10 @@ class MoonMindRunWorkflow:
         )
         payload = decision.model_dump(by_alias=True, mode="json")
         payload["hasRemainingRemediationStep"] = has_remaining_remediation_step
+        payload["remediationRoutingReason"] = successor_reason
+        payload["nextLogicalStepId"] = (
+            successor.logical_step_id if successor is not None else None
+        )
         payload["gate"] = {
             "verdict": gate.verdict,
             "gateResultRef": gate.gate_result_ref,
@@ -5802,6 +6390,50 @@ class MoonMindRunWorkflow:
             "diagnosticsRef": gate.diagnostics_ref,
             "progressSignature": gate.progress_signature,
         }
+        payload["budget"] = budget.model_dump(by_alias=True, mode="json")
+        payload["currentLogicalStepId"] = logical_step_id
+        current_node = next(
+            (
+                candidate
+                for candidate in ordered_nodes
+                if str(candidate.get("id") or "") == logical_step_id
+            ),
+            (
+                ordered_nodes[current_index]
+                if 0 <= current_index < len(ordered_nodes)
+                else {}
+            ),
+        )
+        remediation_attempt, remediation_max = (
+            self._moonspec_remediation_attempt_metadata(current_node)
+        )
+        review_retries = max(0, (self._step_execution_for(logical_step_id) or 1) - 1)
+        persisted_review_budget: Mapping[str, Any] | None = None
+        current_row = self._step_ledger_row_for(logical_step_id) or {}
+        checks = current_row.get("checks")
+        if isinstance(checks, Sequence):
+            for check in reversed(checks):
+                if not isinstance(check, Mapping):
+                    continue
+                candidate_budget = check.get("reviewGateBudget")
+                if isinstance(candidate_budget, Mapping):
+                    persisted_review_budget = candidate_budget
+                    break
+        payload["reviewGateBudget"] = (
+            dict(persisted_review_budget)
+            if persisted_review_budget is not None
+            else {
+                "maxExecutions": review_retries + 1,
+                "executionsConsumed": review_retries + 1,
+                "retriesConsumed": review_retries,
+                "remainingExecutions": 0,
+            }
+        )
+        payload["remediationBudget"] = self._moonspec_remediation_budget_metadata(
+            ordered_nodes=ordered_nodes,
+            current_attempt=remediation_attempt,
+            max_attempts=remediation_max,
+        )
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
         ] = payload
@@ -6010,6 +6642,9 @@ class MoonMindRunWorkflow:
             "gate": "approval_policy",
             "maxAttempts": attempts_allowed,
             "attemptsConsumed": attempts_consumed,
+            "maxExecutions": attempts_allowed,
+            "executionsConsumed": attempts_consumed,
+            "retriesConsumed": review_retry_count,
             "remainingExecutions": remaining_executions,
             "additionalStopDimension": {
                 "type": "consecutive_no_progress_attempts",
@@ -6062,6 +6697,18 @@ class MoonMindRunWorkflow:
             return recommended_next_action == "reattempt_current_step"
         return normalized == "NO_DETERMINATION" and bool(
             getattr(verdict, "recoverable_in_current_runtime", False)
+        )
+
+    @staticmethod
+    def _gate_transition_allows_review_retry(
+        *,
+        plan_routed_moonspec_remediation_enabled: bool,
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Keep pre-cutover review retries independent of new plan routing."""
+        return (
+            not plan_routed_moonspec_remediation_enabled
+            or transition.disposition in {"generic", "retry"}
         )
 
     @staticmethod
@@ -6743,7 +7390,7 @@ class MoonMindRunWorkflow:
         }
         self._dependency_outcomes_by_id[prerequisite_workflow_id] = outcome
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             self._unresolved_dependency_ids.discard(prerequisite_workflow_id)
             if not self._unresolved_dependency_ids and self._dependency_failure is None:
                 self._dependency_resolution = DEPENDENCY_RESOLUTION_SATISFIED
@@ -6781,7 +7428,7 @@ class MoonMindRunWorkflow:
         ):
             return
 
-        if terminal_state == STATE_COMPLETED:
+        if terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}:
             # Idempotency: stale completed signals after already satisfied are no-ops.
             if existing_resolution in (
                 DEPENDENCY_RESOLUTION_SATISFIED,
@@ -6967,13 +7614,13 @@ class MoonMindRunWorkflow:
             )
             return
 
-        # Normalize "succeeded" to "completed" so the outcome recorder
-        # (which only treats "completed" as success) can satisfy the gate.
+        # Normalize "succeeded" to "completed" so the outcome recorder can
+        # satisfy the gate with either canonical successful terminal state.
         terminal_state = signal.terminal_state
         if terminal_state == "succeeded":
             terminal_state = "completed"
 
-        is_terminal_failure = terminal_state != "completed"
+        is_terminal_failure = terminal_state not in {STATE_COMPLETED, STATE_NO_COMMIT}
         if is_terminal_failure:
             self._get_logger().warning(
                 "DependencyResolved signal indicates non-success terminal state %s for %s",
@@ -7120,7 +7767,7 @@ class MoonMindRunWorkflow:
                 )
                 continue
 
-            if state == STATE_COMPLETED:
+            if state in {STATE_COMPLETED, STATE_NO_COMMIT}:
                 self._record_dependency_outcome(
                     prerequisite_workflow_id=dependency_id,
                     terminal_state=state,
@@ -7281,6 +7928,12 @@ class MoonMindRunWorkflow:
                 str(exc),
                 non_retryable=True,
             ) from exc
+        self._canonical_no_commit_outcome_enabled = workflow.patched(
+            RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH
+        )
+        self._authoritative_publish_outcome_enabled = workflow.patched(
+            RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH
+        )
         self._get_logger().info(
             "Starting MoonMind.UserWorkflow workflow",
             extra={"workflow_type": workflow_type},
@@ -8267,6 +8920,9 @@ class MoonMindRunWorkflow:
         # cancellation/failure handling.
         workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         step_retry_overrides_enabled = workflow.patched(RUN_STEP_RETRY_OVERRIDES_PATCH)
+        plan_routed_moonspec_remediation_enabled = workflow.patched(
+            RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH
+        )
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
@@ -8370,6 +9026,10 @@ class MoonMindRunWorkflow:
             result_status: str | None = None
             execution_result = None
             accepted_execution = False
+            accepted_gate_verdict = "FULLY_IMPLEMENTED"
+            accepted_gate_action = "advance"
+            accepted_gate_disposition = "accepted"
+            accepted_gate_budget: dict[str, Any] | None = None
             gate_stop_requested = False
             step_failure_summary: str | None = None
             blocked_outcome_wait_skipped = False
@@ -8562,6 +9222,32 @@ class MoonMindRunWorkflow:
                                 queue_order=index,
                                 attempt_reason=attempt_reason,
                             )
+                            if (
+                                node_id == self._recovery_failed_step_id
+                                and self._checkpoint_recovery_state is not None
+                            ):
+                                locator = self._checkpoint_recovery_state.get(
+                                    "destinationWorkspaceLocator"
+                                )
+                                evidence_ref = self._checkpoint_recovery_state.get(
+                                    "restorationEvidenceRef"
+                                )
+                                if not isinstance(locator, Mapping) or not evidence_ref:
+                                    raise ValueError(
+                                        "CHECKPOINT_RESTORATION_NOT_READY: recovered "
+                                        "AgentRun requires destination locator and evidence"
+                                    )
+                                recovered_workspace = dict(request.workspace_spec)
+                                recovered_workspace["workspaceLocator"] = dict(locator)
+                                recovered_workspace["restorationEvidenceRef"] = evidence_ref
+                                recovered_workspace["sourceCheckpointRef"] = (
+                                    self._checkpoint_recovery_state[
+                                        "sourceCheckpointRef"
+                                    ]
+                                )
+                                request = request.model_copy(
+                                    update={"workspace_spec": recovered_workspace}
+                                )
                             await self._resolve_step_resilience_policy_ref(
                                 node_id=node_id,
                                 execution_profile_ref=request.execution_profile_ref,
@@ -9305,10 +9991,6 @@ class MoonMindRunWorkflow:
                 )
 
                 if review_verdict.verdict != "FULLY_IMPLEMENTED":
-                    if self._review_gate_verdict_made_progress(review_verdict):
-                        consecutive_no_progress_attempts = 0
-                    else:
-                        consecutive_no_progress_attempts += 1
                     failed_review_summary = self._bounded_review_summary(
                         review_verdict.feedback,
                         fallback="Structured gate did not approve advancement",
@@ -9322,7 +10004,112 @@ class MoonMindRunWorkflow:
                         artifact_ref=gate_result_ref,
                         metadata=gate_check_metadata,
                     )
-                    if self._review_gate_retry_allowed(
+                    transition = self._resolve_gate_transition(
+                        verdict=review_verdict,
+                        ordered_nodes=ordered_nodes,
+                        current_index=index - 1,
+                    )
+                    if (
+                        plan_routed_moonspec_remediation_enabled
+                        and transition.disposition != "generic"
+                    ):
+                        self._record_moonspec_gate_transition_event(
+                            logical_step_id=node_id,
+                            node=node,
+                            verdict=review_verdict.verdict,
+                            transition=transition,
+                            review_retries_consumed=review_retry_count,
+                        )
+                    plan_routed_verifier = (
+                        plan_routed_moonspec_remediation_enabled
+                        and transition.disposition == "accept"
+                    )
+                    if plan_routed_verifier and self._step_has_accepted_output_evidence(
+                        node_id, execution_result
+                    ):
+                        current_attempt, current_max = (
+                            self._moonspec_remediation_attempt_metadata(node)
+                        )
+                        # The verifier owns the semantic verdict.  Accepting its
+                        # evidence as a completed control operation must not
+                        # rewrite terminal outcomes as remediation work.
+                        accepted_gate_verdict = (
+                            self._accepted_verifier_semantic_verdict(
+                                review_verdict.verdict
+                            )
+                        )
+                        accepted_gate_action = transition.routing_disposition
+                        accepted_gate_disposition = "accepted"
+                        next_logical_step_id = (
+                            transition.successor.logical_step_id
+                            if transition.successor is not None
+                            else None
+                        )
+                        review_budget = self._review_gate_budget_metadata(
+                            max_review_attempts=max_review_attempts,
+                            review_retry_count=review_retry_count,
+                            max_consecutive_no_progress_attempts=(
+                                max_consecutive_no_progress_attempts
+                            ),
+                            consecutive_no_progress_attempts=(
+                                consecutive_no_progress_attempts
+                            ),
+                            verdict=review_verdict.verdict,
+                            recommended_next_action=(
+                                review_verdict.recommended_next_action
+                            ),
+                        )
+                        remediation_budget = (
+                            self._moonspec_remediation_budget_metadata(
+                                ordered_nodes=ordered_nodes,
+                                current_attempt=current_attempt,
+                                max_attempts=current_max,
+                            )
+                        )
+                        accepted_gate_budget = {
+                            "reviewGateBudget": review_budget,
+                            "remediationBudget": remediation_budget,
+                        }
+                        self._upsert_step_check(
+                            node_id,
+                            kind="approval_policy",
+                            status="passed",
+                            summary=(
+                                "Valid verifier result accepted; routing to "
+                                + (
+                                    f"remediation attempt {transition.successor.attempt}."
+                                    if transition.successor is not None
+                                    else "the workflow control gate."
+                                )
+                            ),
+                            retry_count=review_retry_count,
+                            artifact_ref=gate_result_ref,
+                            metadata={
+                                **gate_check_metadata,
+                                "workflowTransition": accepted_gate_action,
+                                "transitionReasonCode": transition.reason_code,
+                                "targetLogicalStepId": next_logical_step_id,
+                                "reviewEvidenceRetriesConsumed": review_retry_count,
+                                "remediationAttemptsConsumed": remediation_budget[
+                                    "attemptsStarted"
+                                ],
+                                "remediationAttemptsMaximum": current_max,
+                                "reviewGateBudget": review_budget,
+                                "remediationBudget": remediation_budget,
+                            },
+                        )
+                        accepted_execution = True
+                        break
+                    if self._review_gate_verdict_made_progress(review_verdict):
+                        consecutive_no_progress_attempts = 0
+                    else:
+                        consecutive_no_progress_attempts += 1
+                    if self._gate_transition_allows_review_retry(
+                        plan_routed_moonspec_remediation_enabled=(
+                            plan_routed_moonspec_remediation_enabled
+                        ),
+                        transition=transition,
+                    ) and self._review_gate_retry_allowed(
                         verdict=review_verdict,
                         review_retry_count=review_retry_count,
                         max_review_attempts=max_review_attempts,
@@ -9443,6 +10230,26 @@ class MoonMindRunWorkflow:
                         raise ValueError(missing_evidence_summary)
                     break
 
+                passing_transition = self._resolve_gate_transition(
+                    verdict=review_verdict,
+                    ordered_nodes=ordered_nodes,
+                    current_index=index - 1,
+                )
+                if (
+                    plan_routed_moonspec_remediation_enabled
+                    and passing_transition.disposition == "accept"
+                    and passing_transition.routing_disposition
+                    == "exit_remediation_loop"
+                ):
+                    accepted_gate_verdict = review_verdict.verdict
+                    accepted_gate_action = passing_transition.routing_disposition
+                    self._record_moonspec_gate_transition_event(
+                        logical_step_id=node_id,
+                        node=node,
+                        verdict=review_verdict.verdict,
+                        transition=passing_transition,
+                        review_retries_consumed=review_retry_count,
+                    )
                 self._upsert_step_check(
                     node_id,
                     kind="approval_policy",
@@ -9485,6 +10292,13 @@ class MoonMindRunWorkflow:
                         or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
                     )
                 ):
+                    # Failed managed runs may still carry independently verified
+                    # terminal-checkpoint publication evidence. Project it before
+                    # the failure short-circuit so operators can recover the work.
+                    self._record_publish_result(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
                     self._plan_blocked_message = (
                         step_failure_summary
                         or self._activity_result_provider_failure_summary(
@@ -9511,6 +10325,12 @@ class MoonMindRunWorkflow:
                 or self._summary,
                 last_error=None,
             )
+            outputs = self._effective_result_outputs(execution_result)
+            if isinstance(outputs, Mapping):
+                self._record_declared_side_effect(
+                    logical_step_id=node_id,
+                    outputs=outputs,
+                )
             self._record_downstream_dependency_effects(
                 node_id,
                 updated_at=workflow.now(),
@@ -9521,8 +10341,9 @@ class MoonMindRunWorkflow:
                 updated_at=workflow.now(),
                 reason=attempt_reason,
                 status="completed",
-                terminal_disposition="accepted",
-                budget=self._review_gate_budget_metadata(
+                terminal_disposition=accepted_gate_disposition,
+                budget=accepted_gate_budget
+                or self._review_gate_budget_metadata(
                     max_review_attempts=max_review_attempts,
                     review_retry_count=review_retry_count,
                     max_consecutive_no_progress_attempts=(
@@ -9531,8 +10352,8 @@ class MoonMindRunWorkflow:
                     consecutive_no_progress_attempts=(
                         consecutive_no_progress_attempts
                     ),
-                    verdict="FULLY_IMPLEMENTED",
-                    recommended_next_action="advance",
+                    verdict=accepted_gate_verdict,
+                    recommended_next_action=accepted_gate_action,
                 )
                 if review_gate_active
                 else None,
@@ -9687,11 +10508,94 @@ class MoonMindRunWorkflow:
                             gate_result_ref=step_gate_result_ref,
                             ordered_nodes=ordered_nodes,
                             current_index=remaining_remediation_index,
+                            plan_routed_moonspec_remediation_enabled=(
+                                plan_routed_moonspec_remediation_enabled
+                            ),
                         )
                     )
                     if blocking_gate_reason and not bool(
                         continuation_decision.get("continueLoop")
                     ):
+                        transition_reason = "terminal_gate_verdict"
+                        normalized_gate = str(gate_verdict or "").upper()
+                        budget_payload = continuation_decision.get("budget")
+                        consumed_payload = (
+                            budget_payload.get("consumed")
+                            if isinstance(budget_payload, Mapping)
+                            else None
+                        )
+                        if (
+                            isinstance(consumed_payload, Mapping)
+                            and int(
+                                consumed_payload.get(
+                                    "consecutiveNoProgressAttempts", 0
+                                )
+                                or 0
+                            )
+                            >= int(
+                                budget_payload.get(
+                                    "maxConsecutiveNoProgressAttempts", 1
+                                )
+                                or 1
+                            )
+                        ):
+                            transition_reason = "no_progress_attempts_exhausted"
+                        elif (
+                            normalized_gate == "ADDITIONAL_WORK_NEEDED"
+                            and plan_routed_moonspec_remediation_enabled
+                        ):
+                            _, transition_reason = (
+                                self._resolve_next_moonspec_remediation_step(
+                                    ordered_nodes=ordered_nodes,
+                                    current_index=index - 1,
+                                )
+                            )
+                        elif normalized_gate == "NO_DETERMINATION":
+                            transition_reason = "unrecoverable_no_determination"
+                        remediation_budget = continuation_decision.get(
+                            "remediationBudget"
+                        )
+                        review_budget = continuation_decision.get("reviewGateBudget")
+                        self._workflow_control_stop = {
+                            "kind": "workflow_gate",
+                            "reasonCode": transition_reason,
+                            "logicalStepId": node_id,
+                            "verdict": normalized_gate,
+                            "gateResultRef": step_gate_result_ref,
+                            "remainingWorkRef": step_gate_result.remaining_work_ref,
+                            "reviewGateBudget": (
+                                dict(review_budget)
+                                if isinstance(review_budget, Mapping)
+                                else None
+                            ),
+                            "remediationBudget": (
+                                dict(remediation_budget)
+                                if isinstance(remediation_budget, Mapping)
+                                else None
+                            ),
+                        }
+                        control_stop_summary = {
+                            "remediation_budget_exhausted": (
+                                "Skipped because remediation budget was exhausted "
+                                "after verification attempt "
+                                f"{(self._workflow_control_stop.get('remediationBudget') or {}).get('currentAttempt')}."
+                            ),
+                            "no_remediation_successor": (
+                                "Skipped because no explicit remediation successor exists."
+                            ),
+                            "no_progress_attempts_exhausted": (
+                                "Skipped because consecutive remediation cycles "
+                                "produced no new progress."
+                            ),
+                            "terminal_gate_verdict": (
+                                "Skipped because verification returned "
+                                f"{normalized_gate}."
+                            ),
+                            "unrecoverable_no_determination": (
+                                "Skipped because verification could not obtain "
+                                "recoverable evidence."
+                            ),
+                        }.get(transition_reason, blocking_gate_reason)
                         environment_draft_publish_enabled = workflow.patched(
                             RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
                         )
@@ -9729,17 +10633,17 @@ class MoonMindRunWorkflow:
                             )
                             self._update_memo()
                             break
-                        self._plan_blocked_message = blocking_gate_reason
+                        self._plan_blocked_message = control_stop_summary
                         self._publish_status = "not_required"
-                        self._publish_reason = blocking_gate_reason
+                        self._publish_reason = control_stop_summary
                         self._publish_context["publicationBlockedBy"] = (
                             "moonspec_verify"
                         )
-                        self._summary = blocking_gate_reason
+                        self._summary = control_stop_summary
                         self._mark_remaining_plan_steps_skipped(
                             ordered_nodes=ordered_nodes,
                             completed_index=index - 1,
-                            summary=blocking_gate_reason,
+                            summary=control_stop_summary,
                         )
                         self._refresh_step_readiness(updated_at=workflow.now())
                         self._update_memo()
@@ -11200,12 +12104,20 @@ class MoonMindRunWorkflow:
         if self._codex_session_binding is not None:
             return self._codex_session_binding
 
+        recovery_agent_run_id = ""
+        if self._checkpoint_recovery_state is not None:
+            recovery_agent_run_id = str(
+                self._checkpoint_recovery_state.get("destinationAgentRunId") or ""
+            ).strip()
+        agent_run_id = recovery_agent_run_id or workflow.info().workflow_id
         session_input = CodexManagedSessionWorkflowInput(
-            agentRunId=workflow.info().workflow_id,
+            agentRunId=agent_run_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
         session_workflow_id = self._workflow_scoped_session_workflow_id(runtime_id)
+        if recovery_agent_run_id:
+            session_workflow_id = f"{session_workflow_id}:recovery"
         initial_binding = CodexManagedSessionBinding.from_input(
             workflow_id=session_workflow_id,
             session_input=session_input,
@@ -12034,6 +12946,23 @@ class MoonMindRunWorkflow:
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
+        terminal_publication = outputs.get("terminalPublication")
+        if isinstance(terminal_publication, Mapping):
+            compact_terminal = {
+                key: terminal_publication.get(key)
+                for key in (
+                    "intent", "status", "reasonCode", "source", "attempted",
+                    "commitCreated", "branchPushed", "branchName", "branchUrl",
+                    "headSha", "baseBranch", "remoteVerified", "evidenceRef",
+                    "idempotencyKey",
+                )
+                if terminal_publication.get(key) is not None
+            }
+            self._publish_context["terminalPublication"] = compact_terminal
+            if compact_terminal.get("remoteVerified") is True:
+                self._publish_context["branch"] = compact_terminal.get("branchName")
+                self._publish_context["headSha"] = compact_terminal.get("headSha")
+                self._publish_context["baseRef"] = compact_terminal.get("baseBranch")
         self._record_no_commit_publish_evidence(outputs)
 
         not_required_reason = self._publish_not_required_reason(outputs)
@@ -12060,8 +12989,11 @@ class MoonMindRunWorkflow:
         self._record_publish_metadata_context(outputs)
 
         if push_status == "no_commits":
-            if publish_mode == "pr" and self._pr_publish_optional_for_task(
-                parameters, include_applied_templates=True
+            if publish_mode == "pr" and (
+                self._pr_publish_optional_for_task(
+                    parameters, include_applied_templates=True
+                )
+                or self._is_canonical_no_commit_task(parameters)
             ):
                 self._publish_status = "not_required"
                 self._publish_reason = self._compose_no_commit_publish_reason(
@@ -12788,6 +13720,18 @@ class MoonMindRunWorkflow:
 
     def _record_no_commit_publish_evidence(self, outputs: Mapping[str, Any]) -> None:
         push_status = self._coerce_text(outputs.get("push_status"), max_chars=80)
+        if self._authoritative_publish_outcome_enabled and push_status == "pushed":
+            stale_no_commit = self._publish_context.pop("noCommitPublish", None)
+            stale_no_change = self._publish_context.pop("noChangePublish", None)
+            if (
+                stale_no_commit is not None or stale_no_change is not None
+            ) and self._publish_status in {
+                "not_required",
+                "skipped",
+            }:
+                self._publish_status = None
+                self._publish_reason = None
+            return
         if push_status == "no_commits":
             self._publish_context["noCommitPublish"] = {"status": "no_commits"}
             return
@@ -12870,6 +13814,20 @@ class MoonMindRunWorkflow:
         if not skill_names:
             return False
         return skill_names.issubset(_PR_OPTIONAL_TASK_SKILLS)
+
+    def _is_canonical_no_commit_task(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        task_payload = self._mapping_value(parameters, "workflow")
+        if not task_payload:
+            task_payload = self._mapping_value(parameters, "task")
+        return bool(
+            self._task_applied_template_slugs(parameters, task_payload)
+            & _CANONICAL_NO_COMMIT_TASK_PRESETS
+        )
 
     def _task_skill_names(
         self,
@@ -13063,7 +14021,8 @@ class MoonMindRunWorkflow:
         parts: list[str] = []
         if publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "No pull request was required because this Jira-oriented workflow "
+                "No pull request was required because this issue implementation "
+                "workflow "
                 "completed without repository changes"
             )
         elif publish_mode == "pr":
@@ -13086,7 +14045,7 @@ class MoonMindRunWorkflow:
             parts.append(f"final agent report: {operator_summary}")
         elif publish_mode == "pr" and pr_publish_optional:
             parts.append(
-                "no structured agent report confirmed whether the Jira issue was "
+                "no structured agent report confirmed whether the issue was "
                 "already implemented"
             )
 
@@ -13422,6 +14381,30 @@ class MoonMindRunWorkflow:
                 )
 
         publish_mode = self._publish_mode(parameters)
+        if (
+            self._authoritative_publish_outcome_enabled
+            and self._moonspec_draft_publication_reason is not None
+        ):
+            pull_request_url = self._coerce_text(
+                self._pull_request_url
+                or self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+            if pull_request_url:
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification; incomplete work was "
+                    f"preserved in draft pull request {pull_request_url}. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
+            return (
+                "failed",
+                "Workflow failed MoonSpec verification and draft pull request "
+                "publication did not complete. "
+                f"{self._moonspec_draft_publication_reason}",
+                True,
+            )
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
@@ -13446,6 +14429,15 @@ class MoonMindRunWorkflow:
                     "failed",
                     "reportOutput requested but no final report was created",
                     True,
+                )
+            if self._is_canonical_no_commit_outcome(parameters):
+                return (
+                    "no_commit",
+                    self._compose_success_completion_message(
+                        publish_detail=self._publish_reason,
+                        publish_mode=publish_mode,
+                    ),
+                    False,
                 )
             return (
                 "success",
@@ -13521,6 +14513,20 @@ class MoonMindRunWorkflow:
             self._compose_success_completion_message(publish_mode=publish_mode),
             False,
         )
+
+    def _is_canonical_no_commit_outcome(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> bool:
+        if not self._canonical_no_commit_outcome_enabled:
+            return False
+        if self._publish_mode(parameters) not in {"pr", "branch"}:
+            return False
+        if self._report_requested(parameters):
+            return False
+        if not self._has_no_commit_publish_evidence():
+            return False
+        return not self._pull_request_created() and not self._branch_published()
 
     def _missing_required_outcome_reason(
         self,
@@ -16785,6 +17791,27 @@ class MoonMindRunWorkflow:
         if not workflow.patched(RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH):
             return None, None
         try:
+            failed_step_id = self._recovery_failed_step_id or self._coerce_text(
+                (self._failure_diagnostic or {}).get("stepId"), max_chars=200
+            )
+            capture_input = self._step_workspace_capture_inputs.get(
+                failed_step_id or "", {}
+            )
+            capability_payload = capture_input.get("runtimeCapabilities")
+            capabilities = (
+                RuntimeExecutionCapabilities.model_validate(capability_payload)
+                if isinstance(capability_payload, Mapping)
+                else None
+            )
+            restore_route_registered = False
+            if capabilities and capabilities.checkpoint_restore_activity:
+                try:
+                    DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        capabilities.checkpoint_restore_activity
+                    )
+                    restore_route_registered = True
+                except Exception:
+                    restore_route_registered = False
             manifest = build_failed_run_recovery_manifest(
                 workflow_id=workflow.info().workflow_id,
                 run_id=workflow.info().run_id,
@@ -16798,6 +17825,12 @@ class MoonMindRunWorkflow:
                 checkpoint_validation_failure=(
                     self._recovery_checkpoint_validation_failure
                 ),
+                checkpoint_kind=self._coerce_text(
+                    capture_input.get("kind") or capture_input.get("checkpointKind"),
+                    max_chars=100,
+                ),
+                runtime_capabilities=capabilities,
+                restore_route_registered=restore_route_registered,
             )
         except Exception as exc:
             self._get_logger().warning(
@@ -16961,6 +17994,7 @@ class MoonMindRunWorkflow:
                 workspace_changes=self._incident_workspace_changes(),
                 logs_ref=self._logs_ref,
                 artifact_refs=self._incident_artifact_refs(),
+                control_stop=self._workflow_control_stop,
             )
         except Exception as exc:
             self._get_logger().warning(
@@ -16998,6 +18032,10 @@ class MoonMindRunWorkflow:
             "evidencePresent": present_kinds,
             "traceBoundaries": [span.boundary for span in manifest.trace_spans],
         }
+        if manifest.control_stop is not None:
+            summary["controlStop"] = manifest.control_stop.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
         if manifest.cost is not None:
             summary["costObserved"] = manifest.cost.observed_available
         if manifest.provider is not None and manifest.provider.provider_error_class:
@@ -17071,7 +18109,11 @@ class MoonMindRunWorkflow:
                             or "No repository changes were available to commit or publish."
                         )
                     elif self._publish_status == "not_required":
-                        code = "NO_COMMIT" if publish_mode == "auto" else "PUBLISH_DISABLED"
+                        code = (
+                            "NO_COMMIT"
+                            if self._is_canonical_no_commit_outcome(parameters)
+                            else "PUBLISH_DISABLED"
+                        )
                         publish_status = "skipped"
                         publish_reason = (
                             self._publish_reason or "publish output not required"
@@ -17181,6 +18223,35 @@ class MoonMindRunWorkflow:
                         self._publish_context.get("blockedReason")
                     )
             if self._publish_context:
+                terminal_publication = self._publish_context.get(
+                    "terminalPublication"
+                )
+                if isinstance(terminal_publication, Mapping):
+                    # Keep preservation evidence on the canonical publish block
+                    # consumed by terminal-state persistence and execution detail.
+                    # The failed finish outcome above remains authoritative.
+                    finish_summary["publish"].update(
+                        {
+                            key: terminal_publication.get(key)
+                            for key in (
+                                "intent",
+                                "status",
+                                "reasonCode",
+                                "source",
+                                "attempted",
+                                "commitCreated",
+                                "branchPushed",
+                                "branchName",
+                                "branchUrl",
+                                "headSha",
+                                "baseBranch",
+                                "remoteVerified",
+                                "evidenceRef",
+                                "idempotencyKey",
+                            )
+                            if terminal_publication.get(key) is not None
+                        }
+                    )
                 finish_summary["publishContext"] = dict(self._publish_context)
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:

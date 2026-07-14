@@ -3914,6 +3914,7 @@ def _serialize_execution(
         priority=priority,
         starting_branch=starting_branch,
         target_branch=target_branch,
+        output_branch=_verified_output_branch(finish_summary),
         repository=repository,
         pr_url=pr_url,
         publish_mode=publish_mode,
@@ -3994,6 +3995,51 @@ def _finish_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
     if isinstance(finish_summary, Mapping):
         return dict(finish_summary)
     return None
+
+
+def _verified_output_branch(
+    finish_summary: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Project only independently verified publication evidence."""
+    if not isinstance(finish_summary, Mapping):
+        return None
+    publish = finish_summary.get("publish")
+    context = finish_summary.get("publishContext")
+    if not isinstance(publish, Mapping):
+        publish = {}
+    if not isinstance(context, Mapping):
+        context = {}
+    terminal = publish.get("terminalPublication")
+    if not isinstance(terminal, Mapping):
+        terminal = context.get("terminalPublication")
+    source = terminal if isinstance(terminal, Mapping) else {**context, **publish}
+    remote_verified = source.get("remoteVerified") is True
+    status_value = str(source.get("status") or publish.get("status") or "").strip()
+    if not remote_verified or status_value not in {"pushed", "already_published", "published"}:
+        return None
+    name = str(
+        source.get("branchName")
+        or source.get("branch")
+        or context.get("branch")
+        or ""
+    ).strip()
+    if not name:
+        return None
+    intent_value = source.get("intent")
+    if intent_value not in {"normal", "terminal_checkpoint"}:
+        intent_value = "normal"
+    result: dict[str, Any] = {
+        "name": name,
+        "headSha": source.get("headSha") or context.get("headSha"),
+        "baseBranch": source.get("baseBranch") or context.get("baseRef"),
+        "intent": intent_value,
+        "status": status_value,
+        "evidenceRef": source.get("evidenceRef"),
+    }
+    url = source.get("branchUrl")
+    if isinstance(url, str) and url.startswith("https://github.com/"):
+        result["url"] = url
+    return {key: value for key, value in result.items() if value not in (None, "")}
 
 
 def _proposal_summary_from_memo(memo: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -6379,7 +6425,8 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
     if diagnostics and _is_environment_blocked_manifest(manifest):
         return {
             "eligible": False,
-            "defaultAction": "environment_fix",
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "defaultAction": "fix_environment",
             "disabledReasonCode": "environment_invalid",
             "requiredBoundary": required_boundary,
             "checkpointRef": None,
@@ -6401,14 +6448,15 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         }
     if checkpoint_ref:
         return {
-            "eligible": True,
-            "defaultAction": "resume_from_checkpoint",
-            "disabledReasonCode": None,
-            "requiredBoundary": required_boundary,
+            "eligible": False,
+            "requestedAction": "resume_from_workspace_checkpoint",
+            "defaultAction": "full_retry",
+            "disabledReasonCode": "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING",
+            "checkpointBoundary": required_boundary,
             "checkpointRef": checkpoint_ref,
             "sourceWorkflowId": source_workflow_id,
             "sourceRunId": source_run_id,
-            "operatorGuidance": "resume",
+            "operatorGuidance": "full_retry",
             "evidence": [
                 _evidence_ref_status(
                     category="checkpoint",
@@ -6421,9 +6469,10 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         }
     return {
         "eligible": False,
+        "requestedAction": "resume_from_workspace_checkpoint",
         "defaultAction": "full_retry",
-        "disabledReasonCode": "missing_required_checkpoint_boundary",
-        "requiredBoundary": required_boundary,
+        "disabledReasonCode": "CHECKPOINT_ARTIFACT_INVALID",
+        "checkpointBoundary": required_boundary,
         "checkpointRef": None,
         "sourceWorkflowId": source_workflow_id,
         "sourceRunId": source_run_id,

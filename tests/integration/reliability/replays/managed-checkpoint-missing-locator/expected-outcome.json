@@ -1,0 +1,11 @@
+{
+  "activityCalls": [],
+  "captureOutcome": {
+    "status": "deferred",
+    "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+    "boundary": "after_prepare",
+    "captureAuthority": "managed_runtime",
+    "captureActivity": "agent_runtime.capture_workspace_checkpoint",
+    "capabilityCriticality": "recoverability_only"
+  }
+}

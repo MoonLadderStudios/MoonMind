@@ -534,8 +534,10 @@ def test_runtime_execution_capabilities_consume_precise_codex_results() -> None:
     assert isinstance(capabilities, RuntimeExecutionCapabilities)
     assert capabilities.workspace_authority == "managed_runtime"
     assert capabilities.supports_same_session_continuation is True
-    assert capabilities.checkpoint_capture_kinds == ()
+    assert capabilities.checkpoint_capture_kinds == ("worktree_archive",)
     assert capabilities.checkpoint_restore_kinds == ()
-    assert capabilities.checkpoint_capture_activity is None
+    assert capabilities.checkpoint_capture_activity == (
+        "agent_runtime.capture_workspace_checkpoint"
+    )
     assert capabilities.checkpoint_restore_activity is None
     assert capabilities.post_execution_checkpoint_criticality == "recoverability_only"

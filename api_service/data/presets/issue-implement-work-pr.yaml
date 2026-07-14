@@ -232,6 +232,7 @@ steps:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 1
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+    moonSpecFinalRemediationGate: '{{ inputs.remediation_max_attempts | int == 1 }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
@@ -335,6 +336,7 @@ steps:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 2
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+    moonSpecFinalRemediationGate: '{{ inputs.remediation_max_attempts | int == 2 }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
@@ -438,6 +440,7 @@ steps:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 3
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+    moonSpecFinalRemediationGate: '{{ inputs.remediation_max_attempts | int == 3 }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
@@ -541,6 +544,7 @@ steps:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 4
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+    moonSpecFinalRemediationGate: '{{ inputs.remediation_max_attempts | int == 4 }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
@@ -644,6 +648,7 @@ steps:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 5
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
+    moonSpecFinalRemediationGate: '{{ inputs.remediation_max_attempts | int == 5 }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 
@@ -747,7 +752,7 @@ steps:
     issueImplementRole: moonspec-verification-gate
     moonSpecRemediationAttempt: 6
     moonSpecRemediationMaxAttempts: '{{ inputs.remediation_max_attempts }}'
-    moonSpecFinalRemediationGate: true
+    moonSpecFinalRemediationGate: '{{ inputs.remediation_max_attempts | int == 6 }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} and inspect the latest
     remediation result before doing anything.
 

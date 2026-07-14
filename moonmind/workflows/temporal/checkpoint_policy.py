@@ -164,7 +164,14 @@ def resolve_checkpoint_policy(
             supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
         )
 
-    kind = "git_patch" if token == "after_execution" else "worktree_archive"
+    preferred_kind = (
+        "git_patch" if token == "after_execution" else "worktree_archive"
+    )
+    kind = (
+        preferred_kind
+        if preferred_kind in capabilities.checkpoint_capture_kinds
+        else capabilities.checkpoint_capture_kinds[0]
+    )
     validate_runtime_preflight(
         capabilities,
         workspace_authority=authority,

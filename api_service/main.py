@@ -652,6 +652,73 @@ def _should_reconcile_openrouter_codex_file_templates(
         _legacy_codex_openrouter_qwen36_plus_file_templates(),
     )
 
+_LEGACY_SETUP_PROFILE_SPECS = {
+    "claude_anthropic_default": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "claude_anthropic": (
+        "claude_code",
+        "anthropic",
+        "Claude Code (setup required)",
+    ),
+    "codex_openai_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "codex_default": ("codex_cli", "openai", "Codex CLI (setup required)"),
+    "gemini_google_default": (
+        "gemini_cli",
+        "google",
+        "Gemini CLI (setup required)",
+    ),
+    "gemini_default": ("gemini_cli", "google", "Gemini CLI (setup required)"),
+}
+
+
+def _is_untouched_legacy_setup_profile(profile_id: str, row: dict[str, Any]) -> bool:
+    spec = _LEGACY_SETUP_PROFILE_SPECS.get(profile_id)
+    if spec is None:
+        return False
+    runtime_id, provider_id, account_label = spec
+
+    def enum_value(key: str) -> Any:
+        value = row.get(key)
+        return getattr(value, "value", value)
+
+    return (
+        row.get("runtime_id") == runtime_id
+        and row.get("provider_id") == provider_id
+        and row.get("account_label") == account_label
+        and row.get("provider_label")
+        == {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}[
+            provider_id
+        ]
+        and row.get("default_model") is None
+        and row.get("default_effort") is None
+        and row.get("model_overrides") is None
+        and row.get("enabled") is False
+        and row.get("is_default") is False
+        and enum_value("credential_source") == "none"
+        and enum_value("runtime_materialization_mode") == "api_key_env"
+        and enum_value("auth_state") == "not_configured"
+        and enum_value("disabled_reason") == "missing_credentials"
+        and not row.get("secret_refs")
+        and row.get("tags") is None
+        and row.get("priority") == 100
+        and row.get("clear_env_keys") is None
+        and row.get("env_template") is None
+        and row.get("file_templates") is None
+        and row.get("home_path_overrides") is None
+        and row.get("command_behavior") is None
+        and row.get("max_parallel_runs") == 1
+        and row.get("cooldown_after_429_seconds") == 900
+        and enum_value("rate_limit_policy") == "backoff"
+        and row.get("max_lease_duration_seconds") == 7200
+        and row.get("volume_ref") is None
+        and row.get("volume_mount_path") is None
+        and row.get("last_auth_method") is None
+    )
+
+
 async def _auto_seed_provider_profiles() -> list[str]:
     """Seed well-known provider profiles that are missing from the DB.
 
@@ -989,19 +1056,31 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.runtime_id,
                     ManagedAgentProviderProfile.provider_id,
                     ManagedAgentProviderProfile.provider_label,
+                    ManagedAgentProviderProfile.account_label,
                     ManagedAgentProviderProfile.default_model,
+                    ManagedAgentProviderProfile.default_effort,
+                    ManagedAgentProviderProfile.model_overrides,
+                    ManagedAgentProviderProfile.tags,
+                    ManagedAgentProviderProfile.priority,
                     ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
+                    ManagedAgentProviderProfile.home_path_overrides,
                     ManagedAgentProviderProfile.credential_source,
                     ManagedAgentProviderProfile.runtime_materialization_mode,
                     ManagedAgentProviderProfile.secret_refs,
                     ManagedAgentProviderProfile.env_template,
                     ManagedAgentProviderProfile.enabled,
+                    ManagedAgentProviderProfile.is_default,
                     ManagedAgentProviderProfile.auth_state,
                     ManagedAgentProviderProfile.disabled_reason,
                     ManagedAgentProviderProfile.command_behavior,
                     ManagedAgentProviderProfile.last_auth_method,
+                    ManagedAgentProviderProfile.volume_ref,
+                    ManagedAgentProviderProfile.volume_mount_path,
                     ManagedAgentProviderProfile.max_parallel_runs,
+                    ManagedAgentProviderProfile.cooldown_after_429_seconds,
+                    ManagedAgentProviderProfile.rate_limit_policy,
+                    ManagedAgentProviderProfile.max_lease_duration_seconds,
                 )
             )
             existing_rows = existing_result.all()
@@ -1010,48 +1089,71 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "runtime_id": row.runtime_id,
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
+                    "account_label": row.account_label,
                     "default_model": row.default_model,
+                    "default_effort": row.default_effort,
+                    "model_overrides": row.model_overrides,
+                    "tags": row.tags,
+                    "priority": row.priority,
                     "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
+                    "home_path_overrides": row.home_path_overrides,
                     "credential_source": row.credential_source,
                     "runtime_materialization_mode": row.runtime_materialization_mode,
                     "secret_refs": row.secret_refs,
                     "env_template": row.env_template,
                     "enabled": row.enabled,
+                    "is_default": row.is_default,
                     "auth_state": row.auth_state,
                     "disabled_reason": row.disabled_reason,
                     "command_behavior": row.command_behavior,
                     "last_auth_method": row.last_auth_method,
+                    "volume_ref": row.volume_ref,
+                    "volume_mount_path": row.volume_mount_path,
                     "max_parallel_runs": row.max_parallel_runs,
+                    "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
+                    "rate_limit_policy": row.rate_limit_policy,
+                    "max_lease_duration_seconds": row.max_lease_duration_seconds,
                 }
                 for row in existing_rows
             }
             existing_ids: set[str] = set(existing_by_id)
 
-            deprecated_gemini_profile_ids = {
-                "gemini_google_default",
-                "gemini_default",
+            legacy_profile_ids_to_delete = {
+                profile_id
+                for profile_id, row in existing_by_id.items()
+                if _is_untouched_legacy_setup_profile(profile_id, row)
             }
-            deprecated_gemini_profile_ids_to_delete = (
-                deprecated_gemini_profile_ids.intersection(existing_ids)
-            )
             needs_commit = False
-            if deprecated_gemini_profile_ids_to_delete:
+            if legacy_profile_ids_to_delete:
                 await session.execute(
                     delete(ManagedAgentProviderProfile).where(
                         ManagedAgentProviderProfile.profile_id.in_(
-                            deprecated_gemini_profile_ids_to_delete
+                            legacy_profile_ids_to_delete
                         ),
-                        ManagedAgentProviderProfile.runtime_id == "gemini_cli",
                     )
                 )
                 needs_commit = True
                 existing_by_id = {
                     profile_id: row
                     for profile_id, row in existing_by_id.items()
-                    if profile_id not in deprecated_gemini_profile_ids_to_delete
+                    if profile_id not in legacy_profile_ids_to_delete
                 }
                 existing_ids = set(existing_by_id)
+                logger.info(
+                    "Removed %s untouched legacy provider setup stubs: %s",
+                    len(legacy_profile_ids_to_delete),
+                    ", ".join(sorted(legacy_profile_ids_to_delete)),
+                )
+
+            edited_legacy_profile_ids = sorted(
+                set(_LEGACY_SETUP_PROFILE_SPECS).intersection(existing_ids)
+            )
+            if edited_legacy_profile_ids:
+                logger.warning(
+                    "Preserved configured legacy provider profiles for manual review: %s",
+                    ", ".join(edited_legacy_profile_ids),
+                )
 
             first_party_env_api_profiles = {
                 "codex_openai_api": "OPENAI_API_KEY",

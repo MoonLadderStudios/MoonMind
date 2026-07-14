@@ -21,15 +21,31 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
-  /* Highlight-edge treatment: a bright top-edge inset, a faint lit
-   * bottom-edge inset (accent lightened toward white), and a tight accent
-   * glow hugging the bottom edge so it reads as backlit. Deliberately NO
-   * perimeter ring: the sides stay open — light on the top and bottom edges
-   * only — rather than reading as an outlined button. */
-  --mm-shadow-highlight-edge:
-    inset 0 1px 0 rgb(255 255 255 / 0.26),
-    inset 0 -1px 0 rgb(167 139 250 / 0.4),
-    0 3px 9px -2px rgb(var(--mm-accent) / 0.75);
+  /* Highlight-edge treatment, liquid-glass style. The edge light is a masked
+   * gradient ring (--mm-highlight-edge-ring, applied via pseudo-element):
+   * two corner-anchored radial gradients — white bleeding out of the top-left
+   * corner, violet out of the bottom-right — fading to nothing before they
+   * reach the top-right and bottom-left corners. Radials (not a 135° linear)
+   * so the light hugs the corners at any button aspect ratio, and a gradient
+   * (not box-shadow insets) because a shadow cannot fade along an edge. The
+   * shadow tokens carry only the faint under-glow, kept almost entirely on
+   * the bottom edge (the negative spread pulls the blur off the sides); the
+   * hover variant swaps it to light blue. */
+  --mm-highlight-edge-ring:
+    radial-gradient(
+      130% 220% at 0% 0%,
+      rgb(255 255 255 / 0.6) 0%,
+      rgb(255 255 255 / 0.12) 22%,
+      transparent 45%
+    ),
+    radial-gradient(
+      130% 220% at 100% 100%,
+      rgb(167 139 250 / 0.7) 0%,
+      rgb(167 139 250 / 0.16) 22%,
+      transparent 45%
+    );
+  --mm-shadow-highlight-edge: 0 5px 9px -5px rgb(var(--mm-accent) / 0.45);
+  --mm-shadow-highlight-edge-hover: 0 5px 9px -5px rgb(110 180 255 / 0.6);
   --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
   --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
   --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
@@ -96,6 +112,12 @@
   --workflow-list-column-workflow-width: 20rem;
   --workflow-list-divider-width: 1px;
   --workflow-list-divider-color: rgb(var(--mm-border) / 0.72);
+  /* Visible block size available to a collection workspace below the dashboard
+   * chrome (masthead, banners, alert strip). The route shell overrides this
+   * precisely from the panel's top coordinate + visualViewport height; the
+   * 100dvh default keeps the shared rail full-height before/without that
+   * measurement so its size never depends on the row count. */
+  --mm-collection-workspace-block-size: 100dvh;
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -678,18 +700,46 @@ h1 {
   transition: background 130ms ease, color 130ms ease;
 }
 
-/* Workflows and Create adopt the System trigger's original highlight-edge
- * treatment: a bright top-edge inset, a hairline ring that closes the shape
- * (so the bottom edge reads as lit, not open), and an accent under-glow. The
- * mid-strength idle glow alone is too diffuse to register against the
- * masthead's glass fill, so the ring carries the bottom-edge light. Scoped to
- * `.route-nav-primary` so the System popover menu items — which also match
- * `.route-nav a` — keep their flat menu-row look. All three shadows are
- * non-layout-affecting, so the link box height, and thus the active underline
- * on the masthead edge, is unchanged. Higher-specificity :hover /
- * :focus-visible / .active rules still win, so those states are preserved. */
+/* Workflows and Create share the liquid-glass highlight-edge treatment with
+ * the System trigger. Scoped to `.route-nav-primary` so the System popover
+ * menu items — which also match `.route-nav a` — keep their flat menu-row
+ * look. The shadows are non-layout-affecting and the hover scale is a
+ * transform, so the link box height, and thus the active underline on the
+ * masthead edge, is unchanged. :focus-visible / .active rules have higher
+ * specificity and still win. */
 .route-nav-primary a {
   box-shadow: var(--mm-shadow-highlight-edge);
+  transition: var(--mm-control-transition), color 130ms ease;
+}
+
+/* Hovered nav buttons brighten, grow slightly, and swap the purple under-glow
+ * for light blue — matching the System trigger's hover feel. */
+.route-nav-primary a:hover {
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
+}
+
+/* Diagonal liquid-glass edge: a 1px gradient ring drawn on a pseudo-element
+ * (the border-box gradient is masked down to the ring between border-box and
+ * content-box), bright white at the top-left corner and violet at the
+ * bottom-right, fading to nothing at the other two corners. The radio group
+ * uses ::after because its ::before is the sliding selection thumb. The ring
+ * scales with the hover transform and never intercepts pointer events. */
+.route-nav-primary a::before,
+.dashboard-system-trigger::before,
+.workflow-list-display-control::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--mm-highlight-edge-ring);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }
 
 .route-nav-icon {
@@ -746,12 +796,10 @@ h1 {
   padding: 0.48rem 0.82rem;
   border: 0;
   border-radius: 0.5rem;
-  /* Highlight-edge button: transparent fill with a bright top-edge inset, a
-   * hairline ring that closes the shape so the bottom edge reads as lit, and
-   * an accent under-glow (the trigger's original look, stated explicitly
-   * rather than inherited from the global button rules). All three shadows
-   * are non-layout-affecting, so the box size — and therefore the active
-   * underline position on the masthead's bottom edge — is unchanged. */
+  /* Liquid-glass highlight-edge button: transparent fill with the shared
+   * asymmetric edge shadows. Non-layout-affecting, so the box size — and
+   * therefore the active underline position on the masthead's bottom edge —
+   * is unchanged. */
   background: transparent;
   box-shadow: var(--mm-shadow-highlight-edge);
   color: rgb(var(--mm-ink) / 0.82);
@@ -760,10 +808,20 @@ h1 {
   cursor: pointer;
 }
 
+/* The open and hover states share the highlighted surface and cyan under-glow.
+ * Stating box-shadow here also keeps the global button:hover rule (ring + wide
+ * purple glow, for filled CTAs) from leaking onto the trigger. */
 .dashboard-system-trigger:hover,
 .dashboard-system-trigger[aria-expanded="true"] {
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+}
+
+/* Keep hover-only motion and brightening out of the persistent open state. */
+.dashboard-system-trigger:hover {
+  transform: scale(var(--mm-control-hover-scale));
+  filter: brightness(1.08) saturate(1.04);
 }
 
 .dashboard-system-trigger.active {
@@ -6066,6 +6124,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .workflow-start-heading {
   margin-bottom: 0.35rem;
+  text-align: center;
 }
 
 .queue-advanced-settings-body {
@@ -7809,6 +7868,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     transform: none;
   }
 
+  /* The collapsed nav renders flat menu rows: drop the desktop liquid-glass
+   * gradient ring along with the shadows it accompanies. */
+  .route-nav-primary a::before {
+    content: none;
+  }
+
   .route-nav a:hover {
     color: white;
     background: var(--mm-mobile-nav-hover);
@@ -7881,6 +7946,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     transform: none !important;
   }
 
+  .route-nav-primary a,
   .dashboard-system-trigger,
   .dashboard-system-popover {
     animation: none !important;
@@ -7921,6 +7987,30 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   column-gap: 1.25rem;
   width: 100%;
   max-width: none;
+  /* The workspace owns its visible block size (route area below the dashboard
+   * chrome), so the sidebar rail can fill it regardless of how many rows the
+   * list holds. This is a floor: a taller detail pane still grows the shell. */
+  min-block-size: var(--mm-collection-workspace-block-size);
+}
+
+/*
+ * The collection rail's separator is its own right border, not a pseudo-element
+ * pinned beside the list scrollbar. The scrollbar is painted inside this border
+ * regardless of its platform-specific width, so the line stays at the rail's
+ * true outer edge whether or not a scrollbar exists. Scoped to the shared
+ * edge-rail layouts (Workflows, Recurring, Skills) via the neutral
+ * `.collection-sidebar` primitive so all three stay consistent. Global
+ * border-box sizing keeps the border inside the existing rail width (no shift).
+ */
+.workflow-workspace-shell > .collection-sidebar,
+.collection-workspace--edge-rail > .collection-sidebar {
+  align-self: stretch;
+  block-size: var(--mm-collection-workspace-block-size);
+  max-block-size: var(--mm-collection-workspace-block-size);
+  border-inline-end:
+    var(--workflow-list-divider-width)
+    solid
+    var(--workflow-list-divider-color);
 }
 
 .collection-workspace {
@@ -7977,20 +8067,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .workflow-workspace-sidebar {
-  /* Width of the sidebar list's thin scrollbar; the divider below sits directly
-   * to its left, and the ::-webkit-scrollbar rule keeps the two in sync. */
-  --workflow-list-sidebar-scrollbar-width: 6px;
-
   position: sticky;
   top: 0;
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-height: 100vh;
   overflow: visible;
   /* Not a card: the sidebar is a plain left column. It is separated from the
-   * detail by the grid gap plus a single thin divider (::after) that sits
-   * directly to the left of the list scrollbar — see below. */
+   * detail by the grid gap plus its own right border (border-inline-end on the
+   * shared collection rail — see the edge-rail block above). The rail fills the
+   * workspace block size; the list below is the only scroll container. */
   padding: 0;
   /* MM-1138 Q1: bleed the rail's left edge to the screen edge like the list
    * table's first column. The right edge stays on the grid-column boundary, so
@@ -8169,23 +8255,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /*
- * A thin vertical line directly to the left of the sidebar scrollbar, running
- * the full height of the rail (over the sticky header too). It is scoped to the
- * sidebar, so the full-screen workflow table — which has no sidebar and no inner
- * scrollbar — never draws it. Offset by the scrollbar width so the scrollbar
- * sits in the narrow gutter just to its right; z-index clears the sticky header
- * (z-index 8) and pinned list (z-index 6) so the line stays continuous.
+ * The old scrollbar-positioned divider is gone: the rail's separator is now its
+ * own border-inline-end (see the edge-rail block above), which is deterministic
+ * across scrollbar width, overlay scrollbars, and display scaling. Keep the
+ * pseudo-element explicitly empty so nothing re-draws a second line.
  */
 .workflow-workspace-sidebar::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: var(--workflow-list-sidebar-scrollbar-width);
-  z-index: 9;
-  width: var(--workflow-list-divider-width);
-  background: var(--workflow-list-divider-color);
-  pointer-events: none;
+  content: none;
 }
 
 .workflow-workspace-sidebar-header {
@@ -8240,6 +8316,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-sidebar-table {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* Pack the header and list rows at the top. The rail now owns a full
+   * `--mm-collection-workspace-block-size` height and this table fills it
+   * (flex: 1 1 auto), so a short list leaves free vertical space. Without an
+   * explicit `align-content`, a grid defaults to `stretch` and would grow the
+   * auto rows — most visibly ballooning the sticky header — to absorb that
+   * slack. `start` keeps the header and rows at their natural height and lets
+   * the leftover space fall below the list instead. */
+  align-content: start;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -8249,10 +8333,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin: 0;
   scrollbar-width: thin;
   scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
+  /* Reserve the scrollbar gutter so the header and rows keep a constant width
+   * whether or not a classic scrollbar is painted. The rail's right border is
+   * outside this element and stays put regardless. This is purely cosmetic —
+   * no separator geometry depends on the scrollbar width. */
+  scrollbar-gutter: stable;
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar {
-  width: var(--workflow-list-sidebar-scrollbar-width);
+  width: 6px;
 }
 
 .workflow-workspace-sidebar-table::-webkit-scrollbar-thumb {
