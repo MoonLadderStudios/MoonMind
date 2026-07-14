@@ -26,7 +26,7 @@ JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
 def _request(tmp_path, **spec_overrides) -> ContainerJobActivityRequest:
     spec = {
         "image": "python:3.13",
-        "workspaceRef": {"kind": "artifact-workspace", "artifactRef": "art_workspace"},
+        "workspaceRef": {"kind": "sandbox", "workspaceId": "art_workspace"},
         "command": ["python", "-V"],
         "resources": {"cpuMillis": 1000, "memoryMiB": 512},
         "timeoutSeconds": 60,

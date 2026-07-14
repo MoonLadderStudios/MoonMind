@@ -2647,6 +2647,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     container_backend_settings.default_backend_ref,
                 ),
                 secret_resolver=_container_job_secret_resolver(),
+                managed_run_store=run_store,
             )
             if container_backend_settings.enabled:
                 # Fail fast at startup when the deployment-selected endpoint is
