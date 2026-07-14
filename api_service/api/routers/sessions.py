@@ -264,9 +264,12 @@ async def post_session_event(
     if event_type == "message":
         try:
             control = ArtifactSessionControlRequest(
+                controlRequestId=payload.get("controlRequestId"),
+                idempotencyKey=payload.get("idempotencyKey"),
                 action="continue_same_session",
                 message=payload.get("message"),
                 reason=payload.get("reason"),
+                expectedSessionEpoch=payload.get("expectedSessionEpoch"),
             )
         except ValidationError as exc:
             raise HTTPException(
@@ -276,8 +279,12 @@ async def post_session_event(
     elif event_type == "interrupt":
         try:
             control = ArtifactSessionControlRequest(
+                controlRequestId=payload.get("controlRequestId"),
+                idempotencyKey=payload.get("idempotencyKey"),
                 action="interrupt_turn",
                 reason=payload.get("reason"),
+                expectedSessionEpoch=payload.get("expectedSessionEpoch"),
+                expectedTurnId=payload.get("expectedTurnId"),
             )
         except ValidationError as exc:
             raise HTTPException(
@@ -287,8 +294,11 @@ async def post_session_event(
     elif event_type == "clear_session":
         try:
             control = ArtifactSessionControlRequest(
+                controlRequestId=payload.get("controlRequestId"),
+                idempotencyKey=payload.get("idempotencyKey"),
                 action="clear_session",
                 reason=payload.get("reason"),
+                expectedSessionEpoch=payload.get("expectedSessionEpoch"),
             )
         except ValidationError as exc:
             raise HTTPException(
@@ -342,9 +352,12 @@ async def resolve_session_elicitation(
             ) from exc
         raise
     control = ArtifactSessionControlRequest(
+        controlRequestId=f"elicitation:{session_id}:{elicitation_id}:{decision}",
+        idempotencyKey=f"elicitation:{session_id}:{elicitation_id}:{decision}",
         action="continue_same_session",
         message=_ELICITATION_DECISION_MESSAGES[decision],
         reason=f"session_elicitation:{elicitation_id}:{decision}",
+        expectedSessionEpoch=record.session_epoch,
     )
     response = await control_agent_run_artifact_session(
         agent_run_id=record.agent_run_id,
