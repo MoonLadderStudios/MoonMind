@@ -567,6 +567,9 @@ RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
 RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
+RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
+    "run-managed-checkpoint-locator-guard-v1"
+)
 RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v1"
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
@@ -5029,6 +5032,26 @@ class MoonMindRunWorkflow:
                     and not managed_capture_enabled
                     else resolved_policy.capture_activity
                 ),
+                "capabilityCriticality": resolved_policy.criticality,
+            }
+            return None
+
+        if (
+            resolved_policy.capture_activity
+            == "agent_runtime.capture_workspace_checkpoint"
+            and workflow.patched(RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH)
+            and not isinstance(capture_input.get("workspaceLocator"), Mapping)
+        ):
+            # The parent cannot address a managed workspace until AgentRun returns
+            # the runtime-owned locator. In particular, after_prepare and
+            # before_execution run before the child exists. Defer capture instead
+            # of sending a payload the strict activity contract must reject.
+            self._step_checkpoint_capture_outcomes[logical_step_id] = {
+                "status": "deferred",
+                "failureCode": "CHECKPOINT_WORKSPACE_LOCATOR_UNAVAILABLE",
+                "boundary": str(boundary),
+                "captureAuthority": resolved_policy.capture_authority,
+                "captureActivity": resolved_policy.capture_activity,
                 "capabilityCriticality": resolved_policy.criticality,
             }
             return None
