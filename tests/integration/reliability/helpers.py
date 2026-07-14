@@ -35,3 +35,18 @@ class NestedYieldProcess:
 
     def finish_inner(self) -> None:
         self.inner_active = False
+
+
+@dataclass
+class FinalizationFaultInjector:
+    """Reusable fail-first wrapper for auxiliary finalization operations."""
+
+    failures_remaining: int = 1
+    calls: int = 0
+
+    async def invoke(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise RuntimeError("injected finalization failure")
+        return await operation(*args, **kwargs)

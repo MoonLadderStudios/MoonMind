@@ -10,6 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from temporalio import activity, workflow
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.schemas.managed_session_models import SendCodexManagedSessionTurnRequest
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -33,7 +36,11 @@ from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
-from tests.integration.reliability.helpers import NestedYieldProcess, load_replay
+from tests.integration.reliability.helpers import (
+    FinalizationFaultInjector,
+    NestedYieldProcess,
+    load_replay,
+)
 from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
@@ -52,6 +59,19 @@ pytestmark = [
     pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
+
+
+@workflow.defn(name="Reliability.TerminalContractContinuation")
+class TerminalContractContinuationJourney:
+    """Drive the production AgentRun authority boundary on a Temporal server."""
+
+    @workflow.run
+    async def run(self, payload: dict[str, object]) -> AgentRunResult:
+        request = AgentExecutionRequest.model_validate(payload["request"])
+        result = AgentRunResult.model_validate(payload["result"])
+        return await MoonMindAgentRun()._evaluate_terminal_contract(
+            request=request, result=result
+        )
 
 
 async def test_oauth_maintenance_lease_replays_through_activity_update_boundary() -> (
@@ -291,6 +311,103 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
     } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
 
 
+@pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+async def test_nested_yield_continuation_replays_through_temporal_agent_run(
+    tmp_path: Path, recover: bool
+) -> None:
+    """MoonLadderStudios/MoonMind#3145 continuation journey on Temporal."""
+    replay_id = "incomplete-terminal-contract"
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / "repo"
+    _materialize_workspace_fixture(replay_id, workspace)
+    binding = _binding()
+    turns: list[SendCodexManagedSessionTurnRequest] = []
+
+    @activity.defn(name="agent_runtime.evaluate_terminal_evidence")
+    async def evaluate(payload: dict[str, object]) -> dict[str, object]:
+        activities = TemporalAgentRuntimeActivities(client_adapter=object())
+        result = await activities.agent_runtime_evaluate_terminal_evidence(payload)
+        return result.model_dump(mode="json", by_alias=True)
+
+    @activity.defn(name="agent_runtime.load_session_snapshot")
+    async def load_snapshot(_payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "sessionId": binding.session_id,
+            "sessionEpoch": binding.session_epoch,
+            "containerId": binding.container_id,
+            "threadId": "thread-terminal-contract",
+        }
+
+    @activity.defn(name="agent_runtime.send_turn")
+    async def send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> dict[str, object]:
+        turns.append(request)
+        if recover and len(turns) == 1:
+            target = workspace / "var/pr_resolver/result.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(
+                    {
+                        "executionRef": request.terminal_contract.execution_ref,
+                        "mergeAutomationDisposition": "manual_review",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+            turn_id=f"continuation-{len(turns)}",
+        ).model_dump(mode="json", by_alias=True)
+
+    @activity.defn(name="agent_runtime.fetch_result")
+    async def fetch_result(_payload: dict[str, object]) -> dict[str, object]:
+        return AgentRunResult(
+            summary="continuation completed",
+            metadata={"workspacePath": str(workspace)},
+        ).model_dump(mode="json", by_alias=True)
+
+    request = _pr_resolver_request(binding, workspace)
+    payload = {
+        "request": request.model_dump(mode="json", by_alias=True),
+        "result": AgentRunResult(
+            summary="wrapper completed while inner process remained active",
+            metadata={"workspacePath": str(workspace)},
+        ).model_dump(mode="json", by_alias=True),
+    }
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="reliability-3145-agent-run",
+            workflows=[TerminalContractContinuationJourney],
+            activities=[evaluate, load_snapshot, send_turn, fetch_result],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                TerminalContractContinuationJourney.run,
+                payload,
+                id=f"reliability-3145-{'recovered' if recover else 'exhausted'}",
+                task_queue="reliability-3145-agent-run",
+            )
+
+    expected_turns = 1 if recover else 2
+    assert len(turns) == expected_turns
+    assert {
+        (turn.session_id, turn.session_epoch, turn.thread_id) for turn in turns
+    } == {(binding.session_id, binding.session_epoch, "thread-terminal-contract")}
+    assert result.metadata["terminalContractContinuationCount"] == expected_turns
+    if recover:
+        assert result.failure_class is None
+        assert result.metadata["terminalContractRecoveryOutcome"] == "recovered"
+    else:
+        assert result.failure_class != "user_error"
+        assert result.metadata["failureCode"] == expected["failureCode"]
+        assert result.metadata["terminalContractRecoveryOutcome"] == "incomplete"
+
+
 async def test_sandbox_checkpoint_rejects_managed_workspace_without_resolving_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -506,16 +623,19 @@ async def test_checkpoint_finalization_fault_is_retryable(
     repo.mkdir(parents=True)
     activities = TemporalSandboxActivities(workspace_root=workspace_root)
 
-    durable_execution_result = load_replay(replay_id, "execution-result.json")
+    agent_execution_calls = 0
+
+    async def execute_agent_once() -> dict[str, object]:
+        nonlocal agent_execution_calls
+        agent_execution_calls += 1
+        return load_replay(replay_id, "execution-result.json")
+
+    durable_execution_result = await execute_agent_once()
     original_capture = activities._capture_workspace_evidence
-    calls = 0
+    fault = FinalizationFaultInjector()
 
     async def fail_once(model: object, workspace: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("injected finalization failure")
-        return await original_capture(model, workspace)
+        return await fault.invoke(original_capture, model, workspace)
 
     monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
     payload = {
@@ -537,4 +657,5 @@ async def test_checkpoint_finalization_fault_is_retryable(
     second = await activities.workspace_capture_checkpoint(payload)
     assert second["status"] == "captured"
     assert durable_execution_result["status"] == "completed"
-    assert calls == 2
+    assert fault.calls == 2
+    assert agent_execution_calls == 1
