@@ -1,0 +1,60 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3272",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3272",
+  "verdict": "FULLY_IMPLEMENTED",
+  "branch": "fetch-github-issue-moonladderstudios-moo-e50b2ec5",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "All visible in-scope acceptance criteria are satisfied in the current origin/main-equivalent checkout. Merged PR #3280 (86c2629fb) introduced the canonical recovery contract and later mainline changes retain concrete same-session controls, fail-closed checkpoint decisions, service and workflow preflight, typed locator projection, stable operator guidance, and replay-safe legacy reads. No new code work is needed for issue #3272. No tests were run because this assessment was explicitly limited to read-only inspection without long verification suites.",
+  "requirements": [
+    {
+      "description": "Session continuation, checkpoint Resume, and full retry are distinct typed operations throughout schemas, API, workflow parameters, and UI. Evidence: RecoveryAction and recovery models in moonmind/schemas/temporal_models.py; session routers; generated OpenAPI; workflow-detail actions and tests.",
+      "status": "met"
+    },
+    {
+      "description": "Checkpoint Resume is ineligible when the selected runtime lacks a compatible restore kind. Evidence: decide_checkpoint_recovery in moonmind/workflows/temporal/recovery_decision.py and focused test_recovery_decision coverage.",
+      "status": "met"
+    },
+    {
+      "description": "Checkpoint Resume is ineligible when the capability names a missing or unregistered restore activity. Evidence: recovery decision route checks plus activity-catalog revalidation in moonmind/workflows/temporal/service.py.",
+      "status": "met"
+    },
+    {
+      "description": "Checkpoint Resume is ineligible for an unknown or incompatible checkpoint boundary. Evidence: canonical BOUNDARY_RESUME_PHASE mapping and CHECKPOINT_BOUNDARY_INCOMPATIBLE handling in recovery_decision.py and recovery_state.py.",
+      "status": "met"
+    },
+    {
+      "description": "A present checkpoint ref alone is insufficient to produce resumeAllowed=true. Evidence: recovery_manifest.py delegates to the fail-closed structured decision and tests cover invalid capability, route, boundary, artifact, and side-effect inputs.",
+      "status": "met"
+    },
+    {
+      "description": "A full retry never carries checkpoint-restoration fields or presents itself as Resume. Evidence: distinct full_retry action/provenance paths and _full_retry_recovery_from_patch validation in moonmind/workflows/temporal/service.py, with focused service tests.",
+      "status": "met"
+    },
+    {
+      "description": "A same-session continuation never claims cold workspace recoverability. Evidence: RecoveryEligibilityDiagnosticModel rejects checkpoint evidence for continue_same_session, and decide_same_session_recovery uses only live-session identity and continuation capability.",
+      "status": "met"
+    },
+    {
+      "description": "Recovery execution creation revalidates checkpoint, capability, route, boundary, and side-effect safety before starting a linked execution. Evidence: create_failed_step_recovery_execution in moonmind/workflows/temporal/service.py validates the manifest, immutable capability proof, catalog route, source identity, artifact model, and side-effect dispositions.",
+      "status": "met"
+    },
+    {
+      "description": "Workflow preflight independently rejects contradictory recovery contracts before any agent or workspace mutation starts. Evidence: RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH and RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH paths in moonmind/workflows/temporal/workflows/run.py use recovery contract/state validation before restore and launch.",
+      "status": "met"
+    },
+    {
+      "description": "New compact execution outcomes preserve typed workspaceLocator objects. Evidence: WorkspaceLocator-typed fields in moonmind/schemas/temporal_models.py and structured locator preservation in agent_run.py, run.py, and their unit/integration fixtures.",
+      "status": "met"
+    },
+    {
+      "description": "Disabled actions expose stable reason codes and bounded operator guidance. Evidence: bounded reason literals in temporal_models.py, structured recovery eligibility in generated OpenAPI, and explicit bounded messages in frontend/src/entrypoints/workflow-detail.tsx.",
+      "status": "met"
+    },
+    {
+      "description": "Existing Temporal histories remain replayable across the migration. Evidence: patch-guarded explicit recovery/state-machine paths in run.py, legacy recovery token and pre-v2 manifest reads in temporal_models.py and service.py, and legacy payload/recovery boundary tests.",
+      "status": "met"
+    }
+  ]
+}
