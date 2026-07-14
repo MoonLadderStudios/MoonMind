@@ -1,0 +1,60 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3273",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3273",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "github-issue-implement-2ead29ef",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "Most of the managed codex_cli checkpoint capture lane was merged in e0225babd (PR #3283): the typed contract, agent-runtime-only catalog route, owner-side locator resolution, bounded archive and manifest artifacts, idempotency record, workflow routing, checkpoint persistence, failure isolation, replay guards, and focused tests are present. The implementation is not fully complete against the issue brief because correlation checks compare run, step, and execution ordinal but do not compare the request workflowId with the managed-run record workflowId; the archive uses tarfile w:gz without normalizing the gzip header timestamp, so stable archive digests across equivalent fresh captures are not established; partial artifact writes are not reconciled or reused on retry; and the requested bounded observability set is incomplete. No long test suites were run, as required by this assessment step.",
+  "requirements": [
+    {
+      "description": "Register agent_runtime.capture_workspace_checkpoint on the agent-runtime queue and nowhere else, while keeping sandbox and external-state checkpoint paths under their own owners.",
+      "status": "met"
+    },
+    {
+      "description": "Accept a typed ManagedWorkspaceLocator rather than an arbitrary absolute workspace path, resolve it through the managed run store, and prevent managed workspaces from being captured by TemporalSandboxActivities.",
+      "status": "met"
+    },
+    {
+      "description": "Verify runtime, agent-run, workflow, step, and execution correlation before capture. Runtime, agent-run, owner run, step, and execution ordinal are checked, but request identity.workflowId is not compared with ManagedRunRecord.workflowId.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Capture tracked and untracked files, binary content, executable bits, and safe symlink metadata while rejecting escaping symlinks and unsupported special files.",
+      "status": "met"
+    },
+    {
+      "description": "Exclude runtime credentials, provider homes, control sockets, caches, .git internals, and out-of-repository state, with bounded file-count, per-file, and total-size limits.",
+      "status": "met"
+    },
+    {
+      "description": "Produce deterministic archive and manifest evidence suitable for stable digest and retry verification. Entry ordering and tar member metadata are normalized, but gzip header time is not normalized, so equivalent fresh captures can receive different archive digests.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Keep archive and manifest payloads in the artifact system and return only compact refs, digests, summaries, and bounded diagnostics across the workflow boundary.",
+      "status": "met"
+    },
+    {
+      "description": "Make capture idempotent across Temporal retries and concurrent duplicate invocations, including immutable-input conflict detection and recovery from partial artifact writes. Completed results are locked and reused and conflicts are rejected, but incomplete archive or manifest writes are not recorded, reconciled, or reused on retry.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Route managed capture through the canonical catalog, pass compact evidence to step_checkpoint.create, persist the boundary checkpoint ref, and preserve a successful primary execution when capture fails.",
+      "status": "met"
+    },
+    {
+      "description": "Ensure capture-only support does not by itself make checkpoint Resume eligible. Current admission remains fail-closed and requires restore readiness and rollout evidence; later restore support does not make capture alone sufficient.",
+      "status": "met"
+    },
+    {
+      "description": "Preserve replayability across the managed activity-routing cutover with explicit workflow patch guards and regression fixtures.",
+      "status": "met"
+    },
+    {
+      "description": "Emit the requested bounded capture observability for requested, succeeded, failed, idempotently reused, limit exceeded, authority rejected, bytes, files, and duration. Only a subset is currently logged, with no complete bytes/files/failure/limit event set and a differently named reuse event.",
+      "status": "partially_met"
+    }
+  ]
+}
