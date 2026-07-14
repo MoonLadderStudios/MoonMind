@@ -1,4 +1,4 @@
-name: Codex conformance canary
+name: Provider / Codex Conformance Canary
 
 on:
   schedule:

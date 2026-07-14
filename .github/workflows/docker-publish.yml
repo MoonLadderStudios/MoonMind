@@ -1,4 +1,4 @@
-name: Build and Publish Docker Image to GHCR
+name: Release / Build App Image
 
 on:
   push:
@@ -201,7 +201,7 @@ jobs:
 
           # Mirror the PentestGPT runner summary so promotion is copy/paste low
           # friction: `latest` is the current build channel, `stable` is moved
-          # later by the Promote GHCR image to stable workflow.
+          # later by the Release / Promote Stable workflow.
           {
             echo "### App image published"
             echo ""
@@ -210,5 +210,5 @@ jobs:
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}:${VERSION}@${DIGEST}\`"
             echo ""
-            echo "To promote this build, run **Actions → Promote GHCR image to stable** with image \`app\` and source tag \`${VERSION}\`."
+            echo "To promote this build, run **Actions → Release / Promote Stable** with image \`app\` and source tag \`${VERSION}\`."
           } >> "${GITHUB_STEP_SUMMARY}"

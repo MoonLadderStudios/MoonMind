@@ -187,7 +187,7 @@ async def test_production_backend_makes_every_registered_activity_callable(
     image = await activities.container_job_acquire_image(payload)
     payload["resolvedImageRef"] = image["resolvedImageRef"]
     reconciliation = await activities.container_job_reconcile_container(payload)
-    assert reconciliation["containerRef"].startswith("moonmind-container-job-")
+    assert "containerRef" not in reconciliation
     assert reconciliation["running"] is False
     created = await activities.container_job_create_container(payload)
     payload["containerRef"] = created["containerRef"]
