@@ -18,7 +18,48 @@ def test_docs_only_change_does_not_select_heavy_backend_suites() -> None:
         "integration_ci": "false",
         "reliability_journey": "false",
         "full_backend": "false",
+        "frontend_static": "false",
+        "frontend_browser_chromium": "false",
+        "frontend_browser_firefox": "false",
+        "full_frontend": "false",
     }
+
+
+def test_backend_only_change_skips_frontend() -> None:
+    outputs = _outputs(["api_service/services/execution_service.py"])
+    assert outputs["frontend_static"] == "false"
+    assert outputs["frontend_browser_chromium"] == "false"
+    assert outputs["frontend_browser_firefox"] == "false"
+
+
+def test_frontend_source_selects_static_and_chromium() -> None:
+    outputs = _outputs(["frontend/src/components/Workflow.tsx"])
+    assert outputs["frontend_static"] == "true"
+    assert outputs["frontend_browser_chromium"] == "true"
+    assert outputs["frontend_browser_firefox"] == "false"
+
+
+def test_generated_openapi_client_selects_static_only() -> None:
+    outputs = _outputs(["frontend/src/generated/openapi.ts"])
+    assert outputs["frontend_static"] == "true"
+    assert outputs["frontend_browser_chromium"] == "false"
+    assert outputs["frontend_browser_firefox"] == "false"
+
+
+def test_browser_sensitive_changes_select_both_engines() -> None:
+    for path in ("frontend/src/browser/layout.browser.test.ts", "frontend/src/styles/dashboard.css", "frontend/vitest.browser.config.ts"):
+        outputs = _outputs([path])
+        assert outputs["frontend_static"] == "true"
+        assert outputs["frontend_browser_chromium"] == "true"
+        assert outputs["frontend_browser_firefox"] == "true"
+
+
+def test_package_lock_selects_full_frontend() -> None:
+    outputs = _outputs(["package-lock.json"])
+    assert outputs["full_frontend"] == "true"
+    assert outputs["frontend_static"] == "true"
+    assert outputs["frontend_browser_chromium"] == "true"
+    assert outputs["frontend_browser_firefox"] == "true"
 
 
 def test_api_router_change_selects_unit_fast_and_component() -> None:

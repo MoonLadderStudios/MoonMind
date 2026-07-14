@@ -40,6 +40,10 @@ temporal_boundary=true|false
 integration_ci=true|false
 reliability_journey=true|false
 full_backend=true|false
+frontend_static=true|false
+frontend_browser_chromium=true|false
+frontend_browser_firefox=true|false
+full_frontend=true|false
 ```
 
 The selector is conservative. If it cannot classify the change confidently, it selects full backend verification.
@@ -49,6 +53,8 @@ The selector is conservative. If it cannot classify the change confidently, it s
 A pull request is backend-impacting when it touches backend source, backend tests, backend tooling, migrations, or workflow-sensitive generated contracts. Backend-impacting pull requests select `unit_fast=true` unless the selector forces the full backend path, which also includes fast unit coverage.
 
 Docs-only and frontend-only changes do not select backend suites unless they touch a backend-sensitive generated contract or another fail-open path.
+
+Frontend selection is independent. Generated OpenAPI client changes select static validation only; ordinary UI source selects static validation plus Chromium; browser tests, styles, browser configuration, and npm dependency changes also select Firefox. Pushes to `main`, schedules, manual runs, unavailable change sets, and unknown paths select the full backend and frontend paths. The stable `test-frontend` job always runs as a result aggregator even when both frontend runner jobs are intentionally skipped.
 
 ### Component Selection
 
