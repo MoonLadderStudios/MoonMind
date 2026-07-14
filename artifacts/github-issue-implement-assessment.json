@@ -1,0 +1,56 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#2557",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/2557",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "github-issue-implement-a37e032b",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "The checkout is at the same commit as origin/main (545dec476), and no recent commit references #2557. Existing direct-Codex controls, Omnigent bridge events/elicitation support, durable session observability, and passive Live Logs satisfy portions of the issue baseline. The canonical runtime-neutral request/result/capability contract and durable idempotent command path are absent: the current ArtifactSessionControlRequest contains only action, message, and reason, and its response contains only action plus a refreshed projection. Workflow Chat also lacks the complete Omnigent message/elicitation/interrupt/stop/terminal control experience. New code work is required.",
+  "requirements": [
+    {
+      "description": "Workflow Chat exposes only controls supported by the current host/session, MoonMind policy, and operator authorization. Existing Workflow Detail controls consume server-projected intervention capabilities, but the projection is limited to the direct compatibility surface and is not the issue’s complete host/session/policy/approval/authorization resolver.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Every control has a stable request ID, idempotency key, actor, target session/turn precondition, reason where required, and durable result. The current ArtifactSessionControlRequest has only action, message, and optional reason; ArtifactSessionControlResponse has only action and projection.",
+      "status": "not_met"
+    },
+    {
+      "description": "Duplicate submissions cannot duplicate the provider side effect. The current artifact-session control endpoint accepts no request identity or idempotency key and dispatches a Temporal update directly.",
+      "status": "not_met"
+    },
+    {
+      "description": "Stale epoch/session/turn requests fail closed with a stable reason. The current public control request accepts no expected epoch/session version/turn ID and the response has no stable reason code.",
+      "status": "not_met"
+    },
+    {
+      "description": "Omnigent message, elicitation response, interrupt, and stop flows have end-to-end API/UI coverage. Bridge event and elicitation routes plus conformance tests exist, while the complete typed control API and Workflow Chat UI journey does not.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Unsupported clear/reset returns an explicit create-new-session policy rather than pretending the host was cleared. Omnigent bridge design and bridge-local behavior represent unsupported clear/reset as requiring a new session.",
+      "status": "met"
+    },
+    {
+      "description": "Existing direct Codex controls use the same request/result/capability contract behind a compatibility gate. Direct controls exist, but no shared canonical request/result contract with the Omnigent path exists.",
+      "status": "not_met"
+    },
+    {
+      "description": "continue_same_session, checkpoint Resume, and full_retry remain distinct throughout API and UI. Current workflow detail schemas and recovery UI model these as separate actions.",
+      "status": "met"
+    },
+    {
+      "description": "Control outcomes appear in Workflow Chat and durable audit evidence after reload and after the live host is gone. Durable session/control observability exists for the direct path, but the canonical control receipt and complete Workflow Chat outcome projection are absent.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Authorization, policy denial, concurrent control, timeout/reconciliation, terminal-session, and provider-rejection journeys are tested. Authorization and terminal/capability checks have coverage, but the canonical concurrent-control and delivery-unknown reconciliation journeys cannot exist without the missing command contract.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Live Logs remains passive observation; no control depends on an SSE connection or browser-local state. Canonical Live Logs documentation and the current separation of the artifact-session control endpoint from log streaming satisfy this requirement.",
+      "status": "met"
+    }
+  ]
+}
