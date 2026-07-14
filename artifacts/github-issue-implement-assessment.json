@@ -1,0 +1,52 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3261",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3261",
+  "verdict": "NOT_IMPLEMENTED",
+  "branch": "github-issue-implement-6cd3f481",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "HEAD 704b636a1 equals origin/main, and no recent commit references #3261. The generic authenticated container-job backend and documentation exist, but the issue-specific managed-session cutover is absent: managed sessions still create and clean up DinD sidecars, inject session-local DOCKER_HOST, expose Docker rather than containerJobs capability metadata, and run Docker CLI sidecar preflight. Repository searches found no managed-session client/tool adapter, scoped authenticated channel, containerJobs runtime descriptor, managed-session job correlation/evidence integration, or public-service cancellation policy. All ten acceptance criteria therefore require implementation.",
+  "requirements": [
+    {
+      "description": "A managed session can discover and call all five canonical container-job tools through an authenticated MoonMind channel.",
+      "status": "not_met"
+    },
+    {
+      "description": "Submission uses an authorized managed-session workspace locator and returns a distinct stable job ID immediately.",
+      "status": "not_met"
+    },
+    {
+      "description": "The runtime capability advertises `containerJobs` and does not advertise/inject session-local `DOCKER_HOST`.",
+      "status": "not_met"
+    },
+    {
+      "description": "Managed agents can poll/follow bounded status/logs and retrieve durable artifact references without holding a single call open for job duration.",
+      "status": "not_met"
+    },
+    {
+      "description": "Job records correlate to session/turn/thread/epoch where available while remaining separate from session and `MoonMind.AgentRun` identity.",
+      "status": "not_met"
+    },
+    {
+      "description": "Session observability can link to job evidence without treating job events as session lifecycle truth.",
+      "status": "not_met"
+    },
+    {
+      "description": "A turn ending does not kill the job container; session termination only affects the job through an explicit authorized cancellation policy.",
+      "status": "not_met"
+    },
+    {
+      "description": "No managed-session container/image receives the system Docker proxy, Docker socket, raw host path, or registry credentials.",
+      "status": "not_met"
+    },
+    {
+      "description": "Default managed-session configuration no longer depends on a DinD sidecar or Docker CLI for repository container jobs.",
+      "status": "not_met"
+    },
+    {
+      "description": "Sidecar/direct-Docker capability can be disabled before physical removal without breaking supported container-job use.",
+      "status": "not_met"
+    }
+  ]
+}
