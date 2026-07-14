@@ -1704,8 +1704,11 @@ class TemporalExecutionService:
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
 
+        description: Any | None = None
         try:
-            await self._client_adapter.describe_workflow(canonical_workflow_id)
+            description = await self._client_adapter.describe_workflow(
+                canonical_workflow_id
+            )
         except Exception as exc:
             logger.debug(
                 "Temporal describe failed for %s: %s", canonical_workflow_id, exc
@@ -1715,15 +1718,39 @@ class TemporalExecutionService:
             canonical_workflow_id,
         )
         if record is None:
-            if not include_orphaned:
-                raise TemporalExecutionNotFoundError(
-                    f"Workflow execution {canonical_workflow_id} was not found"
+            projection: TemporalExecutionRecord | None = None
+            if description is not None:
+                try:
+                    from api_service.core.sync import sync_execution_projection
+
+                    projection = await sync_execution_projection(
+                        self._session,
+                        description,
+                    )
+                    await self._session.commit()
+                    await self._session.refresh(projection)
+                except Exception as exc:
+                    await self._session.rollback()
+                    logger.warning(
+                        "Temporal projection sync failed for source-less execution %s: %s",
+                        canonical_workflow_id,
+                        exc,
+                        exc_info=True,
+                    )
+            if projection is None:
+                projection = await self._load_projection_execution(
+                    canonical_workflow_id,
+                    include_orphaned=include_orphaned,
                 )
-            projection = await self._load_projection_execution(
-                canonical_workflow_id,
-                include_orphaned=True,
-            )
-            if projection is not None:
+            if projection is not None and (
+                include_orphaned
+                or projection.source_mode
+                == TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+            ):
+                # Temporal Schedules start UserWorkflow executions directly, so
+                # those runs have no API-created canonical source row. Their
+                # Temporal-authoritative projection is the durable control-plane
+                # record used for ownership and parent-runtime inheritance.
                 return projection
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
