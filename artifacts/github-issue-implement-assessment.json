@@ -1,0 +1,60 @@
+{
+  "issue_provider": "github",
+  "issue_ref": "MoonLadderStudios/MoonMind#3264",
+  "issue_url": "https://github.com/MoonLadderStudios/MoonMind/issues/3264",
+  "verdict": "PARTIALLY_IMPLEMENTED",
+  "branch": "fetch-github-issue-moonladderstudios-moo-3f88e134",
+  "base_ref": "origin/main",
+  "mode": "main/trunk",
+  "summary": "The canonical containerJobs service and managed-session capability advertisement are present, but the superseded per-session Docker sidecar remains broadly implemented and supported in schemas, session state, controller lifecycle, Temporal activities, preflight, settings, tests, and documentation. The checkout is zero commits ahead of origin/main and no recent merge referencing #3264 was found. Substantial new code work is required.",
+  "requirements": [
+    {
+      "description": "Remove the supported docker-sidecar capability, session-local Docker endpoint, graph/socket volumes, sidecar resources, and related profile validators; these remain in moonmind/schemas/agent_runtime_models.py and its tests.",
+      "status": "not_met"
+    },
+    {
+      "description": "Stop advertising sidecar readiness and DOCKER_HOST in managed-session state while advertising containerJobs; containerJobs is advertised, but sidecar capability/status models and dockerHost remain.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Remove DinD create/start/probe/restart/reap behavior and Docker-authority injection from managed_session_controller.py; the controller still implements all of these paths.",
+      "status": "not_met"
+    },
+    {
+      "description": "Remove agent_runtime.ensure_docker_sidecar and related Temporal catalog, handler, routing, and controller construction; the activity remains registered and implemented.",
+      "status": "not_met"
+    },
+    {
+      "description": "Remove session-side Docker CLI/Compose preflight; moonmind/workflows/automation/preflight.py still detects docker-sidecar/DOCKER_HOST and emits preflight://docker-sidecar.",
+      "status": "not_met"
+    },
+    {
+      "description": "Remove or justify sidecar-only settings, compose wiring, credentials, image preflight, schemas, tests, status fields, and lifecycle code; extensive sidecar-specific production and test references remain.",
+      "status": "not_met"
+    },
+    {
+      "description": "Support generic container jobs through MoonMind MCP/API with no sidecar present; the container-job API/MCP service exists, but managed sessions still support and launch sidecars.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Remove every user/operator-selectable sidecar compatibility/runtime mode; docker-sidecar and docker-sidecar-rootless vocabulary remains accepted or handled.",
+      "status": "not_met"
+    },
+    {
+      "description": "Add replay/payload compatibility code only when evidence-backed and time-bounded, otherwise add none; existing legacy payload migration and sidecar model support are not documented as the narrow evidence-backed guard required by the issue.",
+      "status": "not_met"
+    },
+    {
+      "description": "Provide conservative legacy sidecar cleanup that identifies MoonMind-owned inactive resources and never deletes images or unrelated objects; current sidecar orphan/reaper code and tests show ownership-aware cleanup elements, but the required one-time post-removal reconciliation path is not established.",
+      "status": "partially_met"
+    },
+    {
+      "description": "Leave no supported sidecar implementation references outside tombstones or bounded migration guards; repository search finds many active production, test, and canonical-doc references.",
+      "status": "not_met"
+    },
+    {
+      "description": "Keep Omnigent-host and managed-session containers without Docker authority; documentation and no-Docker paths cover this goal, but selectable managed-session sidecar paths still inject DOCKER_HOST and socket volumes.",
+      "status": "partially_met"
+    }
+  ]
+}
