@@ -708,13 +708,18 @@ const RecoveryEligibilitySchema = z
     eligible: z.boolean(),
     requestedAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention']).optional(),
     defaultAction: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume_from_checkpoint', 'environment_fix', 'none']),
-    disabledReasonCode: z.string().nullable().optional(),
+    disabledReasonCode: z.enum(['CHECKPOINT_CAPTURE_UNSUPPORTED', 'CHECKPOINT_RESTORE_UNSUPPORTED', 'CHECKPOINT_RESTORE_ROUTE_MISSING', 'CHECKPOINT_KIND_INCOMPATIBLE', 'CHECKPOINT_BOUNDARY_INCOMPATIBLE', 'CHECKPOINT_DESTINATION_IDENTITY_MISMATCH', 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING', 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH', 'CHECKPOINT_ARTIFACT_INVALID', 'CHECKPOINT_SIDE_EFFECT_UNSAFE', 'SAME_SESSION_UNREACHABLE', 'SAME_SESSION_CONTINUATION_UNSUPPORTED']).nullable().optional(),
     checkpointBoundary: z.string().nullable().optional(),
     requiredBoundary: z.string().nullable().optional(),
     resumePhase: z.enum(['rerun_failed_step', 'continue_to_gate', 'continue_after_gate', 'resume_publication', 'retry_restoration']).nullable().optional(),
     checkpointRef: z.string().nullable().optional(),
+    checkpointKind: z.string().nullable().optional(),
+    targetRuntimeId: z.string().nullable().optional(),
+    restoreActivity: z.string().nullable().optional(),
     sourceWorkflowId: z.string().nullable().optional(),
     sourceRunId: z.string().nullable().optional(),
+    liveSessionId: z.string().nullable().optional(),
+    supportsSameSessionContinuation: z.boolean().nullable().optional(),
     operatorGuidance: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume', 'needs_human']),
     evidence: z.array(EvidenceRefStatusSchema).default([]),
   })
@@ -5946,6 +5951,26 @@ function RecoveryEvidencePanel({
     ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
   ) || [];
   const preservedSteps = diagnosticsRecovery?.preservedSteps || [];
+  const disabledGuidance = (() => {
+    const runtime = recovery?.targetRuntimeId || 'the selected runtime';
+    const kind = recovery?.checkpointKind || 'the selected checkpoint kind';
+    const route = recovery?.restoreActivity || 'a registered restore route';
+    switch (disabledReason) {
+      case 'CHECKPOINT_RESTORE_UNSUPPORTED': return `${runtime} does not support workspace checkpoint restore. Retry from source.`;
+      case 'CHECKPOINT_RESTORE_ROUTE_MISSING': return `${runtime} has no registered restore route (${route}). Retry from source.`;
+      case 'CHECKPOINT_KIND_INCOMPATIBLE': return `${runtime} cannot restore ${kind}. Retry from source.`;
+      case 'CHECKPOINT_DESTINATION_IDENTITY_MISMATCH': return 'The selected destination runtime changed. Refresh recovery evidence before retrying.';
+      case 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING': return 'The immutable runtime capability snapshot is missing. Refresh recovery evidence.';
+      case 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH': return `${runtime} capabilities changed. Refresh recovery evidence before retrying.`;
+      case 'CHECKPOINT_ARTIFACT_INVALID': return 'The checkpoint artifact or its source identity is invalid. Retry from source.';
+      case 'CHECKPOINT_SIDE_EFFECT_UNSAFE': return 'Prior side effects make checkpoint restoration unsafe. Resolve them or retry from source.';
+      case 'CHECKPOINT_BOUNDARY_INCOMPATIBLE': return 'This checkpoint boundary has no legal continuation phase. Retry from source.';
+      case 'CHECKPOINT_CAPTURE_UNSUPPORTED': return `${runtime} cannot capture a restorable workspace checkpoint. Retry from source.`;
+      case 'SAME_SESSION_UNREACHABLE': return 'The prior session is no longer reachable. Retry from source.';
+      case 'SAME_SESSION_CONTINUATION_UNSUPPORTED': return `${runtime} does not support same-session continuation. Retry from source.`;
+      default: return null;
+    }
+  })();
 
   return (
     <section className="detail-section">
@@ -5960,7 +5985,7 @@ function RecoveryEvidencePanel({
           Resume from checkpoint is the default recovery action for boundary {formatStatusLabel(requiredBoundary)}.
         </p>
       ) : disabledReason ? (
-        <p className="small">Resume from checkpoint unavailable: {formatStatusLabel(disabledReason)}</p>
+        <p className="small">Resume from checkpoint unavailable: {disabledGuidance || formatStatusLabel(disabledReason)}</p>
       ) : null}
 
       <div className="action-row">

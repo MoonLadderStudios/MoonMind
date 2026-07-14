@@ -279,7 +279,7 @@ def test_recovery_eligibility_diagnostic_is_fail_closed_and_typed() -> None:
     disabled = RecoveryEligibilityDiagnosticModel(
         eligible=False,
         defaultAction="full_retry",
-        disabledReasonCode="missing_required_checkpoint_boundary",
+        disabledReasonCode="CHECKPOINT_BOUNDARY_INCOMPATIBLE",
         requiredBoundary="before_execution",
         operatorGuidance="full_retry",
         evidence=[
@@ -287,12 +287,12 @@ def test_recovery_eligibility_diagnostic_is_fail_closed_and_typed() -> None:
                 "category": "checkpoint",
                 "status": "missing",
                 "boundary": "before_execution",
-                "reasonCode": "missing_required_checkpoint_boundary",
+                "reasonCode": "CHECKPOINT_BOUNDARY_INCOMPATIBLE",
             }
         ],
     )
 
-    assert disabled.disabled_reason_code == "missing_required_checkpoint_boundary"
+    assert disabled.disabled_reason_code == "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
 
     with pytest.raises(ValidationError):
         RecoveryEligibilityDiagnosticModel(

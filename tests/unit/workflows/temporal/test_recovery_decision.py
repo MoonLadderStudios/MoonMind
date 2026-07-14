@@ -8,8 +8,34 @@ from moonmind.workflows.executions.runtime_capabilities import (
 )
 from moonmind.workflows.temporal.recovery_decision import (
     decide_checkpoint_recovery,
+    decide_same_session_recovery,
     validate_recovery_contract,
 )
+
+
+def test_same_session_continuation_requires_live_capable_session() -> None:
+    capabilities = resolve_runtime_execution_capabilities("codex_cli")
+    eligible = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=True,
+        capabilities=capabilities,
+    )
+    dead = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=False,
+        capabilities=capabilities,
+    )
+    unsupported = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=True,
+        capabilities=resolve_runtime_execution_capabilities("claude_code"),
+    )
+
+    assert eligible.eligible is True
+    assert eligible.default_action == "continue_same_session"
+    assert eligible.checkpoint_ref is None
+    assert dead.disabled_reason_code == "SAME_SESSION_UNREACHABLE"
+    assert unsupported.disabled_reason_code == "SAME_SESSION_CONTINUATION_UNSUPPORTED"
 
 
 def _decision(**overrides):
@@ -75,7 +101,48 @@ def test_workflow_preflight_rejects_stale_phase() -> None:
         "resumePhase": "continue_after_gate",
         "checkpointRestoreActivity": decision["restoreActivity"],
         "recoveryCheckpointRef": decision["checkpointRef"],
+        "selectedTargetRuntimeId": decision["targetRuntimeId"],
+        "selectedCapabilityDigest": decision["capabilityDigest"],
+        "registeredRestoreActivity": decision["restoreActivity"],
+        "sourceWorkflowId": "workflow-1",
+        "sourceRunId": "run-1",
+        "checkpointSourceWorkflowId": "workflow-1",
+        "checkpointSourceRunId": "run-1",
+        "sideEffectSafe": True,
     }
 
     with pytest.raises(ValueError, match="CHECKPOINT_BOUNDARY_INCOMPATIBLE"):
+        validate_recovery_contract(contract)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("selectedTargetRuntimeId", "stale", "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH"),
+        ("selectedCapabilityDigest", "stale", "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH"),
+        ("registeredRestoreActivity", "missing.route", "CHECKPOINT_RESTORE_ROUTE_MISSING"),
+        ("checkpointSourceRunId", "stale", "CHECKPOINT_ARTIFACT_INVALID"),
+        ("sideEffectSafe", False, "CHECKPOINT_SIDE_EFFECT_UNSAFE"),
+    ],
+)
+def test_workflow_preflight_rejects_contradictory_restore_proof(field, value, reason) -> None:
+    decision = _decision().model_dump(by_alias=True, mode="json")
+    contract = {
+        **decision,
+        "recoveryAction": "resume_from_workspace_checkpoint",
+        "selectedCheckpointBoundary": "before_execution",
+        "checkpointRestoreActivity": decision["restoreActivity"],
+        "recoveryCheckpointRef": decision["checkpointRef"],
+        "selectedTargetRuntimeId": decision["targetRuntimeId"],
+        "selectedCapabilityDigest": decision["capabilityDigest"],
+        "registeredRestoreActivity": decision["restoreActivity"],
+        "sourceWorkflowId": "workflow-1",
+        "sourceRunId": "run-1",
+        "checkpointSourceWorkflowId": "workflow-1",
+        "checkpointSourceRunId": "run-1",
+        "sideEffectSafe": True,
+    }
+    contract[field] = value
+
+    with pytest.raises(ValueError, match=reason):
         validate_recovery_contract(contract)

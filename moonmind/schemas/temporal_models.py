@@ -131,6 +131,13 @@ CheckpointRecoveryDisabledReason = Literal[
     "CHECKPOINT_ARTIFACT_INVALID",
     "CHECKPOINT_SIDE_EFFECT_UNSAFE",
 ]
+SameSessionRecoveryDisabledReason = Literal[
+    "SAME_SESSION_UNREACHABLE",
+    "SAME_SESSION_CONTINUATION_UNSUPPORTED",
+]
+RecoveryDisabledReason = (
+    CheckpointRecoveryDisabledReason | SameSessionRecoveryDisabledReason
+)
 RecoveryOperatorGuidance = Literal[
     "continue_same_session",
     "resume_from_workspace_checkpoint",
@@ -301,7 +308,7 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
         "resume_from_workspace_checkpoint", alias="requestedAction"
     )
     default_action: RecoveryDefaultAction = Field(..., alias="defaultAction")
-    disabled_reason_code: str | None = Field(
+    disabled_reason_code: RecoveryDisabledReason | None = Field(
         None, alias="disabledReasonCode", max_length=120
     )
     checkpoint_boundary: str | None = Field(
@@ -321,6 +328,10 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     checkpoint_ref: str | None = Field(None, alias="checkpointRef", max_length=500)
     source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
     source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
+    live_session_id: str | None = Field(None, alias="liveSessionId", max_length=200)
+    supports_same_session_continuation: bool | None = Field(
+        None, alias="supportsSameSessionContinuation"
+    )
     operator_guidance: RecoveryOperatorGuidance = Field(..., alias="operatorGuidance")
     evidence: list[EvidenceRefStatusModel] = Field(default_factory=list)
 
@@ -352,6 +363,7 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
         "checkpoint_ref",
         "source_workflow_id",
         "source_run_id",
+        "live_session_id",
         mode="before",
     )
     @classmethod
@@ -363,6 +375,27 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate_decision(self) -> "RecoveryEligibilityDiagnosticModel":
+        if self.requested_action == "continue_same_session":
+            if self.checkpoint_ref or self.checkpoint_restore_kinds or self.restore_activity:
+                raise ValueError("same-session continuation cannot use checkpoint evidence")
+            if self.eligible:
+                if not self.live_session_id or not self.supports_same_session_continuation:
+                    raise ValueError("same-session continuation requires a reachable capable session")
+                if self.default_action != "continue_same_session":
+                    raise ValueError("eligible same-session continuation must be the default")
+                if self.operator_guidance != "continue_same_session":
+                    raise ValueError("eligible same-session continuation requires matching guidance")
+                if self.disabled_reason_code is not None:
+                    raise ValueError("eligible same-session continuation cannot be disabled")
+            else:
+                if self.disabled_reason_code not in {
+                    "SAME_SESSION_UNREACHABLE",
+                    "SAME_SESSION_CONTINUATION_UNSUPPORTED",
+                }:
+                    raise ValueError("ineligible same-session continuation requires a session reason")
+                if self.default_action == "continue_same_session":
+                    raise ValueError("ineligible same-session continuation cannot be the default")
+            return self
         if self.eligible:
             if self.requested_action != "resume_from_workspace_checkpoint":
                 raise ValueError("eligible checkpoint recovery requires checkpoint Resume")
@@ -2596,6 +2629,15 @@ class RecoverySourceModel(BaseModel):
     checkpoint_restore_kinds: tuple[str, ...] = Field(..., alias="checkpointRestoreKinds")
     checkpoint_restore_activity: str = Field(..., alias="checkpointRestoreActivity", min_length=1)
     workspace_authority: str = Field(..., alias="workspaceAuthority", min_length=1)
+    # Optional only while decoding pre-patch histories. New recovery creation
+    # supplies the complete proof set and patch-gated workflow preflight rejects
+    # absent or contradictory values before restoration.
+    selected_target_runtime_id: str | None = Field(None, alias="selectedTargetRuntimeId")
+    selected_capability_digest: str | None = Field(None, alias="selectedCapabilityDigest")
+    registered_restore_activity: str | None = Field(None, alias="registeredRestoreActivity")
+    checkpoint_source_workflow_id: str | None = Field(None, alias="checkpointSourceWorkflowId")
+    checkpoint_source_run_id: str | None = Field(None, alias="checkpointSourceRunId")
+    side_effect_safe: bool | None = Field(None, alias="sideEffectSafe")
     source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
     source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
     source_task_input_snapshot_ref: str = Field(

@@ -19,6 +19,43 @@ BOUNDARY_RESUME_PHASE = {
 }
 
 
+def decide_same_session_recovery(
+    *,
+    live_session_id: str | None,
+    session_reachable: bool,
+    capabilities: RuntimeExecutionCapabilities | None,
+    evidence: Sequence[Any] = (),
+) -> RecoveryEligibilityDiagnosticModel:
+    """Decide live continuation without using cold-checkpoint evidence."""
+
+    supported = bool(
+        capabilities and capabilities.supports_same_session_continuation
+    )
+    reason = None
+    if not supported:
+        reason = "SAME_SESSION_CONTINUATION_UNSUPPORTED"
+    elif not live_session_id or not session_reachable:
+        reason = "SAME_SESSION_UNREACHABLE"
+    eligible = reason is None
+    capability_dump = (
+        capabilities.model_dump(by_alias=True, mode="json") if capabilities else {}
+    )
+    return RecoveryEligibilityDiagnosticModel(
+        eligible=eligible,
+        requestedAction="continue_same_session",
+        defaultAction="continue_same_session" if eligible else "full_retry",
+        disabledReasonCode=reason,
+        targetRuntimeId=capability_dump.get("runtimeId"),
+        capabilitySetVersion=capability_dump.get("capabilitySetVersion"),
+        capabilityDigest=capability_dump.get("capabilityDigest"),
+        workspaceAuthority=capability_dump.get("workspaceAuthority"),
+        liveSessionId=live_session_id,
+        supportsSameSessionContinuation=supported,
+        operatorGuidance="continue_same_session" if eligible else "full_retry",
+        evidence=list(evidence),
+    )
+
+
 def decide_checkpoint_recovery(
     *,
     checkpoint_ref: str | None,
@@ -99,3 +136,16 @@ def validate_recovery_contract(contract: Mapping[str, Any]) -> None:
         raise ValueError("CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING")
     if contract["checkpointKind"] not in contract["checkpointRestoreKinds"]:
         raise ValueError("CHECKPOINT_KIND_INCOMPATIBLE")
+    if contract.get("targetRuntimeId") != contract.get("selectedTargetRuntimeId"):
+        raise ValueError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH")
+    if contract.get("capabilityDigest") != contract.get("selectedCapabilityDigest"):
+        raise ValueError("CHECKPOINT_CAPABILITY_DIGEST_MISMATCH")
+    if contract.get("checkpointRestoreActivity") != contract.get("registeredRestoreActivity"):
+        raise ValueError("CHECKPOINT_RESTORE_ROUTE_MISSING")
+    if (
+        contract.get("sourceWorkflowId") != contract.get("checkpointSourceWorkflowId")
+        or contract.get("sourceRunId") != contract.get("checkpointSourceRunId")
+    ):
+        raise ValueError("CHECKPOINT_ARTIFACT_INVALID")
+    if contract.get("sideEffectSafe") is not True:
+        raise ValueError("CHECKPOINT_SIDE_EFFECT_UNSAFE")

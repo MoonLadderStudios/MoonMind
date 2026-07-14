@@ -3392,6 +3392,15 @@ class TemporalExecutionService:
         capabilities = resolve_runtime_execution_capabilities(
             eligibility.target_runtime_id
         )
+        selected_runtime_id = str(
+            _visibility_runtime_from_parameters(record.parameters)
+            or eligibility.target_runtime_id
+            or ""
+        ).strip()
+        if selected_runtime_id != eligibility.target_runtime_id:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH"
+            )
         if capabilities.capability_digest != eligibility.capability_digest:
             raise TemporalExecutionRecoveryCheckpointError(
                 "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH"
@@ -3514,6 +3523,12 @@ class TemporalExecutionService:
             checkpointRestoreKinds=eligibility.checkpoint_restore_kinds,
             checkpointRestoreActivity=eligibility.restore_activity,
             workspaceAuthority=eligibility.workspace_authority,
+            selectedTargetRuntimeId=selected_runtime_id,
+            selectedCapabilityDigest=capabilities.capability_digest,
+            registeredRestoreActivity=capabilities.checkpoint_restore_activity,
+            checkpointSourceWorkflowId=checkpoint.source.workflow_id,
+            checkpointSourceRunId=checkpoint.source.run_id,
+            sideEffectSafe=True,
             sourceWorkflowId=record.workflow_id,
             sourceRunId=source_run_id,
             sourceTaskInputSnapshotRef=source_snapshot_ref,
