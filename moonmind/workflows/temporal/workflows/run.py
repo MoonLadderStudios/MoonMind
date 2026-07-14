@@ -3226,13 +3226,24 @@ class MoonMindRunWorkflow:
                 f"recovery checkpoint validation failed: {failure_code}"
             )
 
+        target_workspace_locator = self._recovery_workspace.get(
+            "targetWorkspaceLocator"
+        )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = self._recovery_workspace.get(
+                "target_workspace_locator"
+            )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = None
         target_workspace_ref = self._recovery_source_text(
             self._recovery_workspace,
             "targetWorkspaceRef",
             "target_workspace_ref",
             "workspaceRef",
             "workspace_ref",
-        ) or checkpoint_ref
+        )
+        if target_workspace_locator is None:
+            target_workspace_ref = target_workspace_ref or checkpoint_ref
         apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("workspace.apply_policy")
         apply_payload = {
             "identity": {
@@ -3244,11 +3255,14 @@ class MoonMindRunWorkflow:
             "workspacePolicy": workspace_policy,
             "checkpointRef": checkpoint_ref,
             "checkpoint": dict(checkpoint_payload),
-            "targetWorkspaceRef": target_workspace_ref,
             "expectedPlanRef": source_plan_ref or None,
             "expectedPlanDigest": source_plan_digest or None,
             "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
         }
+        if target_workspace_locator is not None:
+            apply_payload["targetWorkspaceLocator"] = dict(target_workspace_locator)
+        if target_workspace_ref:
+            apply_payload["targetWorkspaceRef"] = target_workspace_ref
         policy = await workflow.execute_activity(
             apply_route.activity_type,
             apply_payload,
