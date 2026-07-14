@@ -2055,6 +2055,9 @@ class ResumeFromFailedStepRef(BaseModel):
         "start_from_last_passed_commit",
         "fresh_branch_from_source",
     ] | None = Field(None, alias="workspacePolicy")
+    admitted_checkpoint_resume_decision: dict[str, Any] | None = Field(
+        None, alias="admittedCheckpointResumeDecision"
+    )
 
     @field_validator(
         "source_workflow_id",
@@ -2104,6 +2107,27 @@ class ResumeFromFailedStepRef(BaseModel):
         if not isinstance(value, Mapping):
             raise WorkflowContractError("dependencySignatures must be an object")
         return dict(value)
+
+    @field_validator("admitted_checkpoint_resume_decision", mode="before")
+    @classmethod
+    def _require_admitted_checkpoint_decision(cls, value: object) -> dict[str, Any] | None:
+        # Optional only for replay/validation of histories created before capability v2.
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise WorkflowContractError(
+                "admittedCheckpointResumeDecision must be an immutable decision object"
+            )
+        from moonmind.workflows.executions.checkpoint_resume_admission import (
+            AdmittedCheckpointResumeDecision,
+        )
+
+        decision = AdmittedCheckpointResumeDecision.model_validate(value)
+        if not decision.admitted:
+            raise WorkflowContractError(
+                "admittedCheckpointResumeDecision must admit checkpoint Resume"
+            )
+        return decision.model_dump(by_alias=True, mode="json")
 
 
 class WorkflowExecutionSpec(BaseModel):

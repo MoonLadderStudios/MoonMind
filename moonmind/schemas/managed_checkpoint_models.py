@@ -41,7 +41,9 @@ class ManagedWorkspaceCheckpointCaptureInput(BaseModel):
     expected_runtime_id: Literal["codex_cli"] = Field(
         "codex_cli", alias="expectedRuntimeId"
     )
-    capability_set_version: Literal["runtime-execution-capabilities-v1"] = Field(
+    capability_set_version: Literal[
+        "runtime-execution-capabilities-v1", "runtime-execution-capabilities-v2"
+    ] = Field(
         ..., alias="capabilitySetVersion"
     )
     capability_digest: str = Field(..., alias="capabilityDigest", min_length=1, max_length=128)
