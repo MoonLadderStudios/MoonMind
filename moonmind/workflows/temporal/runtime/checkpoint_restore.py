@@ -348,14 +348,20 @@ class ManagedCheckpointRestoreService:
         record_path = record_dir / f"{key_hash}.json"
         immutable = _digest(_canonical(req.model_dump(by_alias=True, mode="json")))
         if record_path.exists():
-            record = json.loads(record_path.read_text())
-            if record["immutableDigest"] != immutable:
-                raise CheckpointRestoreError(
-                    "CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT",
-                    "idempotency key input drift",
-                )
-            if record.get("status") == "ready":
-                return record["result"]
+            try:
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                record = None
+            if not isinstance(record, dict):
+                record = None
+            if record is not None:
+                if record.get("immutableDigest") != immutable:
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT",
+                        "idempotency key input drift",
+                    )
+                if record.get("status") == "ready":
+                    return record["result"]
 
         workspace_parent = self.root / req.destination.agent_run_id
         workspace = workspace_parent / "repo"
@@ -387,7 +393,9 @@ class ManagedCheckpointRestoreService:
             "agentRunId": req.destination.agent_run_id,
             "capabilityDigest": req.capability_digest,
         }
-        record_path.write_text(json.dumps(record, sort_keys=True))
+        tmp = record_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, record_path)
 
         checkpoint_bytes = await self._read(
             req.source.checkpoint_ref,
@@ -434,7 +442,13 @@ class ManagedCheckpointRestoreService:
                     "CHECKPOINT_SOURCE_IDENTITY_MISMATCH", f"checkpoint {key} mismatch"
                 )
         archive = await self._read(req.checkpoint.archive_ref, content_types={"application/vnd.moonmind.worktree-archive"})
-        manifest_bytes = await self._read(req.checkpoint.manifest_ref, content_types={"application/json"})
+        manifest_bytes = await self._read(
+            req.checkpoint.manifest_ref,
+            content_types={
+                "application/json",
+                "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+            },
+        )
         if _digest(archive) != req.checkpoint.archive_digest:
             raise CheckpointRestoreError(
                 "CHECKPOINT_ARCHIVE_CORRUPTED", "archive digest mismatch"
@@ -449,16 +463,45 @@ class ManagedCheckpointRestoreService:
             raise CheckpointRestoreError(
                 "CHECKPOINT_MANIFEST_CORRUPTED", "manifest is not valid JSON"
             ) from exc
-        if manifest.get("baseCommit") != req.checkpoint.base_commit:
+        managed_manifest = manifest.get("contentType") == (
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"
+        )
+        git_manifest = manifest.get("git", {}) if managed_manifest else manifest
+        archive_manifest = manifest.get("archive", {}) if managed_manifest else manifest
+        if managed_manifest:
+            manifest = dict(manifest)
+            manifest["entries"] = [
+                {
+                    **entry,
+                    "digest": (
+                        "sha256:" + str(entry.get("sha256"))
+                        if entry.get("sha256")
+                        and not str(entry.get("sha256")).startswith("sha256:")
+                        else entry.get("sha256")
+                    ),
+                    "target": entry.get("linkTarget"),
+                }
+                for entry in manifest.get("entries", [])
+                if isinstance(entry, Mapping)
+            ]
+        if git_manifest.get("baseCommit") != req.checkpoint.base_commit:
             raise CheckpointRestoreError(
                 "CHECKPOINT_BASE_COMMIT_MISMATCH", "manifest base commit mismatch"
             )
-        if manifest.get("schemaVersion") != "v1" or manifest.get("kind") != "worktree_archive":
+        if manifest.get("schemaVersion") != "v1" or (
+            not managed_manifest and manifest.get("kind") != "worktree_archive"
+        ):
             raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest schema or kind mismatch")
-        if manifest.get("archiveRef") != req.checkpoint.archive_ref or manifest.get("archiveDigest") != req.checkpoint.archive_digest:
+        if archive_manifest.get("ref", archive_manifest.get("archiveRef")) != req.checkpoint.archive_ref or (
+            "sha256:" + str(archive_manifest.get("sha256"))
+            if managed_manifest and not str(archive_manifest.get("sha256", "")).startswith("sha256:")
+            else archive_manifest.get("sha256", archive_manifest.get("archiveDigest"))
+        ) != req.checkpoint.archive_digest:
             raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest archive identity mismatch")
         entries = manifest.get("entries")
-        if not isinstance(entries, list) or manifest.get("pathCount") != len(entries):
+        if not isinstance(entries, list) or (
+            not managed_manifest and manifest.get("pathCount") != len(entries)
+        ):
             raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest entry count mismatch")
 
         workspace_parent.mkdir(parents=True, exist_ok=True)
@@ -482,7 +525,9 @@ class ManagedCheckpointRestoreService:
                     else None
                 )
             self._git(
-                ["clone", "--no-checkout", repo_url, str(staging)], env=clone_env
+                ["clone", "--no-checkout", repo_url, str(staging)],
+                code="CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                env=clone_env,
             )
             self._git(
                 ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
@@ -496,6 +541,9 @@ class ManagedCheckpointRestoreService:
             # those deletions so the tree matches the manifest before verifying.
             self._replay_deletions(staging, manifest)
             self._verify_materialized(staging, manifest)
+            staged_paths = manifest.get("git", {}).get("stagedPaths", [])
+            if isinstance(staged_paths, list) and staged_paths:
+                self._git(["add", "-A", "--", *map(str, staged_paths)], staging)
             actual = self._git(
                 ["rev-parse", "HEAD"], staging, "CHECKPOINT_BASE_COMMIT_MISMATCH"
             )
@@ -508,7 +556,7 @@ class ManagedCheckpointRestoreService:
                 ["status", "--porcelain=v1", "-z", "--untracked-files=all"], staging
             )
             status_digest = _digest(status_payload)
-            expected_status = manifest.get("gitStatusDigest")
+            expected_status = manifest.get("gitStatusDigest") or manifest.get("git", {}).get("statusDigest")
             if expected_status and status_digest != expected_status:
                 raise CheckpointRestoreError(
                     "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch"
@@ -578,7 +626,7 @@ class ManagedCheckpointRestoreService:
         ).model_dump(by_alias=True, mode="json")
         record.update(status="ready", evidenceRef=evidence_ref, result=result)
         tmp = record_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(record, sort_keys=True))
+        tmp.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
         os.replace(tmp, record_path)
         return result
 
@@ -590,7 +638,7 @@ class ManagedCheckpointRestoreService:
             # crash the launch gate for every other run; skip it and keep looking
             # for a valid ready restoration.
             try:
-                record = json.loads(path.read_text())
+                record = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if not isinstance(record, dict):
