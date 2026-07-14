@@ -13,6 +13,15 @@ if str(TOOLS_DIR) not in sys.path:
 import check_alembic_graph
 
 
+def test_repository_migration_graph_has_exactly_one_head(capsys) -> None:
+    assert check_alembic_graph.main() == 0
+
+    assert capsys.readouterr().out == (
+        "Alembic migration graph has one head: "
+        "339_merge_migration_heads\n"
+    )
+
+
 def test_main_accepts_exactly_one_head(capsys) -> None:
     script = SimpleNamespace(get_heads=lambda: ["revision_1"])
 
