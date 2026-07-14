@@ -525,7 +525,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     assert handle.metadata["containerId"] == "container-1"
     assert persisted_record is not None
     assert persisted_record.run_id == binding.agent_run_id
-    assert persisted_record.workflow_id == "wf-user-1"
+    assert persisted_record.workflow_id == "wf-agent-run-1"
     assert persisted_record.runtime_id == "codex_cli"
     assert persisted_record.status == "completed"
     assert persisted_record.owner_run_id == "run-user-1"

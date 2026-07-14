@@ -638,7 +638,12 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
         managed_run_id=manifest["incidentWorkflowId"],
         binding=_binding(),
         workspace_path=str(workspace),
-        locator={"sessionEpoch": 1},
+        locator={
+            "sessionId": f"sess:{manifest['incidentWorkflowId']}:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-replay",
+            "threadId": "thread-replay",
+        },
         active_turn_id=None,
         result={"summary": "completed"},
         status="completed",
@@ -650,6 +655,7 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
     record = run_store.load(manifest["incidentWorkflowId"])
     assert record is not None
     assert record.workflow_id == expected["persistedWorkflowId"]
+    assert record.session_id is not None
 
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,

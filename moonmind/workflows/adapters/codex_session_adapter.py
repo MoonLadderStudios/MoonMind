@@ -2128,10 +2128,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         thread_id = str(locator.get("threadId") or "").strip() or None
         record = ManagedRunRecord(
             runId=record_key,
-            # Managed-run records are task-scoped durable evidence.  The
-            # session adapter itself runs inside a MoonMind.AgentRun child, but
-            # checkpoint authority is bound to the parent Step Execution.
-            workflowId=self._task_workflow_id or self._workflow_id,
+            workflowId=self._workflow_id,
             ownerRunId=(
                 step_execution.run_id
                 if step_execution is not None
