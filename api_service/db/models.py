@@ -3044,6 +3044,7 @@ class ContainerJobRecord(Base):
     backend_kind: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     backend_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     image_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
+    authorization_observation_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
     terminal_outcome_json: Mapped[Optional[dict[str, Any]]] = mapped_column(mutable_json_dict(), nullable=True)
     publication_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
     cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)

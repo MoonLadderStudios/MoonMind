@@ -31,3 +31,31 @@ def test_container_jobs_migration_upgrade_and_downgrade(monkeypatch) -> None:
         ]
         migration.downgrade()
         assert "container_jobs" not in sa.inspect(connection).get_table_names()
+
+
+def test_registry_authorization_migration_adds_and_drops_column(monkeypatch) -> None:
+    base = importlib.import_module(
+        "api_service.migrations.versions.338_container_jobs_contract"
+    )
+    auth = importlib.import_module(
+        "api_service.migrations.versions.340_container_job_registry_authorization"
+    )
+    assert auth.down_revision == "339_merge_migration_heads"
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        operations = Operations(MigrationContext.configure(connection))
+        monkeypatch.setattr(base, "op", operations)
+        monkeypatch.setattr(auth, "op", operations)
+        base.upgrade()
+        auth.upgrade()
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("container_jobs")
+        }
+        assert "authorization_observation_json" in columns
+        auth.downgrade()
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("container_jobs")
+        }
+        assert "authorization_observation_json" not in columns

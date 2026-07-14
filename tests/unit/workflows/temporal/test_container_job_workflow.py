@@ -107,6 +107,39 @@ async def test_typed_activity_boundary_delegates_to_backend() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backend_denial_becomes_nonretryable_application_error() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.schemas.container_job_models import (
+        ContainerJobBackendError,
+        ContainerJobFailureClass,
+        failure_class_from_exception,
+    )
+
+    async def deny(request):
+        raise ContainerJobBackendError(
+            ContainerJobFailureClass.IMAGE_USE_DENIED, "not authorized"
+        )
+
+    backend = type("Backend", (), {"acquire_image": staticmethod(deny)})()
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    inp = _input()
+    payload = {
+        "jobId": JOB_ID,
+        "ownershipToken": inp.ownership_token,
+        "request": inp.request.model_dump(mode="json", by_alias=True),
+    }
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities.container_job_acquire_image(payload)
+    assert excinfo.value.non_retryable
+    assert excinfo.value.type == "image_use_denied"
+    assert (
+        failure_class_from_exception(excinfo.value)
+        == ContainerJobFailureClass.IMAGE_USE_DENIED
+    )
+
+
+@pytest.mark.asyncio
 async def test_production_backend_makes_every_registered_activity_callable(
     tmp_path,
 ) -> None:
@@ -285,6 +318,51 @@ async def test_primary_success_survives_publication_and_cleanup_failures(
     assert result["terminal"].get("failureClass") is None
     assert result["publication"]["state"] == "failed"
     assert result["cleanup"]["state"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_authorization_flows_to_acquire_image_and_failure_class_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.schemas.container_job_models import (
+        ContainerJobBackendError,
+        ContainerJobFailureClass,
+    )
+
+    job = MoonMindContainerJobWorkflow()
+    seen: dict[str, object] = {}
+
+    async def activity(name, request):
+        if name == "container_job.acquire_image":
+            seen["authorization"] = request.registry_authorization
+            # Simulate a trusted-backend denial after the API authorized the job;
+            # the specific failure class must reach the terminal outcome even
+            # after crossing the (simulated) activity boundary.
+            raise RuntimeError(
+                "Activity task failed: "
+                + str(
+                    ContainerJobBackendError(
+                        ContainerJobFailureClass.REGISTRY_AUTH_FAILED, "registry denied"
+                    )
+                )
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    payload = _input().model_dump(mode="json", by_alias=True)
+    payload["registryAuthorization"] = {
+        "authorized": True,
+        "registry": "ghcr.io",
+        "repository": "org/app",
+        "reference": "ghcr.io/org/app:1",
+        "credentialRef": "db://ghcr",
+        "scope": "org/*",
+    }
+    result = await job.run(payload)
+    assert seen["authorization"] is not None
+    assert seen["authorization"].credential_ref == "db://ghcr"
+    assert result["state"] == "failed"
+    assert result["terminal"]["failureClass"] == "registry_auth_failed"
 
 
 @pytest.mark.asyncio

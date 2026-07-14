@@ -7882,6 +7882,8 @@ class TemporalAgentRuntimeActivities:
         from moonmind.schemas.container_job_models import (
             ContainerJobActivityRequest,
             ContainerJobActivityResult,
+            ContainerJobBackendError,
+            ContainerJobFailureClass,
         )
         from moonmind.workflows.temporal.container_image_acquisition import (
             ImageAcquisitionError,
@@ -7890,10 +7892,24 @@ class TemporalAgentRuntimeActivities:
         request = ContainerJobActivityRequest.model_validate(payload)
         try:
             result = await getattr(self._container_job_backend, operation)(request)
+        except ContainerJobBackendError as exc:
+            # Preserve the specific failure class across the activity boundary
+            # and fail fast on deterministic authority-sensitive denials so a
+            # denied image, credential, or scope is not retried pointlessly.
+            deterministic = {
+                ContainerJobFailureClass.IMAGE_USE_DENIED,
+                ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+            }
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type=exc.failure_class.value,
+                non_retryable=exc.failure_class in deterministic,
+            ) from exc
         except ImageAcquisitionError as exc:
             # Surface the granular image failure class to the workflow via the
             # ApplicationError type so the durable terminal outcome is exact.
-            raise ApplicationError(
+            raise temporal_exceptions.ApplicationError(
                 str(exc),
                 *([{"diagnosticsRef": exc.diagnostics_ref}] if exc.diagnostics_ref else []),
                 type=exc.failure_class.value,
