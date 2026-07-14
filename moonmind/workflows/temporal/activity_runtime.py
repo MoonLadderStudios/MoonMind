@@ -1418,6 +1418,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         f"container_job.{name}": ("agent_runtime", f"container_job_{name}")
         for name in (
             "resolve_workspace",
+            "probe_workspace",
             "acquire_image",
             "create_container",
             "start_container",
@@ -7875,19 +7876,33 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 f"container-job backend is required for container_job.{operation}"
             )
+        from temporalio.exceptions import ApplicationError
+
         from moonmind.schemas.container_job_models import (
             ContainerJobActivityRequest,
             ContainerJobActivityResult,
         )
+        from moonmind.workloads.container_workspace import ContainerWorkspaceError
 
         request = ContainerJobActivityRequest.model_validate(payload)
-        result = await getattr(self._container_job_backend, operation)(request)
+        try:
+            result = await getattr(self._container_job_backend, operation)(request)
+        except ContainerWorkspaceError as err:
+            # Surface a stable, non-retryable classification (workspace_not_found
+            # / permission_denied / workspace_not_visible) without leaking the
+            # resolved host or volume source into Temporal history or logs.
+            raise ApplicationError(
+                str(err), type=err.code, non_retryable=True
+            ) from err
         return ContainerJobActivityResult.model_validate(result).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
 
     async def container_job_resolve_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
         return await self._container_job_call("resolve_workspace", payload)
+
+    async def container_job_probe_workspace(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
+        return await self._container_job_call("probe_workspace", payload)
 
     async def container_job_acquire_image(self, payload: Mapping[str, Any], /) -> dict[str, Any]:
         return await self._container_job_call("acquire_image", payload)

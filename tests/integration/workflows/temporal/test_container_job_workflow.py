@@ -44,6 +44,7 @@ def _input() -> dict[str, Any]:
 def _activities() -> list[Any]:
     names = (
         "resolve_workspace",
+        "probe_workspace",
         "acquire_image",
         "create_container",
         "start_container",

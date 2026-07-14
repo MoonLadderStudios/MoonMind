@@ -23,9 +23,46 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
     )
+    from moonmind.workloads.container_workspace import (
+        CONTAINER_WORKSPACE_NOT_FOUND,
+        CONTAINER_WORKSPACE_NOT_VISIBLE,
+        CONTAINER_WORKSPACE_PERMISSION_DENIED,
+    )
 
 CATALOG = build_default_activity_catalog()
 _TERMINAL = frozenset({"succeeded", "failed", "canceled", "timed_out"})
+
+# Stable workspace classifications mapped onto the durable failure taxonomy so
+# a terminal outcome carries the right class regardless of whether the error
+# arrives directly or wrapped by a Temporal activity error.
+_WORKSPACE_FAILURE_CLASS = {
+    CONTAINER_WORKSPACE_NOT_FOUND: ContainerJobFailureClass.WORKSPACE,
+    CONTAINER_WORKSPACE_NOT_VISIBLE: ContainerJobFailureClass.WORKSPACE,
+    CONTAINER_WORKSPACE_PERMISSION_DENIED: ContainerJobFailureClass.AUTHORIZATION,
+}
+
+
+def _classify_failure(exc: BaseException) -> ContainerJobFailureClass:
+    """Map a lifecycle exception onto the durable container-job failure class.
+
+    Recognizes the stable workspace classification whether it surfaces as a
+    direct ``ContainerWorkspaceError`` (``failure_class`` attribute or a
+    ``code:`` prefixed message) or as a Temporal ``ApplicationError`` whose
+    ``type`` carries the stable code.
+    """
+
+    direct = getattr(exc, "failure_class", None)
+    if isinstance(direct, ContainerJobFailureClass):
+        return direct
+    for candidate in (getattr(exc, "type", None), getattr(exc, "cause", None)):
+        code = getattr(candidate, "type", candidate)
+        if code in _WORKSPACE_FAILURE_CLASS:
+            return _WORKSPACE_FAILURE_CLASS[code]
+    text = str(exc)
+    for code, failure_class in _WORKSPACE_FAILURE_CLASS.items():
+        if text.startswith(f"{code}:") or f"{code}:" in text:
+            return failure_class
+    return ContainerJobFailureClass.INFRASTRUCTURE
 
 
 @workflow.defn(name="MoonMind.ContainerJob")
@@ -120,6 +157,11 @@ class MoonMindContainerJobWorkflow:
                     "container_job.resolve_workspace", request
                 )
                 request.resolved_workspace_ref = resolved.resolved_workspace_ref
+                # Prove the selected daemon can see the resolved workspace before
+                # any (potentially large) image is acquired. A workspace visible
+                # to the API/agent but not the daemon fails workspace_not_visible
+                # here, before image acquisition.
+                await self._activity("container_job.probe_workspace", request)
             if not self._cancel_requested:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
                 image = await self._activity("container_job.acquire_image", request)
@@ -171,7 +213,7 @@ class MoonMindContainerJobWorkflow:
             message = "container job exceeded its timeout"
         except Exception as exc:
             terminal_state = ContainerJobState.FAILED
-            failure_class = ContainerJobFailureClass.INFRASTRUCTURE
+            failure_class = _classify_failure(exc)
             message = str(exc)[:2048]
 
         request.terminal_state = terminal_state

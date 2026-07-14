@@ -2617,6 +2617,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         or os.environ.get("SYSTEM_DOCKER_HOST")
                         or "tcp://docker-proxy:2375"
                     ),
+                    omnigent_worktree_root=os.environ.get(
+                        "MOONMIND_OMNIGENT_WORKTREE_ROOT"
+                    ),
+                    probe_image=os.environ.get("MOONMIND_CONTAINER_JOB_PROBE_IMAGE"),
                     evidence_publisher=_container_job_evidence_publisher(artifact_service),
                     projection_writer=_container_job_projection_writer,
                 ),

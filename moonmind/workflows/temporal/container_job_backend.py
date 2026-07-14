@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import tarfile
 from io import BytesIO
 from pathlib import Path
@@ -16,10 +15,22 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
 )
+from moonmind.workloads.container_workspace import (
+    CONTAINER_WORKSPACE_NOT_VISIBLE,
+    ApprovedWorkspaceMapping,
+    ContainerMountPlan,
+    ContainerWorkspaceError,
+    ContainerWorkspaceResolver,
+)
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
+
+# Small, always-available probe image used only to prove daemon visibility of
+# the resolved workspace before the requested (potentially large) image is
+# acquired. Overridable for air-gapped mirrors.
+DEFAULT_PROBE_IMAGE = "busybox:stable"
 
 
 class DockerContainerJobBackend:
@@ -34,6 +45,9 @@ class DockerContainerJobBackend:
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
         projection_writer: ProjectionWriter | None = None,
+        workspace_mapping: ApprovedWorkspaceMapping | None = None,
+        omnigent_worktree_root: str | Path | None = None,
+        probe_image: str | None = None,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         self._docker_binary = docker_binary
@@ -41,6 +55,16 @@ class DockerContainerJobBackend:
         self._runner = command_runner or self._run
         self._publish = evidence_publisher
         self._write_projection = projection_writer
+        self._resolver = ContainerWorkspaceResolver(
+            mapping=workspace_mapping
+            or ApprovedWorkspaceMapping.from_workspace_root(
+                self._workspace_root,
+                omnigent_worktree_root=omnigent_worktree_root,
+            )
+        )
+        self._probe_image = probe_image or os.environ.get(
+            "MOONMIND_CONTAINER_JOB_PROBE_IMAGE", DEFAULT_PROBE_IMAGE
+        )
 
     async def _run(self, args: Sequence[str]) -> tuple[int, bytes, bytes]:
         env = os.environ.copy()
@@ -68,15 +92,86 @@ class DockerContainerJobBackend:
         suffix = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:20]
         return f"moonmind-container-job-{suffix}"
 
+    def _plan(self, request: ContainerJobActivityRequest) -> ContainerMountPlan:
+        """Deterministically re-resolve the owner-side mount plan.
+
+        Called at every owner-side boundary so the daemon-visible source never
+        has to cross workflow history to be reused downstream.
+        """
+
+        return self._resolver.resolve(request)
+
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
-        ref = request.request.spec.workspace_ref
-        identity = ref.get("artifactRef") or ref.get("sessionId")
-        # Logical identifiers never become arbitrary paths: sanitize and contain.
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(identity))
-        workspace = (self._workspace_root / safe).resolve()
-        if self._workspace_root not in workspace.parents or not workspace.is_dir():
-            raise RuntimeError("authorized container-job workspace is unavailable")
-        return ContainerJobActivityResult(resolvedWorkspaceRef=str(workspace))
+        # Prove ownership, containment, and symlink safety now, but return only
+        # an opaque handle. The resolved host/volume source stays owner-side and
+        # never enters MCP/HTTP responses, activity results, or Temporal history.
+        self._plan(request)
+        return ContainerJobActivityResult(
+            resolvedWorkspaceRef=self._resolver.opaque_handle(request)
+        )
+
+    async def probe_workspace(self, request: ContainerJobActivityRequest):
+        """Prove the selected daemon can mount/read (and write) the workspace.
+
+        Runs before image acquisition using a small probe image so a workspace
+        visible to the API/agent but not the daemon fails as
+        ``workspace_not_visible`` without pulling the requested large image. The
+        only thing the writable probe mutates is a deterministic, job-owned
+        marker, and both markers are removed in a ``finally`` block.
+        """
+
+        plan = self._plan(request)
+        marker = self._resolver.visibility_marker_name(request)
+        expected = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:16]
+        workspace_marker = Path(plan.workspace_source) / marker
+        artifacts_marker = Path(plan.artifacts_source) / marker
+        name = f"{self._name(request)}-probe"
+        try:
+            workspace_marker.write_text(expected, encoding="utf-8")
+            code, stdout, stderr = await self._runner(
+                (
+                    "run",
+                    "--rm",
+                    "--name",
+                    name,
+                    "--network",
+                    "none",
+                    "--mount",
+                    f"type=bind,src={plan.workspace_source},dst=/workspace,readonly",
+                    "--mount",
+                    f"type=bind,src={plan.artifacts_source},dst=/artifacts",
+                    self._probe_image,
+                    "sh",
+                    "-c",
+                    f"cat /workspace/{marker} && printf '{expected}' > /artifacts/{marker}",
+                )
+            )
+            observed = stdout.decode(errors="replace").strip()
+            if code or observed != expected:
+                raise ContainerWorkspaceError(
+                    CONTAINER_WORKSPACE_NOT_VISIBLE,
+                    "selected Docker daemon cannot read the resolved workspace: "
+                    + stderr.decode(errors="replace").strip()[:500],
+                )
+            if artifacts_marker.read_text(encoding="utf-8").strip() != expected:
+                raise ContainerWorkspaceError(
+                    CONTAINER_WORKSPACE_NOT_VISIBLE,
+                    "selected Docker daemon cannot write the resolved artifacts area",
+                )
+        except OSError as exc:
+            raise ContainerWorkspaceError(
+                CONTAINER_WORKSPACE_NOT_VISIBLE,
+                f"workspace visibility marker could not be prepared: {exc}",
+            ) from exc
+        finally:
+            for path in (workspace_marker, artifacts_marker):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+        return ContainerJobActivityResult(
+            resolvedWorkspaceRef=self._resolver.opaque_handle(request)
+        )
 
     async def acquire_image(self, request: ContainerJobActivityRequest):
         if request.request.spec.registry_credential_ref:
@@ -116,6 +211,9 @@ class DockerContainerJobBackend:
             raise RuntimeError("resolved workspace and image are required")
         spec = request.request.spec
         name = self._name(request)
+        # Re-resolve owner-side so the daemon-visible sources are derived from
+        # trusted authority here, not from the opaque handle carried in history.
+        plan = self._plan(request)
         args = [
             "create",
             "--name",
@@ -134,9 +232,8 @@ class DockerContainerJobBackend:
             str(spec.resources.pids),
             "--workdir",
             spec.workdir,
-            "--mount",
-            f"type=bind,src={request.resolved_workspace_ref},dst=/workspace",
         ]
+        args.extend(plan.mount_args())
         for item in spec.environment:
             if item.secret_ref is not None:
                 raise RuntimeError("secretRef resolution is unavailable on this worker")
@@ -196,13 +293,15 @@ class DockerContainerJobBackend:
         )
         artifacts_ref = None
         if self._publish and request.request.spec.outputs:
-            workspace = Path(request.resolved_workspace_ref or "").resolve()
+            # Outputs are collected only from the approved, job-owned artifact
+            # root (/artifacts), never from the writable repository workspace.
+            artifacts_root = Path(self._plan(request).artifacts_source).resolve()
             archive = BytesIO()
             with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
                 for output in request.request.spec.outputs:
-                    path = (workspace / output.relative_path).resolve()
-                    if workspace not in path.parents and path != workspace:
-                        raise RuntimeError("declared output escapes the workspace")
+                    path = (artifacts_root / output.relative_path).resolve()
+                    if artifacts_root not in path.parents and path != artifacts_root:
+                        raise RuntimeError("declared output escapes the artifact root")
                     if not path.exists():
                         raise RuntimeError(f"declared output is missing: {output.name}")
                     bundle.add(path, arcname=output.name, recursive=True)

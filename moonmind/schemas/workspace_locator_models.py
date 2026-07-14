@@ -62,3 +62,81 @@ class WorkspaceLocatorResolutionError(ValueError):
 WORKSPACE_AUTHORITY_MISMATCH = "WORKSPACE_AUTHORITY_MISMATCH"
 WORKSPACE_IDENTITY_MISMATCH = "WORKSPACE_IDENTITY_MISMATCH"
 WORKSPACE_LOCATOR_UNSUPPORTED = "WORKSPACE_LOCATOR_UNSUPPORTED"
+
+
+# ---------------------------------------------------------------------------
+# Container-job workspace source kinds (MoonLadderStudios/MoonMind#3255).
+#
+# These extend the canonical typed workspace-locator contract above for the
+# public container-job submission surface rather than introducing a competing
+# Docker-only identity model.  Every kind reuses the shared relative-subpath
+# traversal guard and the ``WorkspaceLocatorResolutionError`` taxonomy so that
+# owner-side resolution stays uniform across workflow, managed-session,
+# Omnigent, and artifact workspaces.
+# ---------------------------------------------------------------------------
+
+# Stable, caller-visible classification codes for container-job workspace
+# resolution.  Owner-side resolution must fail closed with exactly one of these
+# before any image acquisition; resolved host/volume sources never leak.
+CONTAINER_WORKSPACE_NOT_FOUND = "workspace_not_found"
+CONTAINER_WORKSPACE_PERMISSION_DENIED = "permission_denied"
+CONTAINER_WORKSPACE_NOT_VISIBLE = "workspace_not_visible"
+
+
+class ContainerRunWorkspaceLocator(BaseModel):
+    """MoonMind workflow/run workspace referenced by its authoritative run id."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["moonmind-run"] = "moonmind-run"
+    run_id: str = Field(..., alias="runId", min_length=1, max_length=300)
+    relative_path: str = Field("repo", alias="relativePath", max_length=1000)
+
+    _validate_relative_path = field_validator("relative_path", mode="before")(_relative_subpath)
+
+
+class ContainerManagedSessionWorkspaceLocator(BaseModel):
+    """MoonMind managed-session repository/workspace referenced by session id."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["moonmind-session"] = "moonmind-session"
+    session_id: str = Field(..., alias="sessionId", min_length=1, max_length=300)
+    relative_path: str = Field("repo", alias="relativePath", max_length=1000)
+
+    _validate_relative_path = field_validator("relative_path", mode="before")(_relative_subpath)
+
+
+class ContainerOmnigentWorkspaceLocator(BaseModel):
+    """Omnigent session/conversation worktree referenced by session id."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["omnigent-session"] = "omnigent-session"
+    session_id: str = Field(..., alias="sessionId", min_length=1, max_length=300)
+    conversation_id: str | None = Field(None, alias="conversationId", max_length=300)
+    relative_path: str = Field("repo", alias="relativePath", max_length=1000)
+
+    _validate_relative_path = field_validator("relative_path", mode="before")(_relative_subpath)
+
+
+class ContainerArtifactWorkspaceLocator(BaseModel):
+    """Approved artifact-materialization workspace referenced by artifact ref."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["artifact-workspace"] = "artifact-workspace"
+    artifact_ref: str = Field(..., alias="artifactRef", min_length=1, max_length=2000)
+    relative_path: str = Field("repo", alias="relativePath", max_length=1000)
+
+    _validate_relative_path = field_validator("relative_path", mode="before")(_relative_subpath)
+
+
+ContainerWorkspaceLocator = Annotated[
+    ContainerRunWorkspaceLocator
+    | ContainerManagedSessionWorkspaceLocator
+    | ContainerOmnigentWorkspaceLocator
+    | ContainerArtifactWorkspaceLocator,
+    Field(discriminator="kind"),
+]
+CONTAINER_JOB_WORKSPACE_ADAPTER = TypeAdapter(ContainerWorkspaceLocator)

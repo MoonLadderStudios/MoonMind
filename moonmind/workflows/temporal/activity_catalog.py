@@ -14,6 +14,9 @@ from moonmind.workflows.skills.skill_plan_contracts import (
     SkillDefinition,
     SkillPolicies,
 )
+from moonmind.workloads.container_workspace import (
+    CONTAINER_WORKSPACE_ERROR_CODES,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -1410,11 +1413,14 @@ def build_default_activity_catalog(
                         else 3
                     ),
                     max_interval_seconds=30,
-                    non_retryable=NON_RETRYABLE_ERRORS,
+                    non_retryable=(
+                        NON_RETRYABLE_ERRORS + CONTAINER_WORKSPACE_ERROR_CODES
+                    ),
                 ),
             )
             for name in (
                 "resolve_workspace",
+                "probe_workspace",
                 "acquire_image",
                 "create_container",
                 "start_container",

@@ -58,7 +58,7 @@ def test_workflow_identity_registration_and_activity_routes() -> None:
         for item in build_default_activity_catalog().activities
         if item.family == "container_job"
     ]
-    assert len(routes) == 12
+    assert len(routes) == 13
     assert (
         build_default_activity_catalog()
         .resolve_activity("container_job.create_container")
@@ -107,8 +107,8 @@ async def test_typed_activity_boundary_delegates_to_backend() -> None:
 async def test_production_backend_makes_every_registered_activity_callable(
     tmp_path,
 ) -> None:
-    workspace = tmp_path / "art_workspace"
-    workspace.mkdir()
+    workspace = tmp_path / "art_workspace" / "repo"
+    workspace.mkdir(parents=True)
     commands: list[tuple[str, ...]] = []
 
     async def runner(args):
@@ -260,6 +260,41 @@ async def test_primary_success_survives_publication_and_cleanup_failures(
     assert result["terminal"].get("failureClass") is None
     assert result["publication"]["state"] == "failed"
     assert result["cleanup"]["state"] == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failing_activity", "code", "expected_class"),
+    [
+        ("container_job.resolve_workspace", "permission_denied", "authorization"),
+        ("container_job.probe_workspace", "workspace_not_visible", "workspace"),
+    ],
+)
+async def test_workspace_failures_classify_before_image_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_activity: str,
+    code: str,
+    expected_class: str,
+) -> None:
+    from moonmind.workloads.container_workspace import ContainerWorkspaceError
+
+    job = MoonMindContainerJobWorkflow()
+    calls: list[str] = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == failing_activity:
+            raise ContainerWorkspaceError(code, "boom")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "failed"
+    assert result["terminal"]["failureClass"] == expected_class
+    # The visibility probe runs before image acquisition, and a failure there
+    # (or in resolution) stops the lifecycle before acquire_image.
+    assert "container_job.acquire_image" not in calls
 
 
 @pytest.mark.asyncio

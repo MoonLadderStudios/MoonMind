@@ -163,15 +163,17 @@ class ContainerJobSpec(ContractModel):
     @field_validator("workspace_ref")
     @classmethod
     def valid_workspace_ref(cls, value: dict[str, Any]) -> dict[str, Any]:
-        kind = value.get("kind")
-        identity_fields = {
-            "omnigent-session": "sessionId",
-            "moonmind-session": "sessionId",
-            "artifact-workspace": "artifactRef",
-        }
-        identity = identity_fields.get(str(kind))
-        if identity is None or not isinstance(value.get(identity), str) or not value[identity].strip():
-            raise ValueError("workspaceRef must contain a supported kind and identity")
+        # Validate through the canonical typed workspace-locator contract
+        # (MoonMind#3147/#3255) instead of a bespoke Docker-only identity model.
+        # The original compact dict is returned unchanged so the shared
+        # HTTP/MCP/Temporal serialization stays deterministic.
+        from moonmind.schemas.workspace_locator_models import (
+            CONTAINER_JOB_WORKSPACE_ADAPTER,
+        )
+
+        if not isinstance(value, dict):
+            raise ValueError("workspaceRef must be a typed logical locator object")
+        CONTAINER_JOB_WORKSPACE_ADAPTER.validate_python(value)
         return value
 
     @field_validator("workdir")
