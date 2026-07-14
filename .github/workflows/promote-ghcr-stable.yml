@@ -1,4 +1,4 @@
-name: Promote GHCR image to stable
+name: Release / Promote Stable
 
 # Promotion is a registry-side retag, never a rebuild. Build workflows keep the
 # `latest` / `1.0` "current build channel" tags fresh automatically; this
