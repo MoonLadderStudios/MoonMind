@@ -96,6 +96,10 @@ LABEL_CONTAINER_JOB = "moonmind.container_job"
 LABEL_OWNERSHIP = "moonmind.ownership"
 LABEL_CORRELATION = "moonmind.correlation"
 LABEL_EXPIRES_AT = "moonmind.expires_at"
+LABEL_OBJECT_KIND = "moonmind.object_kind"
+LABEL_BACKEND_REF = "moonmind.backend_ref"
+LABEL_OWNERSHIP_SCHEMA = "moonmind.ownership_schema"
+OWNERSHIP_SCHEMA_VERSION = "container-job/v1"
 
 # Grace added to the job timeout when computing the reaper expiry label so a
 # container that is still being torn down is not swept mid-cleanup.
@@ -815,6 +819,12 @@ class DockerContainerJobBackend:
             f"{LABEL_CORRELATION}={self._correlation_label(request)}",
             "--label",
             f"{LABEL_EXPIRES_AT}={self._expiry_label(request)}",
+            "--label",
+            f"{LABEL_OBJECT_KIND}=container",
+            "--label",
+            f"{LABEL_BACKEND_REF}={self._backend_ref}",
+            "--label",
+            f"{LABEL_OWNERSHIP_SCHEMA}={OWNERSHIP_SCHEMA_VERSION}",
             "--network",
             spec.network_mode,
             *structured_container_security_args(),
@@ -871,17 +881,32 @@ class DockerContainerJobBackend:
         )
 
     async def stop_container(self, request: ContainerJobActivityRequest):
+        ref = request.container_ref or self._name(request)
+        ownership = await self._owned_ownership_label(ref)
+        if ownership is None:
+            return ContainerJobActivityResult(containerRef=ref, running=False)
+        if ownership != request.ownership_token:
+            raise RuntimeError("container job ownership mismatch; refusing stop")
         await self._checked(
-            "stop", "--time", "10", request.container_ref or self._name(request)
+            "stop", "--time", "10", ref
         )
         return ContainerJobActivityResult(
-            containerRef=request.container_ref or self._name(request), running=False
+            containerRef=ref, running=False
         )
 
     async def remove_container(self, request: ContainerJobActivityRequest):
-        await self._checked(
-            "rm", "--force", request.container_ref or self._name(request)
-        )
+        # Re-read immutable ownership immediately before deletion. A prior
+        # observe/reconcile result is not deletion authority: the expected name
+        # may have been removed and replaced between Activities. Missing is an
+        # idempotent success; a replacement with different ownership fails
+        # closed.
+        ref = request.container_ref or self._name(request)
+        ownership = await self._owned_ownership_label(ref)
+        if ownership is None:
+            return ContainerJobActivityResult()
+        if ownership != request.ownership_token:
+            raise RuntimeError("container job ownership mismatch; refusing removal")
+        await self._checked("rm", "--force", ref)
         return ContainerJobActivityResult()
 
     async def publish_evidence(self, request: ContainerJobActivityRequest):
