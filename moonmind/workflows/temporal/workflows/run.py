@@ -22,7 +22,7 @@ with workflow.unsafe.imports_passed_through():
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
-    from moonmind.schemas.agent_skill_models import SkillSelector
+    from moonmind.schemas.agent_skill_models import ResolvedSkillSet, SkillSelector
     from moonmind.schemas.container_job_models import (
         ContainerJobState,
         ContainerJobSubmitRequest,
@@ -698,6 +698,9 @@ RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH = (
 )
 RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH = (
     "run-resolved-skill-terminal-contract-v1"
+)
+RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH = (
+    "run-existing-skillset-terminal-contract-v1"
 )
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
     "run-pr-resolver-selector-resolution-v1"
@@ -15620,16 +15623,44 @@ class MoonMindRunWorkflow:
     ) -> str | None:
         """Resolve effective workflow/step skill intent before AgentRun launch."""
 
+        selected_skill = selected_agent_skill(node_inputs)
+        if selected_skill == "auto":
+            selected_skill = ""
         if existing_skillset_ref:
+            if selected_skill and self._workflow_patch_enabled(
+                RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH
+            ):
+                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "artifact.read"
+                )
+                resolved_payload = await execute_typed_activity(
+                    "artifact.read",
+                    ArtifactReadInput(
+                        principal=self._principal(),
+                        artifact_ref=existing_skillset_ref,
+                    ),
+                    **self._execute_kwargs_for_route(artifact_read_route),
+                )
+                resolved = ResolvedSkillSet.model_validate(
+                    self._decode_json_payload(
+                        resolved_payload,
+                        error_message=(
+                            "resolvedSkillsetRef must resolve to a JSON object"
+                        ),
+                    )
+                )
+                self._record_resolved_selected_skill(
+                    resolved=resolved,
+                    selected_skill=selected_skill,
+                    node_id=node_id,
+                    terminal_contract_enabled=True,
+                )
             return existing_skillset_ref
 
         effective = build_effective_workflow_skill_selectors(
             task_skills,
             node_skills if node_skills is not None else node_inputs.get("skills"),
         )
-        selected_skill = selected_agent_skill(node_inputs)
-        if selected_skill == "auto":
-            selected_skill = ""
         if effective is None and not selected_skill:
             return None
 
@@ -15677,59 +15708,14 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(route),
         )
         if selected_skill:
-            normalized_skill = str(selected_skill).strip().lower()
-            resolved_skill_names = self._resolved_skillset_skill_names(resolved)
-            if normalized_skill not in resolved_skill_names:
-                raise ValueError(
-                    f"selected skill '{selected_skill}' was not resolved into the "
-                    "agent skill snapshot"
-                )
-            selected_entry = self._resolved_skillset_entry(
-                resolved,
-                normalized_skill,
+            self._record_resolved_selected_skill(
+                resolved=resolved,
+                selected_skill=selected_skill,
+                node_id=node_id,
+                terminal_contract_enabled=self._workflow_patch_enabled(
+                    RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH
+                ),
             )
-            if self._workflow_patch_enabled(
-                RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH
-            ):
-                terminal_contract = self._resolved_skill_terminal_contract(
-                    selected_entry
-                )
-                if terminal_contract is not None:
-                    self._resolved_skill_terminal_contract_by_step[node_id] = (
-                        terminal_contract
-                    )
-            if normalized_skill == "pr-resolver":
-                if workflow.patched(
-                    RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH
-                ):
-                    decision = require_skill_owned_pr_resolver_execution(
-                        selected_entry
-                    )
-                    self._native_skill_binding_by_step[node_id] = {
-                        "eligible": decision.eligible,
-                        "host": decision.host,
-                        "reasonCode": decision.reason_code,
-                        "identity": dict(decision.identity),
-                    }
-                elif workflow.patched(RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH):
-                    decision = evaluate_pr_resolver_native_binding(selected_entry)
-                    self._native_skill_binding_by_step[node_id] = {
-                        "eligible": decision.eligible,
-                        "host": decision.host,
-                        "reasonCode": decision.reason_code,
-                        "identity": dict(decision.identity),
-                    }
-                else:
-                    # Replay path for histories created before native routing was
-                    # bound to immutable resolved-skill evidence. Those histories
-                    # selected the native host by canonical name, so preserve that
-                    # child-workflow command only for their replay.
-                    self._native_skill_binding_by_step[node_id] = {
-                        "eligible": True,
-                        "host": "temporal",
-                        "reasonCode": "legacy_name_binding_replay",
-                        "identity": {},
-                    }
         manifest_ref = self._resolved_skillset_field(
             resolved,
             "manifest_ref",
@@ -15743,6 +15729,63 @@ class MoonMindRunWorkflow:
             "snapshotId",
         )
         return str(snapshot_id) if snapshot_id else None
+
+    def _record_resolved_selected_skill(
+        self,
+        *,
+        resolved: Any,
+        selected_skill: str,
+        node_id: str,
+        terminal_contract_enabled: bool,
+    ) -> None:
+        """Record trusted selected-Skill launch metadata from its snapshot."""
+
+        normalized_skill = str(selected_skill).strip().lower()
+        resolved_skill_names = self._resolved_skillset_skill_names(resolved)
+        if normalized_skill not in resolved_skill_names:
+            raise ValueError(
+                f"selected skill '{selected_skill}' was not resolved into the "
+                "agent skill snapshot"
+            )
+        selected_entry = self._resolved_skillset_entry(
+            resolved,
+            normalized_skill,
+        )
+        if terminal_contract_enabled:
+            terminal_contract = self._resolved_skill_terminal_contract(selected_entry)
+            if terminal_contract is not None:
+                self._resolved_skill_terminal_contract_by_step[node_id] = (
+                    terminal_contract
+                )
+        if normalized_skill != "pr-resolver":
+            return
+        if workflow.patched(RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH):
+            decision = require_skill_owned_pr_resolver_execution(selected_entry)
+            self._native_skill_binding_by_step[node_id] = {
+                "eligible": decision.eligible,
+                "host": decision.host,
+                "reasonCode": decision.reason_code,
+                "identity": dict(decision.identity),
+            }
+        elif workflow.patched(RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH):
+            decision = evaluate_pr_resolver_native_binding(selected_entry)
+            self._native_skill_binding_by_step[node_id] = {
+                "eligible": decision.eligible,
+                "host": decision.host,
+                "reasonCode": decision.reason_code,
+                "identity": dict(decision.identity),
+            }
+        else:
+            # Replay path for histories created before native routing was bound
+            # to immutable resolved-skill evidence. Those histories selected the
+            # native host by canonical name, so preserve that child-workflow
+            # command only for their replay.
+            self._native_skill_binding_by_step[node_id] = {
+                "eligible": True,
+                "host": "temporal",
+                "reasonCode": "legacy_name_binding_replay",
+                "identity": {},
+            }
 
     @staticmethod
     def _resolved_skillset_skill_names(resolved: Any) -> set[str]:

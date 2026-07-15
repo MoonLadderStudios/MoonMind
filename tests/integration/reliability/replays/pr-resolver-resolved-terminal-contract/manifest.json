@@ -5,6 +5,7 @@
   "parentWorkflowId": "merge-automation:mm:4858fff0-4708-41e3-9465-bb0904bb0b1e:MoonLadderStudios/Tactics:2189:4dc317593b0ec1d855e1d72cd233f23702a31643",
   "parentRunId": "019f65d7-aba5-7ee5-b869-f5beb627efcb",
   "logicalStepId": "node-1",
+  "existingResolvedSkillsetRef": "art_resolved_skillset_pr_2189",
   "planNodeInputs": {
     "targetRuntime": "codex_cli",
     "selectedSkill": "pr-resolver"

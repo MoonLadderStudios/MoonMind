@@ -774,6 +774,42 @@ async def test_resolved_pr_resolver_contract_owns_durable_continuation(
         request.terminal_continuation_authority.allowed_actions
     )
 
+    async def read_existing_skillset(*_args: object, **_kwargs: object) -> object:
+        return manifest["resolvedSkillSet"]
+
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        read_existing_skillset,
+    )
+    existing_parent = MoonMindRunWorkflow()
+    existing_parent._owner_id = "owner-replay-existing"
+    existing_ref = await existing_parent._resolve_agent_node_skillset_ref(
+        task_skills=None,
+        node_inputs=manifest["planNodeInputs"],
+        node_id=manifest["logicalStepId"],
+        existing_skillset_ref=manifest["existingResolvedSkillsetRef"],
+    )
+    existing_request = existing_parent._build_agent_execution_request(
+        node_inputs=manifest["planNodeInputs"],
+        node_id=manifest["logicalStepId"],
+        tool_name=manifest["planNodeInputs"]["targetRuntime"],
+        resolved_skillset_ref=existing_ref,
+        workflow_parameters={"mergeGate": manifest["mergeGate"]},
+    )
+
+    assert existing_ref == manifest["existingResolvedSkillsetRef"]
+    assert existing_request.terminal_contract is not None
+    assert (
+        existing_request.terminal_contract.contract_id
+        == expected["terminalContractId"]
+    )
+    assert existing_request.terminal_continuation_authority is not None
+    assert (
+        existing_request.terminal_continuation_authority.owner_workflow_type
+        == expected["continuationOwnerWorkflowType"]
+    )
+
 
 @pytest.mark.integration_ci
 async def test_retry_before_execution_captures_terminal_prior_workspace(
