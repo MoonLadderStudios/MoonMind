@@ -1,0 +1,33 @@
+groups:
+  - name: moonmind-recording
+    rules:
+      - record: moonmind:api_error_ratio:5m
+        expr: sum(rate(moonmind_api_requests_total{outcome="failure"}[5m])) / clamp_min(sum(rate(moonmind_api_requests_total[5m])), 1)
+      - record: moonmind:workflow_failure_ratio:1h
+        expr: sum(rate(moonmind_workflow_started_total{outcome="failure"}[1h])) / clamp_min(sum(rate(moonmind_workflow_started_total[1h])), 1)
+  - name: moonmind-alerts
+    rules:
+      - alert: MoonMindApiErrorBudgetBurn
+        expr: moonmind:api_error_ratio:5m > 0.05
+        for: 15m
+        labels: {severity: ticket, owner: api}
+        annotations:
+          summary: API errors are consuming the provisional budget
+          impact: Operators may be unable to submit or inspect work.
+          dashboard: moonmind-overview
+          runbook: docs/Runbooks/Observability/ServiceHealth.md
+          query: Inspect API failure outcomes and correlated traces.
+          recovery: Error ratio remains below the calibrated threshold for one hour.
+          dedupe_key: moonmind-api-budget-burn
+      - alert: MoonMindWorkflowFailureBudgetBurn
+        expr: moonmind:workflow_failure_ratio:1h > 0.10
+        for: 30m
+        labels: {severity: ticket, owner: workflows}
+        annotations:
+          summary: Workflow failures are consuming the provisional budget
+          impact: Supported workflow classes may not complete.
+          dashboard: moonmind-overview
+          runbook: docs/Runbooks/Observability/ServiceHealth.md
+          query: Inspect bounded failure outcomes, then drill into Temporal by authorized link.
+          recovery: Failure ratio remains below the calibrated threshold for one hour.
+          dedupe_key: moonmind-workflow-budget-burn

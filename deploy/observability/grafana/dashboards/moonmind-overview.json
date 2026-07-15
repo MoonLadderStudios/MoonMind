@@ -1,0 +1,16 @@
+{
+  "uid": "moonmind-overview",
+  "title": "MoonMind Production Overview",
+  "schemaVersion": 39,
+  "tags": ["moonmind"],
+  "templating": {"list": [{"name": "runtime_family", "type": "custom", "query": "omnigent,codex,claude,other,unknown"}]},
+  "panels": [
+    {"id": 1, "title": "API availability and latency", "type": "timeseries", "targets": [{"expr": "sum(rate(moonmind_api_requests_total[5m]))"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(moonmind_api_request_duration_seconds_bucket[5m])))"}]},
+    {"id": 2, "title": "Workflow and step reliability", "type": "timeseries", "targets": [{"expr": "sum by (outcome) (rate(moonmind_workflow_started_total[5m]))"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(moonmind_workflow_duration_seconds_bucket[5m])))"}]},
+    {"id": 3, "title": "Temporal and worker queues", "type": "timeseries", "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(moonmind_task_schedule_to_start_seconds_bucket[5m])))"}]},
+    {"id": 4, "title": "Providers, profiles, and attribution", "type": "timeseries", "targets": [{"expr": "sum by (outcome) (rate(moonmind_provider_requests_total[5m]))"}, {"expr": "moonmind_usage_attribution_coverage_ratio"}]},
+    {"id": 5, "title": "Omnigent bridge and hosts", "type": "timeseries", "targets": [{"expr": "moonmind_omnigent_event_lag_seconds"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(moonmind_omnigent_session_start_seconds_bucket[5m])))"}]},
+    {"id": 6, "title": "Artifacts, Live Logs, and Chat", "type": "timeseries", "targets": [{"expr": "sum by (outcome) (rate(moonmind_artifact_operations_total[5m]))"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(moonmind_observability_stream_lag_seconds_bucket[5m])))"}]},
+    {"id": 7, "title": "Safety and intervention", "type": "timeseries", "targets": [{"expr": "sum by (outcome) (rate(moonmind_policy_decisions_total[5m]))"}]}
+  ]
+}
