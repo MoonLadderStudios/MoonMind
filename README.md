@@ -18,7 +18,7 @@ UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://gith
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. `cd MoonMind && git submodule update --init --recursive`. This initializes separately licensed submodules, including Omnigent.
+4. `cd MoonMind && git submodule update --init --recursive`. This initializes the submodules like Omnigent.
 5. Run `docker compose up -d` to start the service
 6. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
 7. In Settings:
@@ -28,35 +28,6 @@ UPDATE: MoonMind is in the process of incorporating [Omnigent-host](https://gith
 8. Click Create and submit a workflow!
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
-
-### Recovering from `postgres` unhealthy (no space left on device)
-
-If `postgres` reports:
-
-`FATAL: could not write lock file "postmaster.pid": No space left on device`
-
-that is a disk-capacity failure on the PostgreSQL data volume, not a Compose or janitor bug.
-
-1. Run a safe cleanup pass:
-
-```bash
-./tools/cleanup-docker-space.sh --dry-run
-./tools/cleanup-docker-space.sh --aggressive
-```
-
-2. Restart postgres:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml up -d postgres
-```
-
-3. Verify recovery:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.claude-host.yaml ps --format table postgres
-```
-
-The managed-runtime janitor is a separate retention cleanup path for workspace/artifact state; it is not the same as Docker disk cleanup for PostgreSQL data.
 
 ### OAuth Workflow
 If you already have a subscription with a model provider:
