@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import subprocess
@@ -112,6 +113,67 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
     assert result["workspace"]["archiveRef"].startswith("artifact://")
     assert len(commands) == 4
     assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_bounds_heartbeats_during_archive_loop(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    for index in range(3):
+        (repo / f"tracked-{index}.txt").write_text("checkpoint evidence\n")
+
+    async def run_git(command, **_kwargs):
+        operation = [str(part) for part in command][5:]
+        if operation[0] == "ls-files":
+            return SimpleNamespace(
+                stdout="".join(f"tracked-{index}.txt\0" for index in range(3))
+            )
+        if operation[:2] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(stdout="abc123\n")
+        if operation[:2] == ["branch", "--show-current"]:
+            return SimpleNamespace(stdout="main\n")
+        if operation[0] == "status":
+            return SimpleNamespace(stdout="")
+        raise AssertionError(f"unexpected git command: {operation}")
+
+    heartbeat_queue: asyncio.Queue[object] = asyncio.Queue(maxsize=1)
+    monkeypatch.setattr(activity_runtime_module, "_run_command", run_git)
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity, "in_activity", lambda: True
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: heartbeat_queue.put_nowait(payload),
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS",
+        0.0,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=object(), artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        return "artifact://" + hashlib.sha256(payload).hexdigest()
+
+    activities._put_managed_checkpoint_artifact = put
+    model = ManagedWorkspaceCheckpointCaptureInput.model_validate(
+        _request(digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest)
+    )
+    now = datetime.now(UTC)
+
+    result = await activities._capture_managed_worktree(
+        model,
+        repo,
+        SimpleNamespace(started_at=now, finished_at=now),
+    )
+
+    assert result["status"] == "captured"
+    assert heartbeat_queue.qsize() == 1
 
 
 @pytest.mark.asyncio
