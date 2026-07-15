@@ -69,7 +69,6 @@ from tests.unit.workflows.temporal.workflows.test_run_integration import (
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 

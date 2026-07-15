@@ -13,6 +13,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites() -> None:
 
     assert outputs == {
         "unit_fast": "false",
+        "unit_slow": "false",
         "api_component": "false",
         "temporal_boundary": "false",
         "integration_ci": "false",
@@ -47,7 +48,11 @@ def test_generated_openapi_client_selects_static_only() -> None:
 
 
 def test_browser_sensitive_changes_select_both_engines() -> None:
-    for path in ("frontend/src/browser/layout.browser.test.ts", "frontend/src/styles/dashboard.css", "frontend/vitest.browser.config.ts"):
+    for path in (
+        "frontend/src/browser/layout.browser.test.ts",
+        "frontend/src/styles/dashboard.css",
+        "frontend/vitest.browser.config.ts",
+    ):
         outputs = _outputs([path])
         assert outputs["frontend_static"] == "true"
         assert outputs["frontend_browser_chromium"] == "true"
@@ -173,6 +178,25 @@ def test_integration_test_change_selects_integration_ci() -> None:
 
     assert outputs["unit_fast"] == "true"
     assert outputs["integration_ci"] == "true"
+
+
+def test_reliability_only_change_does_not_select_integration_ci() -> None:
+    outputs = _outputs(["tests/integration/reliability/test_checkpoint_resume.py"])
+
+    assert outputs["reliability_journey"] == "true"
+    assert outputs["integration_ci"] == "false"
+
+
+def test_known_slow_test_change_selects_unit_slow() -> None:
+    outputs = _outputs(["tests/unit/api/routers/test_agent_runs.py"])
+
+    assert outputs["unit_slow"] == "true"
+
+
+def test_full_backend_includes_unit_slow() -> None:
+    outputs = select_suites([], event_name="schedule").as_outputs()
+
+    assert outputs["unit_slow"] == "true"
 
 
 def test_api_service_migration_change_selects_integration_ci() -> None:
