@@ -158,7 +158,7 @@ def normalize_portable_snapshot(
         open=state not in {"CLOSED", "MERGED"},
         draft=pr.get("isDraft") is True,
         merge_conflict=(
-            merge_state == "DIRTY"
+            merge_state in {"BEHIND", "DIRTY"}
             or mergeable is False
             or mergeable_text in {"CONFLICTING", "DIRTY", "CONFLICT"}
         ),

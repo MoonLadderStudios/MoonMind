@@ -294,6 +294,14 @@ async def _run_command(cmd, **kwargs):
 
 logger = getLogger(__name__)
 
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
@@ -1000,7 +1008,6 @@ _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "live_streams.spool",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
-_CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS = 1.0
 
 class ManagedSessionController(Protocol):
     """Remote control surface for managed session containers."""
@@ -2669,7 +2676,14 @@ async def _await_with_activity_heartbeats(
             done, _ = await asyncio.wait({task}, timeout=heartbeat_interval)
             if task in done:
                 return await task
-            activity.heartbeat(dict(heartbeat_payload))
+            try:
+                activity.heartbeat(dict(heartbeat_payload))
+            except asyncio.QueueFull:
+                # The Temporal SDK coalesces activity heartbeats through a
+                # bounded local queue.  Queue saturation means an earlier
+                # heartbeat is already pending; it is backpressure, not an
+                # activity failure.
+                logger.debug("activity_heartbeat_coalesced_queue_full")
     finally:
         if not task.done():
             task.cancel()
@@ -6941,8 +6955,14 @@ class TemporalAgentRuntimeActivities:
                     raise TemporalActivityRuntimeError(
                         "managed checkpoint capture requires run and artifact stores"
                     )
-                return await self._capture_managed_checkpoint_locked(
-                    model, locator, capture_started
+                return await _await_with_activity_heartbeats(
+                    self._capture_managed_checkpoint_locked(
+                        model, locator, capture_started
+                    ),
+                    heartbeat_payload={
+                        "activity": "agent_runtime.capture_workspace_checkpoint",
+                        "phase": "capture",
+                    },
                 )
             except Exception as exc:
                 failure_type = getattr(exc, "type", type(exc).__name__)
@@ -7088,39 +7108,15 @@ class TemporalAgentRuntimeActivities:
         entries: list[ManagedCheckpointEntry] = []
         total = 0
         output = BytesIO()
-        last_heartbeat_at: float | None = None
-
-        async def heartbeat_capture_progress() -> None:
-            """Emit bounded progress without overflowing the SDK heartbeat queue."""
-
-            nonlocal last_heartbeat_at
-            if not temporal_activity.in_activity():
-                return
-            now = time.monotonic()
-            if (
-                last_heartbeat_at is not None
-                and now - last_heartbeat_at
-                < _CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS
-            ):
-                return
-            last_heartbeat_at = now
-            try:
-                temporal_activity.heartbeat(
-                    {"phase": "archive", "filesCaptured": len(entries)}
-                )
-            except asyncio.QueueFull:
-                # A queued heartbeat already proves liveness. Coalesce progress
-                # instead of turning SDK backpressure into a checkpoint failure.
-                pass
-            # The archive loop is otherwise synchronous. Yield after each
-            # bounded heartbeat so the Temporal worker can drain its queue.
-            await asyncio.sleep(0)
 
         with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
             fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
             for relative_text in selected:
-                await heartbeat_capture_progress()
+                # Archive construction is synchronous. Yield between entries so
+                # the bounded heartbeat task can run without enqueueing one
+                # heartbeat per file and flooding the Temporal SDK queue.
+                await asyncio.sleep(0)
                 path = workspace / relative_text
                 if not path.exists() and not path.is_symlink():
                     continue
@@ -7141,11 +7137,7 @@ class TemporalAgentRuntimeActivities:
                             "maximum per-file size exceeded",
                             type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
                         )
-                    digest = hashlib.sha256()
-                    with path.open("rb") as source:
-                        while chunk := source.read(1024 * 1024):
-                            digest.update(chunk)
-                            await heartbeat_capture_progress()
+                    digest = await asyncio.to_thread(_sha256_file, path)
                     payload = None
                     target = None
                     entry_type = "file"
@@ -7172,7 +7164,7 @@ class TemporalAgentRuntimeActivities:
                 tar_info.uname = tar_info.gname = ""
                 if entry_type == "file":
                     with path.open("rb") as source:
-                        archive.addfile(tar_info, source)
+                        await asyncio.to_thread(archive.addfile, tar_info, source)
                 else:
                     archive.addfile(tar_info)
                 entries.append(
@@ -7182,7 +7174,7 @@ class TemporalAgentRuntimeActivities:
                         mode=f"{stat.S_IMODE(info_stat.st_mode):06o}",
                         size=payload_size,
                         sha256=(
-                            digest.hexdigest()
+                            digest
                             if entry_type == "file"
                             else hashlib.sha256(payload).hexdigest()
                         ),
