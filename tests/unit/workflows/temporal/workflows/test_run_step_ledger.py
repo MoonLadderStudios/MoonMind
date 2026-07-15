@@ -3565,7 +3565,13 @@ async def test_after_execution_finalization_failure_preserves_primary_outcome(
     )
 
     async def fail_checkpoint(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("checkpoint service unavailable")
+        try:
+            raise ValueError(
+                "checkpoint service unavailable password=raw-secret "
+                "Authorization: Bearer raw-token"
+            )
+        except ValueError as cause:
+            raise RuntimeError("Activity task failed") from cause
 
     monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", fail_checkpoint)
     await workflow._finalize_after_execution_checkpoint("implement", updated_at=now)
@@ -3588,6 +3594,12 @@ async def test_after_execution_finalization_failure_preserves_primary_outcome(
         "FINALIZATION_CHECKPOINT_FAILED"
     )
     assert step["finalizationOutcome"]["phase"] == "after_execution_checkpoint"
+    assert step["finalizationOutcome"]["message"] == (
+        "checkpoint service unavailable password=[REDACTED] "
+        "[REDACTED_AUTHORIZATION]"
+    )
+    assert "raw-secret" not in str(step["finalizationOutcome"])
+    assert "raw-token" not in str(step["finalizationOutcome"])
     assert workflow._attention_required is attention_required
     assert workflow._summary.startswith("Execution succeeded; finalization failed")
     completion = workflow._determine_publish_completion(

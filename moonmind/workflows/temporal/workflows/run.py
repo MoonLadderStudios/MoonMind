@@ -73,7 +73,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
-    from moonmind.utils.logging import scrub_github_tokens
+    from moonmind.utils.logging import redact_sensitive_text, scrub_github_tokens
     from moonmind.workflows.temporal.jira_agent_skills import (
         JIRA_AGENT_SKILLS,
         JIRA_BACKED_AGENT_SKILLS,
@@ -820,7 +820,9 @@ class MoonMindRunWorkflow:
         """Return redacted nested failure evidence suitable for durable summaries."""
 
         raw_message = self._operator_failure_summary(exc)
-        sanitized = self._sanitize_operator_summary(raw_message) or raw_message
+        sanitized = self._sanitize_operator_summary(
+            redact_sensitive_text(raw_message)
+        )
         return self._coerce_text(sanitized, max_chars=max_chars) or (
             exc.__class__.__name__
         )
