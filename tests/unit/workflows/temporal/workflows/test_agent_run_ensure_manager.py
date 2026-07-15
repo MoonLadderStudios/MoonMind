@@ -13,6 +13,7 @@ import textwrap
 from types import SimpleNamespace
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
@@ -333,6 +334,145 @@ class TestEnsureManagerAutoStart:
         assert request.parameters["task"]["runtime"]["mode"] == "claude_code"
         assert "profileSelector" not in request.parameters
         assert "profileSelector" not in request.parameters["task"]["runtime"]
+
+    def test_runtime_selection_update_detaches_incompatible_managed_session(self):
+        """Replay mm:d3ca1354: a Codex retry was switched to Claude while queued."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            managedSession={
+                "workflowId": "mm:d3ca1354:session:codex_cli",
+                "agentRunId": "mm:d3ca1354",
+                "sessionId": "sess:mm:d3ca1354:codex_cli",
+                "sessionEpoch": 2,
+                "runtimeId": "codex_cli",
+                "executionProfileRef": "codex-openrouter",
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:d3ca1354",
+                "runId": "replay-run",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 2,
+                "stepExecutionId": "mm:d3ca1354:replay-run:node-1:execution:2",
+                "reason": "runtime_recovered",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "agentKind": "managed",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                    "executionProfileRef": "codex-openrouter",
+                    "skillId": "pr-resolver",
+                },
+                "runtimeSessionReset": {
+                    "resolvedPolicy": "fresh_agent_run",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "executionProfileRef": "claude-anthropic",
+                "model": "claude-opus-4-7",
+                "effort": "high",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "model": "claude-opus-4-7",
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "profileId": "claude-anthropic",
+                        }
+                    },
+                },
+            },
+        )
+        workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert request.agent_id == "claude_code"
+        assert request.managed_session is None
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_session_reset is None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "agentKind": "managed",
+            "model": "claude-opus-4-7",
+            "effort": "high",
+            "executionProfileRef": "claude-anthropic",
+            "skillId": "pr-resolver",
+        }
+        AgentExecutionRequest.model_validate(
+            request.model_dump(mode="json", by_alias=True)
+        )
+
+    def test_runtime_selection_update_detaches_session_for_new_profile(self):
+        """A queued Codex retry must not reuse credentials from its old profile."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            managedSession={
+                "workflowId": "task:session:codex_cli",
+                "agentRunId": "task",
+                "sessionId": "sess:task:codex_cli",
+                "sessionEpoch": 2,
+                "runtimeId": "codex_cli",
+                "executionProfileRef": "codex-openrouter",
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "task",
+                "runId": "run",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 2,
+                "stepExecutionId": "task:run:node-1:execution:2",
+                "reason": "runtime_recovered",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "agentKind": "managed",
+                    "executionProfileRef": "codex-openrouter",
+                },
+                "runtimeSessionReset": {
+                    "resolvedPolicy": "fresh_agent_run",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "codex_cli",
+                "executionProfileRef": "codex-openai",
+            },
+        )
+        workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert request.managed_session is None
+        assert workflow_instance._managed_session_detached_for_runtime_selection
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_session_reset is None
+        assert request.step_execution.runtime_selection[
+            "executionProfileRef"
+        ] == "codex-openai"
+
+    def test_runtime_selection_validation_is_non_retryable_and_sanitized(self):
+        """Invalid input edits must fail AgentRun instead of looping a workflow task."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request()
+        secret_value = "do-not-include-this-secret"
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {"parametersPatch": {"apiKey": secret_value}},
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert exc_info.value.type == "InvalidRuntimeSelection"
+        assert exc_info.value.non_retryable is True
+        assert secret_value not in str(exc_info.value)
 
     def test_runtime_selection_update_clears_profile_when_runtime_changes_without_new_profile(
         self,
