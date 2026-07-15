@@ -1160,6 +1160,148 @@ async def test_managed_agent_runtime_switch_detaches_incompatible_session_before
 
 
 @pytest.mark.asyncio
+async def test_managed_agent_profile_switch_detaches_existing_session_before_launch():
+    """A queued Codex retry must not reuse a session from the previous profile."""
+    _managed_launch_requests.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue-session-profile-switch",
+                workflows=[MoonMindAgentRun, RuntimeUpdateProviderProfileManager],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.artifacts",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue="mm.activity.agent_runtime",
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+        ):
+            manager_id = "provider-profile-manager:codex_cli"
+            await env.client.start_workflow(
+                RuntimeUpdateProviderProfileManager.run,
+                {
+                    "runtime_id": "codex_cli",
+                    "assignable_profile_id": "alternate-managed",
+                },
+                id=manager_id,
+                task_queue="agent-run-task-queue-session-profile-switch",
+            )
+
+            child_id = "test-agent-session-profile-switch"
+            child_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                AgentExecutionRequest(
+                    agentKind="managed",
+                    agentId="codex_cli",
+                    executionProfileRef="default-managed",
+                    correlationId="corr-session-profile-switch",
+                    idempotencyKey="idem-session-profile-switch",
+                    managedSession={
+                        "workflowId": "task:session:codex_cli",
+                        "agentRunId": "task",
+                        "sessionId": "sess:task:codex_cli",
+                        "sessionEpoch": 2,
+                        "runtimeId": "codex_cli",
+                        "executionProfileRef": "default-managed",
+                    },
+                    stepExecution={
+                        "schemaVersion": "v1",
+                        "workflowId": "task",
+                        "runId": "run",
+                        "logicalStepId": "node-1",
+                        "executionOrdinal": 2,
+                        "stepExecutionId": "task:run:node-1:execution:2",
+                        "reason": "runtime_recovered",
+                        "runtimeContextPolicy": "fresh_agent_run",
+                        "runtimeSelection": {
+                            "runtimeId": "codex_cli",
+                            "agentKind": "managed",
+                            "model": "gpt-5.6-sol",
+                            "effort": "high",
+                            "executionProfileRef": "default-managed",
+                            "skillId": "pr-resolver",
+                        },
+                        "runtimeSessionReset": {
+                            "resolvedPolicy": "fresh_agent_run",
+                        },
+                    },
+                    parameters={
+                        "targetRuntime": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "default-managed",
+                        "metadata": {
+                            "moonmind": {
+                                "deferManagedSessionUntilSlot": {
+                                    "agentRunId": "task",
+                                }
+                            }
+                        },
+                    },
+                ),
+                id=child_id,
+                task_queue="agent-run-task-queue-session-profile-switch",
+            )
+
+            manager_handle = env.client.get_workflow_handle(manager_id)
+            for _ in range(80):
+                manager_state = await manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                )
+                if manager_state["pending_requests"]:
+                    break
+                await asyncio.sleep(0.1)
+
+            await child_handle.signal(
+                "update_runtime_selection",
+                {
+                    "targetRuntime": "codex_cli",
+                    "executionProfileRef": "alternate-managed",
+                    "parametersPatch": {
+                        "profileId": "alternate-managed",
+                        "workflow": {
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "profileId": "alternate-managed",
+                            }
+                        },
+                    },
+                },
+            )
+
+            for _ in range(80):
+                if _managed_launch_requests:
+                    break
+                await asyncio.sleep(0.1)
+
+            assert _managed_launch_requests, await manager_handle.query(
+                RuntimeUpdateProviderProfileManager.get_state
+            )
+            launched_request = _managed_launch_requests[-1]["request"]
+            assert launched_request["agentId"] == "codex_cli"
+            assert launched_request.get("managedSession") is None
+            assert launched_request["executionProfileRef"] == "alternate-managed"
+            assert launched_request["stepExecution"]["runtimeSessionReset"] is None
+            assert launched_request["stepExecution"]["runtimeSelection"][
+                "executionProfileRef"
+            ] == "alternate-managed"
+
+            await child_handle.signal(
+                MoonMindAgentRun.completion_signal,
+                {"summary": "completed after safe profile switch"},
+            )
+            result = await child_handle.result()
+            assert result.summary == "completed after safe profile switch"
+
+
+@pytest.mark.asyncio
 async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():
     """Model-only edits racing with slot assignment must keep the acquired slot."""
     _managed_launch_requests.clear()
