@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +12,7 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     resolve_container_backend_settings,
 )
-from moonmind.schemas.container_job_models import ContainerJobActivityRequest
+from moonmind.schemas.container_job_models import ContainerJobActivityRequest, OutputDeclaration
 from moonmind.workflows.temporal.container_job_backend import (
     LABEL_BACKEND_REF,
     LABEL_CORRELATION,
@@ -339,6 +340,54 @@ async def test_publish_evidence_bounds_captured_output(tmp_path) -> None:
     payload = next(iter(captured.values()))
     assert payload.startswith(b"[truncated]\n")
     assert len(payload) <= 1024 + len(b"[truncated]\n")
+
+
+@pytest.mark.asyncio
+async def test_publish_evidence_redacts_and_publishes_manifest(tmp_path) -> None:
+    workspace = tmp_path / "art_workspace"
+    workspace.mkdir()
+    (workspace / "report.txt").write_text("ok", encoding="utf-8")
+    captured: dict[str, bytes] = {}
+
+    async def runner(args):
+        return (0, b"token=should-not-persist", b"password=hunter2")
+
+    async def publish(request, name, payload):
+        captured[name] = payload
+        return f"art:{name}"
+
+    request = _request(tmp_path)
+    request.request.spec.outputs = [OutputDeclaration(name="report", relativePath="report.txt")]
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    result = await backend.publish_evidence(request)
+    assert result.artifacts_ref == f"art:{request.job_id}-manifest.json"
+    assert all(b"hunter2" not in payload and b"should-not-persist" not in payload for payload in captured.values())
+    manifest = json.loads(captured[f"{request.job_id}-manifest.json"])
+    assert manifest["outputs"][0]["collectionStatus"] == "collected"
+    assert manifest["outputs"][0]["sha256"] == hashlib.sha256(b"ok").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_publish_evidence_rejects_symlink_output(tmp_path) -> None:
+    workspace = tmp_path / "art_workspace"
+    workspace.mkdir()
+    (workspace / "unsafe").symlink_to(tmp_path / "outside")
+
+    async def runner(args):
+        return (0, b"", b"")
+
+    async def publish(request, name, payload):
+        return f"art:{name}"
+
+    request = _request(tmp_path)
+    request.request.spec.outputs = [OutputDeclaration(name="unsafe", relativePath="unsafe")]
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    with pytest.raises(RuntimeError, match="symlink|escapes"):
+        await backend.publish_evidence(request)
 
 
 @pytest.mark.asyncio

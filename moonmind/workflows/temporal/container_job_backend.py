@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -88,6 +89,13 @@ def _redact(text: str, secrets: Sequence[str]) -> str:
         token = str(secret or "").strip()
         if token:
             redacted = redacted.replace(token, "[redacted]")
+    # Defense in depth for credential-shaped output that was not supplied via
+    # the resolver (for example a tool echoing a token acquired in-container).
+    redacted = re.sub(
+        r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)",
+        lambda match: f"{match.group(1)}=[redacted]",
+        redacted,
+    )
     return redacted
 # Ownership/correlation/expiry label keys. These are applied unconditionally by
 # the backend and can never be supplied or overridden through the public spec
@@ -191,6 +199,11 @@ _INSPECT_FORMAT = "{{.Id}}\t{{join .RepoDigests \",\"}}"
 # Bytes of bounded pull progress retained as diagnostics evidence. The full,
 # unbounded pull output never crosses the activity/Temporal boundary.
 _PULL_DIAGNOSTICS_MAX_BYTES = 8192
+_OUTPUT_MAX_FILES = 256
+
+
+def _redacted_bytes(payload: bytes, secrets: Sequence[str] = ()) -> bytes:
+    return _redact(payload.decode(errors="replace"), secrets).encode()
 
 
 class DockerContainerJobBackend:
@@ -915,37 +928,120 @@ class DockerContainerJobBackend:
     async def publish_evidence(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
         code, stdout, stderr = await self._runner(("logs", ref))
+        stdout = _redacted_bytes(stdout)
+        stderr = _redacted_bytes(stderr)
         payload = stdout + (b"\n[stderr]\n" + stderr if stderr else b"")
         # Bound captured output to the deployment ceiling; keep the tail so the
         # terminal failure context survives truncation.
         limit = self._settings.max_output_bytes
         if len(payload) > limit:
             payload = b"[truncated]\n" + payload[-limit:]
+        def bounded(stream: bytes) -> bytes:
+            return (
+                b"[truncated]\n" + stream[-limit:]
+                if len(stream) > limit
+                else stream
+            )
         if code and not payload:
             raise RuntimeError("container evidence is unavailable")
-        logs_ref = (
-            await self._publish(request, f"{request.job_id}-logs.txt", payload)
-            if self._publish
-            else None
-        )
+        logs_ref = None
+        evidence: list[dict[str, object]] = []
+        if self._publish:
+            stdout_ref = await self._publish(
+                request, f"{request.job_id}-stdout.log", bounded(stdout)
+            )
+            stderr_ref = await self._publish(
+                request, f"{request.job_id}-stderr.log", bounded(stderr)
+            )
+            logs_ref = await self._publish(
+                request, f"{request.job_id}-logs.txt", payload
+            )
+            evidence.extend(
+                (
+                    {"name": "stdout.log", "artifactRef": stdout_ref},
+                    {"name": "stderr.log", "artifactRef": stderr_ref},
+                    {"name": "logs.txt", "artifactRef": logs_ref},
+                )
+            )
+            diagnostics = json.dumps(
+                {
+                    "contractVersion": "v1",
+                    "jobId": request.job_id,
+                    "containerRef": ref,
+                    "terminalState": request.terminal_state,
+                    "exitCode": request.exit_code,
+                    "failureClass": request.failure_class,
+                    "logsCommandExitCode": code,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            diagnostics_ref = await self._publish(
+                request, f"{request.job_id}-diagnostics.json", diagnostics
+            )
+            evidence.append(
+                {"name": "diagnostics.json", "artifactRef": diagnostics_ref}
+            )
         artifacts_ref = None
-        if self._publish and request.request.spec.outputs:
+        if self._publish:
             workspace = Path(request.resolved_workspace_ref or "").resolve()
-            def create_archive() -> BytesIO:
+            def create_archive() -> tuple[BytesIO, list[dict[str, object]]]:
                 archive = BytesIO()
+                manifest: list[dict[str, object]] = []
+                count = 0
+                total = 0
                 with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
                     for output in request.request.spec.outputs:
-                        path = (workspace / output.relative_path).resolve()
-                        if workspace not in path.parents and path != workspace:
+                        declared = workspace / output.relative_path
+                        path = declared.resolve(strict=False)
+                        if not path.is_relative_to(workspace):
                             raise RuntimeError("declared output escapes the workspace")
-                        if not path.exists():
-                            raise RuntimeError(f"declared output is missing: {output.name}")
-                        bundle.add(path, arcname=output.name, recursive=True)
-                return archive
+                        if not declared.exists():
+                            manifest.append({"name": output.name, "relativePath": output.relative_path, "collectionStatus": "missing"})
+                            continue
+                        candidates = [declared]
+                        if declared.is_dir():
+                            candidates.extend(sorted(declared.rglob("*")))
+                        for candidate in candidates:
+                            info = candidate.lstat()
+                            if stat.S_ISLNK(info.st_mode):
+                                raise RuntimeError("declared output contains a symlink")
+                            if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                                raise RuntimeError("declared output contains an unsupported file type")
+                            if candidate.resolve() != workspace and not candidate.resolve().is_relative_to(workspace):
+                                raise RuntimeError("declared output escapes the workspace")
+                            if stat.S_ISREG(info.st_mode):
+                                count += 1
+                                total += info.st_size
+                                if count > _OUTPUT_MAX_FILES:
+                                    raise RuntimeError("declared outputs exceed the file-count limit")
+                                if total > self._settings.max_output_bytes:
+                                    raise RuntimeError("declared outputs exceed the collected-size limit")
+                        bundle.add(declared, arcname=output.name, recursive=True)
+                        digest = hashlib.sha256(declared.read_bytes()).hexdigest() if declared.is_file() else hashlib.sha256(output.name.encode()).hexdigest()
+                        manifest.append({
+                            "name": output.name,
+                            "relativePath": output.relative_path,
+                            "collectionStatus": "collected",
+                            "sizeBytes": info.st_size if declared.is_file() else sum(p.stat().st_size for p in declared.rglob("*") if p.is_file()),
+                            "sha256": digest,
+                            "mediaType": mimetypes.guess_type(declared.name)[0] or ("application/octet-stream" if declared.is_file() else "application/x-directory"),
+                        })
+                return archive, manifest
 
-            archive = await asyncio.to_thread(create_archive)
+            archive, outputs = await asyncio.to_thread(create_archive)
+            if request.request.spec.outputs:
+                archive_ref = await self._publish(
+                    request, f"{request.job_id}-outputs.tar.gz", archive.getvalue()
+                )
+                evidence.append({"name": "outputs.tar.gz", "artifactRef": archive_ref})
+            manifest_payload = json.dumps(
+                {"contractVersion": "v1", "jobId": request.job_id, "outputs": outputs, "evidence": evidence},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
             artifacts_ref = await self._publish(
-                request, f"{request.job_id}-outputs.tar.gz", archive.getvalue()
+                request, f"{request.job_id}-manifest.json", manifest_payload
             )
         return ContainerJobActivityResult(
             logsRef=logs_ref, artifactsRef=artifacts_ref

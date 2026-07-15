@@ -73,10 +73,15 @@ class TemporalContractModel(ContractModel):
 
 class ContainerJobState(StrEnum):
     QUEUED = "queued"
+    RESOLVING_WORKSPACE = "resolving_workspace"
+    WORKSPACE_NOT_VISIBLE = "workspace_not_visible"
     PREPARING = "preparing"
     ACQUIRING_IMAGE = "acquiring_image"
+    STARTING = "starting"
     RUNNING = "running"
     CANCELING = "canceling"
+    PUBLISHING_ARTIFACTS = "publishing_artifacts"
+    CLEANING_UP = "cleaning_up"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
