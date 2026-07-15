@@ -73,10 +73,20 @@ class TemporalContractModel(ContractModel):
 
 class ContainerJobState(StrEnum):
     QUEUED = "queued"
+    # Preparation phases. The finer-grained phases below are emitted by the
+    # durable workflow so a status reader can distinguish workspace resolution
+    # from image acquisition and container startup (MoonLadderStudios/MoonMind#3258).
+    # ``PREPARING`` is retained as a still-valid umbrella value so any record
+    # persisted before the finer phases existed remains decodable.
     PREPARING = "preparing"
+    RESOLVING_WORKSPACE = "resolving_workspace"
+    WORKSPACE_NOT_VISIBLE = "workspace_not_visible"
     ACQUIRING_IMAGE = "acquiring_image"
+    STARTING = "starting"
     RUNNING = "running"
     CANCELING = "canceling"
+    PUBLISHING_ARTIFACTS = "publishing_artifacts"
+    CLEANING_UP = "cleaning_up"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
@@ -446,11 +456,29 @@ class ContainerJobLogPage(ContractModel):
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 
 
+class ArtifactCollectionStatus(StrEnum):
+    """Per-output collection outcome for the durable output manifest (#3258)."""
+
+    COLLECTED = "collected"
+    MISSING = "missing"
+    REJECTED = "rejected"
+    TRUNCATED = "truncated"
+
+
 class ContainerJobArtifact(ContractModel):
     name: str = Field(max_length=255)
-    artifact_ref: str = Field(alias="artifactRef", max_length=1024)
-    size_bytes: int = Field(alias="sizeBytes", ge=0)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # ``artifact_ref`` is empty for outputs that were declared but not collected
+    # (missing/rejected); the ``collection_status`` records why.
+    artifact_ref: str | None = Field(None, alias="artifactRef", max_length=1024)
+    size_bytes: int = Field(0, alias="sizeBytes", ge=0)
+    # ``sha256`` is only present for successfully collected content.
+    sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    media_type: str | None = Field(None, alias="mediaType", max_length=255)
+    relative_path: str | None = Field(None, alias="relativePath", max_length=1000)
+    collection_status: ArtifactCollectionStatus = Field(
+        ArtifactCollectionStatus.COLLECTED, alias="collectionStatus"
+    )
+    detail: str | None = Field(None, max_length=512)
 
 
 class ContainerJobArtifactPage(ContractModel):
@@ -589,6 +617,16 @@ class ContainerJobActivityRequest(TemporalContractModel):
     cleanup_outcome: AuxiliaryOutcome | None = Field(None, alias="cleanup")
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
+    events_ref: str | None = Field(None, alias="eventsRef", max_length=1024)
+    # Resumable live-log cursor carried across observe polls, and the compact
+    # timing/probe observations threaded into the terminal projection (#3258).
+    log_cursor: str | None = Field(None, alias="logCursor", max_length=512)
+    workspace_probe: str | None = Field(
+        None, alias="workspaceProbe", max_length=64
+    )
+    started_at: datetime | None = Field(None, alias="startedAt")
+    finished_at: datetime | None = Field(None, alias="finishedAt")
+    duration_ms: int | None = Field(None, alias="durationMs", ge=0)
 
     _valid_job_id = field_validator("job_id")(_validate_job_id)
 
@@ -615,6 +653,18 @@ class ContainerJobActivityResult(TemporalContractModel):
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
     )
+    # Durable observability-event journal ref (the terminal fallback for the
+    # bounded live log stream) and the resumable live-log paging cursor (#3258).
+    events_ref: str | None = Field(None, alias="eventsRef", max_length=1024)
+    log_cursor: str | None = Field(None, alias="logCursor", max_length=512)
+    # Non-sensitive workspace visibility probe result (never a source path) and
+    # container start/end/duration timing observations (#3258).
+    workspace_probe: str | None = Field(
+        None, alias="workspaceProbe", max_length=64
+    )
+    started_at: datetime | None = Field(None, alias="startedAt")
+    finished_at: datetime | None = Field(None, alias="finishedAt")
+    duration_ms: int | None = Field(None, alias="durationMs", ge=0)
 
 
 class ContainerJobWorkflowResult(TemporalContractModel):

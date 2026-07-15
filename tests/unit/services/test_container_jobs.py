@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 import pytest_asyncio
@@ -346,11 +347,23 @@ async def test_artifacts_return_references_and_publication(session_factory, temp
     owner = OwnerIdentity(principalId="art-owner", principalType="user")
     sha = "a" * 64
     reader = _FakeArtifactReader(
-        artifacts={
-            "artifact://outputs": _FakeArtifact(
-                sha256=sha, size_bytes=42, metadata_json={"name": "outputs.tar.gz"}
-            )
-        }
+        blobs={
+            "artifact://manifest": json.dumps(
+                {
+                    "jobId": "container-job:" + "0" * 32,
+                    "artifacts": [
+                        {
+                            "name": "outputs.tar.gz",
+                            "artifactRef": "artifact://outputs",
+                            "sizeBytes": 42,
+                            "sha256": sha,
+                            "collectionStatus": "collected",
+                        }
+                    ],
+                    "publication": {"state": "succeeded"},
+                }
+            ).encode()
+        },
     )
     async with session_factory() as session:
         service = ContainerJobService(session, temporal=temporal, artifacts=reader)
@@ -362,7 +375,7 @@ async def test_artifacts_return_references_and_publication(session_factory, temp
         await service.repository.record_observation(
             owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED,
             publication=AuxiliaryOutcome(state="succeeded"),
-            artifacts_ref="artifact://outputs",
+            artifacts_ref="artifact://manifest",
         )
         page = await service.artifacts(owner=owner, job_id=accepted.job_id)
         assert page.publication.state == "succeeded"

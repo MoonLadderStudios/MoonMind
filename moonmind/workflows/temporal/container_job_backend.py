@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -40,14 +41,23 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendSettings,
     resolve_container_backend_settings,
 )
+from moonmind.observability.transport import SpoolLogPublisher
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.schemas.container_job_models import (
+    ArtifactCollectionStatus,
+    AuxiliaryOutcome,
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
+    ContainerJobArtifact,
+    ContainerJobArtifactPage,
     ContainerJobBackendError,
+    ContainerJobLogEntry,
+    MAX_LOG_PAGE_ENTRIES,
     RegistryAuthorization,
     ContainerJobFailureClass,
     ImageObservation,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
     ImageAcquisitionError,
@@ -192,6 +202,89 @@ _INSPECT_FORMAT = "{{.Id}}\t{{join .RepoDigests \",\"}}"
 # unbounded pull output never crosses the activity/Temporal boundary.
 _PULL_DIAGNOSTICS_MAX_BYTES = 8192
 
+# Live incremental-log plane bounds (MoonLadderStudios/MoonMind#3258). Live
+# events are a bounded, best-effort projection published to the shared Live Logs
+# spool while a job runs; the durable terminal artifacts remain authoritative.
+# ``_MAX_LIVE_LOG_EVENTS`` is the total retention ceiling per job, enforced via
+# the monotonic sequence carried in the resumable cursor.
+_MAX_LIVE_LOG_EVENTS = 5000
+_LIVE_LOG_ENTRY_MAX_CHARS = 8192
+_LIVE_EVENTS_JOURNAL_NAME = "observability.events.jsonl"
+# ``docker logs --timestamps`` prefixes every line with an RFC3339Nano instant.
+_DOCKER_TS_LINE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))(?:\s(?P<text>.*))?$"
+)
+# File types accepted by declared-output collection. Anything else (device,
+# fifo, socket, symlink target escaping the workspace) is rejected, not copied.
+_ALLOWED_OUTPUT_MEDIA_FALLBACK = "application/octet-stream"
+
+
+def _parse_rfc3339(value: str) -> datetime | None:
+    """Parse an RFC3339 (Docker) timestamp into an aware datetime, or ``None``.
+
+    Docker emits nanosecond precision, which ``fromisoformat`` cannot parse; the
+    fractional part is truncated to microseconds and a trailing ``Z`` is
+    normalized to an explicit UTC offset.
+    """
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("Z", "+00:00")
+    match = re.match(r"^(.*?\.\d{6})\d*(.*)$", text)
+    if match:
+        text = match.group(1) + match.group(2)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _parse_container_timing(
+    state: dict,
+) -> tuple[datetime | None, datetime | None, int | None]:
+    """Extract start/finish/duration from a ``docker inspect .State`` payload."""
+
+    started = _parse_rfc3339(str(state.get("StartedAt") or ""))
+    finished = _parse_rfc3339(str(state.get("FinishedAt") or ""))
+    # Docker reports the zero instant for a boundary that never occurred.
+    if started is not None and started.year <= 1:
+        started = None
+    if finished is not None and finished.year <= 1:
+        finished = None
+    duration_ms: int | None = None
+    if started is not None and finished is not None and finished >= started:
+        duration_ms = int((finished - started).total_seconds() * 1000)
+    return started, finished, duration_ms
+
+
+def _parse_log_cursor(cursor: str | None) -> tuple[datetime | None, int, int]:
+    """Decode ``timestamp|sequence|timestamp-offset`` (legacy cursors allowed)."""
+
+    if not cursor:
+        return None, 0, 0
+    parts = str(cursor).split("|")
+    raw_ts = parts[0]
+    raw_seq = parts[1] if len(parts) > 1 else "0"
+    raw_offset = parts[2] if len(parts) > 2 else "0"
+    since = _parse_rfc3339(raw_ts) if raw_ts else None
+    try:
+        sequence = max(0, int(raw_seq))
+    except (TypeError, ValueError):
+        sequence = 0
+    try:
+        timestamp_offset = max(0, int(raw_offset))
+    except (TypeError, ValueError):
+        timestamp_offset = 0
+    return since, sequence, timestamp_offset
+
+
+class _OutputRejected(RuntimeError):
+    """Internal signal that a declared output breaches a collection policy."""
+
 
 class DockerContainerJobBackend:
     """Thin, deployment-selected Docker CLI adapter with owned identities."""
@@ -216,6 +309,8 @@ class DockerContainerJobBackend:
         pull_lock_max_wait_seconds: float = 280.0,
         secret_resolver: SecretResolver | None = None,
         managed_run_store: ManagedRunRecordStore | None = None,
+        log_spool_root: str | Path | None = None,
+        live_log_max_events: int = _MAX_LIVE_LOG_EVENTS,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         # Deployment-owned policy. Default to env-independent defaults so unit
@@ -249,6 +344,16 @@ class DockerContainerJobBackend:
         self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
         self._resolve_secret = secret_resolver
         self._managed_run_store = managed_run_store
+        # Live incremental logs are published to a MoonMind-controlled spool
+        # root, never into the caller's mounted job workspace (which the
+        # container itself sees at /workspace). When unset, live logging is a
+        # no-op and only the durable terminal artifacts are produced.
+        self._log_spool_root = (
+            Path(log_spool_root).resolve()
+            if log_spool_root is not None
+            else None
+        )
+        self._live_log_max_events = max(0, int(live_log_max_events))
 
     # ------------------------------------------------------------------ helpers
 
@@ -410,7 +515,12 @@ class DockerContainerJobBackend:
             or not workspace.is_dir()
         ):
             raise RuntimeError("authorized container-job workspace is unavailable")
-        return ContainerJobActivityResult(resolvedWorkspaceRef=str(workspace))
+        # Report a non-sensitive probe result only; the resolved host path is
+        # returned for the trusted launch boundary but never recorded as an
+        # observation.
+        return ContainerJobActivityResult(
+            resolvedWorkspaceRef=str(workspace), workspaceProbe="visible"
+        )
 
     async def _inspect_image(
         self, image: str
@@ -873,15 +983,141 @@ class DockerContainerJobBackend:
         ref = request.container_ref or self._name(request)
         raw = await self._checked("inspect", "--format", "{{json .State}}", ref)
         state = json.loads(raw)
+        # Publish any incremental log delta produced since the last poll to the
+        # shared Live Logs spool. This is bounded and best-effort; a failure
+        # here never fails the observation of container liveness/terminality.
+        log_cursor = await self._collect_live_logs(request, ref)
         if state.get("Running"):
-            return ContainerJobActivityResult(containerRef=ref, running=True)
+            return ContainerJobActivityResult(
+                containerRef=ref, running=True, logCursor=log_cursor
+            )
         exit_code = int(state.get("ExitCode", 1))
+        started_at, finished_at, duration_ms = _parse_container_timing(state)
         return ContainerJobActivityResult(
             containerRef=ref,
             running=False,
             terminalState="succeeded" if exit_code == 0 else "failed",
             exitCode=exit_code,
+            logCursor=log_cursor,
+            startedAt=started_at,
+            finishedAt=finished_at,
+            durationMs=duration_ms,
         )
+
+    # ------------------------------------------------------- live log producer
+
+    def _live_spool_dir(self, request: ContainerJobActivityRequest) -> Path | None:
+        if self._log_spool_root is None:
+            return None
+        suffix = hashlib.sha256(request.ownership_token.encode()).hexdigest()[:20]
+        return self._log_spool_root / f"job-{suffix}"
+
+    async def _collect_live_logs(
+        self, request: ContainerJobActivityRequest, ref: str
+    ) -> str | None:
+        """Publish the bounded incremental log delta to the shared Live spool.
+
+        Returns the resumable cursor (``"<rfc3339>|<sequence>"``) so the next
+        poll fetches only newer lines. Live logging is opt-in (a spool root must
+        be configured), bounded by a total-retention ceiling, redacted before
+        persistence, and strictly non-authoritative: any error is swallowed and
+        the previous cursor is preserved.
+        """
+
+        spool_dir = self._live_spool_dir(request)
+        if spool_dir is None:
+            return request.log_cursor
+        try:
+            since_dt, base_seq, timestamp_offset = _parse_log_cursor(
+                request.log_cursor
+            )
+            if base_seq >= self._live_log_max_events:
+                return request.log_cursor
+            entries = await self._read_incremental_log_entries(
+                ref, since_dt, base_seq, timestamp_offset
+            )
+            if not entries:
+                return request.log_cursor
+            spool_dir.mkdir(parents=True, exist_ok=True)
+            publisher = SpoolLogPublisher(workspace_path=str(spool_dir))
+            last = entries[-1]
+            for entry in entries:
+                publisher.publish(
+                    RunObservabilityEvent(
+                        runId=request.job_id,
+                        sequence=entry.sequence,
+                        stream=entry.stream if entry.stream != "system" else "system",
+                        timestamp=entry.timestamp.isoformat(),
+                        text=entry.text,
+                        kind="stdout_chunk"
+                        if entry.stream == "stdout"
+                        else "stderr_chunk",
+                    )
+                )
+            prior_at_last = timestamp_offset if last.timestamp == since_dt else 0
+            emitted_at_last = sum(
+                entry.timestamp == last.timestamp for entry in entries
+            )
+            return (
+                f"{last.timestamp.isoformat()}|{last.sequence}|"
+                f"{prior_at_last + emitted_at_last}"
+            )
+        except Exception:
+            return request.log_cursor
+
+    async def _read_incremental_log_entries(
+        self,
+        ref: str,
+        since_dt: datetime | None,
+        base_seq: int,
+        timestamp_offset: int = 0,
+    ) -> list[ContainerJobLogEntry]:
+        """Read and merge the new stdout/stderr delta as bounded log entries."""
+
+        # Bound the daemon response itself; slicing after the subprocess exits
+        # still permits a noisy container to exhaust worker memory.
+        args: list[str] = ["logs", "--timestamps", "--tail", str(MAX_LOG_PAGE_ENTRIES)]
+        if since_dt is not None:
+            args.extend(("--since", since_dt.isoformat()))
+        args.append(ref)
+        code, stdout, stderr = await self._runner(tuple(args))
+        # ``docker logs`` writes container stdout/stderr to the corresponding
+        # streams for a non-TTY container, so they can be attributed exactly.
+        merged: list[tuple[datetime, str, str]] = []
+        seen_at_cursor = 0
+        for stream, blob in (("stdout", stdout), ("stderr", stderr)):
+            for line in blob.decode("utf-8", errors="replace").splitlines():
+                match = _DOCKER_TS_LINE.match(line)
+                if not match:
+                    continue
+                ts = _parse_rfc3339(match.group("ts"))
+                if ts is None:
+                    continue
+                if since_dt is not None and ts < since_dt:
+                    continue
+                if since_dt is not None and ts == since_dt:
+                    seen_at_cursor += 1
+                    if seen_at_cursor <= timestamp_offset:
+                        continue
+                text = redact_sensitive_text(match.group("text") or "")[
+                    :_LIVE_LOG_ENTRY_MAX_CHARS
+                ]
+                merged.append((ts, stream, text))
+        merged.sort(key=lambda item: item[0])
+        remaining = min(
+            MAX_LOG_PAGE_ENTRIES, self._live_log_max_events - base_seq
+        )
+        entries: list[ContainerJobLogEntry] = []
+        for index, (ts, stream, text) in enumerate(merged[:remaining]):
+            entries.append(
+                ContainerJobLogEntry(
+                    sequence=base_seq + index + 1,
+                    timestamp=ts,
+                    stream=stream,
+                    text=text,
+                )
+            )
+        return entries
 
     async def stop_container(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
@@ -912,44 +1148,335 @@ class DockerContainerJobBackend:
         await self._checked("rm", "--force", ref)
         return ContainerJobActivityResult()
 
+    @staticmethod
+    def _bound_tail(data: bytes, limit: int) -> bytes:
+        """Bound captured output to ``limit`` bytes, keeping the failure tail."""
+
+        if len(data) > limit:
+            return b"[truncated]\n" + data[-limit:]
+        return data
+
     async def publish_evidence(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
         code, stdout, stderr = await self._runner(("logs", ref))
-        payload = stdout + (b"\n[stderr]\n" + stderr if stderr else b"")
-        # Bound captured output to the deployment ceiling; keep the tail so the
-        # terminal failure context survives truncation.
+        # Redact container-emitted secrets before anything is persisted. For a
+        # non-TTY container ``docker logs`` writes container stdout/stderr to the
+        # matching streams, so each is captured as a deterministic artifact.
         limit = self._settings.max_output_bytes
-        if len(payload) > limit:
-            payload = b"[truncated]\n" + payload[-limit:]
-        if code and not payload:
+        stdout_raw = redact_sensitive_text(
+            stdout.decode("utf-8", errors="replace")
+        ).encode("utf-8")
+        stderr_raw = redact_sensitive_text(
+            stderr.decode("utf-8", errors="replace")
+        ).encode("utf-8")
+        combined_raw = stdout_raw + (
+            b"\n[stderr]\n" + stderr_raw if stderr_raw else b""
+        )
+        combined = self._bound_tail(combined_raw, limit)
+        stdout_bytes = self._bound_tail(stdout_raw, limit)
+        stderr_bytes = self._bound_tail(stderr_raw, limit)
+        if code and not (stdout_raw or stderr_raw):
             raise RuntimeError("container evidence is unavailable")
-        logs_ref = (
-            await self._publish(request, f"{request.job_id}-logs.txt", payload)
-            if self._publish
-            else None
-        )
-        artifacts_ref = None
-        if self._publish and request.request.spec.outputs:
-            workspace = Path(request.resolved_workspace_ref or "").resolve()
-            def create_archive() -> BytesIO:
-                archive = BytesIO()
-                with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
-                    for output in request.request.spec.outputs:
-                        path = (workspace / output.relative_path).resolve()
-                        if workspace not in path.parents and path != workspace:
-                            raise RuntimeError("declared output escapes the workspace")
-                        if not path.exists():
-                            raise RuntimeError(f"declared output is missing: {output.name}")
-                        bundle.add(path, arcname=output.name, recursive=True)
-                return archive
 
-            archive = await asyncio.to_thread(create_archive)
-            artifacts_ref = await self._publish(
-                request, f"{request.job_id}-outputs.tar.gz", archive.getvalue()
-            )
-        return ContainerJobActivityResult(
-            logsRef=logs_ref, artifactsRef=artifacts_ref
+        if self._publish is None:
+            return ContainerJobActivityResult()
+
+        job = request.job_id
+        # A combined logs artifact preserves the terminal reconstruction
+        # fallback; separate stdout/stderr artifacts satisfy the deterministic
+        # per-stream requirement.
+        logs_ref = await self._publish(request, f"{job}-logs.txt", combined)
+        stdout_ref = await self._publish(request, f"{job}-stdout.txt", stdout_bytes)
+        stderr_ref = await self._publish(request, f"{job}-stderr.txt", stderr_bytes)
+
+        manifest = await self._collect_declared_outputs(request)
+        artifacts_ref = await self._publish_output_manifest(request, manifest)
+        diagnostics_ref = await self._publish_runtime_diagnostics(
+            request,
+            logs_ref=logs_ref,
+            stdout_ref=stdout_ref,
+            stderr_ref=stderr_ref,
+            manifest=manifest,
         )
+        events_ref = await self._persist_live_events_journal(request)
+        return ContainerJobActivityResult(
+            logsRef=logs_ref,
+            artifactsRef=artifacts_ref,
+            diagnosticsRef=diagnostics_ref,
+            eventsRef=events_ref,
+        )
+
+    # ----------------------------------------------- declared-output collection
+
+    def _build_output_entries(
+        self, workspace: Path, outputs: Sequence
+    ) -> list[dict]:
+        """Validate and read declared outputs under the approved workspace root.
+
+        Rejects traversal/symlink escape, unsupported file types, and outputs
+        that would breach the deployment file-count or total-size ceilings.
+        Missing declared outputs are preserved as partial evidence rather than
+        aborting the whole collection (so cancellation/timeout still publishes
+        what exists).
+        """
+
+        workspace_real = Path(os.path.realpath(workspace))
+        files_budget = self._settings.max_output_files
+        bytes_budget = self._settings.max_output_total_bytes
+        results: list[dict] = []
+        for decl in outputs:
+            entry: dict = {
+                "name": decl.name,
+                "relative_path": decl.relative_path,
+                "status": ArtifactCollectionStatus.COLLECTED,
+                "detail": None,
+                "media_type": None,
+                "payload": None,
+            }
+            candidate = workspace / decl.relative_path
+            if not os.path.lexists(candidate):
+                entry["status"] = ArtifactCollectionStatus.MISSING
+                entry["detail"] = "declared output was not produced"
+                results.append(entry)
+                continue
+            real = Path(os.path.realpath(candidate))
+            if real != workspace_real and workspace_real not in real.parents:
+                entry["status"] = ArtifactCollectionStatus.REJECTED
+                entry["detail"] = "declared output escapes the approved workspace root"
+                results.append(entry)
+                continue
+            if candidate.is_symlink():
+                entry["status"] = ArtifactCollectionStatus.REJECTED
+                entry["detail"] = "declared output is a symlink"
+                results.append(entry)
+                continue
+            try:
+                info = candidate.stat()
+            except OSError:
+                entry["status"] = ArtifactCollectionStatus.MISSING
+                entry["detail"] = "declared output could not be read"
+                results.append(entry)
+                continue
+            if stat.S_ISREG(info.st_mode):
+                if files_budget < 1 or info.st_size > bytes_budget:
+                    entry["status"] = ArtifactCollectionStatus.REJECTED
+                    entry["detail"] = "declared output exceeds the collection ceiling"
+                    results.append(entry)
+                    continue
+                entry["payload"] = candidate.read_bytes()
+                entry["media_type"] = (
+                    mimetypes.guess_type(candidate.name)[0]
+                    or _ALLOWED_OUTPUT_MEDIA_FALLBACK
+                )
+                files_budget -= 1
+                bytes_budget -= len(entry["payload"])
+                results.append(entry)
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                try:
+                    archive, used_files, used_bytes = self._archive_directory(
+                        candidate, workspace_real, files_budget, bytes_budget
+                    )
+                except _OutputRejected as exc:
+                    entry["status"] = ArtifactCollectionStatus.REJECTED
+                    entry["detail"] = str(exc)
+                    results.append(entry)
+                    continue
+                entry["payload"] = archive
+                entry["media_type"] = "application/gzip"
+                files_budget -= used_files
+                bytes_budget -= used_bytes
+                results.append(entry)
+                continue
+            # Device, fifo, socket, or other special file.
+            entry["status"] = ArtifactCollectionStatus.REJECTED
+            entry["detail"] = "declared output is an unsupported file type"
+            results.append(entry)
+        return results
+
+    @staticmethod
+    def _archive_directory(
+        root: Path, workspace_real: Path, files_budget: int, bytes_budget: int
+    ) -> tuple[bytes, int, int]:
+        """Archive only regular in-workspace files, never following symlinks."""
+
+        buffer = BytesIO()
+        used_files = 0
+        used_bytes = 0
+        with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                # Never descend into symlinked directories (escape prevention).
+                dirnames[:] = sorted(
+                    name
+                    for name in dirnames
+                    if not os.path.islink(os.path.join(dirpath, name))
+                )
+                for name in sorted(filenames):
+                    full = Path(dirpath) / name
+                    if full.is_symlink():
+                        continue
+                    try:
+                        member = full.stat()
+                    except OSError:
+                        continue
+                    if not stat.S_ISREG(member.st_mode):
+                        continue
+                    real = Path(os.path.realpath(full))
+                    if real != workspace_real and workspace_real not in real.parents:
+                        raise _OutputRejected(
+                            "directory output contains an escaping path"
+                        )
+                    used_files += 1
+                    used_bytes += member.st_size
+                    if used_files > files_budget or used_bytes > bytes_budget:
+                        raise _OutputRejected(
+                            "declared output exceeds the collection ceiling"
+                        )
+                    bundle.add(
+                        str(full),
+                        arcname=os.path.relpath(full, root),
+                        recursive=False,
+                    )
+        return buffer.getvalue(), used_files, used_bytes
+
+    async def _collect_declared_outputs(
+        self, request: ContainerJobActivityRequest
+    ) -> list[ContainerJobArtifact]:
+        outputs = request.request.spec.outputs
+        if not outputs or self._publish is None:
+            return []
+        workspace = Path(request.resolved_workspace_ref or "").resolve()
+        raw = await asyncio.to_thread(
+            self._build_output_entries, workspace, list(outputs)
+        )
+        manifest: list[ContainerJobArtifact] = []
+        for entry in raw:
+            payload = entry["payload"]
+            if payload is None:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=entry["name"],
+                        relativePath=entry["relative_path"],
+                        collectionStatus=entry["status"],
+                        detail=entry["detail"],
+                    )
+                )
+                continue
+            # Preserve the source suffix so the artifact publisher can assign
+            # the media type already detected during collection.
+            suffixes = "".join(Path(entry["relative_path"]).suffixes)
+            name = f"{request.job_id}-output-{entry['name']}{suffixes}"
+            if entry["media_type"] == "application/gzip":
+                name = name.removesuffix(suffixes) + ".tar.gz"
+            ref = await self._publish(request, name, payload)
+            manifest.append(
+                ContainerJobArtifact(
+                    name=entry["name"],
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=entry["media_type"],
+                    relativePath=entry["relative_path"],
+                    collectionStatus=entry["status"],
+                )
+            )
+        return manifest
+
+    async def _publish_output_manifest(
+        self,
+        request: ContainerJobActivityRequest,
+        manifest: list[ContainerJobArtifact],
+    ) -> str | None:
+        if self._publish is None or not manifest:
+            return None
+        collected = any(
+            item.collection_status == ArtifactCollectionStatus.COLLECTED
+            for item in manifest
+        )
+        page = ContainerJobArtifactPage(
+            jobId=request.job_id,
+            artifacts=manifest,
+            publication=AuxiliaryOutcome(
+                state="succeeded" if collected else "failed"
+            ),
+        )
+        data = redact_sensitive_text(
+            page.model_dump_json(by_alias=True, exclude_none=True)
+        ).encode("utf-8")
+        return await self._publish(request, f"{request.job_id}-artifacts.json", data)
+
+    async def _publish_runtime_diagnostics(
+        self,
+        request: ContainerJobActivityRequest,
+        *,
+        logs_ref: str | None,
+        stdout_ref: str | None,
+        stderr_ref: str | None,
+        manifest: list[ContainerJobArtifact],
+    ) -> str | None:
+        if self._publish is None:
+            return None
+        diagnostics = {
+            "jobId": request.job_id,
+            "contractVersion": "v1",
+            "terminalState": getattr(
+                request.terminal_state, "value", request.terminal_state
+            ),
+            "exitCode": request.exit_code,
+            "failureClass": getattr(
+                request.failure_class, "value", request.failure_class
+            ),
+            "message": request.message,
+            "startedAt": request.started_at.isoformat()
+            if request.started_at
+            else None,
+            "finishedAt": request.finished_at.isoformat()
+            if request.finished_at
+            else None,
+            "durationMs": request.duration_ms,
+            "logsRef": logs_ref,
+            "stdoutRef": stdout_ref,
+            "stderrRef": stderr_ref,
+            "outputs": [
+                item.model_dump(mode="json", by_alias=True, exclude_none=True)
+                for item in manifest
+            ],
+        }
+        data = redact_sensitive_text(
+            json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+        ).encode("utf-8")
+        return await self._publish(
+            request, f"{request.job_id}-diagnostics.json", data
+        )
+
+    async def _persist_live_events_journal(
+        self, request: ContainerJobActivityRequest
+    ) -> str | None:
+        """Persist the live spool as the durable terminal log fallback (#3258).
+
+        Active jobs are followed through the live spool; terminal jobs are
+        reconstructed from this durable journal without the container or the
+        live stream.
+        """
+
+        if self._publish is None:
+            return None
+        spool_dir = self._live_spool_dir(request)
+        if spool_dir is None:
+            return None
+        spool_path = spool_dir / "live_streams.spool"
+        try:
+            if not spool_path.is_file() or spool_path.stat().st_size <= 0:
+                return None
+            data = spool_path.read_bytes()
+        except OSError:
+            return None
+        ref = await self._publish(
+            request, f"{request.job_id}-{_LIVE_EVENTS_JOURNAL_NAME}", data
+        )
+        # The durable journal is authoritative once publication succeeds.
+        shutil.rmtree(spool_dir, ignore_errors=True)
+        return ref
 
     async def project_status(self, request: ContainerJobActivityRequest):
         if self._write_projection is None:
