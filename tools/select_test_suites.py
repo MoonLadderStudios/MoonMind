@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Iterable
 
-
 OUTPUT_KEYS = (
     "unit_fast",
+    "unit_slow",
     "api_component",
     "temporal_boundary",
     "integration_ci",
@@ -29,15 +29,22 @@ OUTPUT_KEYS = (
 )
 
 FRONTEND_STATIC_EXACT = {
-    "package.json", "package-lock.json", "postcss.config.cjs",
-    "tailwind.config.cjs", "tools/test_unit.sh", "tools/run_repo_python.sh",
-    "tools/verify_vite_manifest.py", "tools/export_openapi.py",
+    "package.json",
+    "package-lock.json",
+    "postcss.config.cjs",
+    "tailwind.config.cjs",
+    "tools/test_unit.sh",
+    "tools/run_repo_python.sh",
+    "tools/verify_vite_manifest.py",
+    "tools/export_openapi.py",
     "tools/generate_openapi_types.py",
 }
 FRONTEND_STATIC_PREFIXES = ("frontend/", "api_service/templates/")
 FRONTEND_CHROMIUM_PREFIXES = ("frontend/src/", "api_service/templates/")
 FRONTEND_FIREFOX_EXACT = {
-    "package.json", "package-lock.json", "frontend/vitest.browser.config.ts",
+    "package.json",
+    "package-lock.json",
+    "frontend/vitest.browser.config.ts",
 }
 FRONTEND_FIREFOX_PREFIXES = ("frontend/src/browser/", "frontend/src/styles/")
 
@@ -53,9 +60,7 @@ FORCE_FULL_EXACT = {
     "tests/unit/conftest.py",
 }
 
-FORCE_FULL_PREFIXES = (
-    ".github/workflows/",
-)
+FORCE_FULL_PREFIXES = (".github/workflows/",)
 
 API_COMPONENT_EXACT = {
     "api_service/auth_providers.py",
@@ -73,9 +78,7 @@ API_COMPONENT_PREFIXES = (
     "tests/component/api/",
 )
 
-API_COMPONENT_GLOBS = (
-    "api_service/auth*",
-)
+API_COMPONENT_GLOBS = ("api_service/auth*",)
 
 TEMPORAL_BOUNDARY_EXACT = {
     "moonmind/schemas/managed_session_models.py",
@@ -111,6 +114,10 @@ INTEGRATION_CI_PREFIXES = (
     "migrations/",
     "alembic/",
 )
+
+INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
+
+UNIT_SLOW_PREFIXES = ("tests/unit/api/routers/test_agent_runs.py",)
 
 RELIABILITY_JOURNEY_EXACT = {
     ".github/workflows/pytest-unit-tests.yml",
@@ -174,6 +181,7 @@ NON_BACKEND_EXACT = {
 @dataclass(frozen=True)
 class SuiteSelection:
     unit_fast: bool = False
+    unit_slow: bool = False
     api_component: bool = False
     temporal_boundary: bool = False
     integration_ci: bool = False
@@ -185,9 +193,7 @@ class SuiteSelection:
     full_frontend: bool = False
 
     def as_outputs(self) -> dict[str, str]:
-        return {
-            key: "true" if getattr(self, key) else "false" for key in OUTPUT_KEYS
-        }
+        return {key: "true" if getattr(self, key) else "false" for key in OUTPUT_KEYS}
 
 
 def _normalize_path(raw_path: str) -> str | None:
@@ -246,6 +252,7 @@ def _is_backend_path(path: str) -> bool:
 def _full_backend_selection() -> SuiteSelection:
     return SuiteSelection(
         unit_fast=True,
+        unit_slow=True,
         api_component=True,
         temporal_boundary=True,
         integration_ci=True,
@@ -297,13 +304,26 @@ def select_suites(
         return _full_selection()
 
     backend_paths = [path for path in paths if _is_backend_path(path)]
-    static = any(_matches(path, exact=FRONTEND_STATIC_EXACT, prefixes=FRONTEND_STATIC_PREFIXES) for path in paths)
-    firefox = any(_matches(path, exact=FRONTEND_FIREFOX_EXACT, prefixes=FRONTEND_FIREFOX_PREFIXES) for path in paths)
-    chromium = firefox or any(path != "frontend/src/generated/openapi.ts" and _matches(path, prefixes=FRONTEND_CHROMIUM_PREFIXES) for path in paths)
+    static = any(
+        _matches(path, exact=FRONTEND_STATIC_EXACT, prefixes=FRONTEND_STATIC_PREFIXES)
+        for path in paths
+    )
+    firefox = any(
+        _matches(path, exact=FRONTEND_FIREFOX_EXACT, prefixes=FRONTEND_FIREFOX_PREFIXES)
+        for path in paths
+    )
+    chromium = firefox or any(
+        path != "frontend/src/generated/openapi.ts"
+        and _matches(path, prefixes=FRONTEND_CHROMIUM_PREFIXES)
+        for path in paths
+    )
     full_frontend = any(path in {"package.json", "package-lock.json"} for path in paths)
 
     return SuiteSelection(
         unit_fast=bool(backend_paths),
+        unit_slow=any(
+            _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
+        ),
         api_component=any(
             _matches(
                 path,
@@ -328,6 +348,7 @@ def select_suites(
                 exact=INTEGRATION_CI_EXACT,
                 prefixes=INTEGRATION_CI_PREFIXES,
             )
+            and not _matches(path, prefixes=INTEGRATION_CI_EXCLUDED_PREFIXES)
             for path in backend_paths
         ),
         reliability_journey=any(

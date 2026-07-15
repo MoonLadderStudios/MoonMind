@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
 STANDALONE_INTEGRATION_PATH = (
@@ -193,11 +192,17 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
     assert "frontend_browser_firefox" in browser["strategy"]["matrix"]["engine"]
     assert "@sha256:" in browser["container"]["image"]
     assert browser["env"]["HOME"] == "/root"
-    assert not any("playwright install" in step.get("run", "") for step in browser["steps"])
+    assert not any(
+        "playwright install" in step.get("run", "") for step in browser["steps"]
+    )
 
     aggregator = jobs["test-frontend"]
     assert aggregator["if"] == "always()"
-    assert aggregator["needs"] == ["select-test-suites", "frontend-static", "frontend-browser"]
+    assert aggregator["needs"] == [
+        "select-test-suites",
+        "frontend-static",
+        "frontend-browser",
+    ]
     assert not any("uses" in step for step in aggregator["steps"])
     script = "\n".join(step.get("run", "") for step in aggregator["steps"])
     assert "frontend-static was selected" in script
@@ -227,8 +232,18 @@ def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
     assert "--ignore=tests/unit/workflows/temporal" in command
     assert "--ignore=tests/unit/api" in command
     assert "--ignore=tests/unit/api_service" in command
-    assert '-m "not temporal_boundary and not component and not slow"' in command
+    assert (
+        '-m "unit_fast and not provider_verification and not requires_credentials"'
+        in command
+    )
     assert "--junitxml=artifacts/pytest-unit-fast.xml" in command
+    assert "full_backend" not in command
+    unit_fast_steps = _load_workflow()["jobs"]["unit-fast"]["steps"]
+    assert not any(
+        (step.get("uses") or "").startswith("actions/setup-node@")
+        or "npm run ui:build" in (step.get("run") or "")
+        for step in unit_fast_steps
+    )
 
 
 def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
@@ -236,14 +251,45 @@ def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
     temporal_command = _run_command("temporal-boundary", "Run Temporal boundary suite")
 
     assert "tests/unit/api tests/unit/api_service tests/component/api" in api_command
-    assert '-m "not temporal_boundary and not slow"' in api_command
-    assert "component and not temporal_boundary" not in api_command
+    assert (
+        '-m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials"'
+        in api_command
+    )
     assert "--junitxml=artifacts/pytest-api-component.xml" in api_command
 
     assert "python -m pytest tests/unit/workflows/temporal" in temporal_command
-    assert '-m "not slow"' in temporal_command
-    assert "temporal_boundary and not slow" not in temporal_command
+    assert (
+        '-m "temporal_boundary and not slow and not provider_verification and not requires_credentials"'
+        in temporal_command
+    )
     assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
+
+
+def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["unit-slow"]
+    command = _run_command("unit-slow", "Run slow unit suite")
+
+    assert job["if"] == "needs.select-test-suites.outputs.unit_slow == 'true'"
+    assert job["timeout-minutes"] == 45
+    assert (
+        '-m "slow and not provider_verification and not requires_credentials and not integration"'
+        in command
+    )
+    assert "-n " not in command
+    assert "--junitxml=artifacts/pytest-unit-slow.xml" in command
+    assert "unit-slow" in workflow["jobs"]["ci-required"]["needs"]
+
+
+def test_full_backend_runs_shard_ownership_verifier() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["verify-test-shard-ownership"]
+
+    assert job["if"] == "needs.select-test-suites.outputs.full_backend == 'true'"
+    assert any(
+        "tools/verify_test_shard_ownership.py" in step.get("run", "")
+        for step in job["steps"]
+    )
 
 
 def test_reliability_job_runs_the_canonical_journey_suite() -> None:
