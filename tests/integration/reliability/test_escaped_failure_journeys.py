@@ -73,6 +73,37 @@ pytestmark = [
 ]
 
 
+async def test_runtime_switch_rebinds_managed_session_authority_before_activity() -> (
+    None
+):
+    """Replay mm:d3ca1354 at the AgentRun-to-Activity request boundary."""
+    replay_id = "managed-session-runtime-switch"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = AgentExecutionRequest.model_validate(manifest["request"])
+    agent_run = MoonMindAgentRun()
+
+    agent_run._apply_runtime_selection_update(
+        request,
+        manifest["runtimeUpdate"],
+    )
+    agent_run._synchronize_runtime_selection_authority(request)
+    activity_payload = request.model_dump(mode="json", by_alias=True)
+
+    assert activity_payload["agentId"] == expected["agentId"]
+    assert activity_payload["executionProfileRef"] == expected[
+        "executionProfileRef"
+    ]
+    assert activity_payload["managedSession"] is expected["managedSession"]
+    assert activity_payload["stepExecution"]["runtimeSessionReset"] is expected[
+        "runtimeSessionReset"
+    ]
+    assert activity_payload["stepExecution"]["runtimeSelection"] == expected[
+        "runtimeSelection"
+    ]
+    AgentExecutionRequest.model_validate(activity_payload)
+
+
 async def test_oauth_maintenance_lease_replays_through_activity_update_boundary() -> (
     None
 ):

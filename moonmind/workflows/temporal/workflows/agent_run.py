@@ -341,6 +341,9 @@ STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID = (
 RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID = (
     "agent-run-runtime-selection-profile-clear-v1"
 )
+RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID = (
+    "agent-run-runtime-selection-session-rebind-v1"
+)
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID = (
     "agent-run-claude-code-no-progress-policy-v2"
@@ -3085,6 +3088,86 @@ class MoonMindAgentRun:
             params["workflow"] = workflow_payload
         request.parameters = params
 
+    def _synchronize_runtime_selection_authority(
+        self,
+        request: AgentExecutionRequest,
+    ) -> None:
+        """Keep session and step runtime evidence aligned with the launch request.
+
+        Runtime-selection edits are accepted while an AgentRun waits for a
+        provider slot. A retried step can already carry the workflow-scoped
+        managed-session binding from its previous execution, so changing the
+        runtime must detach an incompatible binding before any activity
+        re-validates the request. The adapter-visible Step Execution projection
+        is updated at the same boundary so it never claims the old runtime,
+        profile, model, or effort after the executable request has changed.
+        """
+
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        managed_session_runtime_id = canonical_managed_session_runtime_id(
+            request.agent_id
+        )
+        detached_managed_session = False
+        if (
+            request.managed_session is not None
+            and request.managed_session.runtime_id != managed_session_runtime_id
+        ):
+            request.managed_session = None
+            detached_managed_session = True
+
+        step_execution = request.step_execution
+        if step_execution is not None:
+            runtime_selection = dict(step_execution.runtime_selection or {})
+            runtime_selection["runtimeId"] = runtime_id
+            runtime_selection["agentKind"] = request.agent_kind
+
+            parameters = (
+                request.parameters
+                if isinstance(request.parameters, Mapping)
+                else {}
+            )
+            for key, parameter_keys in (
+                ("model", ("model", "requestedModel")),
+                ("effort", ("effort",)),
+            ):
+                value = next(
+                    (
+                        parameters.get(parameter_key)
+                        for parameter_key in parameter_keys
+                        if parameters.get(parameter_key) is not None
+                    ),
+                    None,
+                )
+                if value is None and any(
+                    parameter_key in parameters
+                    for parameter_key in parameter_keys
+                ):
+                    runtime_selection.pop(key, None)
+                elif value is not None:
+                    runtime_selection[key] = value
+
+            if request.execution_profile_ref:
+                runtime_selection["executionProfileRef"] = (
+                    request.execution_profile_ref
+                )
+            else:
+                runtime_selection.pop("executionProfileRef", None)
+
+            step_update: dict[str, Any] = {
+                "runtime_selection": runtime_selection,
+            }
+            if detached_managed_session:
+                step_update["runtime_session_reset"] = None
+            request.step_execution = step_execution.model_copy(update=step_update)
+
+        # Assignment validation is intentionally not enabled on the canonical
+        # Pydantic model. Re-validate the complete payload here, immediately
+        # before it can cross an Activity boundary, to catch any future partial
+        # runtime-selection mutation at its orchestration source.
+        AgentExecutionRequest.model_validate(
+            request.model_dump(mode="json", by_alias=True)
+        )
+
     def _validate_synced_profile_selection(
         self,
         *,
@@ -3140,6 +3223,8 @@ class MoonMindAgentRun:
         assigned_profile_id = self._assigned_profile_id
         if payload:
             self._apply_runtime_selection_update(request, payload)
+            if workflow.patched(RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID):
+                self._synchronize_runtime_selection_authority(request)
         runtime_id = self._managed_runtime_id(request.agent_id)
         manager_id = self._manager_workflow_id(runtime_id)
         selector_payload = request.profile_selector.model_dump(
@@ -3720,6 +3805,10 @@ class MoonMindAgentRun:
                             args=["launching", f"Slot acquired for {runtime_id}"]
                         )
                     request.execution_profile_ref = self._assigned_profile_id
+                    if workflow.patched(
+                        RUNTIME_SELECTION_SESSION_REBIND_PATCH_ID
+                    ):
+                        self._synchronize_runtime_selection_authority(request)
 
                     # Notify parent of the assigned profile so it can release the slot
                     # if this child exits in a terminal state (fallback for cancelled

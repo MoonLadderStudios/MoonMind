@@ -331,6 +331,78 @@ class TestEnsureManagerAutoStart:
         assert "profileSelector" not in request.parameters
         assert "profileSelector" not in request.parameters["task"]["runtime"]
 
+    def test_runtime_selection_update_detaches_incompatible_managed_session(self):
+        """Replay mm:d3ca1354: a Codex retry was switched to Claude while queued."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            managedSession={
+                "workflowId": "mm:d3ca1354:session:codex_cli",
+                "agentRunId": "mm:d3ca1354",
+                "sessionId": "sess:mm:d3ca1354:codex_cli",
+                "sessionEpoch": 2,
+                "runtimeId": "codex_cli",
+                "executionProfileRef": "codex-openrouter",
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:d3ca1354",
+                "runId": "replay-run",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 2,
+                "stepExecutionId": "mm:d3ca1354:replay-run:node-1:execution:2",
+                "reason": "runtime_recovered",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "agentKind": "managed",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                    "executionProfileRef": "codex-openrouter",
+                    "skillId": "pr-resolver",
+                },
+                "runtimeSessionReset": {
+                    "resolvedPolicy": "fresh_agent_run",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "executionProfileRef": "claude-anthropic",
+                "model": "claude-opus-4-7",
+                "effort": "high",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "model": "claude-opus-4-7",
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "profileId": "claude-anthropic",
+                        }
+                    },
+                },
+            },
+        )
+        workflow_instance._synchronize_runtime_selection_authority(request)
+
+        assert request.agent_id == "claude_code"
+        assert request.managed_session is None
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_session_reset is None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "agentKind": "managed",
+            "model": "claude-opus-4-7",
+            "effort": "high",
+            "executionProfileRef": "claude-anthropic",
+            "skillId": "pr-resolver",
+        }
+        AgentExecutionRequest.model_validate(
+            request.model_dump(mode="json", by_alias=True)
+        )
+
     def test_runtime_selection_update_clears_profile_when_runtime_changes_without_new_profile(
         self,
     ):
