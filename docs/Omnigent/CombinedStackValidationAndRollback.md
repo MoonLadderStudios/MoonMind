@@ -2,7 +2,7 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-07-08
+**Updated:** 2026-07-15
 **Audience:** Local and self-hosted MoonMind operators
 **Authority:** Operator-facing startup, validation, rollback, and troubleshooting behavior for the combined MoonMind plus Omnigent Docker Compose stack
 **Owning Surface:** Docker Compose deployment with MoonMind and Omnigent services
@@ -232,56 +232,38 @@ Operator flow:
    docker compose --profile omnigent-host exec omnigent-host sh -lc 'ls -la /workspaces/MoonMind; test ! -w /workspaces/MoonMind && echo "workspace is read-only"'
    ```
 
-Codex subscription OAuth remains owned by MoonMind's managed Codex runtime and the OAuth flow documented in [OAuth Terminal](../ManagedAgents/OAuthTerminal.md). If Omnigent needs Codex subscription credentials later, add them at a Codex-specific launch boundary or a dedicated trusted host profile rather than exposing `codex_auth_volume` to every process in the generic host container.
+Subscription OAuth remains owned by MoonMind's managed runtime and the OAuth flows documented in [OAuth Terminal](../ManagedAgents/OAuthTerminal.md). The generic host deliberately never receives `claude_auth_volume` or `codex_auth_volume`; use the matching dedicated host below.
 
-### Dedicated Claude OAuth Host
+### Dedicated OAuth Hosts
 
-The `docker-compose.claude-host.yaml` overlay provides a Claude-only Omnigent host without exposing Claude credentials to the generic host. Complete Claude OAuth through MoonMind first so that `claude_auth_volume` contains the durable login state. The overlay runs as the same uid and gid (`1000:1000`) as MoonMind's Claude OAuth flow and mounts that named volume, writable, at `/home/app/.claude`. It pins `HOME`, `CLAUDE_HOME`, `CLAUDE_VOLUME_PATH`, and `CLAUDE_CONFIG_DIR` to the mounted path and uses an explicit environment allowlist instead of injecting `.env` into the third-party host.
+The canonical `docker-compose.yaml` defines separate Claude-only and Codex-only Omnigent hosts behind the `omnigent-host-claude` and `omnigent-host-codex` profiles. Complete OAuth through MoonMind first so the matching durable auth volume contains verified login state. Each dedicated host runs as UID/GID `1000:1000`, mounts only its matching OAuth home read/write, clears competing provider credentials, and keeps its Omnigent identity in a separate state volume.
 
-Start the dedicated host with the base Compose file and overlay together:
+To make one or both hosts part of the normal startup path, set profiles in `.env` without setting `COMPOSE_FILE`:
+
+```dotenv
+COMPOSE_PROFILES="omnigent-host-claude,omnigent-host-codex"
+```
+
+Then use the same platform-neutral command on Linux, macOS, WSL, and Windows:
 
 ```bash
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.claude-host.yaml \
-  --profile omnigent-host-claude \
-  up -d omnigent-host-claude
+docker compose up -d
 ```
 
-If you prefer `COMPOSE_FILE`, do not pass a colon-separated value in the
-command string on Windows. Use the OS-specific separator:
-
-`docker compose` reads `COMPOSE_FILE` from the working-directory `.env` file
-automatically, so remove or update any existing `COMPOSE_FILE` entry there before
-running these commands.
-
-```text
-# Linux / macOS
-COMPOSE_FILE=docker-compose.yaml:docker-compose.claude-host.yaml docker compose --profile omnigent-host-claude up -d omnigent-host-claude
-
-# Windows PowerShell
-$env:COMPOSE_FILE = "docker-compose.yaml;docker-compose.claude-host.yaml"
-docker compose --profile omnigent-host-claude up -d omnigent-host-claude
-
-# Windows CMD
-set COMPOSE_FILE=docker-compose.yaml;docker-compose.claude-host.yaml
-docker compose --profile omnigent-host-claude up -d omnigent-host-claude
-```
-
-Validate the merged configuration and confirm the host can see the OAuth directory:
+For a one-time launch that does not change `.env`, select the desired profile and service explicitly:
 
 ```bash
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.claude-host.yaml \
-  --profile omnigent-host-claude \
-  config --quiet
-
-docker compose \
-  -f docker-compose.yaml \
-  -f docker-compose.claude-host.yaml \
-  --profile omnigent-host-claude \
-  exec omnigent-host-claude sh -lc 'test -d /home/app/.claude && ls -la /home/app/.claude'
+docker compose --profile omnigent-host-claude up -d omnigent-host-claude
+docker compose --profile omnigent-host-codex up -d omnigent-host-codex
 ```
 
-The dedicated host uses `omnigent-host-claude-state`, separate from the generic host identity. It retains the same sanitized `/workspaces` and read-only MoonMind workspace policy. Do not add provider API keys to this service or mount `claude_auth_volume` into the generic host.
+Validate the canonical configuration, host state, and Codex preflight with:
+
+```bash
+docker compose config --quiet
+docker compose ps omnigent-host-claude omnigent-host-codex
+docker compose exec omnigent-host-claude sh -lc 'test -d /home/app/.claude && test -w /home/app/.claude'
+docker compose exec omnigent-host-codex /opt/moonmind/check-codex-oauth-host.sh
+```
+
+The dedicated hosts retain the sanitized `/workspaces` and read-only MoonMind workspace policy. Do not add provider API keys to these services or mount either OAuth volume into the generic host. One OAuth profile remains limited to one active runtime consumer across direct MoonMind and Omnigent execution.

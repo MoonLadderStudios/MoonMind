@@ -37,6 +37,8 @@ If you already have a subscription with a model provider:
 3. Follow the instructions on the new tab
 4. Go back to Settings and click Finalize
 
+To expose a Settings-authenticated OAuth profile to Omnigent, enable the matching dedicated host profile in `.env`, for example `COMPOSE_PROFILES="omnigent-host-codex"`, and rerun `docker compose up -d`. The dedicated hosts live in the canonical Compose file, so no platform-specific `COMPOSE_FILE` list is required. See [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md#dedicated-oauth-hosts).
+
 ## Why MoonMind?
 
 Claude Code and Codex CLI are remarkable agents, but long-running autonomous work needs more than a terminal process:

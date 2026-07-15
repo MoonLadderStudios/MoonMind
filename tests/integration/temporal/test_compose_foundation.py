@@ -45,23 +45,7 @@ def _load_compose() -> dict:
     )
 
 
-def _load_claude_host_compose() -> dict:
-    compose_path = REPO_ROOT / "docker-compose.claude-host.yaml"
-    return yaml.load(
-        compose_path.read_text(encoding="utf-8"),
-        Loader=UniqueKeySafeLoader,
-    )
-
-
-def _load_codex_host_compose() -> dict:
-    compose_path = REPO_ROOT / "docker-compose.codex-host.yaml"
-    return yaml.load(
-        compose_path.read_text(encoding="utf-8"),
-        Loader=UniqueKeySafeLoader,
-    )
-
-
-def _render_merged_codex_host_compose() -> dict:
+def _render_codex_host_compose() -> dict:
     _require_docker_compose()
     result = subprocess.run(
         [
@@ -71,8 +55,6 @@ def _render_merged_codex_host_compose() -> dict:
             "/dev/null",
             "-f",
             "docker-compose.yaml",
-            "-f",
-            "docker-compose.codex-host.yaml",
             "--profile",
             "omnigent-host-codex",
             "config",
@@ -511,14 +493,14 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
 
 
 def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
-    compose = _load_claude_host_compose()
+    compose = _load_compose()
     host_service = compose["services"]["omnigent-host-claude"]
 
     assert host_service["profiles"] == ["omnigent-host-claude"]
     assert host_service["hostname"] == "omnigent-host-claude"
     assert host_service["image"] == (
         "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+        "${OMNIGENT_HOST_IMAGE_TAG:-0.2.11}"
     )
     assert host_service["command"] == [
         "omnigent",
@@ -553,7 +535,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
         "/workspaces/MoonMind:ro"
     ) in host_volumes
-    assert compose["volumes"] == {"omnigent-host-claude-state": None}
+    assert "omnigent-host-claude-state" in compose["volumes"]
 
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
@@ -561,10 +543,20 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     }
     assert _network_names(host_service) == {"local-network"}
     assert host_service["restart"] == "unless-stopped"
+    assert host_service["healthcheck"] == {
+        "test": [
+            "CMD-SHELL",
+            "test -d /home/app/.claude && test -w /home/app/.claude",
+        ],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "10s",
+    }
 
 
 def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
-    compose = _load_codex_host_compose()
+    compose = _load_compose()
     host_service = compose["services"]["omnigent-host-codex"]
 
     assert host_service["profiles"] == ["omnigent-host-codex"]
@@ -605,7 +597,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         ),
         "./services/omnigent/scripts:/opt/moonmind:ro",
     }
-    assert compose["volumes"] == {"omnigent-host-codex-state": None}
+    assert "omnigent-host-codex-state" in compose["volumes"]
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
         "omnigent-host-codex-init": {
@@ -623,8 +615,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert _network_names(host_service) == {"local-network"}
 
 
-def test_merged_omnigent_codex_host_uses_base_owned_oauth_volume():
-    config = _render_merged_codex_host_compose()
+def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():
+    config = _render_codex_host_compose()
     host_service = config["services"]["omnigent-host-codex"]
     mounts = host_service["volumes"]
     oauth_mount = next(
@@ -636,6 +628,11 @@ def test_merged_omnigent_codex_host_uses_base_owned_oauth_volume():
     assert config["volumes"]["codex_auth_volume"]["name"] == "codex_auth_volume"
     assert config["volumes"]["codex_auth_volume"].get("external") is not True
     assert config["volumes"]["omnigent-host-codex-state"].get("name")
+
+
+def test_oauth_hosts_have_no_platform_specific_compose_overlays():
+    assert not (REPO_ROOT / "docker-compose.claude-host.yaml").exists()
+    assert not (REPO_ROOT / "docker-compose.codex-host.yaml").exists()
 
 
 def test_visibility_schema_rehearsal_service_is_wired():
@@ -794,8 +791,12 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_CONFIG",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
+        "COMPOSE_PROFILES",
     ):
         assert f"{expected_name}=" in env_template
+    env_lines = env_template.splitlines()
+    assert not any(line.startswith("COMPOSE_FILE=") for line in env_lines)
+    assert not any(line.startswith("COMPOSE_PATH_SEPARATOR=") for line in env_lines)
     for removed_name in (
         "OMNIGENT_BUILTIN_ADMIN_EMAIL",
         "OMNIGENT_BUILTIN_ADMIN_PASSWORD",

@@ -468,8 +468,8 @@ If any step fails, MoonMind must not fall back to another credential method or g
 The first local-development slice may use one dedicated Compose service per first-party OAuth profile:
 
 ```text
-omnigent-host-claude-oauth
-omnigent-host-codex-oauth
+omnigent-host-claude
+omnigent-host-codex
 ```
 
 Compose and init scripts should automatically provide:
