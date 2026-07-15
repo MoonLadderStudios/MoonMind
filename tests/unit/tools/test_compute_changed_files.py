@@ -163,3 +163,29 @@ def test_schedule_is_unknown(tmp_path) -> None:
 
     assert stdout == "resolution=unknown"
     assert changed == []
+
+
+def test_creates_custom_output_parent_directory(tmp_path) -> None:
+    repo, base, head = _init_repo(tmp_path)
+    output = tmp_path / "nested" / "changed.txt"
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps({"before": base, "after": head}), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), str(output)],
+        cwd=repo,
+        env={
+            "PATH": os.environ["PATH"],
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_SHA": head,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert output.read_text(encoding="utf-8").splitlines() == ["b.txt"]

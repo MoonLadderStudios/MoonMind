@@ -230,6 +230,10 @@ def test_changed_paths_from_file_missing_is_fail_open(tmp_path) -> None:
     assert cli._changed_paths_from_file(str(missing)) == []
 
 
+def test_changed_paths_from_file_directory_is_fail_open(tmp_path) -> None:
+    assert cli._changed_paths_from_file(str(tmp_path)) == []
+
+
 def test_cli_changed_files_file_skips_merge_base_discovery(tmp_path, monkeypatch) -> None:
     changed = tmp_path / "changed-files.txt"
     changed.write_text("README.md\n", encoding="utf-8")

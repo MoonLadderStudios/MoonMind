@@ -26,6 +26,7 @@
 set -euo pipefail
 
 OUTPUT_FILE="${1:-/tmp/changed-files.txt}"
+mkdir -p "$(dirname "${OUTPUT_FILE}")"
 
 ensure_commit_available() {
   local sha="$1"
@@ -38,7 +39,7 @@ ensure_commit_available() {
 }
 
 # Classify the event into a base/head pair. Empty values mean "unknown".
-read -r base_sha head_sha < <(
+if ! read -r base_sha head_sha < <(
   python3 - <<'PY'
 import json
 import os
@@ -87,7 +88,10 @@ if not base or not head or base == zero or head == zero:
 
 print(f"{base}\t{head}")
 PY
-)
+); then
+  base_sha=""
+  head_sha=""
+fi
 
 if [[ -z "${base_sha}" || -z "${head_sha}" ]]; then
   : > "${OUTPUT_FILE}"
@@ -101,7 +105,7 @@ if ! ensure_commit_available "${base_sha}" || ! ensure_commit_available "${head_
   exit 0
 fi
 
-if ! git diff --name-only "${base_sha}" "${head_sha}" > "${OUTPUT_FILE}" 2>/dev/null; then
+if ! git -c core.quotepath=false diff --name-only "${base_sha}" "${head_sha}" > "${OUTPUT_FILE}" 2>/dev/null; then
   : > "${OUTPUT_FILE}"
   echo "resolution=unknown"
   exit 0

@@ -445,6 +445,27 @@ def test_selector_uses_shallow_submodule_free_checkout_and_shared_helper() -> No
     assert "tools/select_test_suites.py" in scripts
 
 
+def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> None:
+    job = _load_workflow()["jobs"]["preflight-policy"]
+    steps = {step["name"]: step for step in job["steps"]}
+
+    compute = steps["Compute changed files"]
+    assert compute["id"] == "changed-files"
+    assert '>> "$GITHUB_OUTPUT"' in compute["run"]
+    assert steps["Validate AgentSession deployment safety"]["if"] == (
+        "steps.changed-files.outputs.resolution == 'known'"
+    )
+    assert steps["Block deployment safety validation on an unknown diff"]["if"] == (
+        "steps.changed-files.outputs.resolution != 'known'"
+    )
+
+
+def test_unit_fast_initializes_moonspec_test_fixtures() -> None:
+    job = _load_workflow()["jobs"]["unit-fast"]
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "git submodule update --init --depth 1 -- moonspec" in scripts
+
+
 def test_moonspec_projection_initializes_only_moonspec_submodule() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["moonspec-projection"]

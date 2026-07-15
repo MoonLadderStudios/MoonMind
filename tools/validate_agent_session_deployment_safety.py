@@ -47,7 +47,7 @@ def _changed_paths_from_file(path: str) -> list[str]:
     """
 
     file_path = Path(path)
-    if not file_path.exists():
+    if not file_path.is_file():
         return []
     lines = file_path.read_text(encoding="utf-8").splitlines()
     return sorted({line.strip() for line in lines if line.strip()})
