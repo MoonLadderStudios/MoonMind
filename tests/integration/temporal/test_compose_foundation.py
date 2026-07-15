@@ -510,6 +510,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "--non-interactive",
     ]
     assert host_service["user"] == "1000:1000"
+    assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
 
     host_env = _env_map(host_service["environment"])
@@ -568,6 +569,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["image"] == expected_image
     assert compose["services"]["omnigent-host-codex-init"]["image"] == expected_image
     assert host_service["user"] == "1000:1000"
+    assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {
         "HOME": "/home/app",
@@ -631,6 +633,7 @@ def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():
 
     assert oauth_mount["type"] == "volume"
     assert oauth_mount["source"] == "codex_auth_volume"
+    assert host_service["working_dir"] == "/home/app"
     assert config["volumes"]["codex_auth_volume"]["name"] == "codex_auth_volume"
     assert config["volumes"]["codex_auth_volume"].get("external") is not True
     assert config["volumes"]["omnigent-host-codex-state"].get("name")

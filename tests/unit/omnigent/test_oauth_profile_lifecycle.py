@@ -253,6 +253,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
+    assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
 
 
 @pytest.mark.asyncio
