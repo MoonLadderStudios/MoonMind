@@ -241,7 +241,7 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
             f"{job_id}-stderr.txt",
             f"{job_id}-diagnostics.json",
             f"{job_id}-artifacts.json",
-            f"{job_id}-output-result",
+            f"{job_id}-output-result.txt",
         } <= names
     pull_diagnostics = [
         name for _, name, _ in published if name.endswith("-image-pull.txt")
