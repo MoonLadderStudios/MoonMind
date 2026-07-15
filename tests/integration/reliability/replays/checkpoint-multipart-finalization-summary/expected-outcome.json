@@ -1,0 +1,7 @@
+{
+  "status": "failed",
+  "message": "artifact expects multipart completion; use /complete with parts",
+  "publishReason": "Execution succeeded; finalization failed during the pre-publication checkpoint.",
+  "publishFailure": true,
+  "forbiddenSummary": "Finalizing execution."
+}

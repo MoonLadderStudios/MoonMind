@@ -162,6 +162,22 @@ def test_compose_tests_use_an_explicit_isolated_project() -> None:
         assert "--remove-orphans" in runner, relative_path
 
 
+def test_compose_test_artifact_endpoints_ignore_deployment_env() -> None:
+    compose_file = (REPO_ROOT / "docker-compose.test.yaml").read_text(
+        encoding="utf-8"
+    )
+    isolated_endpoint = "http://moonmind-test-temporal-artifacts-s3:9000"
+
+    assert (
+        f"TEMPORAL_ARTIFACT_S3_ENDPOINT={isolated_endpoint}" in compose_file
+    )
+    assert (
+        f"TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT={isolated_endpoint}" in compose_file
+    )
+    assert "TEMPORAL_ARTIFACT_S3_ENDPOINT=${" not in compose_file
+    assert "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${" not in compose_file
+
+
 def test_powershell_compose_runners_preserve_test_exit_codes_after_cleanup() -> None:
     for relative_path in (
         "tools/test-unit.ps1",
