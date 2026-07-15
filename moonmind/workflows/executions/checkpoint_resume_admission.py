@@ -48,6 +48,18 @@ class CheckpointPromotionEvidence(BaseModel):
     source_workspace_dependencies: int = Field(
         0, ge=0, alias="sourceWorkspaceDependencies"
     )
+    restore_attempts: int = Field(0, ge=0, alias="restoreAttempts")
+    restore_failures: int = Field(0, ge=0, alias="restoreFailures")
+    managed_workspace_sandbox_routes: int = Field(
+        0, ge=0, alias="managedWorkspaceSandboxRoutes"
+    )
+    route_readiness_divergences: int = Field(
+        0, ge=0, alias="routeReadinessDivergences"
+    )
+    capability_generation_mismatches: int = Field(
+        0, ge=0, alias="capabilityGenerationMismatches"
+    )
+    required_journey_missing: int = Field(0, ge=0, alias="requiredJourneyMissing")
     rollback_drill_passed: bool = Field(False, alias="rollbackDrillPassed")
     operational_alerts_ready: bool = Field(False, alias="operationalAlertsReady")
     on_call_ownership_confirmed: bool = Field(
@@ -163,6 +175,18 @@ def rollout_policy_from_settings(feature_flags: object) -> CheckpointResumeRollo
             falsePositiveEligibility=evidence.false_positive_eligibility if evidence else 0,
             credentialInclusions=evidence.credential_inclusions if evidence else 0,
             sourceWorkspaceDependencies=evidence.source_workspace_dependencies if evidence else 0,
+            restoreAttempts=evidence.restore_attempts if evidence else 0,
+            restoreFailures=evidence.restore_failures if evidence else 0,
+            managedWorkspaceSandboxRoutes=(
+                evidence.managed_workspace_sandbox_routes if evidence else 0
+            ),
+            routeReadinessDivergences=(
+                evidence.route_readiness_divergences if evidence else 0
+            ),
+            capabilityGenerationMismatches=(
+                evidence.capability_generation_mismatches if evidence else 0
+            ),
+            requiredJourneyMissing=evidence.required_journey_missing if evidence else 0,
         ),
         maximum_restore_failure_ratio=0.05,
     )

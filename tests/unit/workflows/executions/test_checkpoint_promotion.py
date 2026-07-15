@@ -105,3 +105,21 @@ def test_metric_catalog_covers_required_checkpoint_series() -> None:
         "checkpoint_resume.false_positive_eligibility_total",
         "checkpoint_resume.duplicate_side_effect_total",
     } <= CHECKPOINT_METRIC_NAMES
+
+
+def test_observability_rules_cover_every_zero_tolerance_pause_condition() -> None:
+    from pathlib import Path
+
+    rules = Path("deploy/observability/prometheus/rules.yaml").read_text()
+    assert {
+        "MoonMindCheckpointResumeIntegrityFailure",
+        "MoonMindCheckpointResumeFalseEligibility",
+        "MoonMindCheckpointResumeDuplicateSideEffect",
+        "MoonMindCheckpointRestoreFailureRate",
+        "MoonMindCheckpointCredentialInclusion",
+        "MoonMindCheckpointSandboxAuthorityViolation",
+        "MoonMindCheckpointSourceStateDependency",
+        "MoonMindCheckpointRouteReadinessDivergence",
+        "MoonMindCheckpointCapabilityGenerationMismatch",
+        "MoonMindCheckpointRequiredJourneyMissing",
+    } <= {line.split(":", 1)[1].strip() for line in rules.splitlines() if "- alert:" in line}

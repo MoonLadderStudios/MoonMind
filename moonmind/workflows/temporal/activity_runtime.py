@@ -6939,7 +6939,15 @@ class TemporalAgentRuntimeActivities:
             _emit_checkpoint_metric("managed_checkpoint.restore_success_total", outcome="success")
             _emit_checkpoint_metric(
                 "managed_checkpoint.restore_duration_ms",
-                outcome="success", value=time.monotonic() - started, observe=True,
+                outcome="success", value=(time.monotonic() - started) * 1000, observe=True,
+            )
+            _emit_checkpoint_metric(
+                "managed_checkpoint.restore_bytes", outcome="success",
+                value=float(result.get("restoredBytes", 0) or 0),
+            )
+            _emit_checkpoint_metric(
+                "managed_checkpoint.restore_entries", outcome="success",
+                value=float(result.get("restoredEntryCount", 0) or 0),
             )
             return result
         except CheckpointRestoreError as exc:
@@ -7001,8 +7009,12 @@ class TemporalAgentRuntimeActivities:
                     value=float(workspace.get("archiveBytes", 0) or 0),
                 )
                 _emit_checkpoint_metric(
+                    "managed_checkpoint.capture_entries", outcome="success",
+                    value=float(workspace.get("pathCount", 0) or 0),
+                )
+                _emit_checkpoint_metric(
                     "managed_checkpoint.capture_duration_ms", outcome="success",
-                    value=time.monotonic() - capture_started, observe=True,
+                    value=(time.monotonic() - capture_started) * 1000, observe=True,
                 )
                 return result
             except Exception as exc:
@@ -7044,6 +7056,10 @@ class TemporalAgentRuntimeActivities:
                         )
                     result = dict(saved["result"])
                     logger.info("managed_checkpoint_capture_reused_idempotently")
+                    _emit_checkpoint_metric(
+                        "managed_checkpoint.capture_idempotent_reuse_total",
+                        outcome="reused",
+                    )
                     return result
 
                 expected = resolve_runtime_execution_capabilities("codex_cli")
@@ -7348,7 +7364,15 @@ class TemporalAgentRuntimeActivities:
             _emit_checkpoint_metric("managed_checkpoint.restore_success_total", outcome="success")
             _emit_checkpoint_metric(
                 "managed_checkpoint.restore_duration_ms",
-                outcome="success", value=time.monotonic() - started, observe=True,
+                outcome="success", value=(time.monotonic() - started) * 1000, observe=True,
+            )
+            _emit_checkpoint_metric(
+                "managed_checkpoint.restore_bytes", outcome="success",
+                value=float(result.get("restoredBytes", 0) or 0),
+            )
+            _emit_checkpoint_metric(
+                "managed_checkpoint.restore_entries", outcome="success",
+                value=float(result.get("restoredEntryCount", 0) or 0),
             )
             return result
         except CheckpointRestoreError as exc:

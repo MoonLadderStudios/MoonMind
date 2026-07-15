@@ -8,6 +8,8 @@ from moonmind.workflows.executions.checkpoint_resume_admission import (
     rollout_policy_from_settings,
 )
 from types import SimpleNamespace
+
+import pytest
 from moonmind.workflows.executions.runtime_capabilities import (
     RUNTIME_EXECUTION_CAPABILITIES,
     resolve_runtime_execution_capabilities,
@@ -158,3 +160,37 @@ def test_critical_promotion_evidence_automatically_pauses_new_admission() -> Non
     policy = rollout_policy_from_settings(flags)
     assert policy.promotion_state == "paused"
     assert policy.reason == "automatic_pause:checkpoint_integrity_failure"
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("managedWorkspaceSandboxRoutes", "managed_workspace_sandbox_route"),
+        ("routeReadinessDivergences", "route_readiness_divergence"),
+        ("capabilityGenerationMismatches", "capability_generation_mismatch"),
+        ("requiredJourneyMissing", "required_journey_missing"),
+    ],
+)
+def test_all_promotion_health_evidence_reaches_automatic_pause(field, reason) -> None:
+    evidence = _policy().promotion_evidence.model_dump(by_alias=True, mode="json")
+    evidence[field] = 1
+    flags = SimpleNamespace(
+        checkpoint_resume_promotion_evidence_json=__import__("json").dumps(evidence),
+        checkpoint_resume_deployment_generation="generation-1",
+        checkpoint_resume_promotion_state="limited",
+    )
+    policy = rollout_policy_from_settings(flags)
+    assert policy.promotion_state == "paused"
+    assert policy.reason == f"automatic_pause:{reason}"
+
+
+def test_restore_failure_ratio_reaches_automatic_pause() -> None:
+    evidence = _policy().promotion_evidence.model_dump(by_alias=True, mode="json")
+    evidence.update(restoreAttempts=100, restoreFailures=6)
+    flags = SimpleNamespace(
+        checkpoint_resume_promotion_evidence_json=__import__("json").dumps(evidence),
+        checkpoint_resume_deployment_generation="generation-1",
+        checkpoint_resume_promotion_state="limited",
+    )
+    policy = rollout_policy_from_settings(flags)
+    assert policy.reason == "automatic_pause:restore_failure_ratio_exceeded"

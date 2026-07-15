@@ -60,3 +60,45 @@ groups:
           summary: Managed checkpoint restore failures exceed the promotion threshold
           runbook: docs/Temporal/CheckpointResumePromotion.md
           recovery: Pause new admissions and retain worker routes until recoveries drain.
+      - alert: MoonMindCheckpointCredentialInclusion
+        expr: increase(moonmind_workflow_checkpoint_resume_credential_inclusion_total[5m]) > 0
+        labels: {severity: critical, owner: security}
+        annotations:
+          summary: Checkpoint validation detected credential material
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions and investigate the capture exclusion boundary.
+      - alert: MoonMindCheckpointSandboxAuthorityViolation
+        expr: increase(moonmind_workflow_checkpoint_resume_managed_workspace_sandbox_route_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Checkpoint restore crossed the managed workspace sandbox route
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions and restore the managed-runtime authority boundary.
+      - alert: MoonMindCheckpointSourceStateDependency
+        expr: increase(moonmind_workflow_checkpoint_resume_source_state_dependency_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Cold restore depended on source workspace or session state
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions until a disposable source-independent restore passes.
+      - alert: MoonMindCheckpointRouteReadinessDivergence
+        expr: increase(moonmind_workflow_checkpoint_resume_route_readiness_divergence_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Recorded checkpoint route readiness diverged from deployed routes
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions and reconcile the deployment readiness snapshot.
+      - alert: MoonMindCheckpointCapabilityGenerationMismatch
+        expr: increase(moonmind_workflow_checkpoint_resume_capability_generation_mismatch_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Checkpoint capability digest or deployment generation mismatched
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions while retaining routes for frozen in-flight decisions.
+      - alert: MoonMindCheckpointRequiredJourneyMissing
+        expr: increase(moonmind_workflow_checkpoint_resume_required_journey_missing_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Required cold-resume promotion journey is missing or unhealthy
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions until generation-bound journey evidence is green.
