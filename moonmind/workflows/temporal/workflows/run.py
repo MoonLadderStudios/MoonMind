@@ -612,6 +612,9 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
     "run-moonspec-verify-publication-gate-v1"
 )
+RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
+    "run-moonspec-gate-previous-outputs-handoff-v1"
+)
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
@@ -7263,6 +7266,22 @@ class MoonMindRunWorkflow:
             value = self._assessment_context.get(key)
             if value not in (None, "", {}, []):
                 merged.setdefault(key, value)
+        if self._patched_or_false_outside_workflow(
+            RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH
+        ):
+            gate_context = self._publish_context.get("moonSpecGate")
+            if isinstance(gate_context, Mapping) and gate_context:
+                # The workflow-owned gate is the latest controlling verifier
+                # result. Carry it across intervening agent steps so trusted
+                # finalizers do not depend on another workspace's relative path
+                # or on unstructured agent prose.
+                merged["moonSpecVerify"] = dict(gate_context)
+                gate_result_ref = self._coerce_text(
+                    gate_context.get("gateResultRef"),
+                    max_chars=400,
+                )
+                if gate_result_ref:
+                    merged["moonSpecVerifyArtifactRef"] = gate_result_ref
         if not self._trusted_issue_context:
             return merged if merged != previous_outputs else previous_outputs
         if self._trusted_previous_outputs_context(previous_outputs):

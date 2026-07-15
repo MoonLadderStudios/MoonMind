@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
@@ -739,6 +740,124 @@ async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy
     retry_policy = tool_calls[0][2]["retry_policy"]
     assert retry_policy.maximum_attempts == 3
     assert tool_calls[0][1]["invocation_payload"]["inputs"]["maxAttempts"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handoff_enabled", "expects_verification"),
+    [(True, True), (False, False)],
+)
+async def test_run_execution_stage_hands_controlling_verification_to_finalizer(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    handoff_enabled: bool,
+    expects_verification: bool,
+) -> None:
+    """Regression for workflow mm:341551dd-06d0-4c80-9563-77b12b144499."""
+
+    mock_run_workflow._integration = None
+    mock_run_workflow._publish_context["moonSpecGate"] = {
+        "logicalStepId": "verify",
+        "verdict": "FULLY_IMPLEMENTED",
+        "gateResultRef": "art_verify_gate",
+    }
+    captured: list[tuple[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "github.update_issue_status",
+                                "description": "Finalize a GitHub issue",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {
+                                    "capabilities": ["integration:github"]
+                                },
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 60,
+                                        "schedule_to_close_seconds": 120,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "finalize-issue",
+                        "tool": {
+                            "type": "skill",
+                            "name": "github.update_issue_status",
+                        },
+                        "inputs": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "issueNumber": 3258,
+                            "mode": "finalize_after_pr_or_done",
+                            "pullRequestArtifactPath": "artifacts/pr.json",
+                            "verificationArtifactPath": "artifacts/verify.json",
+                            "requireVerification": True,
+                        },
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            handoff_enabled
+            and patch_id == RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={},
+        plan_ref="art:sha256:plan",
+    )
+
+    tool_call = next(call for call in captured if call[0] == "mm.tool.execute")
+    inputs = tool_call[1]["invocation_payload"]["inputs"]
+    if expects_verification:
+        assert inputs["previousOutputs"]["moonSpecVerify"] == {
+            "logicalStepId": "verify",
+            "verdict": "FULLY_IMPLEMENTED",
+            "gateResultRef": "art_verify_gate",
+        }
+        assert (
+            inputs["previousOutputs"]["moonSpecVerifyArtifactRef"]
+            == "art_verify_gate"
+        )
+    else:
+        assert "previousOutputs" not in inputs
 
 
 def test_execute_kwargs_retry_override_preserves_route_retry_policy() -> None:
