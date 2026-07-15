@@ -1000,6 +1000,7 @@ _PUBLISH_GIT_EXCLUDED_PATHS: tuple[str, ...] = (
     "live_streams.spool",
 )
 _SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS = 10.0
+_CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS = 1.0
 
 class ManagedSessionController(Protocol):
     """Remote control surface for managed session containers."""
@@ -7087,14 +7088,39 @@ class TemporalAgentRuntimeActivities:
         entries: list[ManagedCheckpointEntry] = []
         total = 0
         output = BytesIO()
+        last_heartbeat_at: float | None = None
+
+        async def heartbeat_capture_progress() -> None:
+            """Emit bounded progress without overflowing the SDK heartbeat queue."""
+
+            nonlocal last_heartbeat_at
+            if not temporal_activity.in_activity():
+                return
+            now = time.monotonic()
+            if (
+                last_heartbeat_at is not None
+                and now - last_heartbeat_at
+                < _CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS
+            ):
+                return
+            last_heartbeat_at = now
+            try:
+                temporal_activity.heartbeat(
+                    {"phase": "archive", "filesCaptured": len(entries)}
+                )
+            except asyncio.QueueFull:
+                # A queued heartbeat already proves liveness. Coalesce progress
+                # instead of turning SDK backpressure into a checkpoint failure.
+                pass
+            # The archive loop is otherwise synchronous. Yield after each
+            # bounded heartbeat so the Temporal worker can drain its queue.
+            await asyncio.sleep(0)
+
         with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
             fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
             for relative_text in selected:
-                if temporal_activity.in_activity():
-                    temporal_activity.heartbeat(
-                        {"phase": "archive", "filesCaptured": len(entries)}
-                    )
+                await heartbeat_capture_progress()
                 path = workspace / relative_text
                 if not path.exists() and not path.is_symlink():
                     continue
@@ -7119,6 +7145,7 @@ class TemporalAgentRuntimeActivities:
                     with path.open("rb") as source:
                         while chunk := source.read(1024 * 1024):
                             digest.update(chunk)
+                            await heartbeat_capture_progress()
                     payload = None
                     target = None
                     entry_type = "file"
