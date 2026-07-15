@@ -500,7 +500,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["hostname"] == "omnigent-host-claude"
     assert host_service["image"] == (
         "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+        "${OMNIGENT_HOST_IMAGE_TAG:-0.2.11}"
     )
     assert host_service["command"] == [
         "omnigent",
@@ -543,6 +543,16 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     }
     assert _network_names(host_service) == {"local-network"}
     assert host_service["restart"] == "unless-stopped"
+    assert host_service["healthcheck"] == {
+        "test": [
+            "CMD-SHELL",
+            "test -d /home/app/.claude && test -w /home/app/.claude",
+        ],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "10s",
+    }
 
 
 def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():

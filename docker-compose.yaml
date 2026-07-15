@@ -828,7 +828,7 @@ services:
 
   omnigent-host-claude:
     profiles: ["omnigent-host-claude"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-0.2.11}
     hostname: omnigent-host-claude
     user: "1000:1000"
     command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
@@ -858,6 +858,12 @@ services:
     networks:
       - local-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /home/app/.claude && test -w /home/app/.claude"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
