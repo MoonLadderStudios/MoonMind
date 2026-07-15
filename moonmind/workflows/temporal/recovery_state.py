@@ -22,7 +22,25 @@ CHECKPOINT_RESTORATION_NOT_READY = "CHECKPOINT_RESTORATION_NOT_READY"
 
 BOUNDARY_PHASES = {
     "before_execution": "rerun_failed_step",
+    "after_execution": "continue_to_gate",
+    "after_gate": "continue_after_gate",
+    "before_publication": "resume_publication",
+    "before_recovery_restoration": "retry_restoration",
 }
+
+RECOVERY_STATES = (
+    "recovery_contract_received",
+    "recovery_preflight_validating",
+    "recovery_preflight_validated",
+    "recovery_destination_reserving",
+    "recovery_restoring_workspace",
+    "recovery_workspace_restored",
+    "recovery_materializing_preserved_steps",
+    "recovery_ready_for_continuation",
+    "recovery_continuing",
+    "recovery_completed",
+    "recovery_failed",
+)
 
 
 class RecoveryContractError(ValueError):
@@ -132,10 +150,34 @@ def validate_restore_result(
     return locator.model_dump(by_alias=True), evidence_ref, evidence_digest
 
 
+def restoration_outcome(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the compact, independently projectable restoration evidence."""
+    status = str(state.get("restorationStatus") or "").strip()
+    if not status:
+        return None
+    outcome = {
+        "status": status,
+        "phase": "workspace_restoration",
+        "checkpointRef": state.get("sourceCheckpointRef"),
+        "restoreActivity": state.get("restoreActivity"),
+        "restoreIdempotencyKey": state.get("restoreIdempotencyKey"),
+        "destinationAgentRunId": state.get("destinationAgentRunId"),
+        "destinationWorkspaceLocator": state.get("destinationWorkspaceLocator"),
+        "restorationEvidenceRef": state.get("restorationEvidenceRef"),
+        "restorationEvidenceDigest": state.get("restorationEvidenceDigest"),
+        "capabilityDigest": state.get("capabilityDigest"),
+        "retryCount": int(state.get("restorationRetryCount") or 0),
+    }
+    for key in ("failureCode", "diagnosticsRef", "retryRecommendation"):
+        if state.get(key):
+            outcome[key] = state[key]
+    return {key: value for key, value in outcome.items() if value is not None}
+
+
 __all__ = [
     "BOUNDARY_PHASES", "CHECKPOINT_BOUNDARY_INCOMPATIBLE",
     "CHECKPOINT_CAPABILITY_INVALID", "CHECKPOINT_RESTORATION_NOT_READY",
     "CHECKPOINT_SIDE_EFFECT_UNSAFE", "CheckpointRecoveryContract",
-    "RecoveryContractError", "deterministic_recovery_identity",
-    "validate_restore_result",
+    "RECOVERY_STATES", "RecoveryContractError", "deterministic_recovery_identity",
+    "restoration_outcome", "validate_restore_result",
 ]

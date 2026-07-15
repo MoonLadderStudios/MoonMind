@@ -167,6 +167,7 @@ from moonmind.workflows.temporal.recovery_manifest import (
 from moonmind.workflows.temporal.recovery_state import (
     CheckpointRecoveryContract,
     deterministic_recovery_identity,
+    restoration_outcome,
     validate_restore_result,
 )
 from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
@@ -3159,13 +3160,39 @@ class MoonMindRunWorkflow:
                 "status": "recovery_preflight_validated",
                 "recoveryAction": contract.recovery_action,
                 "resumePhase": contract.resume_phase,
+                "sourceWorkflowId": self._recovery_source_text(
+                    recovery_source, "sourceWorkflowId", "source_workflow_id"
+                ),
+                "sourceRunId": self._recovery_source_text(
+                    recovery_source, "sourceRunId", "source_run_id"
+                ),
+                "sourceLogicalStepId": failed_step_id,
+                "sourceExecutionOrdinal": self._recovery_source_int(
+                    recovery_source, "failedStepExecution", "failed_step_execution"
+                ) or 1,
                 "sourceCheckpointRef": contract.source_checkpoint_ref,
                 "sourceCheckpointBoundary": contract.source_checkpoint_boundary,
                 "sourceCheckpointKind": contract.source_checkpoint_kind,
+                "workspacePolicy": contract.workspace_policy,
                 "targetRuntimeId": contract.capabilities.runtime_id,
                 "capabilitySetVersion": contract.capabilities.capability_set_version,
                 "capabilityDigest": contract.capabilities.capability_digest,
                 "restoreActivity": contract.restore_activity,
+                "restorationStatus": "pending",
+                "restorationRetryCount": 0,
+                "preservedStepRefs": [
+                    str(step.get("stateCheckpointRef") or "")
+                    for step in preserved_steps or []
+                    if isinstance(step, Mapping) and step.get("stateCheckpointRef")
+                ],
+                "sideEffectDispositionSummary": [
+                    {
+                        key: disposition.get(key)
+                        for key in ("disposition", "idempotent", "compensationRef")
+                        if disposition.get(key) is not None
+                    }
+                    for disposition in contract.side_effect_dispositions
+                ],
             }
 
         self._recovery_failed_step_id = failed_step_id
@@ -3378,9 +3405,13 @@ class MoonMindRunWorkflow:
             checkpoint_ref=contract.source_checkpoint_ref,
         )
         state.update({
-            "status": "recovery_restoring_workspace",
+            "status": "recovery_destination_reserving",
             "destinationAgentRunId": destination_id,
             "restoreIdempotencyKey": idempotency_key,
+        })
+        state.update({
+            "status": "recovery_restoring_workspace",
+            "restorationStatus": "running",
         })
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
         workspace = dict(self._recovery_workspace)
@@ -3388,9 +3419,10 @@ class MoonMindRunWorkflow:
             "workspaceLocator"
         )
         checkpoint = workspace.get("workspace") or workspace.get("checkpoint") or workspace
-        result = await workflow.execute_activity(
-            route.activity_type,
-            {
+        try:
+            result = await workflow.execute_activity(
+                route.activity_type,
+                {
                 "schemaVersion": "v1",
                 "recoveryIdentity": {
                     "workflowId": workflow.info().workflow_id,
@@ -3426,22 +3458,40 @@ class MoonMindRunWorkflow:
                 "capabilitySetVersion": contract.capabilities.capability_set_version,
                 "capabilityDigest": contract.capabilities.capability_digest,
                 "idempotencyKey": idempotency_key,
-            },
-            **self._execute_kwargs_for_route(route),
-        )
-        if not isinstance(result, Mapping):
-            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: invalid restore result")
-        locator, evidence_ref, evidence_digest = validate_restore_result(
-            result,
-            runtime_id=contract.capabilities.runtime_id,
-            destination_agent_run_id=destination_id,
-        )
+                },
+                **self._execute_kwargs_for_route(route),
+            )
+            if not isinstance(result, Mapping):
+                raise ValueError(
+                    "CHECKPOINT_RESTORATION_NOT_READY: invalid restore result"
+                )
+            locator, evidence_ref, evidence_digest = validate_restore_result(
+                result,
+                runtime_id=contract.capabilities.runtime_id,
+                destination_agent_run_id=destination_id,
+            )
+        except Exception as exc:
+            state.update({
+                "status": "recovery_failed",
+                "restorationStatus": "failed",
+                "failureCode": getattr(exc, "code", None)
+                or "CHECKPOINT_RESTORATION_NOT_READY",
+                "retryRecommendation": "retry_restoration",
+            })
+            row = self._step_ledger_row_for(logical_step_id)
+            if row is not None:
+                row["restorationOutcome"] = restoration_outcome(state)
+            raise
         state.update({
             "status": "recovery_workspace_restored",
+            "restorationStatus": "succeeded",
             "destinationWorkspaceLocator": locator,
             "restorationEvidenceRef": evidence_ref,
             "restorationEvidenceDigest": evidence_digest,
         })
+        row = self._step_ledger_row_for(logical_step_id)
+        if row is not None:
+            row["restorationOutcome"] = restoration_outcome(state)
         self._recovery_workspace_restored_ref = evidence_ref
         return evidence_ref
 
@@ -18471,6 +18521,18 @@ class MoonMindRunWorkflow:
             }
             if self._operator_summary:
                 finish_summary["operatorSummary"] = self._operator_summary
+            if self._checkpoint_recovery_state is not None:
+                projected_restoration = restoration_outcome(
+                    self._checkpoint_recovery_state
+                )
+                if projected_restoration is not None:
+                    finish_summary["checkpointRecovery"] = {
+                        "state": self._checkpoint_recovery_state.get("status"),
+                        "resumePhase": self._checkpoint_recovery_state.get(
+                            "resumePhase"
+                        ),
+                        "restorationOutcome": projected_restoration,
+                    }
             side_effects = self._finish_summary_side_effects()
             if side_effects:
                 finish_summary["sideEffects"] = side_effects
