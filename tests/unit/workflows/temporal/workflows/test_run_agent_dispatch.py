@@ -22,13 +22,16 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillEntry,
     ResolvedSkillSet,
     SkillImplementationContract,
+    SkillTerminalContract,
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
+    RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
+    RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
@@ -224,6 +227,268 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         self.assertEqual(request.parameters, {})
 
 class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_resolved_skillset_supplies_owned_terminal_contract(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        existing_ref = "artifact://skillsets/pr-resolver-existing"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-pr-resolver-existing",
+            resolved_at=datetime.now(UTC),
+            skills=[
+                ResolvedSkillEntry(
+                    skill_name="pr-resolver",
+                    provenance=AgentSkillProvenance(
+                        source_kind=AgentSkillSourceKind.BUILT_IN
+                    ),
+                    terminal_contract=SkillTerminalContract(
+                        contract_id="pr_resolver_terminal.v1",
+                        relative_path="var/pr_resolver/result.json",
+                        expected_schema_version=(
+                            "moonmind.pr-resolver-result.v1"
+                        ),
+                    ),
+                )
+            ],
+        )
+        parent = SimpleNamespace(
+            workflow_id="merge-automation:owner",
+            run_id="merge-run-1",
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="resolver:pr:3353",
+            run_id="resolver-run-1",
+            parent=parent,
+        )
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.execute_typed_activity",
+                new=AsyncMock(return_value=resolved.model_dump(mode="json")),
+            ) as read_artifact,
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+        ):
+            resolved_ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "pr-resolver"},
+                node_id="node-1",
+                existing_skillset_ref=existing_ref,
+            )
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex_cli",
+                    "selectedSkill": "pr-resolver",
+                },
+                node_id="node-1",
+                tool_name="codex_cli",
+                resolved_skillset_ref=resolved_ref,
+                workflow_parameters={
+                    "mergeGate": {
+                        "parentWorkflowId": parent.workflow_id,
+                        "pullRequestUrl": (
+                            "https://github.com/MoonLadderStudios/MoonMind/pull/3353"
+                        ),
+                    }
+                },
+            )
+
+        self.assertEqual(resolved_ref, existing_ref)
+        read_artifact.assert_awaited_once()
+        self.assertIsNotNone(request.terminal_contract)
+        self.assertEqual(
+            request.terminal_contract.contract_id,
+            "pr_resolver_terminal.v1",
+        )
+        self.assertIsNotNone(request.terminal_continuation_authority)
+        self.assertEqual(
+            request.terminal_continuation_authority.owner_workflow_id,
+            parent.workflow_id,
+        )
+
+    async def test_existing_skillset_history_does_not_add_artifact_read(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        existing_ref = "artifact://skillsets/pr-resolver-existing"
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.execute_typed_activity",
+                new=AsyncMock(),
+            ) as read_artifact,
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id
+                    != RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH
+                ),
+            ),
+        ):
+            resolved_ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "pr-resolver"},
+                node_id="node-1",
+                existing_skillset_ref=existing_ref,
+            )
+
+        self.assertEqual(resolved_ref, existing_ref)
+        read_artifact.assert_not_awaited()
+        self.assertNotIn(
+            "node-1",
+            wf._resolved_skill_terminal_contract_by_step,
+        )
+
+    async def test_resolved_skill_terminal_contract_reaches_owned_agent_run(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-pr-resolver",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/pr-resolver",
+            skills=[
+                ResolvedSkillEntry(
+                    skill_name="pr-resolver",
+                    provenance=AgentSkillProvenance(
+                        source_kind=AgentSkillSourceKind.BUILT_IN
+                    ),
+                    terminal_contract=SkillTerminalContract(
+                        contract_id="pr_resolver_terminal.v1",
+                        relative_path="var/pr_resolver/result.json",
+                        expected_schema_version=(
+                            "moonmind.pr-resolver-result.v1"
+                        ),
+                    ),
+                )
+            ],
+        )
+        parent = SimpleNamespace(
+            workflow_id="merge-automation:owner",
+            run_id="merge-run-1",
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="resolver:pr:2189",
+            run_id="resolver-run-1",
+            parent=parent,
+        )
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(return_value=resolved),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+        ):
+            resolved_ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "pr-resolver"},
+                node_id="node-1",
+                existing_skillset_ref=None,
+            )
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex_cli",
+                    "selectedSkill": "pr-resolver",
+                },
+                node_id="node-1",
+                tool_name="codex_cli",
+                resolved_skillset_ref=resolved_ref,
+                workflow_parameters={
+                    "mergeGate": {
+                        "parentWorkflowId": parent.workflow_id,
+                        "pullRequestUrl": (
+                            "https://github.com/MoonLadderStudios/Tactics/pull/2189"
+                        ),
+                    }
+                },
+            )
+
+        self.assertIsNotNone(request.terminal_contract)
+        self.assertEqual(
+            request.terminal_contract.contract_id,
+            "pr_resolver_terminal.v1",
+        )
+        self.assertEqual(
+            request.terminal_contract.execution_ref,
+            "resolver:pr:2189:resolver-run-1:node-1:execution:1",
+        )
+        self.assertIsNotNone(request.terminal_continuation_authority)
+        self.assertEqual(
+            request.terminal_continuation_authority.owner_workflow_id,
+            parent.workflow_id,
+        )
+        self.assertEqual(
+            request.terminal_continuation_authority.owner_run_id,
+            parent.run_id,
+        )
+
+    async def test_existing_history_does_not_change_agent_request_shape(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-pr-resolver",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/pr-resolver",
+            skills=[
+                ResolvedSkillEntry(
+                    skill_name="pr-resolver",
+                    provenance=AgentSkillProvenance(
+                        source_kind=AgentSkillSourceKind.BUILT_IN
+                    ),
+                    terminal_contract=SkillTerminalContract(
+                        contract_id="pr_resolver_terminal.v1",
+                        relative_path="var/pr_resolver/result.json",
+                        expected_schema_version=(
+                            "moonmind.pr-resolver-result.v1"
+                        ),
+                    ),
+                )
+            ],
+        )
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(return_value=resolved),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id != RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH
+                ),
+            ),
+        ):
+            await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "pr-resolver"},
+                node_id="node-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertNotIn(
+            "node-1",
+            wf._resolved_skill_terminal_contract_by_step,
+        )
+
     async def test_agent_node_resolves_effective_task_and_step_skills_before_launch(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"
