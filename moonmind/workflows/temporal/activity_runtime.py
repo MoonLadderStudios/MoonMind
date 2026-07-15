@@ -7108,6 +7108,7 @@ class TemporalAgentRuntimeActivities:
         entries: list[ManagedCheckpointEntry] = []
         total = 0
         output = BytesIO()
+
         with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
             fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
