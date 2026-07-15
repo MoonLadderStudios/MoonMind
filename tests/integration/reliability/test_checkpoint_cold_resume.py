@@ -30,7 +30,6 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 

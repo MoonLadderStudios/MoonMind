@@ -227,8 +227,9 @@ def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
     assert "--ignore=tests/unit/workflows/temporal" in command
     assert "--ignore=tests/unit/api" in command
     assert "--ignore=tests/unit/api_service" in command
-    assert '-m "not temporal_boundary and not component and not slow"' in command
+    assert '-m "unit_fast and not provider_verification and not requires_credentials"' in command
     assert "--junitxml=artifacts/pytest-unit-fast.xml" in command
+    assert "full_backend" not in command
 
 
 def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
@@ -236,14 +237,29 @@ def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
     temporal_command = _run_command("temporal-boundary", "Run Temporal boundary suite")
 
     assert "tests/unit/api tests/unit/api_service tests/component/api" in api_command
-    assert '-m "not temporal_boundary and not slow"' in api_command
-    assert "component and not temporal_boundary" not in api_command
+    assert (
+        '-m "component and not temporal_boundary and not slow '
+        'and not provider_verification and not requires_credentials"' in api_command
+    )
     assert "--junitxml=artifacts/pytest-api-component.xml" in api_command
 
     assert "python -m pytest tests/unit/workflows/temporal" in temporal_command
-    assert '-m "not slow"' in temporal_command
-    assert "temporal_boundary and not slow" not in temporal_command
+    assert (
+        '-m "temporal_boundary and not slow and not provider_verification '
+        'and not requires_credentials"' in temporal_command
+    )
     assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
+
+
+def test_unit_slow_has_dedicated_non_xdist_job() -> None:
+    command = _run_command("unit-slow", "Run slow unit suite")
+
+    assert (
+        '-m "slow and not provider_verification and not requires_credentials '
+        'and not integration"' in command
+    )
+    assert "-n auto" not in command
+    assert "--junitxml=artifacts/pytest-unit-slow.xml" in command
 
 
 def test_reliability_job_runs_the_canonical_journey_suite() -> None:

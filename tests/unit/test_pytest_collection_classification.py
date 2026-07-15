@@ -54,12 +54,12 @@ def test_mm849_temporal_boundary_paths_are_marked_by_structure() -> None:
     assert "unit_fast" not in item.marker_names
 
 
-def test_mm849_regular_temporal_unit_paths_remain_unit_fast() -> None:
+def test_temporal_unit_directory_is_temporal_boundary() -> None:
     item = _item_for("tests/unit/workflows/temporal/test_activity_runtime.py")
 
     conftest.pytest_collection_modifyitems([item])
 
-    assert item.marker_names == {"unit_fast"}
+    assert item.marker_names == {"temporal_boundary"}
 
 
 def test_mm849_collection_classification_does_not_read_source(monkeypatch) -> None:

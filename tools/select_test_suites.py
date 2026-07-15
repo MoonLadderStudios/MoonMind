@@ -17,6 +17,7 @@ from typing import Iterable
 
 OUTPUT_KEYS = (
     "unit_fast",
+    "unit_slow",
     "api_component",
     "temporal_boundary",
     "integration_ci",
@@ -51,6 +52,7 @@ FORCE_FULL_EXACT = {
     "tools/select_test_suites.py",
     "tests/conftest.py",
     "tests/unit/conftest.py",
+    "tools/verify_test_shard_ownership.py",
 }
 
 FORCE_FULL_PREFIXES = (
@@ -111,6 +113,12 @@ INTEGRATION_CI_PREFIXES = (
     "migrations/",
     "alembic/",
 )
+
+INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
+
+UNIT_SLOW_EXACT = {
+    "tests/unit/api/routers/test_agent_runs.py",
+}
 
 RELIABILITY_JOURNEY_EXACT = {
     ".github/workflows/pytest-unit-tests.yml",
@@ -174,6 +182,7 @@ NON_BACKEND_EXACT = {
 @dataclass(frozen=True)
 class SuiteSelection:
     unit_fast: bool = False
+    unit_slow: bool = False
     api_component: bool = False
     temporal_boundary: bool = False
     integration_ci: bool = False
@@ -246,6 +255,7 @@ def _is_backend_path(path: str) -> bool:
 def _full_backend_selection() -> SuiteSelection:
     return SuiteSelection(
         unit_fast=True,
+        unit_slow=True,
         api_component=True,
         temporal_boundary=True,
         integration_ci=True,
@@ -304,6 +314,7 @@ def select_suites(
 
     return SuiteSelection(
         unit_fast=bool(backend_paths),
+        unit_slow=any(path in UNIT_SLOW_EXACT for path in backend_paths),
         api_component=any(
             _matches(
                 path,
@@ -327,6 +338,10 @@ def select_suites(
                 path,
                 exact=INTEGRATION_CI_EXACT,
                 prefixes=INTEGRATION_CI_PREFIXES,
+            )
+            and not any(
+                path.startswith(prefix)
+                for prefix in INTEGRATION_CI_EXCLUDED_PREFIXES
             )
             for path in backend_paths
         ),

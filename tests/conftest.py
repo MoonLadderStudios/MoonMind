@@ -38,7 +38,9 @@ _TEMPORAL_BOUNDARY_TEST_PATHS = {
     Path("tests/unit/workflows/temporal/workflows/test_run_signals_updates.py"),
 }
 
-_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES: tuple[Path, ...] = ()
+_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES = (
+    Path("tests/unit/workflows/temporal"),
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -141,6 +143,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             and not is_slow
             and not _item_has_marker(item, "integration")
             and not _item_has_marker(item, "provider_verification")
+            and not _item_has_marker(item, "requires_credentials")
         ):
             item.add_marker(pytest.mark.unit_fast)
 

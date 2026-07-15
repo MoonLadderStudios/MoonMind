@@ -20,6 +20,7 @@ Backend tests are classified by the runtime resources they start, not by the imp
 | Category | Marker | Resource boundary | PR behavior |
 | --- | --- | --- | --- |
 | Fast unit | `unit_fast` | Pure Python logic, schemas, validation, and services with mocks. No Docker, network, external process, or Temporal test server. | Required for backend-impacting pull requests. |
+| Slow unit | `slow` | Remaining slow tests under `tests/unit`. | Pushes to `main`, schedules, manual/full runs, fail-open runs, and direct changes to known slow tests. |
 | Component | `component` | FastAPI `TestClient`, dependency overrides, and in-process router/service wiring. | Required for API, auth, database, service, and generated OpenAPI type changes. |
 | Temporal boundary | `temporal_boundary` | Temporal `WorkflowEnvironment`, `Worker`, `Replayer`, workflow signal/update/query/replay, activity-boundary, and serialized payload behavior. | Required for Temporal workflow, runtime, worker, or Temporal schema-sensitive changes. |
 | Reliability journey | `reliability_journey` | Hermetic production composition across the Temporal test server, real workflows, managed-session/runtime adapters, scripted provider or subprocess behavior, terminal artifacts, and checkpoint/finalization routing. No external network or credentials. | Required for orchestration seams, managed runtime packaging, skill contracts, checkpoints, and replay fixtures. |
@@ -35,6 +36,7 @@ The pytest marker registry lives in `pyproject.toml`. Runtime classification for
 
 ```text
 unit_fast=true|false
+unit_slow=true|false
 api_component=true|false
 temporal_boundary=true|false
 integration_ci=true|false
@@ -119,6 +121,11 @@ The selector enables `integration_ci=true` for changes under or matching:
 - `pyproject.toml`
 - `uv.lock`
 
+`tests/integration/reliability/` is explicitly excluded from this selector; a
+reliability-only fixture change selects the reliability journey without also
+selecting Compose integration. Shared Compose and image infrastructure can
+still select both suites.
+
 This suite validates compose-backed local infrastructure seams and must remain free of external-provider credentials.
 
 ## Full Backend Path
@@ -136,20 +143,23 @@ The selector enables `full_backend=true` and selects all backend suites when any
 - Test runner or selector files changed, including `tools/test_unit.sh`, `tools/test_unit_docker.sh`, `tools/test_integration.sh`, or `tools/select_test_suites.py`.
 - Global pytest configuration changed, including `tests/conftest.py` or `tests/unit/conftest.py`.
 
-The full backend path uses the canonical unit runner:
+The full backend path selects all six mutually exclusive backend shards:
+`unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`,
+`reliability-journey-checkpoint-resume`, and `integration-ci`. It does not run
+the entire unit tree as an additional overlapping job.
+
+Shard ownership is checked with:
 
 ```bash
-./tools/test_unit.sh --python-only
+python tools/verify_test_shard_ownership.py
 ```
-
-`./tools/test_unit.sh` reports slow tests with `--durations=${MOONMIND_PYTEST_DURATIONS:-25}` and emits JUnit XML in CI.
 
 ## Required Check Model
 
 Conditional GitHub Actions jobs are not suitable as individual branch-protection requirements because skipped jobs can leave required checks unresolved. MoonMind uses one always-running required summary job instead:
 
 - `select-test-suites` computes backend suite outputs.
-- `unit-fast`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey-checkpoint-resume` run only when selected.
+- `unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey-checkpoint-resume` run only when selected.
 - `ci-required` always runs and fails if any selected backend suite did not complete successfully.
 
 Branch protection must require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks. It must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
@@ -180,7 +190,10 @@ Run the fast unit PR safety net:
 
 ```bash
 pytest tests/unit \
-  -m "not temporal_boundary and not component and not slow" \
+  --ignore=tests/unit/workflows/temporal \
+  --ignore=tests/unit/api \
+  --ignore=tests/unit/api_service \
+  -m "unit_fast and not provider_verification and not requires_credentials" \
   -q -n auto --dist loadfile --durations=25
 ```
 
@@ -188,7 +201,7 @@ Run component coverage:
 
 ```bash
 pytest tests/unit/api tests/unit/api_service tests/component/api \
-  -m "component and not temporal_boundary and not slow" \
+  -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
   -q -n auto --dist loadfile --durations=25
 ```
 
@@ -196,8 +209,16 @@ Run Temporal boundary coverage:
 
 ```bash
 pytest tests/unit/workflows/temporal \
-  -m "temporal_boundary and not slow" \
+  -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
   -q --durations=25
+```
+
+Run slow unit coverage without xdist:
+
+```bash
+pytest tests/unit \
+  -m "slow and not provider_verification and not requires_credentials and not integration" \
+  -q --durations=50
 ```
 
 Run hermetic integration CI:
