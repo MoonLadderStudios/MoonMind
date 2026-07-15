@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -299,6 +300,15 @@ async def test_logs_return_bounded_owner_scoped_pages(session_factory, temporal)
 
         empty = await service.logs(owner=owner, job_id=accepted.job_id)
         assert empty.entries == [] and empty.next_cursor is None
+
+        record = await service.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
+        record.live_log_events_json = [{
+            "sequence": 1, "timestamp": datetime.now(timezone.utc).isoformat(),
+            "stream": "stdout", "text": "active-line",
+        }]
+        await session.flush()
+        active = await service.logs(owner=owner, job_id=accepted.job_id)
+        assert [entry.text for entry in active.entries] == ["active-line"]
 
         await service.repository.record_observation(
             owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED,

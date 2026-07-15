@@ -226,4 +226,9 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
         "container-job:" + "2" * 32,
         "container-job:" + "3" * 32,
     }
-    assert len(published) == 8  # two pull diagnostics, then logs + outputs per job
+    names = [name for _, name, _ in published]
+    assert sum(name.endswith("-stdout.log") for name in names) == 3
+    assert sum(name.endswith("-stderr.log") for name in names) == 3
+    assert sum(name.endswith("-diagnostics.json") for name in names) == 3
+    assert sum(name.endswith("-manifest.json") for name in names) == 3
+    assert sum(name.endswith("-outputs.tar.gz") for name in names) == 3

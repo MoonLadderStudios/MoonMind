@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 from unittest.mock import AsyncMock
 
 import pytest
@@ -387,6 +388,83 @@ async def test_publish_evidence_rejects_symlink_output(tmp_path) -> None:
         workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
     )
     with pytest.raises(RuntimeError, match="symlink|escapes"):
+        await backend.publish_evidence(request)
+
+
+@pytest.mark.asyncio
+async def test_observe_publishes_bounded_redacted_incremental_live_events(tmp_path) -> None:
+    events = []
+    async def runner(args):
+        if args[0] == "logs":
+            return 0, b"token=secret-value\nhello", b""
+        return 0, b'{"Running": true}', b""
+    async def publish(_request, event):
+        events.append(event)
+    request = _request(tmp_path)
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner,
+        live_log_publisher=publish)
+    first = await backend.observe_container(request)
+    request.live_log_sequence = first.live_log_sequence or 0
+    request.live_log_offset = first.live_log_offset or 0
+    await backend.observe_container(request)
+    assert len(events) == 1
+    assert events[0].sequence == 1
+    assert "secret-value" not in events[0].text
+    assert len(events[0].text) <= 8192
+
+
+@pytest.mark.asyncio
+async def test_publish_evidence_rejects_special_file_and_size_ceiling(tmp_path) -> None:
+    workspace = tmp_path / "art_workspace"
+    workspace.mkdir()
+    fifo = workspace / "fifo"
+    os.mkfifo(fifo)
+    async def runner(args): return 0, b"", b""
+    async def publish(request, name, payload): return f"art:{name}"
+    request = _request(tmp_path)
+    request.request.spec.outputs = [OutputDeclaration(name="fifo", relativePath="fifo")]
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner,
+        evidence_publisher=publish)
+    with pytest.raises(RuntimeError, match="unsupported file type"):
+        await backend.publish_evidence(request)
+
+    fifo.unlink()
+    (workspace / "large").write_bytes(b"x" * 2048)
+    settings = resolve_container_backend_settings({"MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_BYTES": "1024"})
+    request.request.spec.outputs = [OutputDeclaration(name="large", relativePath="large")]
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, settings=settings,
+        command_runner=runner, evidence_publisher=publish)
+    with pytest.raises(RuntimeError, match="collected-size limit"):
+        await backend.publish_evidence(request)
+
+
+@pytest.mark.asyncio
+async def test_output_manifest_covers_missing_directory_digest_and_count_limit(tmp_path) -> None:
+    workspace = tmp_path / "art_workspace"
+    directory = workspace / "tree"
+    directory.mkdir(parents=True)
+    (directory / "a.txt").write_text("a", encoding="utf-8")
+    captured = {}
+    async def runner(args): return 0, b"", b""
+    async def publish(request, name, payload):
+        captured[name] = payload
+        return f"art:{name}"
+    request = _request(tmp_path)
+    request.request.spec.outputs = [
+        OutputDeclaration(name="tree", relativePath="tree"),
+        OutputDeclaration(name="missing", relativePath="missing"),
+    ]
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner,
+        evidence_publisher=publish)
+    await backend.publish_evidence(request)
+    manifest = json.loads(captured[f"{request.job_id}-manifest.json"])
+    assert [item["collectionStatus"] for item in manifest["outputs"]] == ["collected", "missing"]
+    expected = hashlib.sha256(b"a.txt\0a").hexdigest()
+    assert manifest["outputs"][0]["sha256"] == expected
+    for index in range(257):
+        (directory / f"extra-{index}").write_text("x", encoding="utf-8")
+    request.request.spec.outputs = [OutputDeclaration(name="tree", relativePath="tree")]
+    with pytest.raises(RuntimeError, match="file-count limit"):
         await backend.publish_evidence(request)
 
 

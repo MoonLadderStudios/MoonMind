@@ -252,6 +252,8 @@ class ContainerJobService:
         return ContainerJobStatus(
             jobId=record.job_id, state=record.state, backendKind=record.backend_kind,
             backendRef=record.backend_ref, image=record.image_observation_json,
+            workspace=record.workspace_observation_json,
+            timing=record.timing_observation_json,
             authorization=record.authorization_observation_json,
             terminal=record.terminal_outcome_json, publication=record.publication_outcome_json,
             cleanup=record.cleanup_outcome_json, logsRef=record.logs_ref,
@@ -281,9 +283,14 @@ class ContainerJobService:
         if record is None:
             raise ContainerJobNotFoundError(job_id)
         if not record.logs_ref:
-            # Evidence is not published yet (or the job produced none): the
-            # bounded contract is an empty page, not an unbounded daemon stream.
-            return ContainerJobLogPage(jobId=job_id, entries=[], nextCursor=None)
+            events = record.live_log_events_json or []
+            offset = self._decode_cursor(query.cursor)
+            page = events[offset:offset + min(query.limit, MAX_LOG_PAGE_ENTRIES)]
+            entries = [ContainerJobLogEntry.model_validate(event) for event in page]
+            next_index = offset + len(entries)
+            return ContainerJobLogPage(
+                jobId=job_id, entries=entries,
+                nextCursor=str(next_index) if next_index < len(events) else None)
 
         text = await self._read_evidence_text(owner=owner, artifact_ref=record.logs_ref)
         lines = text.split("\n")

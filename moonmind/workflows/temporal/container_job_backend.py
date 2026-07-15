@@ -49,6 +49,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobFailureClass,
     ImageObservation,
 )
+from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
     ImageAcquisitionError,
@@ -79,6 +80,7 @@ EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitabl
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
 RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
 SecretResolver = Callable[[str], Awaitable[str]]
+LiveLogPublisher = Callable[[ContainerJobActivityRequest, RunObservabilityEvent], Awaitable[None]]
 
 
 def _redact(text: str, secrets: Sequence[str]) -> str:
@@ -219,6 +221,7 @@ class DockerContainerJobBackend:
         backend_ref: str = "system",
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
+        live_log_publisher: LiveLogPublisher | None = None,
         projection_writer: ProjectionWriter | None = None,
         registry_auth_resolver: RegistryAuthResolver | None = None,
         auth_root: str | Path | None = None,
@@ -240,6 +243,7 @@ class DockerContainerJobBackend:
         self._backend_ref = backend_ref
         self._runner = command_runner or self._run
         self._publish = evidence_publisher
+        self._live_log_publisher = live_log_publisher
         self._write_projection = projection_writer
         self._resolve_registry_auth = (
             registry_auth_resolver or resolve_registry_pull_credentials
@@ -884,17 +888,51 @@ class DockerContainerJobBackend:
 
     async def observe_container(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
+        await self._publish_live_logs(request, ref)
         raw = await self._checked("inspect", "--format", "{{json .State}}", ref)
         state = json.loads(raw)
         if state.get("Running"):
-            return ContainerJobActivityResult(containerRef=ref, running=True)
+            return ContainerJobActivityResult(containerRef=ref, running=True,
+                liveLogSequence=request.live_log_sequence, liveLogOffset=request.live_log_offset)
         exit_code = int(state.get("ExitCode", 1))
         return ContainerJobActivityResult(
             containerRef=ref,
             running=False,
             terminalState="succeeded" if exit_code == 0 else "failed",
             exitCode=exit_code,
+            liveLogSequence=request.live_log_sequence,
+            liveLogOffset=request.live_log_offset,
         )
+
+    async def _publish_live_logs(self, request: ContainerJobActivityRequest, ref: str) -> None:
+        """Publish only newly observed, redacted Docker output to the shared log plane."""
+        if self._live_log_publisher is None:
+            return
+        code, stdout, stderr = await self._runner(("logs", ref))
+        if code:
+            return
+        merged = [("stdout", _redacted_bytes(stdout)), ("stderr", _redacted_bytes(stderr))]
+        flat = b"\n[stderr]\n".join(value for _, value in merged)
+        start = min(request.live_log_offset, len(flat))
+        fresh = flat[start:]
+        total_limit = self._settings.max_output_bytes
+        if len(fresh) > total_limit:
+            fresh = fresh[-total_limit:]
+        sequence = request.live_log_sequence
+        offset = start
+        for chunk_start in range(0, len(fresh), 8192):
+            chunk = fresh[chunk_start:chunk_start + 8192]
+            sequence += 1
+            stream = "stderr" if start + chunk_start > len(stdout) else "stdout"
+            await self._live_log_publisher(request, RunObservabilityEvent(
+                runId=request.job_id, sequence=sequence, stream=stream,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                text=chunk.decode(errors="replace"), offset=offset,
+                kind=f"{stream}_chunk", metadata={"containerJobId": request.job_id},
+            ))
+            offset += len(chunk)
+        request.live_log_sequence = sequence
+        request.live_log_offset = len(flat)
 
     async def stop_container(self, request: ContainerJobActivityRequest):
         ref = request.container_ref or self._name(request)
@@ -1018,7 +1056,15 @@ class DockerContainerJobBackend:
                                 if total > self._settings.max_output_bytes:
                                     raise RuntimeError("declared outputs exceed the collected-size limit")
                         bundle.add(declared, arcname=output.name, recursive=True)
-                        digest = hashlib.sha256(declared.read_bytes()).hexdigest() if declared.is_file() else hashlib.sha256(output.name.encode()).hexdigest()
+                        if declared.is_file():
+                            digest = hashlib.sha256(declared.read_bytes()).hexdigest()
+                        else:
+                            directory_hash = hashlib.sha256()
+                            for child in sorted(p for p in declared.rglob("*") if p.is_file()):
+                                directory_hash.update(child.relative_to(declared).as_posix().encode())
+                                directory_hash.update(b"\0")
+                                directory_hash.update(child.read_bytes())
+                            digest = directory_hash.hexdigest()
                         manifest.append({
                             "name": output.name,
                             "relativePath": output.relative_path,

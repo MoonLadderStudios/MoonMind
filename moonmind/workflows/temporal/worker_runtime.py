@@ -2350,6 +2350,12 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
                     "cacheHit": True,
                     "pullLockWaitMs": 0,
                 }
+            if request.workspace_observation is not None:
+                record.workspace_observation_json = request.workspace_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True)
+            if request.timing_observation is not None:
+                record.timing_observation_json = request.timing_observation.model_dump(
+                    mode="json", by_alias=True, exclude_none=True)
             if (
                 request.exit_code is not None
                 or request.failure_class
@@ -2375,6 +2381,25 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
             await session.commit()
 
     return _write
+
+def _container_job_live_log_publisher():
+    """Persist bounded canonical Live Log events for owner-scoped active paging."""
+    async def _publish(request, event) -> None:
+        async with get_async_session_context() as session:
+            result = await session.execute(select(ContainerJobRecord).where(
+                ContainerJobRecord.job_id == request.job_id))
+            record = result.scalar_one_or_none()
+            if record is None:
+                raise RuntimeError(f"container job record not found: {request.job_id}")
+            events = list(record.live_log_events_json or [])
+            events.append({
+                "sequence": event.sequence, "timestamp": event.timestamp,
+                "stream": event.stream, "text": event.text[:8192],
+            })
+            # Shared active history is explicitly bounded; durable artifacts remain fallback.
+            record.live_log_events_json = events[-500:]
+            await session.commit()
+    return _publish
 
 
 def _container_job_secret_resolver():
@@ -2648,6 +2673,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 backend_ref=container_backend_settings.default_backend_ref,
                 docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
                 evidence_publisher=_container_job_evidence_publisher(artifact_service),
+                live_log_publisher=_container_job_live_log_publisher(),
                 projection_writer=_container_job_projection_writer(
                     container_backend_settings.kind,
                     container_backend_settings.default_backend_ref,

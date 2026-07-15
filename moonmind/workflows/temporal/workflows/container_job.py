@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from temporalio import workflow
@@ -21,6 +21,8 @@ with workflow.unsafe.imports_passed_through():
         ContainerJobWorkflowResult,
         TerminalOutcome,
         failure_class_from_exception,
+        TimingObservation,
+        WorkspaceObservation,
     )
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
@@ -41,6 +43,14 @@ _IMAGE_FAILURE_TYPES = frozenset(
         ContainerJobFailureClass.WORKSPACE.value,
     }
 )
+
+
+def _workflow_now() -> datetime:
+    """Use deterministic workflow time, with a fallback for direct unit invocation."""
+    try:
+        return workflow.now()
+    except Exception:
+        return datetime.now(timezone.utc)
 
 
 def _acquisition_failure_class(exc: BaseException) -> ContainerJobFailureClass | None:
@@ -138,6 +148,7 @@ class MoonMindContainerJobWorkflow:
         exit_code: int | None = None
         failure_class: ContainerJobFailureClass | None = ContainerJobFailureClass.INFRASTRUCTURE
         message: str | None = None
+        started_at = _workflow_now()
 
         async def execute_lifecycle() -> None:
             nonlocal terminal_state, exit_code, failure_class
@@ -147,6 +158,9 @@ class MoonMindContainerJobWorkflow:
                     "container_job.resolve_workspace", request
                 )
                 request.resolved_workspace_ref = resolved.resolved_workspace_ref
+                request.workspace_observation = WorkspaceObservation(
+                    locatorKind=inp.request.spec.workspace_ref.kind,
+                    visible=True, probeResult="resolved")
             if not self._cancel_requested:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
                 image = await self._activity("container_job.acquire_image", request)
@@ -171,6 +185,8 @@ class MoonMindContainerJobWorkflow:
                 observed = await self._activity(
                     "container_job.observe_container", request
                 )
+                request.live_log_sequence = observed.live_log_sequence or request.live_log_sequence
+                request.live_log_offset = observed.live_log_offset or request.live_log_offset
                 if observed.terminal_state is not None:
                     terminal_state = observed.terminal_state
                     exit_code = observed.exit_code
@@ -216,6 +232,13 @@ class MoonMindContainerJobWorkflow:
                 await self._project(request, ContainerJobState.WORKSPACE_NOT_VISIBLE)
 
         request.terminal_state = terminal_state
+        ended_at = _workflow_now()
+        request.timing_observation = TimingObservation(
+            startedAt=started_at, endedAt=ended_at,
+            durationMs=max(0, int((ended_at - started_at).total_seconds() * 1000)),
+            cause=("canceled" if terminal_state == ContainerJobState.CANCELED else
+                   "timed_out" if terminal_state == ContainerJobState.TIMED_OUT else None),
+        )
         if request.container_ref and terminal_state in {
             ContainerJobState.CANCELED,
             ContainerJobState.TIMED_OUT,

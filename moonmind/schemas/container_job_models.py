@@ -402,6 +402,21 @@ class ImageObservation(ContractModel):
     pull_duration_ms: int | None = Field(None, alias="pullDurationMs", ge=0)
 
 
+class WorkspaceObservation(ContractModel):
+    """Bounded workspace probe evidence; never contains a resolved host path."""
+
+    locator_kind: str = Field(alias="locatorKind", min_length=1, max_length=64)
+    visible: bool
+    probe_result: Literal["resolved", "not_visible", "rejected"] = Field(alias="probeResult")
+
+
+class TimingObservation(ContractModel):
+    started_at: datetime | None = Field(None, alias="startedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
+    duration_ms: int | None = Field(None, alias="durationMs", ge=0)
+    cause: Literal["canceled", "timed_out"] | None = None
+
+
 class TerminalOutcome(ContractModel):
     exit_code: int | None = Field(None, alias="exitCode")
     failure_class: ContainerJobFailureClass | None = Field(None, alias="failureClass")
@@ -420,6 +435,8 @@ class ContainerJobStatus(TemporalContractModel):
     backend_kind: str | None = Field(None, alias="backendKind", max_length=64)
     backend_ref: str | None = Field(None, alias="backendRef", max_length=255)
     image: ImageObservation | None = None
+    workspace: WorkspaceObservation | None = None
+    timing: TimingObservation | None = None
     authorization: RegistryAuthorization | None = None
     terminal: TerminalOutcome | None = None
     publication: AuxiliaryOutcome = Field(default_factory=lambda: AuxiliaryOutcome(state="not_attempted"))
@@ -581,6 +598,10 @@ class ContainerJobActivityRequest(TemporalContractModel):
     image_observation: ImageObservation | None = Field(
         None, alias="imageObservation"
     )
+    workspace_observation: WorkspaceObservation | None = Field(None, alias="workspaceObservation")
+    timing_observation: TimingObservation | None = Field(None, alias="timingObservation")
+    live_log_sequence: int = Field(0, alias="liveLogSequence", ge=0)
+    live_log_offset: int = Field(0, alias="liveLogOffset", ge=0)
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
@@ -615,6 +636,8 @@ class ContainerJobActivityResult(TemporalContractModel):
     running: bool | None = None
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     exit_code: int | None = Field(None, alias="exitCode")
+    live_log_sequence: int | None = Field(None, alias="liveLogSequence", ge=0)
+    live_log_offset: int | None = Field(None, alias="liveLogOffset", ge=0)
     logs_ref: str | None = Field(None, alias="logsRef", max_length=1024)
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     diagnostics_ref: str | None = Field(
