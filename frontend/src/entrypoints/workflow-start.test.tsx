@@ -32,6 +32,7 @@ import {
   previewModelTier,
   deriveExplicitWorkflowTitle,
   resolveDefaultProviderProfileId,
+  resolveLoadedProviderProfileId,
   resolveObjectiveInstructions,
   workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
@@ -18609,6 +18610,28 @@ describe("resolveDefaultProviderProfileId", () => {
     expect(resolveDefaultProviderProfileId(candidates, "disabled-default")).toBe(
       "high-priority",
     );
+  });
+
+  it("preserves an unavailable saved profile while editing unrelated fields", () => {
+    expect(
+      resolveLoadedProviderProfileId({
+        profiles,
+        providerProfile: "deleted-billing-profile",
+        configuredDefaultRef: "codex",
+        preserveUnavailableProfile: true,
+      }),
+    ).toBe("deleted-billing-profile");
+  });
+
+  it("selects the new runtime default after an explicit runtime switch clears the profile", () => {
+    expect(
+      resolveLoadedProviderProfileId({
+        profiles,
+        providerProfile: "",
+        configuredDefaultRef: "codex",
+        preserveUnavailableProfile: true,
+      }),
+    ).toBe("codex");
   });
 });
 

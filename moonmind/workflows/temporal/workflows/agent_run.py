@@ -1046,6 +1046,31 @@ class MoonMindAgentRun:
             "retryPolicy": "managed_runtime_polling_with_profile_cooldown",
         }
 
+    def _refresh_selection_after_slot_assignment(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        use_extended_claude_no_progress_window: bool,
+    ) -> dict[str, Any]:
+        """Refresh launch metadata and policy from the assigned selection."""
+
+        if request.step_execution is not None:
+            runtime_selection = dict(request.step_execution.runtime_selection or {})
+            runtime_selection["runtimeId"] = request.agent_id
+            if request.execution_profile_ref:
+                runtime_selection["executionProfileRef"] = (
+                    request.execution_profile_ref
+                )
+            else:
+                runtime_selection.pop("executionProfileRef", None)
+            request.step_execution.runtime_selection = runtime_selection
+        return self._resiliency_policy_for_request(
+            request,
+            use_extended_claude_no_progress_window=(
+                use_extended_claude_no_progress_window
+            ),
+        )
+
     @staticmethod
     def _status_progress_signature(status_obj: AgentRunStatusModel) -> tuple[Any, ...]:
         metadata = status_obj.metadata if isinstance(status_obj.metadata, Mapping) else {}
@@ -3142,7 +3167,31 @@ class MoonMindAgentRun:
                 or current_selector_payload != previous_selector_payload
             )
             runtime_or_profile_changed = runtime_changed or profile_selection_changed
-            requested_model_tier = params.get("modelTier")
+            requested_model_tier = None
+            if isinstance(parameters_patch, Mapping):
+                tier_sources: list[Mapping[str, Any]] = [parameters_patch]
+                runtime_patch = parameters_patch.get("runtime")
+                if isinstance(runtime_patch, Mapping):
+                    tier_sources.append(runtime_patch)
+                for container_key in (
+                    "task",
+                    "authoredTaskInput",
+                    "authoredWorkflowInput",
+                    "workflow",
+                ):
+                    container_patch = parameters_patch.get(container_key)
+                    nested_runtime_patch = (
+                        container_patch.get("runtime")
+                        if isinstance(container_patch, Mapping)
+                        else None
+                    )
+                    if isinstance(nested_runtime_patch, Mapping):
+                        tier_sources.append(nested_runtime_patch)
+                for tier_source in tier_sources:
+                    for tier_key in ("modelTier", "model_tier"):
+                        tier_value = tier_source.get(tier_key)
+                        if tier_value not in (None, ""):
+                            requested_model_tier = tier_value
             if (
                 runtime_or_profile_changed
                 and not model
@@ -3183,7 +3232,7 @@ class MoonMindAgentRun:
         request.parameters = params
 
         if refresh_derived_selection and request.step_execution is not None:
-            runtime_selection = dict(request.step_execution.runtime_selection)
+            runtime_selection = dict(request.step_execution.runtime_selection or {})
             runtime_selection["runtimeId"] = request.agent_id
             if request.execution_profile_ref:
                 runtime_selection["executionProfileRef"] = (
@@ -3845,18 +3894,6 @@ class MoonMindAgentRun:
                     if workflow.patched(
                         AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID
                     ):
-                        if request.step_execution is not None:
-                            runtime_selection = dict(
-                                request.step_execution.runtime_selection
-                            )
-                            runtime_selection["runtimeId"] = request.agent_id
-                            if request.execution_profile_ref:
-                                runtime_selection["executionProfileRef"] = (
-                                    request.execution_profile_ref
-                                )
-                            else:
-                                runtime_selection.pop("executionProfileRef", None)
-                            request.step_execution.runtime_selection = runtime_selection
                         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
                             use_extended_claude_no_progress_window = True
                             if (
@@ -3868,11 +3905,13 @@ class MoonMindAgentRun:
                                         AGENT_RUN_CLAUDE_NO_PROGRESS_POLICY_PATCH_ID
                                     )
                                 )
-                            resiliency_policy = self._resiliency_policy_for_request(
-                                request,
-                                use_extended_claude_no_progress_window=(
-                                    use_extended_claude_no_progress_window
-                                ),
+                            resiliency_policy = (
+                                self._refresh_selection_after_slot_assignment(
+                                    request,
+                                    use_extended_claude_no_progress_window=(
+                                        use_extended_claude_no_progress_window
+                                    ),
+                                )
                             )
 
                     # Notify parent of the assigned profile so it can release the slot

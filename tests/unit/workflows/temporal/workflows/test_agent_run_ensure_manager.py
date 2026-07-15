@@ -396,6 +396,8 @@ class TestEnsureManagerAutoStart:
                 "requestedModel": "gpt-5.6-sol",
                 "resolvedModel": "gpt-5.6-sol",
                 "effort": "high",
+                "modelTier": 4,
+                "tierFallback": "clamp",
                 "modelTierResolution": {
                     "providerProfileId": "codex_openai_oauth",
                     "resolvedModel": "gpt-5.6-sol",
@@ -482,6 +484,8 @@ class TestEnsureManagerAutoStart:
             "resolvedModel",
             "effort",
             "modelTierResolution",
+            "modelTier",
+            "tierFallback",
         ):
             assert field not in request.parameters
         for container in (
@@ -500,6 +504,74 @@ class TestEnsureManagerAutoStart:
             "runtimeId": "claude_code",
             "executionProfileRef": "claude_anthropic_oauth",
         }
+
+    def test_runtime_edit_without_tier_patch_clears_stale_tier_metadata(self):
+        """Automation runtime edits must not inherit the old profile's tier."""
+
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            parameters={
+                "targetRuntime": "codex_cli",
+                "modelTier": 4,
+                "tierFallback": "clamp",
+                "requestedModel": "gpt-5.6-sol",
+                "resolvedModel": "gpt-5.6-sol",
+                "modelTierResolution": {"resolvedModel": "gpt-5.6-sol"},
+                "workflow": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "modelTier": 4,
+                        "tierFallback": "clamp",
+                        "requestedModel": "gpt-5.6-sol",
+                    }
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "workflow": {"runtime": {"mode": "claude_code"}},
+                },
+            },
+            refresh_derived_selection=True,
+        )
+
+        for field in (
+            "modelTier",
+            "tierFallback",
+            "requestedModel",
+            "resolvedModel",
+            "modelTierResolution",
+        ):
+            assert field not in request.parameters
+        assert request.parameters["workflow"]["runtime"] == {
+            "mode": "claude_code"
+        }
+
+    def test_runtime_edit_preserves_explicit_nested_model_tier(self):
+        """An explicit tier remains authoritative across a runtime edit."""
+
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request()
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "parametersPatch": {
+                    "workflow": {
+                        "runtime": {"mode": "claude_code", "modelTier": 2}
+                    }
+                },
+            },
+            refresh_derived_selection=True,
+        )
+
+        assert request.parameters["workflow"]["runtime"]["modelTier"] == 2
 
     def test_runtime_selection_update_clears_profile_when_profile_patch_is_empty(
         self,
@@ -860,23 +932,58 @@ class TestEnsureManagerAutoStart:
 
         assert tuple_assignment_count == 2
 
-    def test_slot_wait_runtime_update_refreshes_launch_policy_after_assignment(self):
-        """Runtime-specific launch policy must follow an awaiting-slot edit."""
+    def test_slot_assignment_refreshes_launch_policy_from_edited_selection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Launch policy and step metadata must use the assigned selection."""
 
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
-        assigned_profile_index = source.index(
-            "request.execution_profile_ref = self._assigned_profile_id"
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            agentId="claude_code",
+            executionProfileRef="claude_anthropic_oauth",
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:runtime-edit",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "mm:runtime-edit:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {},
+            },
         )
-        edit_patch_index = source.index(
-            "AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID",
-            assigned_profile_index,
-        )
-        policy_refresh_index = source.index(
-            "resiliency_policy = self._resiliency_policy_for_request(",
-            edit_patch_index,
+        assert request.step_execution is not None
+        request.step_execution.runtime_selection = None  # type: ignore[assignment]
+        observed: dict[str, object] = {}
+
+        def capture_policy(
+            policy_request: AgentExecutionRequest,
+            *,
+            use_extended_claude_no_progress_window: bool,
+        ) -> dict[str, object]:
+            observed["request"] = policy_request
+            observed["extended"] = use_extended_claude_no_progress_window
+            return {"runtime": policy_request.agent_id}
+
+        monkeypatch.setattr(
+            workflow_instance,
+            "_resiliency_policy_for_request",
+            capture_policy,
         )
 
-        assert assigned_profile_index < edit_patch_index < policy_refresh_index
+        policy = workflow_instance._refresh_selection_after_slot_assignment(
+            request,
+            use_extended_claude_no_progress_window=True,
+        )
+
+        assert policy == {"runtime": "claude_code"}
+        assert observed == {"request": request, "extended": True}
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "executionProfileRef": "claude_anthropic_oauth",
+        }
 
     def test_slot_wait_runtime_update_validates_after_profile_sync(self):
         """Edited exact profiles must fail fast after the refreshed profile snapshot."""

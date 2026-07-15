@@ -713,6 +713,26 @@ export function resolveDefaultProviderProfileId(
   );
 }
 
+export function resolveLoadedProviderProfileId({
+  profiles,
+  providerProfile,
+  configuredDefaultRef,
+  preserveUnavailableProfile,
+}: {
+  profiles: ProviderProfile[];
+  providerProfile: string;
+  configuredDefaultRef?: string | null;
+  preserveUnavailableProfile: boolean;
+}): string {
+  if (profiles.some((profile) => profile.profile_id === providerProfile)) {
+    return providerProfile;
+  }
+  if (preserveUnavailableProfile && providerProfile) {
+    return providerProfile;
+  }
+  return resolveDefaultProviderProfileId(profiles, configuredDefaultRef);
+}
+
 interface SkillsResponse {
   items?: {
     worker?: string[];
@@ -6288,26 +6308,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
       return;
     }
-    if (profiles.length === 0) {
-      if (providerProfile) {
-        setProviderProfile("");
-      }
-      return;
-    }
-
-    const stillValid = profiles.some(
-      (profile) => profile.profile_id === providerProfile,
-    );
-    if (stillValid) {
-      return;
-    }
-
-    const defaultProfileId = resolveDefaultProviderProfileId(
+    const resolvedProfileId = resolveLoadedProviderProfileId({
       profiles,
-      configuredDefaultProviderProfileRef,
-    );
-    if (defaultProfileId && providerProfile !== defaultProfileId) {
-      setProviderProfile(defaultProfileId);
+      providerProfile,
+      configuredDefaultRef: configuredDefaultProviderProfileRef,
+      preserveUnavailableProfile:
+        pageMode.mode !== "create" && Boolean(temporalDraftAppliedRef.current),
+    });
+    if (providerProfile !== resolvedProfileId) {
+      setProviderProfile(resolvedProfileId);
     }
   }, [
     pageMode.mode,
