@@ -523,6 +523,110 @@ async def test_managed_capture_accepts_session_record_bound_to_parent_workflow(
 
 
 @pytest.mark.asyncio
+async def test_managed_capture_accepts_terminal_prior_execution_as_retry_baseline(
+    tmp_path,
+) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c",
+            "user.email=test@example.invalid", "commit", "--allow-empty",
+            "-qm", "base",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    now = datetime.now(UTC)
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1",
+            workflowId="wf-1",
+            ownerRunId="run-1",
+            logicalStepId="implement",
+            executionOrdinal=1,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=now,
+            finishedAt=now,
+            workspacePath=str(repo),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+        return "artifact://" + hashlib.sha256(payload).hexdigest()
+
+    activities._put_managed_checkpoint_artifact = put
+    request = _request(
+        digest=resolve_runtime_execution_capabilities(
+            "codex_cli"
+        ).capability_digest
+    )
+    request["identity"] = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 2,
+    }
+    request["boundary"] = "before_execution"
+    request["idempotencyKey"] = "checkpoint-2:before_execution:capture"
+
+    result = await activities.agent_runtime_capture_workspace_checkpoint(request)
+
+    assert result["status"] == "captured"
+    assert result["workspace"]["kind"] == "worktree_archive"
+
+
+@pytest.mark.asyncio
+async def test_managed_capture_rejects_active_prior_execution_as_retry_baseline(
+    tmp_path,
+) -> None:
+    repo = tmp_path / "agent-run-1" / "repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    store.save(
+        ManagedRunRecord(
+            runId="agent-run-1",
+            workflowId="wf-1",
+            ownerRunId="run-1",
+            logicalStepId="implement",
+            executionOrdinal=1,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="running",
+            startedAt=datetime.now(UTC),
+            workspacePath=str(repo),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=store, artifact_service=object(), client_adapter=object()
+    )
+    request = _request(
+        digest=resolve_runtime_execution_capabilities(
+            "codex_cli"
+        ).capability_digest
+    )
+    request["identity"] = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 2,
+    }
+    request["boundary"] = "before_execution"
+    request["idempotencyKey"] = "checkpoint-2:before_execution:capture"
+
+    with pytest.raises(Exception, match="source Step Execution"):
+        await activities.agent_runtime_capture_workspace_checkpoint(request)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [

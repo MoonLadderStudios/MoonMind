@@ -696,6 +696,9 @@ RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH = (
 RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH = (
     "run-pr-resolver-skill-owned-execution-v1"
 )
+RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH = (
+    "run-resolved-skill-terminal-contract-v1"
+)
 RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = (
     "run-pr-resolver-selector-resolution-v1"
 )
@@ -1258,6 +1261,9 @@ class MoonMindRunWorkflow:
         self._remediation_context: dict[str, Any] = {}
         self._remediation_policy: dict[str, Any] = {}
         self._native_skill_binding_by_step: dict[str, dict[str, Any]] = {}
+        self._resolved_skill_terminal_contract_by_step: dict[
+            str, dict[str, Any]
+        ] = {}
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -15678,11 +15684,21 @@ class MoonMindRunWorkflow:
                     f"selected skill '{selected_skill}' was not resolved into the "
                     "agent skill snapshot"
                 )
-            if normalized_skill == "pr-resolver":
-                selected_entry = self._resolved_skillset_entry(
-                    resolved,
-                    normalized_skill,
+            selected_entry = self._resolved_skillset_entry(
+                resolved,
+                normalized_skill,
+            )
+            if self._workflow_patch_enabled(
+                RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH
+            ):
+                terminal_contract = self._resolved_skill_terminal_contract(
+                    selected_entry
                 )
+                if terminal_contract is not None:
+                    self._resolved_skill_terminal_contract_by_step[node_id] = (
+                        terminal_contract
+                    )
+            if normalized_skill == "pr-resolver":
                 if workflow.patched(
                     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH
                 ):
@@ -15781,6 +15797,61 @@ class MoonMindRunWorkflow:
             if str(raw_name or "").strip().lower() == normalized:
                 return entry
         return None
+
+    @staticmethod
+    def _resolved_skill_terminal_contract(
+        resolved_entry: Any,
+    ) -> dict[str, Any] | None:
+        """Return the compact terminal contract selected with the Skill."""
+
+        if resolved_entry is None:
+            return None
+        if isinstance(resolved_entry, WorkflowMapping):
+            raw_contract = resolved_entry.get(
+                "terminal_contract",
+                resolved_entry.get("terminalContract"),
+            )
+        else:
+            raw_contract = getattr(resolved_entry, "terminal_contract", None)
+            if raw_contract is None:
+                raw_contract = getattr(resolved_entry, "terminalContract", None)
+        if hasattr(raw_contract, "model_dump"):
+            raw_contract = raw_contract.model_dump(mode="json")
+        if not isinstance(raw_contract, WorkflowMapping):
+            return None
+
+        def _contract_text(*keys: str) -> str:
+            for key in keys:
+                value = raw_contract.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        contract_id = _contract_text("contract_id", "contractId")
+        owner = _contract_text("owner")
+        evidence_kind = _contract_text("evidence_kind", "evidenceKind")
+        relative_path = _contract_text("relative_path", "relativePath")
+        expected_schema_version = _contract_text(
+            "expected_schema_version",
+            "expectedSchemaVersion",
+        )
+        if not all(
+            (
+                contract_id,
+                owner,
+                evidence_kind,
+                relative_path,
+                expected_schema_version,
+            )
+        ):
+            return None
+        return {
+            "contractId": contract_id,
+            "owner": owner,
+            "evidenceKind": evidence_kind,
+            "relativePath": relative_path,
+            "expectedSchemaVersion": expected_schema_version,
+        }
 
     @staticmethod
     def _resolved_skillset_field(resolved: Any, *keys: str) -> Any:
@@ -16721,22 +16792,37 @@ class MoonMindRunWorkflow:
             )
 
         terminal_contract_payload: dict[str, Any] | None = None
-        side_effect = compact_skill_payload.get("sideEffect")
-        if isinstance(side_effect, Mapping):
-            contract_id = str(side_effect.get("terminalContractId") or "").strip()
-            outcome_artifact = str(side_effect.get("outcomeArtifact") or "").strip()
-            expected_schema_version = str(
-                side_effect.get("terminalSchemaVersion") or ""
-            ).strip()
-            if contract_id and outcome_artifact and expected_schema_version:
-                terminal_contract_payload = {
-                    "contractId": contract_id,
-                    "owner": "agent",
-                    "evidenceKind": "workspace_json",
-                    "relativePath": outcome_artifact,
-                    "expectedSchemaVersion": expected_schema_version,
-                    "executionRef": step_execution_payload["stepExecutionId"],
-                }
+        resolved_terminal_contract = (
+            self._resolved_skill_terminal_contract_by_step.get(node_id)
+        )
+        if isinstance(resolved_terminal_contract, Mapping):
+            terminal_contract_payload = {
+                **dict(resolved_terminal_contract),
+                "executionRef": step_execution_payload["stepExecutionId"],
+            }
+        else:
+            side_effect = compact_skill_payload.get("sideEffect")
+            if isinstance(side_effect, Mapping):
+                contract_id = str(
+                    side_effect.get("terminalContractId") or ""
+                ).strip()
+                outcome_artifact = str(
+                    side_effect.get("outcomeArtifact") or ""
+                ).strip()
+                expected_schema_version = str(
+                    side_effect.get("terminalSchemaVersion") or ""
+                ).strip()
+                if contract_id and outcome_artifact and expected_schema_version:
+                    terminal_contract_payload = {
+                        "contractId": contract_id,
+                        "owner": "agent",
+                        "evidenceKind": "workspace_json",
+                        "relativePath": outcome_artifact,
+                        "expectedSchemaVersion": expected_schema_version,
+                        "executionRef": step_execution_payload[
+                            "stepExecutionId"
+                        ],
+                    }
 
         terminal_continuation_authority = None
         if (

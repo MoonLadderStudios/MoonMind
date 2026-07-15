@@ -7036,12 +7036,32 @@ class TemporalAgentRuntimeActivities:
                     "logicalStepId": model.identity.logical_step_id,
                     "executionOrdinal": model.identity.execution_ordinal,
                 }
-                if correlation != expected_correlation:
+                exact_execution_match = correlation == expected_correlation
+                prior_execution_baseline_match = (
+                    model.boundary == "before_execution"
+                    and record.status
+                    in {"completed", "failed", "canceled", "timed_out"}
+                    and record.finished_at is not None
+                    and correlation["workflowId"]
+                    == expected_correlation["workflowId"]
+                    and correlation["ownerRunId"]
+                    == expected_correlation["ownerRunId"]
+                    and correlation["logicalStepId"]
+                    == expected_correlation["logicalStepId"]
+                    and isinstance(correlation["executionOrdinal"], int)
+                    and correlation["executionOrdinal"] + 1
+                    == expected_correlation["executionOrdinal"]
+                )
+                if not exact_execution_match and not prior_execution_baseline_match:
                     logger.warning("managed_checkpoint_capture_authority_rejected")
                     raise temporal_exceptions.ApplicationError(
                         "managed run record does not belong to the source Step Execution",
                         type=WORKSPACE_IDENTITY_MISMATCH,
                         non_retryable=True,
+                    )
+                if prior_execution_baseline_match:
+                    logger.info(
+                        "managed_checkpoint_capture_prior_execution_baseline_accepted"
                     )
                 try:
                     workspace = resolve_managed_workspace_locator(

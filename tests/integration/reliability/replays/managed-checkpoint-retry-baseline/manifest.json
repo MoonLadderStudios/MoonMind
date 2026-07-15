@@ -1,0 +1,17 @@
+{
+  "failureShapeId": "managed-checkpoint-retry-baseline",
+  "incidentWorkflowId": "resolver:pr:2189:head:4dc317593b0e:h:0c850e615e69fb2d:1",
+  "incidentRunId": "019f65db-6a64-7a93-ac90-0360bdf0f0df",
+  "runtime": "codex_cli",
+  "logicalStepId": "node-1",
+  "completedExecutionOrdinal": 1,
+  "retryExecutionOrdinal": 2,
+  "checkpointBoundary": "before_execution",
+  "eventScript": [
+    "execution_1_completed",
+    "execution_1_after_execution_checkpoint_captured",
+    "execution_2_before_execution_checkpoint_requested",
+    "prior_execution_workspace_authority_validated"
+  ],
+  "invariant": "A terminal execution may provide the same-step workspace baseline for the immediately following before_execution checkpoint"
+}

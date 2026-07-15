@@ -1,0 +1,48 @@
+{
+  "failureShapeId": "pr-resolver-resolved-terminal-contract",
+  "incidentWorkflowId": "resolver:pr:2189:head:4dc317593b0e:h:0c850e615e69fb2d:1",
+  "incidentRunId": "019f65db-6a64-7a93-ac90-0360bdf0f0df",
+  "parentWorkflowId": "merge-automation:mm:4858fff0-4708-41e3-9465-bb0904bb0b1e:MoonLadderStudios/Tactics:2189:4dc317593b0ec1d855e1d72cd233f23702a31643",
+  "parentRunId": "019f65d7-aba5-7ee5-b869-f5beb627efcb",
+  "logicalStepId": "node-1",
+  "planNodeInputs": {
+    "targetRuntime": "codex_cli",
+    "selectedSkill": "pr-resolver"
+  },
+  "mergeGate": {
+    "parentWorkflowId": "merge-automation:mm:4858fff0-4708-41e3-9465-bb0904bb0b1e:MoonLadderStudios/Tactics:2189:4dc317593b0ec1d855e1d72cd233f23702a31643",
+    "pullRequestUrl": "https://github.com/MoonLadderStudios/Tactics/pull/2189",
+    "headSha": "4dc317593b0ec1d855e1d72cd233f23702a31643"
+  },
+  "resolvedSkillSet": {
+    "snapshot_id": "skillset-resolver-pr-2189",
+    "resolved_at": "2026-07-15T12:58:28.395444Z",
+    "manifest_ref": "art_resolved_skillset_pr_2189",
+    "skills": [
+      {
+        "skill_name": "pr-resolver",
+        "format": "bundle",
+        "content_ref": "art_pr_resolver_bundle",
+        "content_digest": "sha256:7899a83c6a3f345f2bed4bd3bc4ebf414705ef05eff21e9473f434c1c8d3044d",
+        "provenance": {
+          "source_kind": "built_in"
+        },
+        "required_skills": [],
+        "required_capabilities": [
+          "git",
+          "gh"
+        ],
+        "terminal_contract": {
+          "contract_id": "pr_resolver_terminal.v1",
+          "owner": "agent",
+          "evidence_kind": "workspace_json",
+          "relative_path": "var/pr_resolver/result.json",
+          "expected_schema_version": "moonmind.pr-resolver-result.v1"
+        },
+        "selection_reason": "selected",
+        "required_by": []
+      }
+    ]
+  },
+  "invariant": "The selected resolved Skill entry, not optional plan-node metadata, supplies the AgentRun terminal contract"
+}
