@@ -249,6 +249,8 @@ class OmnigentOAuthHostRuntime:
             container_name,
             "--user",
             "1000:1000",
+            "--workdir",
+            "/home/app",
             "--network",
             self._network,
             "--read-only",
