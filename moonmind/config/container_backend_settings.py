@@ -88,6 +88,8 @@ class ContainerBackendSettings:
     shm_size_mib: int
     max_timeout_seconds: int
     max_output_bytes: int
+    max_output_files: int
+    max_output_total_bytes: int
 
     def require_endpoint(self) -> str:
         """Return the configured endpoint or fail readiness with a bounded error."""
@@ -172,6 +174,19 @@ def resolve_container_backend_settings(
         max_output_bytes=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_BYTES"),
             default=64_000,
+            minimum=1024,
+        ),
+        # Non-overridable ceilings on declared-output collection: reject a job
+        # that would publish an excessive number of files or an excessive total
+        # size rather than silently truncating collected evidence.
+        max_output_files=_coerce_int(
+            source.get("MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_FILES"),
+            default=1024,
+            minimum=1,
+        ),
+        max_output_total_bytes=_coerce_int(
+            source.get("MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_TOTAL_BYTES"),
+            default=256 * 1024 * 1024,
             minimum=1024,
         ),
     )

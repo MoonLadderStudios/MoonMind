@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -3050,6 +3051,13 @@ class ContainerJobRecord(Base):
     cleanup_outcome_json: Mapped[dict[str, Any]] = mapped_column(mutable_json_dict(), nullable=False, default=_default_container_job_auxiliary_outcome)
     logs_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     artifacts_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # Durable observability-event journal ref (terminal live-log fallback) and
+    # compact non-sensitive execution observations (MoonLadderStudios/MoonMind#3258).
+    events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    workspace_probe: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     cancel_idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

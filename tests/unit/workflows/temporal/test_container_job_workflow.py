@@ -413,6 +413,102 @@ async def test_image_acquisition_failure_maps_to_granular_failure_class(
 
 
 @pytest.mark.asyncio
+async def test_workflow_emits_distinct_lifecycle_phases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The durable projection distinguishes each #3258 lifecycle phase."""
+
+    job = MoonMindContainerJobWorkflow()
+    states: list[str] = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            value = request.state
+            states.append(getattr(value, "value", value))
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert result["state"] == "succeeded"
+
+    # Every distinct phase requested "at least" by the issue must be emitted, in
+    # order, as its own monotonic status projection.
+    expected_order = [
+        "resolving_workspace",
+        "acquiring_image",
+        "starting",
+        "running",
+        "publishing_artifacts",
+        "cleaning_up",
+        "succeeded",
+    ]
+    positions = [states.index(phase) for phase in expected_order]
+    assert positions == sorted(positions), states
+
+
+@pytest.mark.asyncio
+async def test_workspace_failure_projects_workspace_not_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    states: list[str] = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            value = request.state
+            states.append(getattr(value, "value", value))
+        if name == "container_job.resolve_workspace":
+            raise ApplicationError("workspace missing", type="workspace")
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "failed"
+    assert result["terminal"]["failureClass"] == "workspace"
+    assert "workspace_not_visible" in states
+
+
+@pytest.mark.asyncio
+async def test_terminal_projection_carries_timing_and_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    projections = []
+
+    async def activity(name, request):
+        if name == "container_job.project_status":
+            projections.append(request.model_copy(deep=True))
+        if name == "container_job.observe_container":
+            return ContainerJobActivityResult(
+                terminalState="succeeded",
+                exitCode=0,
+                startedAt="2024-01-01T00:00:01+00:00",
+                finishedAt="2024-01-01T00:00:03+00:00",
+                durationMs=2000,
+                logCursor="2024-01-01T00:00:03+00:00|3",
+            )
+        if name == "container_job.publish_evidence":
+            return ContainerJobActivityResult(
+                logsRef="art:logs",
+                artifactsRef="art:manifest",
+                diagnosticsRef="art:diagnostics",
+                eventsRef="art:events",
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    terminal = projections[-1]
+    assert terminal.duration_ms == 2000
+    assert terminal.started_at is not None
+    assert terminal.finished_at is not None
+    assert terminal.events_ref == "art:events"
+    assert terminal.publication.diagnostics_ref == "art:diagnostics"
+
+
+@pytest.mark.asyncio
 async def test_image_observation_threads_into_terminal_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
