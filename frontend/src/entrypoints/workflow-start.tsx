@@ -6288,9 +6288,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
       return;
     }
-    if (pageMode.mode !== "create" && temporalDraftAppliedRef.current) {
-      return;
-    }
     if (profiles.length === 0) {
       if (providerProfile) {
         setProviderProfile("");

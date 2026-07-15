@@ -12,7 +12,10 @@ import inspect
 import textwrap
 from types import SimpleNamespace
 
+import pytest
+
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
@@ -377,6 +380,127 @@ class TestEnsureManagerAutoStart:
         )
         assert "profileSelector" not in request.parameters["workflow"]["runtime"]
 
+    def test_runtime_and_profile_edit_replaces_stale_launch_selection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Awaiting-slot edits must replace every runtime launch authority."""
+
+        monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "codex_openai_oauth",
+                "model": "gpt-5.6-sol",
+                "requestedModel": "gpt-5.6-sol",
+                "resolvedModel": "gpt-5.6-sol",
+                "effort": "high",
+                "modelTierResolution": {
+                    "providerProfileId": "codex_openai_oauth",
+                    "resolvedModel": "gpt-5.6-sol",
+                },
+                "task": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+                "authoredWorkflowInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+                "workflow": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "model": "gpt-5.6-sol",
+                        "effort": "high",
+                        "profileId": "codex_openai_oauth",
+                    }
+                },
+            },
+            stepExecution={
+                "schemaVersion": "v1",
+                "workflowId": "mm:runtime-edit",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "mm:runtime-edit:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "runtimeSelection": {
+                    "runtimeId": "codex_cli",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                    "executionProfileRef": "codex_openai_oauth",
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "claude_code",
+                "executionProfileRef": "claude_anthropic_oauth",
+                "parametersPatch": {
+                    "targetRuntime": "claude_code",
+                    "profileId": "claude_anthropic_oauth",
+                    "model": None,
+                    "requestedModel": None,
+                    "resolvedModel": None,
+                    "effort": None,
+                    "modelTier": None,
+                    "workflow": {
+                        "runtime": {
+                            "mode": "claude_code",
+                            "profileId": "claude_anthropic_oauth",
+                        }
+                    },
+                },
+            },
+            refresh_derived_selection=True,
+        )
+
+        assert request.agent_id == "claude_code"
+        assert request.execution_profile_ref == "claude_anthropic_oauth"
+        for field in (
+            "model",
+            "requestedModel",
+            "resolvedModel",
+            "effort",
+            "modelTierResolution",
+        ):
+            assert field not in request.parameters
+        for container in (
+            "task",
+            "authoredTaskInput",
+            "authoredWorkflowInput",
+            "workflow",
+        ):
+            runtime = request.parameters[container]["runtime"]
+            assert runtime["mode"] == "claude_code"
+            assert runtime["profileId"] == "claude_anthropic_oauth"
+            assert "model" not in runtime
+            assert "effort" not in runtime
+        assert request.step_execution is not None
+        assert request.step_execution.runtime_selection == {
+            "runtimeId": "claude_code",
+            "executionProfileRef": "claude_anthropic_oauth",
+        }
+
     def test_runtime_selection_update_clears_profile_when_profile_patch_is_empty(
         self,
     ):
@@ -735,6 +859,24 @@ class TestEnsureManagerAutoStart:
                 tuple_assignment_count += 1
 
         assert tuple_assignment_count == 2
+
+    def test_slot_wait_runtime_update_refreshes_launch_policy_after_assignment(self):
+        """Runtime-specific launch policy must follow an awaiting-slot edit."""
+
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        assigned_profile_index = source.index(
+            "request.execution_profile_ref = self._assigned_profile_id"
+        )
+        edit_patch_index = source.index(
+            "AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID",
+            assigned_profile_index,
+        )
+        policy_refresh_index = source.index(
+            "resiliency_policy = self._resiliency_policy_for_request(",
+            edit_patch_index,
+        )
+
+        assert assigned_profile_index < edit_patch_index < policy_refresh_index
 
     def test_slot_wait_runtime_update_validates_after_profile_sync(self):
         """Edited exact profiles must fail fast after the refreshed profile snapshot."""
