@@ -350,13 +350,14 @@ async def test_artifacts_return_references_and_publication(session_factory, temp
         blobs={
             "artifact://manifest": json.dumps(
                 {
-                    "jobId": "placeholder",
+                    "jobId": "container-job:" + "0" * 32,
                     "artifacts": [
                         {
                             "name": "outputs.tar.gz",
                             "artifactRef": "artifact://outputs",
                             "sizeBytes": 42,
                             "sha256": sha,
+                            "collectionStatus": "collected",
                         }
                     ],
                     "publication": {"state": "succeeded"},
