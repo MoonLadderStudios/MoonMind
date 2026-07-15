@@ -104,6 +104,42 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
     )
 
 
+def test_oauth_host_runtime_defaults_to_published_image(monkeypatch) -> None:
+    monkeypatch.delenv("OMNIGENT_HOST_IMAGE", raising=False)
+    monkeypatch.delenv("OMNIGENT_HOST_IMAGE_TAG", raising=False)
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+
+    assert runtime._image == "ghcr.io/omnigent-ai/omnigent-host:latest"
+
+
+def test_oauth_host_runtime_respects_image_tag_override(monkeypatch) -> None:
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE", "ghcr.io/omnigent-ai/omnigent-host")
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_TAG", "0.2.12")
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+
+    assert runtime._image == "ghcr.io/omnigent-ai/omnigent-host:0.2.12"
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "localhost:5000/omnigent-host:stable",
+        "ghcr.io/omnigent-ai/omnigent-host@sha256:1234",
+    ],
+)
+def test_oauth_host_runtime_preserves_complete_image_reference(
+    monkeypatch, image: str
+) -> None:
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE", image)
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_TAG", "ignored")
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+
+    assert runtime._image == image
+
+
 def test_deterministic_owner_reuses_activity_retry_identity() -> None:
     kwargs = {
         "profile_id": "codex",
