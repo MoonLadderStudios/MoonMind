@@ -47,6 +47,7 @@ In WSL, `./tools/test_unit.sh` automatically delegates to `./tools/test_unit_doc
 The GitHub unit-test workflow uses impact-aware backend suite selection for pull requests. A `select-test-suites` job runs `tools/select_test_suites.py` against the changed files and emits suite decisions for:
 
 - `unit_fast`
+- `unit_slow`
 - `api_component`
 - `temporal_boundary`
 - `integration_ci`
@@ -57,10 +58,19 @@ Branch protection should require the always-running `ci-required` summary job in
 
 Routine backend pull requests run the cheap unit safety net first. API/router/auth/db/service changes also run the component suite. Temporal workflow, runtime, activity-boundary, signal/update, replay, or Temporal schema changes run the Temporal boundary suite. Changes under workflow adapters, Temporal workflows, checked-in `.agents/skills` bundles, Docker runtime paths, checkpoint schemas, and reliability replay fixtures run the hermetic reliability journey suite. Docker, integration, database, compose, migration, dependency, or test-runner changes run hermetic `integration_ci` as needed.
 
-The selector fails open. Empty changed-file input, unknown paths, CI workflow changes, dependency file changes, test-runner changes, pytest configuration changes, selector changes, pushes to `main`, scheduled runs, and manual dispatches all force `full_backend=true`. On that path, the workflow runs the canonical backend unit command:
+The selector fails open. Empty changed-file input, unknown paths, CI workflow changes, dependency file changes, test-runner changes, pytest configuration changes, selector changes, pushes to `main`, scheduled runs, and manual dispatches all force `full_backend=true`. That path selects every exclusive backend shard, including `unit_slow`; it does not replace `unit-fast` with the broad unit wrapper.
+
+The ownership verifier runs on full-backend paths and checks that every eligible provider-free pytest node has exactly one CI owner. The precedence is `slow > temporal_boundary > component > unit_fast`.
+
+The invariant fast-unit command is:
 
 ```bash
-./tools/test_unit.sh --python-only
+python -m pytest tests/unit \
+  --ignore=tests/unit/workflows/temporal \
+  --ignore=tests/unit/api \
+  --ignore=tests/unit/api_service \
+  -m "unit_fast and not provider_verification and not requires_credentials" \
+  -q -n auto --dist loadfile --durations=25
 ```
 
 `./tools/test_unit.sh` reports the slowest Python tests with `--durations`; set `MOONMIND_PYTEST_DURATIONS` to tune the count. In CI it also writes JUnit XML unless `MOONMIND_PYTEST_JUNITXML` points at a different output path.
@@ -104,16 +114,25 @@ pre-commit install
 
 ```bash
 python -m pytest tests/unit \
-  -m "not temporal_boundary and not component and not slow" \
+  --ignore=tests/unit/workflows/temporal \
+  --ignore=tests/unit/api \
+  --ignore=tests/unit/api_service \
+  -m "unit_fast and not provider_verification and not requires_credentials" \
   -q -n auto --dist loadfile --durations=25
 
 python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
-  -m "component and not temporal_boundary and not slow" \
+  -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
   -q -n auto --dist loadfile --durations=25
 
 python -m pytest tests/unit/workflows/temporal \
-  -m "temporal_boundary and not slow" \
+  -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
   -q --durations=25
+
+python -m pytest tests/unit \
+  -m "slow and not provider_verification and not requires_credentials and not integration" \
+  -q --durations=50
+
+python tools/verify_test_shard_ownership.py
 ```
 
 7. Run `./tools/test_integration.sh` only when Docker, compose, migrations, integration tests, runtime infrastructure, or another selector-selected hermetic integration boundary changed.

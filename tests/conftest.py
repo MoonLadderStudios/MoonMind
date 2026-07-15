@@ -38,7 +38,7 @@ _TEMPORAL_BOUNDARY_TEST_PATHS = {
     Path("tests/unit/workflows/temporal/workflows/test_run_signals_updates.py"),
 }
 
-_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES: tuple[Path, ...] = ()
+_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES = (Path("tests/unit/workflows/temporal"),)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -83,8 +83,7 @@ def _path_is_relative_to(path: Path, prefix: Path) -> bool:
 
 def _is_component_test_path(path: Path) -> bool:
     return any(
-        _path_is_relative_to(path, prefix)
-        for prefix in _COMPONENT_TEST_PATH_PREFIXES
+        _path_is_relative_to(path, prefix) for prefix in _COMPONENT_TEST_PATH_PREFIXES
     )
 
 
@@ -113,14 +112,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_component = _item_has_marker(item, "component") or _is_component_test_path(
             rel_path
         )
-        is_temporal_boundary = (
-            _item_has_marker(item, "temporal_boundary")
-            or _is_temporal_boundary_test_path(rel_path)
-        )
-        is_reliability_journey = (
-            _item_has_marker(item, "reliability_journey")
-            or _is_reliability_journey_test_path(rel_path)
-        )
+        is_temporal_boundary = _item_has_marker(
+            item, "temporal_boundary"
+        ) or _is_temporal_boundary_test_path(rel_path)
+        is_reliability_journey = _item_has_marker(
+            item, "reliability_journey"
+        ) or _is_reliability_journey_test_path(rel_path)
         is_slow = _item_has_marker(item, "slow") or rel_path in _SLOW_TEST_MODULES
 
         if is_component:
@@ -141,6 +138,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             and not is_slow
             and not _item_has_marker(item, "integration")
             and not _item_has_marker(item, "provider_verification")
+            and not _item_has_marker(item, "requires_credentials")
         ):
             item.add_marker(pytest.mark.unit_fast)
 
@@ -160,12 +158,15 @@ def disabled_env_keys(monkeypatch):
     monkeypatch.setattr(settings.google, "google_api_key", "g-test", raising=False)
     yield
 
+
 @pytest.fixture
 def keycloak_mode(monkeypatch):
     from moonmind.config.settings import settings
 
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     yield
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
     """Execute `@pytest.mark.asyncio` tests without requiring pytest-asyncio."""
@@ -205,6 +206,7 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
     asyncio.run(_run_test_with_keepalive())
     return True
 
+
 # ── atexit cleanup for orphaned Temporal test-server processes ──────────────
 #
 # ``WorkflowEnvironment.start_time_skipping()`` spawns a ``temporal-test-server``
@@ -216,6 +218,7 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 # early enough to kill the orphaned child before the pipe blocks.
 import atexit
 import subprocess
+
 
 def _kill_owned_temporal_servers() -> None:
     """Terminate ``temporal-test-server`` subprocesses owned by this process."""
@@ -236,5 +239,6 @@ def _kill_owned_temporal_servers() -> None:
         # Best-effort cleanup: if `pgrep` is unavailable, fails, or output is unexpected,
         # we silently ignore it to avoid disrupting test shutdown.
         pass
+
 
 atexit.register(_kill_owned_temporal_servers)
