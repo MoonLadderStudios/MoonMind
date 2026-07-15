@@ -32,6 +32,7 @@ import {
   previewModelTier,
   deriveExplicitWorkflowTitle,
   resolveDefaultProviderProfileId,
+  resolveLoadedProviderProfileId,
   resolveObjectiveInstructions,
   workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
@@ -1388,7 +1389,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({
               workflowId: "mm:edit-123",
               workflowType: "MoonMind.UserWorkflow",
-              state: "executing",
+              state: "awaiting_slot",
               targetRuntime: "claude_code",
               profileId: "profile:claude-default",
               model: "claude-sonnet-test",
@@ -5172,6 +5173,53 @@ describe.skip("Task Create Entrypoint", () => {
       ]),
     );
     window.removeEventListener("moonmind:temporal-task-editing", onTelemetry);
+  });
+
+  it("submits the selected runtime's default profile when editing an awaiting-slot workflow", async () => {
+    renderForEdit("mm:edit-123");
+
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:claude-default");
+    });
+
+    fireEvent.change(screen.getByLabelText("Runtime"), {
+      target: { value: "codex_cli" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement).value,
+      ).toBe("profile:codex-default");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aedit-123/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Aedit-123/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body || "{}"));
+    expect(request.parametersPatch).toMatchObject({
+      targetRuntime: "codex_cli",
+      profileId: "profile:codex-default",
+      model: null,
+      requestedModel: null,
+      resolvedModel: null,
+      effort: null,
+      workflow: {
+        runtime: {
+          mode: "codex_cli",
+          profileId: "profile:codex-default",
+        },
+      },
+    });
   });
 
   it("clears persisted merge automation when edit mode deselects the combined publish mode", async () => {
@@ -18562,6 +18610,28 @@ describe("resolveDefaultProviderProfileId", () => {
     expect(resolveDefaultProviderProfileId(candidates, "disabled-default")).toBe(
       "high-priority",
     );
+  });
+
+  it("preserves an unavailable saved profile while editing unrelated fields", () => {
+    expect(
+      resolveLoadedProviderProfileId({
+        profiles,
+        providerProfile: "deleted-billing-profile",
+        configuredDefaultRef: "codex",
+        preserveUnavailableProfile: true,
+      }),
+    ).toBe("deleted-billing-profile");
+  });
+
+  it("selects the new runtime default after an explicit runtime switch clears the profile", () => {
+    expect(
+      resolveLoadedProviderProfileId({
+        profiles,
+        providerProfile: "",
+        configuredDefaultRef: "codex",
+        preserveUnavailableProfile: true,
+      }),
+    ).toBe("codex");
   });
 });
 

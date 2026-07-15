@@ -4146,6 +4146,12 @@ export interface components {
             download_url: string;
         };
         /**
+         * ArtifactCollectionStatus
+         * @description Per-output collection outcome for the durable output manifest (#3258).
+         * @enum {string}
+         */
+        ArtifactCollectionStatus: "collected" | "missing" | "rejected" | "truncated";
+        /**
          * ArtifactCreateExecutionLinkRequest
          * @description Optional initial execution linkage for artifact creation.
          */
@@ -5368,11 +5374,22 @@ export interface components {
             /** Name */
             name: string;
             /** Artifactref */
-            artifactRef: string;
-            /** Sizebytes */
+            artifactRef?: string | null;
+            /**
+             * Sizebytes
+             * @default 0
+             */
             sizeBytes: number;
             /** Sha256 */
-            sha256: string;
+            sha256?: string | null;
+            /** Mediatype */
+            mediaType?: string | null;
+            /** Relativepath */
+            relativePath?: string | null;
+            /** @default collected */
+            collectionStatus: components["schemas"]["ArtifactCollectionStatus"];
+            /** Detail */
+            detail?: string | null;
         };
         /** ContainerJobArtifactPage */
         ContainerJobArtifactPage: {
@@ -5481,7 +5498,7 @@ export interface components {
          * ContainerJobState
          * @enum {string}
          */
-        ContainerJobState: "queued" | "preparing" | "acquiring_image" | "running" | "canceling" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
+        ContainerJobState: "queued" | "preparing" | "resolving_workspace" | "workspace_not_visible" | "acquiring_image" | "starting" | "running" | "canceling" | "publishing_artifacts" | "cleaning_up" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
         /** ContainerJobStatus */
         ContainerJobStatus: {
             /**

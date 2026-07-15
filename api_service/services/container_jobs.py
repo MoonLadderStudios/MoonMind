@@ -10,6 +10,7 @@ over durable references, never as an unbounded daemon stream.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -326,13 +327,21 @@ class ContainerJobService:
         )
         artifacts: list[ContainerJobArtifact] = []
         if record.artifacts_ref:
-            artifacts.append(
-                await self._describe_artifact(
-                    owner=owner,
-                    job_id=job_id,
-                    artifact_ref=record.artifacts_ref,
-                )
+            # ``artifacts_ref`` points at the bounded output manifest. Return
+            # its collected output references, rather than describing the
+            # manifest wrapper as though it were the job's sole output.
+            manifest_text = await self._read_evidence_text(
+                owner=owner, artifact_ref=record.artifacts_ref
             )
+            try:
+                manifest = ContainerJobArtifactPage.model_validate(
+                    json.loads(manifest_text)
+                )
+            except (ValueError, TypeError) as exc:
+                raise ContainerJobEvidenceUnavailableError(
+                    "artifact manifest is invalid"
+                ) from exc
+            artifacts.extend(manifest.artifacts)
         offset = self._decode_cursor(cursor)
         limit = min(max(1, limit), MAX_ARTIFACT_PAGE_ENTRIES)
         page = artifacts[offset : offset + limit]
