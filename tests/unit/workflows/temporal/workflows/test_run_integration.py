@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
     RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
+    RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
@@ -408,6 +409,113 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
     )
 
     assert integration_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "durable_handoff_patch_enabled",
+    [True, False],
+    ids=["new-history", "legacy-replay"],
+)
+async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    durable_handoff_patch_enabled: bool,
+) -> None:
+    pull_request_url = "https://github.com/org/repo/pull/3343"
+    merge_gate_urls: list[str | None] = []
+    mock_run_workflow._integration = None
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = "Earlier assessment produced no commits."
+    mock_run_workflow._publish_context.update(
+        {
+            "pullRequestUrl": pull_request_url,
+            "headSha": "0fa9c6613",
+            "noCommitPublish": {"status": "no_commits"},
+        }
+    )
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "final-status",
+                    "tool": {"type": "agent_runtime", "name": "jules"},
+                    "inputs": {"instructions": "Finalize status."},
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _request: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        return {
+            "summary": "Status finalized.",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
+    async def fake_merge_gate(
+        *,
+        parameters: dict[str, Any],
+        pull_request_url: str | None,
+    ) -> None:
+        assert parameters["mergeAutomation"]["enabled"] is True
+        merge_gate_urls.append(pull_request_url)
+
+    async def noop_step_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            durable_handoff_patch_enabled
+            and patch_id == RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH
+        ),
+    )
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_pr_publish_optional_for_task",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_record_step_execution_manifest",
+        noop_step_manifest,
+    )
+    monkeypatch.setattr(mock_run_workflow, "_maybe_start_merge_gate", fake_merge_gate)
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+        },
+        plan_ref="plan-1",
+    )
+
+    expected_url = pull_request_url if durable_handoff_patch_enabled else None
+    expected_status = "published" if durable_handoff_patch_enabled else "not_required"
+    assert merge_gate_urls == [expected_url]
+    assert mock_run_workflow._pull_request_url == expected_url
+    assert mock_run_workflow._publish_status == expected_status
 
 @pytest.mark.asyncio
 async def test_run_integration_stage_poll_driven_completion(

@@ -5017,9 +5017,19 @@ def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
 ) -> str:
+    previous_outputs = _github_status_previous_outputs(inputs, context)
+    previous_metadata = _mapping(previous_outputs.get("metadata"))
     return _first_string(
         inputs.get("pullRequestUrl"),
         inputs.get("pull_request_url"),
+        previous_outputs.get("pullRequestUrl"),
+        previous_outputs.get("pull_request_url"),
+        previous_outputs.get("prUrl"),
+        previous_outputs.get("pr_url"),
+        previous_metadata.get("pullRequestUrl"),
+        previous_metadata.get("pull_request_url"),
+        previous_metadata.get("prUrl"),
+        previous_metadata.get("pr_url"),
         _pull_request_url_from_artifact_path(inputs, context),
     )
 
