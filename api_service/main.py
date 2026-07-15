@@ -3,8 +3,10 @@
 import logging
 
 from moonmind.config.logging import configure_logging
+from moonmind.observability import TelemetrySettings, initialize_telemetry, instrument_fastapi
 
 configure_logging()
+initialize_telemetry(TelemetrySettings.from_env(service_name="moonmind-api"))
 logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
@@ -384,6 +386,7 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+instrument_fastapi(app)
 
 # Setup templates
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

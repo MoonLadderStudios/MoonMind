@@ -5,6 +5,20 @@ import { playwright } from '@vitest/browser-playwright';
 // Real-browser regression suite for styling contracts that jsdom cannot
 // verify: computed pseudo-element styles, CSS custom-property scoping, and
 // layout overflow. Run with `npm run ui:test:browser`.
+const supportedEngines = ['chromium', 'firefox'] as const;
+type BrowserEngine = (typeof supportedEngines)[number];
+const configuredEngines = process.env.MOONMIND_BROWSER_ENGINES
+  ?.split(',')
+  .map((engine) => engine.trim())
+  .filter(Boolean);
+const engines = (configuredEngines?.length ? configuredEngines : supportedEngines) as BrowserEngine[];
+
+for (const engine of engines) {
+  if (!supportedEngines.includes(engine)) {
+    throw new Error(`Unsupported MOONMIND_BROWSER_ENGINES value: ${engine}`);
+  }
+}
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -13,19 +27,11 @@ export default defineConfig({
       enabled: true,
       headless: true,
       provider: playwright(),
-      instances: [
-        {
-          browser: 'chromium',
-          viewport: { width: 1280, height: 800 },
-        },
-        // Firefox paints native scrollbars with a different width/geometry than
-        // Chromium; the collection sidebar rail's separator must not depend on
-        // that, so the guardrail runs in both engines.
-        {
-          browser: 'firefox',
-          viewport: { width: 1280, height: 800 },
-        },
-      ],
+      // Local runs default to both engines. CI assigns one engine per matrix leg.
+      instances: engines.map((browser) => ({
+        browser,
+        viewport: { width: 1280, height: 800 },
+      })),
     },
   },
 });

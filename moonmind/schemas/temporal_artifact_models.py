@@ -285,8 +285,11 @@ class SessionResourceListResponse(BaseModel):
 class ArtifactSessionControlRequest(BaseModel):
     """Operator control request for one workflow-scoped artifact session."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    schema_version: Literal[1] = Field(1, alias="schemaVersion")
+    control_request_id: str = Field(..., alias="controlRequestId", min_length=1)
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     action: Literal[
         "continue_same_session",
         "clear_session",
@@ -295,14 +298,25 @@ class ArtifactSessionControlRequest(BaseModel):
     ]
     message: str | None = None
     reason: str | None = None
+    expected_session_epoch: int = Field(..., alias="expectedSessionEpoch", ge=1)
+    expected_turn_id: str | None = Field(None, alias="expectedTurnId")
+    actor_principal: str | None = Field(None, alias="actorPrincipal")
 
     def model_post_init(self, __context: Any) -> None:
         if self.message is not None:
             self.message = require_non_blank(self.message, field_name="message")
         if self.reason is not None:
             self.reason = require_non_blank(self.reason, field_name="reason")
+        self.control_request_id = require_non_blank(self.control_request_id, field_name="controlRequestId")
+        self.idempotency_key = require_non_blank(self.idempotency_key, field_name="idempotencyKey")
+        if self.expected_turn_id is not None:
+            self.expected_turn_id = require_non_blank(self.expected_turn_id, field_name="expectedTurnId")
         if self.action == "continue_same_session" and self.message is None:
             raise ValueError("message is required when action=continue_same_session")
+        if self.action == "interrupt_turn" and self.expected_turn_id is None:
+            raise ValueError("expectedTurnId is required when action=interrupt_turn")
+        if self.action in {"clear_session", "cancel_session"} and self.reason is None:
+            raise ValueError("reason is required for destructive session controls")
 
 class ArtifactSessionControlResponse(BaseModel):
     """Control response envelope with the refreshed session projection."""
@@ -315,6 +329,11 @@ class ArtifactSessionControlResponse(BaseModel):
         "interrupt_turn",
         "cancel_session",
     ]
+    control_request_id: str = Field(..., alias="controlRequestId")
+    status: Literal["accepted", "rejected", "completed", "failed", "delivery_unknown"]
+    stable_reason_code: str | None = Field(None, alias="stableReasonCode")
+    control_event_ref: str | None = Field(None, alias="controlEventRef")
+    completed_at: datetime | None = Field(None, alias="completedAt")
     projection: ArtifactSessionProjectionModel
 
 class PresignDownloadResponse(BaseModel):
