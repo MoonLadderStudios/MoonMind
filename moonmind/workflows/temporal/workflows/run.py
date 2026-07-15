@@ -515,6 +515,13 @@ NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
 RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
     "run-stop-on-publish-handoff-failure-v1"
 )
+# Replay-stable patch for recovering the confirmed PR URL from durable publish
+# context before starting merge automation. Older histories retain their local
+# variable-only handoff; new histories can no longer lose a PR observed by a
+# prior step when a later plan step carries no publication output.
+RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH = (
+    "run-durable-publish-context-merge-handoff-v1"
+)
 RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = (
     "run-assessment-parameter-injection-v1"
@@ -11135,6 +11142,14 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"publishMode 'pr' requested; native PR creation failed: {e}"
                         ) from e
+        if (
+            workflow.patched(RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH)
+            and not self._publish_context.get("publicationBlockedBy")
+        ):
+            pull_request_url = pull_request_url or self._coerce_text(
+                self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
         if (
             pr_publish_optional
             and publish_mode == "pr"
