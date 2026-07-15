@@ -2103,6 +2103,9 @@ async def test_agent_run_preserves_operator_profile_selection_after_cooldown_ret
     async def fake_fetch_managed_result(**_kwargs: Any) -> AgentRunResult:
         return fetch_results.pop(0)
 
+    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> bool:
+        return True
+
     async def fake_execute_routed_activity(
         activity_name: str,
         payload: Any,
@@ -2113,10 +2116,12 @@ async def test_agent_run_preserves_operator_profile_selection_after_cooldown_ret
         raise AssertionError(f"Unexpected routed activity: {activity_name}")
 
     monkeypatch.setattr(agent_run_module, "CodexSessionAdapter", _FakeCodexSessionAdapter)
+    monkeypatch.setattr(agent_run_module, "ManagedAgentAdapter", _FakeCodexSessionAdapter)
     monkeypatch.setattr(run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal)
     monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
     monkeypatch.setattr(run, "_fetch_managed_result", fake_fetch_managed_result)
     monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(
         agent_run_module.workflow,
         "get_external_workflow_handle",

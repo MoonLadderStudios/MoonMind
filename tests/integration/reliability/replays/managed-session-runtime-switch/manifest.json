@@ -1,0 +1,72 @@
+{
+  "incidentWorkflowId": "mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52",
+  "request": {
+    "agentKind": "managed",
+    "agentId": "codex_cli",
+    "executionProfileRef": "codex_openai_oauth",
+    "correlationId": "mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52",
+    "idempotencyKey": "mm:d3ca1354:node-1:execution:2",
+    "managedSession": {
+      "workflowId": "mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52:session:codex_cli",
+      "agentRunId": "mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52",
+      "sessionId": "sess:mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52:codex_cli",
+      "sessionEpoch": 2,
+      "runtimeId": "codex_cli",
+      "executionProfileRef": "codex_openai_oauth"
+    },
+    "stepExecution": {
+      "schemaVersion": "v1",
+      "workflowId": "mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52",
+      "runId": "019f66f5-161e-746b-b082-c797ce31d859",
+      "logicalStepId": "node-1",
+      "executionOrdinal": 2,
+      "stepExecutionId": "mm:d3ca1354-0d3f-49ea-a5e8-a4598fc98c52:019f66f5-161e-746b-b082-c797ce31d859:node-1:execution:2",
+      "reason": "runtime_recovered",
+      "runtimeContextPolicy": "fresh_agent_run",
+      "runtimeSelection": {
+        "runtimeId": "codex_cli",
+        "agentKind": "managed",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "executionProfileRef": "codex_openai_oauth",
+        "skillId": "pr-resolver"
+      },
+      "runtimeSessionReset": {
+        "resolvedPolicy": "fresh_agent_run"
+      }
+    },
+    "parameters": {
+      "targetRuntime": "codex_cli",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "profileId": "codex_openai_oauth",
+      "workflow": {
+        "runtime": {
+          "mode": "codex_cli",
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "profileId": "codex_openai_oauth"
+        }
+      }
+    }
+  },
+  "runtimeUpdate": {
+    "targetRuntime": "claude_code",
+    "executionProfileRef": "claude_anthropic_oauth",
+    "model": "claude-opus-4-7",
+    "effort": "high",
+    "parametersPatch": {
+      "targetRuntime": "claude_code",
+      "model": "claude-opus-4-7",
+      "effort": "high",
+      "workflow": {
+        "runtime": {
+          "mode": "claude_code",
+          "model": "claude-opus-4-7",
+          "effort": "high",
+          "profileId": "claude_anthropic_oauth"
+        }
+      }
+    }
+  }
+}
