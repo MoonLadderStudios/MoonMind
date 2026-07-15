@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       unit_fast: ${{ steps.select.outputs.unit_fast }}
+      unit_slow: ${{ steps.select.outputs.unit_slow }}
       api_component: ${{ steps.select.outputs.api_component }}
       temporal_boundary: ${{ steps.select.outputs.temporal_boundary }}
       integration_ci: ${{ steps.select.outputs.integration_ci }}
@@ -107,35 +108,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
-      - name: Set up Node.js for full backend path
-        if: needs.select-test-suites.outputs.full_backend == 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-      - name: Build frontend assets for full backend path
-        if: needs.select-test-suites.outputs.full_backend == 'true'
-        run: |
-          npm ci
-          npm run ui:build
       - name: Run selected unit suite
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          MOONMIND_PYTEST_DURATIONS: "50"
-          MOONMIND_PYTEST_JUNITXML: artifacts/pytest-unit.xml
         run: |
           set -euo pipefail
-          if [[ "${{ needs.select-test-suites.outputs.full_backend }}" == "true" ]]; then
-            ./tools/test_unit.sh --python-only
-          else
-            python -m pytest tests/unit \
-              --ignore=tests/unit/workflows/temporal \
-              --ignore=tests/unit/api \
-              --ignore=tests/unit/api_service \
-              -m "not temporal_boundary and not component and not slow" \
-              -q -n auto --dist loadfile --durations=25 \
-              --junitxml=artifacts/pytest-unit-fast.xml
-          fi
+          python -m pytest tests/unit \
+            --ignore=tests/unit/workflows/temporal \
+            --ignore=tests/unit/api \
+            --ignore=tests/unit/api_service \
+            -m "unit_fast and not provider_verification and not requires_credentials" \
+            -q -n auto --dist loadfile --durations=25 \
+            --junitxml=artifacts/pytest-unit-fast.xml
       - name: Verify workflow terminology guardrails
         run: |
           set -euo pipefail
@@ -172,6 +154,39 @@ jobs:
           python -m pip install --upgrade pip PyYAML
           python3 tools/sync_moonspec.py --check
 
+  unit-slow:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.unit_slow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Run slow unit suite
+        run: |
+          set -euo pipefail
+          python -m pytest tests/unit \
+            -m "slow and not provider_verification and not requires_credentials and not integration" \
+            -q --durations=50 \
+            --junitxml=artifacts/pytest-unit-slow.xml
+
   api-component:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.api_component == 'true'
@@ -202,7 +217,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
-            -m "not temporal_boundary and not slow" \
+            -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
             -q -n auto --dist loadfile --durations=25 \
             --junitxml=artifacts/pytest-api-component.xml
 
@@ -230,7 +245,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest tests/unit/workflows/temporal \
-            -m "not slow" \
+            -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
             -q --durations=25 \
             --junitxml=artifacts/pytest-temporal-boundary.xml
 
@@ -346,15 +361,45 @@ jobs:
           path: /tmp/pytest-reliability-journey
           if-no-files-found: error
 
+  verify-test-shard-ownership:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.full_backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Verify exclusive backend shard ownership
+        run: python tools/verify_test_shard_ownership.py
+
   ci-required:
     needs:
       - select-test-suites
       - moonspec-projection
       - unit-fast
+      - unit-slow
       - api-component
       - temporal-boundary
       - integration-ci
       - reliability-journey-checkpoint-resume
+      - verify-test-shard-ownership
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -407,6 +452,10 @@ jobs:
                        "${{ needs.unit-fast.result }}" \
                        "unit-fast"
 
+          check_result "${{ needs.select-test-suites.outputs.unit_slow }}" \
+                       "${{ needs.unit-slow.result }}" \
+                       "unit-slow"
+
           check_result "${{ needs.select-test-suites.outputs.api_component }}" \
                        "${{ needs.api-component.result }}" \
                        "api-component"
@@ -422,6 +471,10 @@ jobs:
           check_result "${{ needs.select-test-suites.outputs.reliability_journey }}" \
                        "${{ needs.reliability-journey-checkpoint-resume.result }}" \
                        "reliability-journey-checkpoint-resume"
+
+          check_result "${{ needs.select-test-suites.outputs.full_backend }}" \
+                       "${{ needs.verify-test-shard-ownership.result }}" \
+                       "verify-test-shard-ownership"
 
           echo "All selected backend suites passed."
 
