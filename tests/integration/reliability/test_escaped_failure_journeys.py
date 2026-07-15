@@ -700,7 +700,6 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
     assert capture["workspace"]["kind"] == "worktree_archive"
 
 
-@pytest.mark.integration_ci
 async def test_resolved_pr_resolver_contract_owns_durable_continuation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -811,7 +810,6 @@ async def test_resolved_pr_resolver_contract_owns_durable_continuation(
     )
 
 
-@pytest.mark.integration_ci
 async def test_retry_before_execution_captures_terminal_prior_workspace(
     tmp_path: Path,
 ) -> None:
