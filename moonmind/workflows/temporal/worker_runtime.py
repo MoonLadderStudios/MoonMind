@@ -2294,12 +2294,24 @@ def _pentest_runner_image_overrides() -> dict[str, str]:
         pentest.claude_oauth_runner_profile_id: pentest.runner_image,
     }
 
+def _container_job_evidence_content_type(name: str) -> str:
+    """Pick a stable media type for a container-job evidence artifact name."""
+
+    lowered = name.lower()
+    if lowered.endswith((".json", ".jsonl")):
+        return "application/json"
+    if lowered.endswith((".tar.gz", ".tgz")):
+        return "application/gzip"
+    return "text/plain"
+
+
 def _container_job_evidence_publisher(artifact_service: TemporalArtifactService):
     async def publish(request, name: str, payload: bytes) -> str:
         principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        content_type = _container_job_evidence_content_type(name)
         artifact, _ = await artifact_service.create(
             principal=principal,
-            content_type="text/plain",
+            content_type=content_type,
             metadata_json={
                 "artifact_type": "container_job.evidence",
                 "name": name,
@@ -2310,7 +2322,7 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             artifact_id=artifact.artifact_id,
             principal=principal,
             payload=payload,
-            content_type="text/plain",
+            content_type=content_type,
         )
         return artifact.artifact_id
     return publish
@@ -2372,6 +2384,19 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
                 record.logs_ref = request.logs_ref
             if request.artifacts_ref:
                 record.artifacts_ref = request.artifacts_ref
+            if request.events_ref:
+                record.events_ref = request.events_ref
+            # Compact, non-sensitive execution observations. Only write when the
+            # trusted backend produced them so intermediate projections never
+            # clobber earlier timing/probe evidence with nulls.
+            if request.workspace_probe is not None:
+                record.workspace_probe = request.workspace_probe
+            if request.started_at is not None:
+                record.started_at = request.started_at
+            if request.finished_at is not None:
+                record.completed_at = request.finished_at
+            if request.duration_ms is not None:
+                record.duration_seconds = request.duration_ms / 1000.0
             await session.commit()
 
     return _write
@@ -2640,10 +2665,11 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         reaped_volumes,
                     )
             container_backend_settings = resolve_container_backend_settings()
+            _container_job_store = os.environ.get(
+                "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
+            )
             container_job_backend = DockerContainerJobBackend(
-                workspace_root=os.environ.get(
-                    "MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"
-                ),
+                workspace_root=_container_job_store,
                 settings=container_backend_settings,
                 backend_ref=container_backend_settings.default_backend_ref,
                 docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
@@ -2654,6 +2680,15 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 ),
                 secret_resolver=_container_job_secret_resolver(),
                 managed_run_store=run_store,
+                # Publish bounded live incremental logs to a MoonMind-controlled
+                # spool root that is never mounted into a job container.
+                log_spool_root=os.environ.get(
+                    "MOONMIND_CONTAINER_JOB_LOG_SPOOL_ROOT"
+                )
+                or str(
+                    Path(_container_job_store).resolve().parent
+                    / ".mm-container-job-logs"
+                ),
             )
             if container_backend_settings.enabled:
                 # Fail fast at startup when the deployment-selected endpoint is

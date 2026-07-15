@@ -5,8 +5,11 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.container_job_models import (
+    ArtifactCollectionStatus,
     AuxiliaryOutcome,
     ContainerJobAccepted,
+    ContainerJobActivityResult,
+    ContainerJobArtifact,
     ContainerJobArtifactPage,
     ContainerJobCancelResult,
     ContainerJobFailureClass,
@@ -251,6 +254,57 @@ def test_log_and_artifact_pages_enforce_bounds() -> None:
             jobId=JOB_ID, artifacts=[artifact] * (MAX_ARTIFACT_PAGE_ENTRIES + 1),
             publication={"state": "succeeded"},
         )
+
+
+def test_status_enum_covers_distinct_lifecycle_phases() -> None:
+    # The finer-grained phases required "at least" by #3258 must exist.
+    for name in (
+        "resolving_workspace",
+        "workspace_not_visible",
+        "starting",
+        "publishing_artifacts",
+        "cleaning_up",
+    ):
+        assert ContainerJobState(name).value == name
+
+
+def test_output_manifest_artifact_allows_missing_and_collected_entries() -> None:
+    missing = ContainerJobArtifact(
+        name="report",
+        relativePath="dist/report.txt",
+        collectionStatus="missing",
+        detail="declared output was not produced",
+    )
+    assert missing.artifact_ref is None
+    assert missing.sha256 is None
+    assert missing.collection_status == ArtifactCollectionStatus.MISSING
+
+    collected = ContainerJobArtifact(
+        name="report",
+        artifactRef="artifact://x",
+        sizeBytes=12,
+        sha256="a" * 64,
+        mediaType="text/plain",
+        relativePath="dist/report.txt",
+    )
+    assert collected.collection_status == ArtifactCollectionStatus.COLLECTED
+    assert collected.media_type == "text/plain"
+
+
+def test_activity_result_carries_observations_and_cursor() -> None:
+    result = ContainerJobActivityResult(
+        logCursor="2024-01-01T00:00:03+00:00|3",
+        workspaceProbe="visible",
+        startedAt=NOW,
+        finishedAt=NOW,
+        durationMs=1500,
+        eventsRef="artifact://events",
+    )
+    dumped = result.model_dump(by_alias=True, exclude_none=True)
+    assert dumped["logCursor"] == "2024-01-01T00:00:03+00:00|3"
+    assert dumped["workspaceProbe"] == "visible"
+    assert dumped["durationMs"] == 1500
+    assert dumped["eventsRef"] == "artifact://events"
 
 
 def test_every_history_facing_contract_enforces_temporal_limit(monkeypatch) -> None:

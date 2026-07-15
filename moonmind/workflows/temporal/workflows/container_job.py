@@ -142,11 +142,12 @@ class MoonMindContainerJobWorkflow:
         async def execute_lifecycle() -> None:
             nonlocal terminal_state, exit_code, failure_class
             if not self._cancel_requested:
-                await self._project(request, ContainerJobState.PREPARING)
+                await self._project(request, ContainerJobState.RESOLVING_WORKSPACE)
                 resolved = await self._activity(
                     "container_job.resolve_workspace", request
                 )
                 request.resolved_workspace_ref = resolved.resolved_workspace_ref
+                request.workspace_probe = resolved.workspace_probe
             if not self._cancel_requested:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)
                 image = await self._activity("container_job.acquire_image", request)
@@ -163,15 +164,22 @@ class MoonMindContainerJobWorkflow:
                     )
                     request.container_ref = created.container_ref
                 if not reconciled.running:
+                    await self._project(request, ContainerJobState.STARTING)
                     await self._activity("container_job.start_container", request)
             while not self._cancel_requested and request.container_ref:
                 await self._project(request, ContainerJobState.RUNNING)
                 observed = await self._activity(
                     "container_job.observe_container", request
                 )
+                # Carry the resumable live-log cursor across polls so each poll
+                # publishes only the newer log delta.
+                request.log_cursor = observed.log_cursor
                 if observed.terminal_state is not None:
                     terminal_state = observed.terminal_state
                     exit_code = observed.exit_code
+                    request.started_at = observed.started_at
+                    request.finished_at = observed.finished_at
+                    request.duration_ms = observed.duration_ms
                     failure_class = (
                         None
                         if terminal_state == ContainerJobState.SUCCEEDED
@@ -212,6 +220,21 @@ class MoonMindContainerJobWorkflow:
             message = str(exc)[:2048]
 
         request.terminal_state = terminal_state
+        # Exit metadata is set before publication so the runtime-diagnostics
+        # artifact records the authoritative exit/failure/timing evidence.
+        request.exit_code = exit_code
+        request.failure_class = failure_class
+        request.message = message
+
+        # Distinguish a workspace-visibility failure as its own status before the
+        # terminal FAILED projection so a reader can tell it apart from a launch
+        # or execution failure.
+        if (
+            terminal_state == ContainerJobState.FAILED
+            and failure_class == ContainerJobFailureClass.WORKSPACE
+        ):
+            await self._project(request, ContainerJobState.WORKSPACE_NOT_VISIBLE)
+
         if request.container_ref and terminal_state in {
             ContainerJobState.CANCELED,
             ContainerJobState.TIMED_OUT,
@@ -221,6 +244,8 @@ class MoonMindContainerJobWorkflow:
 
         logs_ref: str | None = None
         artifacts_ref: str | None = None
+        events_ref: str | None = None
+        await self._project(request, ContainerJobState.PUBLISHING_ARTIFACTS)
         request.publication_token = f"{inp.ownership_token}:publication"
         published = await self._best_effort("container_job.publish_evidence", request)
         if published is None:
@@ -229,7 +254,9 @@ class MoonMindContainerJobWorkflow:
             publication = AuxiliaryOutcome(state="succeeded")
             logs_ref = published.logs_ref
             artifacts_ref = published.artifacts_ref
+            events_ref = published.events_ref
 
+        await self._project(request, ContainerJobState.CLEANING_UP)
         removed = await self._best_effort("container_job.remove_container", request)
         cleaned = await self._best_effort("container_job.cleanup", request)
         cleanup = AuxiliaryOutcome(
@@ -237,13 +264,11 @@ class MoonMindContainerJobWorkflow:
         )
 
         self._state = terminal_state
-        request.exit_code = exit_code
-        request.failure_class = failure_class
-        request.message = message
         request.publication = publication
         request.cleanup_outcome = cleanup
         request.logs_ref = logs_ref
         request.artifacts_ref = artifacts_ref
+        request.events_ref = events_ref
         await self._project(request, terminal_state)
         if self._projection_repair_required:
             repaired = await self._best_effort(

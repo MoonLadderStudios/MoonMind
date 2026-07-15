@@ -336,9 +336,12 @@ async def test_publish_evidence_bounds_captured_output(tmp_path) -> None:
     )
     result = await backend.publish_evidence(_request(tmp_path))
     assert result.logs_ref == "art:logs"
-    payload = next(iter(captured.values()))
+    payload = captured[f"{JOB_ID}-logs.txt"]
     assert payload.startswith(b"[truncated]\n")
     assert len(payload) <= 1024 + len(b"[truncated]\n")
+    # Deterministic per-stream artifacts are published alongside the combined log.
+    assert f"{JOB_ID}-stdout.txt" in captured
+    assert f"{JOB_ID}-stderr.txt" in captured
 
 
 @pytest.mark.asyncio

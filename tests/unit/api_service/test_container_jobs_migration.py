@@ -59,3 +59,38 @@ def test_registry_authorization_migration_adds_and_drops_column(monkeypatch) -> 
             for column in sa.inspect(connection).get_columns("container_jobs")
         }
         assert "authorization_observation_json" not in columns
+
+
+def test_observations_migration_adds_and_drops_columns(monkeypatch) -> None:
+    base = importlib.import_module(
+        "api_service.migrations.versions.338_container_jobs_contract"
+    )
+    observations = importlib.import_module(
+        "api_service.migrations.versions.341_container_job_observations"
+    )
+    assert observations.down_revision == "340_container_job_registry_auth"
+    added = {
+        "events_ref",
+        "workspace_probe",
+        "started_at",
+        "completed_at",
+        "duration_seconds",
+    }
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        operations = Operations(MigrationContext.configure(connection))
+        monkeypatch.setattr(base, "op", operations)
+        monkeypatch.setattr(observations, "op", operations)
+        base.upgrade()
+        observations.upgrade()
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("container_jobs")
+        }
+        assert added <= columns
+        observations.downgrade()
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns("container_jobs")
+        }
+        assert not (added & columns)

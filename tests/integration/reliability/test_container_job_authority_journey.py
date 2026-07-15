@@ -226,4 +226,26 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
         "container-job:" + "2" * 32,
         "container-job:" + "3" * 32,
     }
-    assert len(published) == 8  # two pull diagnostics, then logs + outputs per job
+    # Each job publishes a deterministic evidence set (#3258): a combined log,
+    # separate stdout/stderr, runtime diagnostics, an output manifest, and the
+    # one declared output artifact.
+    for job_id in (
+        "container-job:" + "1" * 32,
+        "container-job:" + "2" * 32,
+        "container-job:" + "3" * 32,
+    ):
+        names = {name for owner, name, _ in published if owner == job_id}
+        assert {
+            f"{job_id}-logs.txt",
+            f"{job_id}-stdout.txt",
+            f"{job_id}-stderr.txt",
+            f"{job_id}-diagnostics.json",
+            f"{job_id}-artifacts.json",
+            f"{job_id}-output-result",
+        } <= names
+    pull_diagnostics = [
+        name for _, name, _ in published if name.endswith("-image-pull.txt")
+    ]
+    assert len(pull_diagnostics) == 2  # each distinct image is pulled exactly once
+    # 6 evidence artifacts per job across 3 jobs, plus the 2 pull diagnostics.
+    assert len(published) == 6 * 3 + 2
