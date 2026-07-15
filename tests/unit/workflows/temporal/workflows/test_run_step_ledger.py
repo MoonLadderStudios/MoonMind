@@ -3737,6 +3737,9 @@ async def test_prepublication_checkpoint_failure_blocks_publish_repair(
     assert workflow._publish_reason == (
         "Execution succeeded; finalization failed during the pre-publication checkpoint."
     )
+    assert workflow.get_step_ledger()["steps"][0]["finalizationOutcome"]["message"] == (
+        "QueueFull"
+    )
     assert workflow._publish_repair_is_available(parameters={"publishMode": "pr"}) is False
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
     assert workflow._publish_repair_is_available(parameters={"publishMode": "pr"}) is True

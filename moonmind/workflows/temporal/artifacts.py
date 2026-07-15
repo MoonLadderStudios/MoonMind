@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_MULTIPART_WRITE_CHUNK_BYTES = 8 * 1024 * 1024
 _RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
@@ -393,6 +394,18 @@ class TemporalArtifactStore:
             "multipart upload is not supported by storage backend"
         )
 
+    def upload_multipart_part(
+        self,
+        *,
+        storage_key: str,
+        upload_id: str,
+        part_number: int,
+        payload: bytes,
+    ) -> str:
+        raise TemporalArtifactValidationError(
+            "multipart upload is not supported by storage backend"
+        )
+
     def complete_multipart_upload(
         self,
         *,
@@ -686,6 +699,28 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             HttpMethod="PUT",
         )
         return self._rewrite_presigned_url(url), {}
+
+    def upload_multipart_part(
+        self,
+        *,
+        storage_key: str,
+        upload_id: str,
+        part_number: int,
+        payload: bytes,
+    ) -> str:
+        response = self._client.upload_part(
+            Bucket=self._bucket,
+            Key=storage_key,
+            UploadId=upload_id,
+            PartNumber=part_number,
+            Body=payload,
+        )
+        etag = str(response.get("ETag") or "").strip()
+        if not etag:
+            raise TemporalArtifactStateError(
+                "multipart part upload did not return an etag"
+            )
+        return etag
 
     def complete_multipart_upload(
         self,
@@ -1546,6 +1581,85 @@ class TemporalArtifactService:
             artifact.artifact_id,
         )
         return artifact
+
+    async def write_payload_complete(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        payload: bytes,
+        content_type: str | None = None,
+    ) -> db_models.TemporalArtifact:
+        """Persist a trusted in-process payload through its declared upload mode.
+
+        HTTP single-put uploads continue to use :meth:`write_complete`, which
+        rejects multipart artifacts. Activity-owned payloads already resident in
+        process use this method so large evidence does not need to round-trip
+        through presigned HTTP URLs.
+        """
+
+        artifact = await self._repository.get_artifact(artifact_id)
+        self._assert_mutation_access(artifact, principal=principal)
+        if artifact.upload_mode is not db_models.TemporalArtifactUploadMode.MULTIPART:
+            return await self.write_complete(
+                artifact_id=artifact_id,
+                principal=principal,
+                payload=payload,
+                content_type=content_type,
+            )
+        if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
+            return artifact
+        if artifact.status is db_models.TemporalArtifactStatus.DELETED:
+            raise TemporalArtifactStateError("artifact is deleted")
+        if not artifact.upload_id:
+            raise TemporalArtifactStateError("multipart upload session is missing")
+        if not payload:
+            raise TemporalArtifactValidationError(
+                "multipart payload must not be empty"
+            )
+
+        upload_id = artifact.upload_id
+        parts: list[dict[str, Any]] = []
+        try:
+            for offset in range(0, len(payload), _MULTIPART_WRITE_CHUNK_BYTES):
+                part_number = len(parts) + 1
+                chunk = payload[offset : offset + _MULTIPART_WRITE_CHUNK_BYTES]
+                etag = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda part_number=part_number, chunk=chunk: (
+                        self._store.upload_multipart_part(
+                            storage_key=artifact.storage_key,
+                            upload_id=upload_id,
+                            part_number=part_number,
+                            payload=chunk,
+                        )
+                    ),
+                )
+                parts.append({"part_number": part_number, "etag": etag})
+        except Exception:
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._store.abort_multipart_upload(
+                        storage_key=artifact.storage_key,
+                        upload_id=upload_id,
+                    ),
+                )
+            except Exception as abort_exc:  # pragma: no cover - cleanup is best effort
+                logger.warning(
+                    "Failed to abort trusted multipart artifact upload artifact_id=%s: %s",
+                    artifact.artifact_id,
+                    abort_exc,
+                )
+            artifact.status = db_models.TemporalArtifactStatus.FAILED
+            await self._repository.commit()
+            raise
+
+        return await self.complete(
+            artifact_id=artifact_id,
+            principal=principal,
+            parts=parts,
+        )
 
     async def presign_upload_part(
         self,

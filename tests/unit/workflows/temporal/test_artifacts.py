@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -116,6 +117,17 @@ class _MultipartMemoryStore(TemporalArtifactStore):
     ):
         _ = storage_key, expires_in_seconds
         return f"https://example.test/upload-part/{upload_id}/{part_number}", {}
+
+    def upload_multipart_part(
+        self,
+        *,
+        storage_key: str,
+        upload_id: str,
+        part_number: int,
+        payload: bytes,
+    ) -> str:
+        _ = storage_key
+        return self.put_part(upload_id, part_number, payload)
 
     def complete_multipart_upload(
         self, *, storage_key: str, upload_id: str, parts: list[dict]
@@ -1473,6 +1485,56 @@ async def test_complete_multipart_upload_sets_integrity_metadata(
 
             assert completed.size_bytes == 8
             assert completed.sha256 is not None
+
+
+async def test_write_payload_complete_persists_trusted_multipart_bytes(
+    tmp_path: Path,
+) -> None:
+    """Trusted activity payloads should honor multipart artifact mode."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = _MultipartMemoryStore()
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=store,
+                direct_upload_max_bytes=4,
+            )
+            payload = b"multipart checkpoint archive"
+            artifact, upload = await service.create(
+                principal="system",
+                content_type="application/octet-stream",
+                size_bytes=len(payload),
+            )
+
+            assert upload.mode == "multipart"
+            with pytest.raises(
+                TemporalArtifactStateError,
+                match="expects multipart completion",
+            ):
+                await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="system",
+                    payload=payload,
+                    content_type="application/octet-stream",
+                )
+
+            completed = await service.write_payload_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system",
+                payload=payload,
+                content_type="application/octet-stream",
+            )
+            _stored, stored_payload = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal="system",
+            )
+
+            assert completed.status.value == "complete"
+            assert completed.size_bytes == len(payload)
+            assert completed.sha256 == hashlib.sha256(payload).hexdigest()
+            assert stored_payload == payload
 
 async def test_write_integration_event_artifact_creates_restricted_preview(
     tmp_path: Path,

@@ -53,6 +53,45 @@ def test_managed_capture_contract_and_catalog_reject_other_authorities() -> None
 
 
 @pytest.mark.asyncio
+async def test_managed_checkpoint_artifact_uses_mode_aware_payload_writer() -> None:
+    calls: list[tuple[str, bytes]] = []
+
+    class ArtifactService:
+        async def create(self, **_kwargs: object) -> tuple[object, object]:
+            return SimpleNamespace(artifact_id="art-checkpoint"), SimpleNamespace(
+                mode="multipart"
+            )
+
+        async def write_payload_complete(
+            self, *, artifact_id: str, payload: bytes, **_kwargs: object
+        ) -> object:
+            calls.append((artifact_id, payload))
+            return SimpleNamespace(
+                artifact_id=artifact_id,
+                sha256=hashlib.sha256(payload).hexdigest(),
+                size_bytes=len(payload),
+                content_type="application/vnd.moonmind.worktree-archive",
+                encryption=SimpleNamespace(value="none"),
+            )
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=object(),
+        artifact_service=ArtifactService(),
+        client_adapter=object(),
+    )
+    payload = b"large checkpoint payload"
+
+    artifact_ref = await activities._put_managed_checkpoint_artifact(
+        payload,
+        "application/vnd.moonmind.worktree-archive",
+        "checkpoint_archive",
+    )
+
+    assert artifact_ref == "art-checkpoint"
+    assert calls == [("art-checkpoint", payload)]
+
+
+@pytest.mark.asyncio
 async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_command(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

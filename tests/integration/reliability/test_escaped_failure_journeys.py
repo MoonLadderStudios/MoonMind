@@ -926,6 +926,49 @@ async def test_checkpoint_capture_heartbeat_backpressure_replay(
     assert heartbeat_queue.qsize() <= expected["maxQueuedHeartbeats"]
 
 
+async def test_checkpoint_multipart_failure_replay_preserves_terminal_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:2ca7d450 without allowing a transient summary to win."""
+
+    replay_id = "checkpoint-multipart-finalization-summary"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 15, tzinfo=timezone.utc)
+    parent._initialize_step_ledger(
+        ordered_nodes=[{"id": manifest["logicalStepId"], "inputs": {}}],
+        dependency_map={manifest["logicalStepId"]: []},
+        updated_at=now,
+    )
+    row = parent._step_ledger_row_for(manifest["logicalStepId"])
+    assert row is not None
+    row["finalizationOutcome"] = manifest["finalizationOutcome"]
+    parent._publish_status = manifest["publishStatus"]
+    parent._publish_reason = manifest["publishReason"]
+    parent._summary = manifest["transientSummary"]
+
+    status, message, publish_failure = parent._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == expected["status"]
+    assert message == expected["message"]
+    assert publish_failure is expected["publishFailure"]
+    assert message != expected["forbiddenSummary"]
+
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: now)
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        parent,
+        parameters={"publishMode": "pr"},
+        status=status,
+        error=message,
+    )
+    assert summary["finishOutcome"]["reason"] == expected["message"]
+    assert summary["publish"]["reason"] == expected["publishReason"]
+
+
 async def test_codex_system_error_waits_for_delayed_oauth_failure_log(
     tmp_path: Path,
 ) -> None:

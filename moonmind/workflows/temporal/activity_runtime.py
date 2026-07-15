@@ -7273,7 +7273,7 @@ class TemporalAgentRuntimeActivities:
             principal="system", content_type=content_type,
             size_bytes=len(payload), metadata_json={"artifact_kind": artifact_kind},
         )
-        completed = await self._artifact_service.write_complete(
+        completed = await self._artifact_service.write_payload_complete(
             artifact_id=artifact.artifact_id, principal="system",
             payload=payload, content_type=content_type,
         )

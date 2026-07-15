@@ -66,6 +66,41 @@ async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
             refreshed = await service._repository.get_artifact(artifact.artifact_id)
             assert refreshed.hard_deleted_at is not None
 
+
+async def test_trusted_multipart_payload_round_trips_through_configured_store(
+    tmp_path: Path,
+) -> None:
+    """Activity-owned large payloads should complete against the real S3 backend."""
+
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                direct_upload_max_bytes=1,
+            )
+            payload = b"m" * ((8 * 1024 * 1024) + 17)
+            artifact, upload = await service.create(
+                principal="system:integration-test",
+                content_type="application/vnd.moonmind.worktree-archive",
+                size_bytes=len(payload),
+            )
+
+            assert upload.mode == "multipart"
+            completed = await service.write_payload_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system:integration-test",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+            )
+            _stored, stored_payload = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal="system:integration-test",
+            )
+
+            assert completed.status is TemporalArtifactStatus.COMPLETE
+            assert completed.size_bytes == len(payload)
+            assert stored_payload == payload
+
 async def test_report_delete_does_not_cascade_to_observability_artifacts(
     tmp_path: Path,
 ) -> None:

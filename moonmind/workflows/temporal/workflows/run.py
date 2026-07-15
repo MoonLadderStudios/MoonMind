@@ -814,6 +814,17 @@ class MoonMindRunWorkflow:
             return chain[-1][1][:1000]
         return exc.__class__.__name__
 
+    def _bounded_operator_failure(
+        self, exc: BaseException, *, max_chars: int = 500
+    ) -> str:
+        """Return redacted nested failure evidence suitable for durable summaries."""
+
+        raw_message = self._operator_failure_summary(exc)
+        sanitized = self._sanitize_operator_summary(raw_message) or raw_message
+        return self._coerce_text(sanitized, max_chars=max_chars) or (
+            exc.__class__.__name__
+        )
+
     @staticmethod
     def _failure_root_cause(exc: BaseException) -> BaseException:
         """Walk the exception chain to the deepest non-generic cause."""
@@ -5362,7 +5373,7 @@ class MoonMindRunWorkflow:
                 "failureCode": FINALIZATION_CHECKPOINT_FAILED,
                 "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
                 "retryCount": retry_count + 1,
-                "message": self._coerce_text(exc, max_chars=500),
+                "message": self._bounded_operator_failure(exc),
                 "updatedAt": workflow.now().isoformat(),
             }
             self._summary = (
@@ -5434,7 +5445,7 @@ class MoonMindRunWorkflow:
             "failureCode": FINALIZATION_PUBLICATION_FAILED,
             "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
             "retryCount": retry_count,
-            "message": self._coerce_text(exc, max_chars=500),
+            "message": self._bounded_operator_failure(exc),
             "updatedAt": updated_at.isoformat(),
         }
         previous_publish_reason = self._publish_reason
@@ -5478,7 +5489,7 @@ class MoonMindRunWorkflow:
                     "failureCode": FINALIZATION_CHECKPOINT_FAILED,
                     "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
                     "retryCount": 1,
-                    "message": self._coerce_text(exc, max_chars=500),
+                    "message": self._bounded_operator_failure(exc),
                     "updatedAt": workflow.now().isoformat(),
                 }
             self._summary = (
@@ -14532,13 +14543,26 @@ class MoonMindRunWorkflow:
                 finalization_outcome.get("status") == "failed"
                 and finalization_outcome.get("criticality") == "required"
             ):
+                failure_message = self._coerce_text(
+                    finalization_outcome.get("message"), max_chars=500
+                )
+                if not failure_message and self._publish_status == "failed":
+                    failure_message = self._coerce_text(
+                        self._publish_reason, max_chars=500
+                    )
+                if not failure_message:
+                    phase = self._coerce_text(
+                        finalization_outcome.get("phase"), max_chars=100
+                    )
+                    failure_message = (
+                        "Required step finalization failed during "
+                        f"{phase.replace('_', ' ')}."
+                        if phase
+                        else "Required step finalization failed."
+                    )
                 return (
                     "failed",
-                    self._coerce_text(
-                        finalization_outcome.get("message"), max_chars=500
-                    )
-                    or self._summary
-                    or "Required step finalization failed.",
+                    failure_message,
                     True,
                 )
 

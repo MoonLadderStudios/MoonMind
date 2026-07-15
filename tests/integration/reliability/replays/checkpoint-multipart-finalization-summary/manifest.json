@@ -1,0 +1,18 @@
+{
+  "incidentWorkflowId": "mm:2ca7d450-7dbb-4152-8314-96782f924291",
+  "logicalStepId": "tpl:jira-implement:02:d24a37b0",
+  "archiveFailure": "artifact expects multipart completion; use /complete with parts",
+  "publishStatus": "failed",
+  "publishReason": "Execution succeeded; finalization failed during the pre-publication checkpoint.",
+  "transientSummary": "Finalizing execution.",
+  "finalizationOutcome": {
+    "status": "failed",
+    "phase": "before_publication_checkpoint",
+    "criticality": "required",
+    "failureCode": "FINALIZATION_CHECKPOINT_FAILED",
+    "terminalFailureCode": "FINALIZATION_RETRY_EXHAUSTED",
+    "retryCount": 1,
+    "message": "artifact expects multipart completion; use /complete with parts",
+    "updatedAt": "2026-07-15T01:11:35.277604Z"
+  }
+}
