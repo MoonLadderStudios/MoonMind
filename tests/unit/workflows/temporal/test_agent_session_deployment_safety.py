@@ -208,6 +208,71 @@ def test_agent_session_deployment_safety_gate_accepts_full_gate_set() -> None:
     assert report.required is True
     assert report.replay_gate_path == AGENT_SESSION_REPLAYER_TEST_PATH
 
+def test_changed_paths_from_file_reads_exact_list(tmp_path) -> None:
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text(
+        "moonmind/workflows/temporal/workflows/agent_session.py\n"
+        "\n"
+        "  README.md  \n"
+        "moonmind/workflows/temporal/workflows/agent_session.py\n",
+        encoding="utf-8",
+    )
+
+    assert cli._changed_paths_from_file(str(changed)) == [
+        "README.md",
+        "moonmind/workflows/temporal/workflows/agent_session.py",
+    ]
+
+
+def test_changed_paths_from_file_missing_is_fail_open(tmp_path) -> None:
+    missing = tmp_path / "does-not-exist.txt"
+
+    assert cli._changed_paths_from_file(str(missing)) == []
+
+
+def test_cli_changed_files_file_skips_merge_base_discovery(tmp_path, monkeypatch) -> None:
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text("README.md\n", encoding="utf-8")
+
+    def fail_changed_paths(base_ref):  # pragma: no cover - must not run
+        raise AssertionError(
+            "merge-base discovery must be skipped when --changed-files-file is set"
+        )
+
+    monkeypatch.setattr(cli, "_changed_paths", fail_changed_paths)
+    monkeypatch.setattr(cli, "_repo_paths", lambda: [])
+    monkeypatch.setattr(
+        cli, "resolve_active_feature_dir", lambda *, repo_root, active_feature: None
+    )
+
+    assert cli.main(["--changed-files-file", str(changed)]) == 0
+
+
+def test_cli_changed_files_file_flags_sensitive_change_without_merge_base(
+    tmp_path, monkeypatch
+) -> None:
+    changed = tmp_path / "changed-files.txt"
+    changed.write_text(
+        "moonmind/workflows/temporal/workflows/agent_session.py\n",
+        encoding="utf-8",
+    )
+
+    def fail_changed_paths(base_ref):  # pragma: no cover - must not run
+        raise AssertionError(
+            "merge-base discovery must be skipped when --changed-files-file is set"
+        )
+
+    monkeypatch.setattr(cli, "_changed_paths", fail_changed_paths)
+    monkeypatch.setattr(
+        cli, "resolve_active_feature_dir", lambda *, repo_root, active_feature: None
+    )
+
+    # The real repository provides the replay gate and the cutover playbook, so
+    # the gate is exercised for a sensitive change using only the exact,
+    # event-derived changed-file list rather than merge-base discovery.
+    assert cli.main(["--changed-files-file", str(changed)]) == 0
+
+
 def test_agent_session_deployment_safety_report_includes_active_feature() -> None:
     report = validate_agent_session_deployment_safety(
         changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],

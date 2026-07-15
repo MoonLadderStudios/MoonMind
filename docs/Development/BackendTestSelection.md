@@ -50,6 +50,10 @@ full_frontend=true|false
 
 The selector is conservative. If it cannot classify the change confidently, it selects full backend verification.
 
+### Shared Changed-File Helper
+
+`tools/ci/compute_changed_files.sh` is the single event-aware classifier that computes the exact changed-file list from a shallow checkout. It fetches only the exact base and head commits (`ensure_commit_available`) and emits the two-dot tree diff. The selector, deployment-safety validation, and the generated-contract detector all consume it instead of maintaining subtly different event logic. It classifies pull requests, pushes with a real non-zero base SHA, and merge groups as known change sets; manual dispatches, scheduled runs, first pushes, and missing or unavailable commits resolve to an unknown change set so every consumer stays fail-open.
+
 ### Backend Detection
 
 A pull request is backend-impacting when it touches backend source, backend tests, backend tooling, migrations, or workflow-sensitive generated contracts. Backend-impacting pull requests select `unit_fast=true` unless the selector forces the full backend path, which also includes fast unit coverage.
@@ -155,9 +159,17 @@ CI corpus and fails on missing, duplicate, or conflicting ownership.
 
 Conditional GitHub Actions jobs are not suitable as individual branch-protection requirements because skipped jobs can leave required checks unresolved. MoonMind uses one always-running required summary job instead:
 
-- `select-test-suites` computes backend suite outputs.
+- `select-test-suites` computes backend suite outputs from a shallow, submodule-free checkout.
+- `preflight-policy` runs the static repository policy checks in parallel with test selection.
+- `moonspec-projection` verifies the vendored MoonSpec projection.
 - `unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`, `integration-ci`, and `reliability-journey-checkpoint-resume` run only when selected.
-- `ci-required` always runs and fails if any selected backend suite did not complete successfully.
+- `ci-required` always runs and fails if any always-required or selected backend job did not complete successfully.
+
+`ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. This keeps repository, submodule, and policy work off the serial tail of required CI.
+
+`preflight-policy` owns the static repository guardrails — docs terminology, workflow terminology, removed-capability semantics, status-token domains, the status-token audit, the GitHub workflow display-name guard, and AgentSession deployment-safety validation. These checks start immediately alongside `select-test-suites` and are no longer duplicated in `unit-fast` or `ci-required`. In CI, deployment-safety validation consumes the exact event-derived changed-file list (`--changed-files-file`) computed by `tools/ci/compute_changed_files.sh`; local development still uses `--base-ref`.
+
+Backend jobs use shallow, submodule-free checkouts. Only `moonspec-projection` initializes a submodule, and it initializes just `moonspec` via `git submodule update --init --depth 1 -- moonspec`. Open WebUI and Omnigent are never initialized in required backend CI.
 
 Branch protection must require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks. It must also require the standalone `migration-gate` check so migration-graph and clean-database upgrade failures block merges independently of impact selection.
 
