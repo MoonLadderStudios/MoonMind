@@ -700,6 +700,214 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
     assert capture["workspace"]["kind"] == "worktree_archive"
 
 
+@pytest.mark.integration_ci
+async def test_resolved_pr_resolver_contract_owns_durable_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay resolver PR 2189's missing terminal-contract launch payload."""
+
+    replay_id = "pr-resolver-resolved-terminal-contract"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    parent_info = SimpleNamespace(
+        workflow_id=manifest["parentWorkflowId"],
+        run_id=manifest["parentRunId"],
+    )
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["incidentRunId"],
+        parent=parent_info,
+        search_attributes={},
+    )
+
+    async def resolve_skillset(*_args: object, **_kwargs: object) -> object:
+        return manifest["resolvedSkillSet"]
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        resolve_skillset,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch: True,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: workflow_info,
+    )
+    parent = MoonMindRunWorkflow()
+    parent._owner_id = "owner-replay"
+    resolved_ref = await parent._resolve_agent_node_skillset_ref(
+        task_skills=None,
+        node_inputs=manifest["planNodeInputs"],
+        node_id=manifest["logicalStepId"],
+        existing_skillset_ref=None,
+    )
+    request = parent._build_agent_execution_request(
+        node_inputs=manifest["planNodeInputs"],
+        node_id=manifest["logicalStepId"],
+        tool_name=manifest["planNodeInputs"]["targetRuntime"],
+        resolved_skillset_ref=resolved_ref,
+        workflow_parameters={"mergeGate": manifest["mergeGate"]},
+    )
+
+    assert request.terminal_contract is not None
+    assert request.terminal_contract.contract_id == expected["terminalContractId"]
+    assert (
+        request.terminal_contract.relative_path
+        == expected["terminalContractPath"]
+    )
+    assert (
+        request.terminal_contract.expected_schema_version
+        == expected["terminalContractSchemaVersion"]
+    )
+    assert request.terminal_continuation_authority is not None
+    assert (
+        request.terminal_continuation_authority.owner_workflow_type
+        == expected["continuationOwnerWorkflowType"]
+    )
+    assert expected["continuationAction"] in (
+        request.terminal_continuation_authority.allowed_actions
+    )
+
+    async def read_existing_skillset(*_args: object, **_kwargs: object) -> object:
+        return manifest["resolvedSkillSet"]
+
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        read_existing_skillset,
+    )
+    existing_parent = MoonMindRunWorkflow()
+    existing_parent._owner_id = "owner-replay-existing"
+    existing_ref = await existing_parent._resolve_agent_node_skillset_ref(
+        task_skills=None,
+        node_inputs=manifest["planNodeInputs"],
+        node_id=manifest["logicalStepId"],
+        existing_skillset_ref=manifest["existingResolvedSkillsetRef"],
+    )
+    existing_request = existing_parent._build_agent_execution_request(
+        node_inputs=manifest["planNodeInputs"],
+        node_id=manifest["logicalStepId"],
+        tool_name=manifest["planNodeInputs"]["targetRuntime"],
+        resolved_skillset_ref=existing_ref,
+        workflow_parameters={"mergeGate": manifest["mergeGate"]},
+    )
+
+    assert existing_ref == manifest["existingResolvedSkillsetRef"]
+    assert existing_request.terminal_contract is not None
+    assert (
+        existing_request.terminal_contract.contract_id
+        == expected["terminalContractId"]
+    )
+    assert existing_request.terminal_continuation_authority is not None
+    assert (
+        existing_request.terminal_continuation_authority.owner_workflow_type
+        == expected["continuationOwnerWorkflowType"]
+    )
+
+
+@pytest.mark.integration_ci
+async def test_retry_before_execution_captures_terminal_prior_workspace(
+    tmp_path: Path,
+) -> None:
+    """Replay resolver PR 2189's retry checkpoint authority handoff."""
+
+    replay_id = "managed-checkpoint-retry-baseline"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / manifest["incidentWorkflowId"] / "repo"
+    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    (workspace / "resolver-result.txt").write_text(
+        "first execution requested durable gate continuation\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=workspace, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=MoonMind Test", "-c",
+            "user.email=test@example.invalid", "commit", "-qm",
+            "checkpoint replay",
+        ],
+        cwd=workspace,
+        check=True,
+    )
+
+    now = datetime.now(timezone.utc)
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=manifest["incidentWorkflowId"],
+            workflowId=f"{manifest['incidentWorkflowId']}:agent:node-1",
+            ownerRunId=manifest["incidentRunId"],
+            logicalStepId=manifest["logicalStepId"],
+            executionOrdinal=manifest["completedExecutionOrdinal"],
+            agentId=manifest["runtime"],
+            runtimeId=manifest["runtime"],
+            status="completed",
+            startedAt=now,
+            finishedAt=now,
+            workspacePath=str(workspace),
+            sessionId=f"sess:{manifest['incidentWorkflowId']}:codex_cli",
+            sessionEpoch=1,
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+        artifact_service=object(),
+        client_adapter=object(),
+    )
+
+    async def put(payload: bytes, _content_type: str, kind: str) -> str:
+        return f"artifact://{kind}/{hashlib.sha256(payload).hexdigest()}"
+
+    activities._put_managed_checkpoint_artifact = put
+    capabilities = resolve_runtime_execution_capabilities(manifest["runtime"])
+    capture = await activities.agent_runtime_capture_workspace_checkpoint(
+        {
+            "schemaVersion": "v1",
+            "identity": {
+                "workflowId": manifest["incidentWorkflowId"],
+                "runId": manifest["incidentRunId"],
+                "logicalStepId": manifest["logicalStepId"],
+                "executionOrdinal": manifest["retryExecutionOrdinal"],
+            },
+            "boundary": manifest["checkpointBoundary"],
+            "checkpointKind": "worktree_archive",
+            "workspaceLocator": {
+                "kind": "managed_runtime",
+                "runtimeId": manifest["runtime"],
+                "agentRunId": manifest["incidentWorkflowId"],
+                "relativePath": "repo",
+            },
+            "expectedRuntimeId": manifest["runtime"],
+            "capabilitySetVersion": capabilities.capability_set_version,
+            "capabilityDigest": capabilities.capability_digest,
+            "artifactNamespace": "step-checkpoints/node-1",
+            "idempotencyKey": (
+                f"{manifest['incidentWorkflowId']}:{manifest['incidentRunId']}:"
+                f"{manifest['logicalStepId']}:execution:"
+                f"{manifest['retryExecutionOrdinal']}:checkpoint:"
+                "before_execution:capture"
+            ),
+            "capturePolicy": {
+                "includeTracked": True,
+                "includeUntracked": True,
+                "includeIgnored": False,
+                "redactionProfile": "managed-code-workspace-v1",
+            },
+        }
+    )
+
+    assert capture["status"] == expected["checkpointStatus"]
+    assert capture["workspace"]["kind"] == expected["checkpointKind"]
+
+
 async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

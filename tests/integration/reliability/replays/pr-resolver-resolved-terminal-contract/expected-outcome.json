@@ -1,0 +1,7 @@
+{
+  "terminalContractId": "pr_resolver_terminal.v1",
+  "terminalContractPath": "var/pr_resolver/result.json",
+  "terminalContractSchemaVersion": "moonmind.pr-resolver-result.v1",
+  "continuationOwnerWorkflowType": "MoonMind.MergeAutomation",
+  "continuationAction": "reenter_gate"
+}
