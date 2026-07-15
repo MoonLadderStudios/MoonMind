@@ -11129,7 +11129,10 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"publishMode 'pr' requested; native PR creation failed: {e}"
                         ) from e
-        if workflow.patched(RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH):
+        if (
+            workflow.patched(RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH)
+            and not self._publish_context.get("publicationBlockedBy")
+        ):
             pull_request_url = pull_request_url or self._coerce_text(
                 self._publish_context.get("pullRequestUrl"),
                 max_chars=500,

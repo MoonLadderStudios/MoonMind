@@ -417,10 +417,16 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
     [True, False],
     ids=["new-history", "legacy-replay"],
 )
+@pytest.mark.parametrize(
+    "publication_blocked",
+    [False, True],
+    ids=["publication-allowed", "publication-blocked"],
+)
 async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
     durable_handoff_patch_enabled: bool,
+    publication_blocked: bool,
 ) -> None:
     pull_request_url = "https://github.com/org/repo/pull/3343"
     merge_gate_urls: list[str | None] = []
@@ -434,6 +440,10 @@ async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
             "noCommitPublish": {"status": "no_commits"},
         }
     )
+    if publication_blocked:
+        mock_run_workflow._publish_context["publicationBlockedBy"] = (
+            "moonspec_verify"
+        )
 
     async def fake_execute_activity(
         activity_type: str,
@@ -511,8 +521,12 @@ async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
         plan_ref="plan-1",
     )
 
-    expected_url = pull_request_url if durable_handoff_patch_enabled else None
-    expected_status = "published" if durable_handoff_patch_enabled else "not_required"
+    expected_url = (
+        pull_request_url
+        if durable_handoff_patch_enabled and not publication_blocked
+        else None
+    )
+    expected_status = "published" if expected_url else "not_required"
     assert merge_gate_urls == [expected_url]
     assert mock_run_workflow._pull_request_url == expected_url
     assert mock_run_workflow._publish_status == expected_status
