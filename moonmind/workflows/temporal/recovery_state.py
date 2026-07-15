@@ -174,10 +174,52 @@ def restoration_outcome(state: Mapping[str, Any]) -> dict[str, Any] | None:
     return {key: value for key, value in outcome.items() if value is not None}
 
 
+def recovery_continuation(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the frozen phase's permitted semantic work.
+
+    Keeping this decision independent from scheduler state prevents a restored
+    checkpoint from implicitly becoming permission to rerun the failed agent.
+    """
+    phase = str(state.get("resumePhase") or "").strip()
+    decisions = {
+        "rerun_failed_step": {
+            "semanticWork": "business_step",
+            "createStepExecution": True,
+            "continueAfterRestore": True,
+        },
+        "continue_to_gate": {
+            "semanticWork": "gate",
+            "createStepExecution": False,
+            "continueAfterRestore": True,
+        },
+        "continue_after_gate": {
+            "semanticWork": "downstream",
+            "createStepExecution": False,
+            "continueAfterRestore": True,
+        },
+        "resume_publication": {
+            "semanticWork": "publication",
+            "createStepExecution": False,
+            "continueAfterRestore": True,
+        },
+        "retry_restoration": {
+            "semanticWork": "restoration",
+            "createStepExecution": False,
+            "continueAfterRestore": False,
+        },
+    }
+    try:
+        return {"resumePhase": phase, **decisions[phase]}
+    except KeyError as exc:
+        raise RecoveryContractError(
+            CHECKPOINT_BOUNDARY_INCOMPATIBLE, "unknown recovery continuation phase"
+        ) from exc
+
+
 __all__ = [
     "BOUNDARY_PHASES", "CHECKPOINT_BOUNDARY_INCOMPATIBLE",
     "CHECKPOINT_CAPABILITY_INVALID", "CHECKPOINT_RESTORATION_NOT_READY",
     "CHECKPOINT_SIDE_EFFECT_UNSAFE", "CheckpointRecoveryContract",
     "RECOVERY_STATES", "RecoveryContractError", "deterministic_recovery_identity",
-    "restoration_outcome", "validate_restore_result",
+    "recovery_continuation", "restoration_outcome", "validate_restore_result",
 ]

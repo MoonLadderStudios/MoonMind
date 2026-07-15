@@ -11,6 +11,7 @@ from moonmind.workflows.temporal.recovery_state import (
     CheckpointRecoveryContract,
     RecoveryContractError,
     deterministic_recovery_identity,
+    recovery_continuation,
     restoration_outcome,
     validate_restore_result,
 )
@@ -144,3 +145,31 @@ def test_restoration_outcome_is_compact_and_independent() -> None:
     assert outcome["status"] == "succeeded"
     assert outcome["retryCount"] == 0
     assert "sourceWorkspaceLocator" not in outcome
+
+
+@pytest.mark.parametrize(
+    ("phase", "semantic_work", "creates_execution", "continues"),
+    [
+        ("rerun_failed_step", "business_step", True, True),
+        ("continue_to_gate", "gate", False, True),
+        ("continue_after_gate", "downstream", False, True),
+        ("resume_publication", "publication", False, True),
+        ("retry_restoration", "restoration", False, False),
+    ],
+)
+def test_recovery_continuation_never_conflates_restore_with_business_execution(
+    phase: str, semantic_work: str, creates_execution: bool, continues: bool
+) -> None:
+    decision = recovery_continuation({"resumePhase": phase})
+    assert decision == {
+        "resumePhase": phase,
+        "semanticWork": semantic_work,
+        "createStepExecution": creates_execution,
+        "continueAfterRestore": continues,
+    }
+
+
+def test_recovery_continuation_fails_closed_for_unknown_phase() -> None:
+    with pytest.raises(RecoveryContractError) as exc:
+        recovery_continuation({"resumePhase": "rerun_everything"})
+    assert exc.value.code == CHECKPOINT_BOUNDARY_INCOMPATIBLE

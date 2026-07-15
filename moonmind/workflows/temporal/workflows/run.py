@@ -168,6 +168,7 @@ from moonmind.workflows.temporal.recovery_state import (
     CheckpointRecoveryContract,
     deterministic_recovery_identity,
     restoration_outcome,
+    recovery_continuation,
     validate_restore_result,
 )
 from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
@@ -3178,6 +3179,7 @@ class MoonMindRunWorkflow:
                 "capabilitySetVersion": contract.capabilities.capability_set_version,
                 "capabilityDigest": contract.capabilities.capability_digest,
                 "restoreActivity": contract.restore_activity,
+                "publicationIdempotencyKey": contract.publication_idempotency_key,
                 "restorationStatus": "pending",
                 "restorationRetryCount": 0,
                 "preservedStepRefs": [
@@ -3412,6 +3414,7 @@ class MoonMindRunWorkflow:
         state.update({
             "status": "recovery_restoring_workspace",
             "restorationStatus": "running",
+            "restorationRetryCount": int(state.get("restorationRetryCount") or 0) + 1,
         })
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
         workspace = dict(self._recovery_workspace)
@@ -9425,6 +9428,15 @@ class MoonMindRunWorkflow:
                                 node_id == self._recovery_failed_step_id
                                 and self._checkpoint_recovery_state is not None
                             ):
+                                continuation = recovery_continuation(
+                                    self._checkpoint_recovery_state
+                                )
+                                if continuation["semanticWork"] != "business_step":
+                                    raise ValueError(
+                                        "CHECKPOINT_BOUNDARY_INCOMPATIBLE: resume phase "
+                                        f"{continuation['resumePhase']} does not authorize "
+                                        "a business AgentRun"
+                                    )
                                 locator = self._checkpoint_recovery_state.get(
                                     "destinationWorkspaceLocator"
                                 )
@@ -18221,6 +18233,10 @@ class MoonMindRunWorkflow:
                 projection[key] = str(value)[:200]
             else:
                 projection[key] = value
+        if self._checkpoint_recovery_state is not None:
+            outcome = restoration_outcome(self._checkpoint_recovery_state)
+            if outcome is not None:
+                projection["recoveryRestoration"] = outcome
         return projection
 
     def _incident_workspace_changes(self) -> list[dict[str, Any]]:
@@ -18261,6 +18277,12 @@ class MoonMindRunWorkflow:
                 refs["resiliencePolicyEnvelope"] = envelope_ref.strip()
         if self._logs_ref:
             refs["logs"] = self._logs_ref
+        if self._checkpoint_recovery_state is not None:
+            evidence_ref = self._checkpoint_recovery_state.get(
+                "restorationEvidenceRef"
+            )
+            if isinstance(evidence_ref, str) and evidence_ref.strip():
+                refs["restorationEvidence"] = evidence_ref.strip()
         if self._plan_ref:
             refs["plan"] = self._plan_ref
         if self._input_ref:
