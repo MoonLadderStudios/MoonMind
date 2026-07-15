@@ -49,9 +49,17 @@ class OmnigentOAuthHostRuntime:
         workspace_root: Path | None = None,
     ) -> None:
         self._client = client
-        self._image = image or os.getenv(
-            "OMNIGENT_HOST_IMAGE", "ghcr.io/omnigent-ai/omnigent-host:latest"
-        )
+        if image:
+            self._image = image
+        else:
+            base_image = os.getenv(
+                "OMNIGENT_HOST_IMAGE", "ghcr.io/omnigent-ai/omnigent-host"
+            )
+            if "@" in base_image or ":" in base_image.rsplit("/", 1)[-1]:
+                self._image = base_image
+            else:
+                tag = os.getenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
+                self._image = f"{base_image}:{tag}"
         self._network = network or os.getenv(
             "OMNIGENT_HOST_NETWORK", "moonmind_local-network"
         )
