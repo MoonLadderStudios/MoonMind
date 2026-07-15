@@ -73,12 +73,13 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
     assert "integration-ci" in required_job["needs"]
 
 
-def test_required_integration_job_checks_out_moonspec_submodule() -> None:
+def test_required_integration_job_uses_submodule_free_checkout() -> None:
     workflow = _load_workflow()
     checkout = workflow["jobs"]["integration-ci"]["steps"][0]
 
     assert checkout["uses"].startswith("actions/checkout@")
-    assert checkout["with"]["submodules"] == "recursive"
+    assert "submodules" not in checkout.get("with", {})
+    assert int(checkout["with"]["fetch-depth"]) == 1
 
 
 def test_required_integration_job_uploads_failure_diagnostics() -> None:
@@ -107,13 +108,22 @@ def test_required_integration_job_uploads_failure_diagnostics() -> None:
     )
 
 
-def test_ci_required_enforces_workflow_display_name_guard() -> None:
+def test_preflight_policy_enforces_workflow_display_name_guard() -> None:
     workflow = _load_workflow()
-    run_scripts = [
+
+    preflight_scripts = [
+        step.get("run", "") for step in workflow["jobs"]["preflight-policy"]["steps"]
+    ]
+    assert any(
+        "tools/check_github_workflow_names.py" in run for run in preflight_scripts
+    )
+
+    ci_required_scripts = [
         step.get("run", "") for step in workflow["jobs"]["ci-required"]["steps"]
     ]
-
-    assert any("tools/check_github_workflow_names.py" in run for run in run_scripts)
+    assert not any(
+        "tools/check_github_workflow_names.py" in run for run in ci_required_scripts
+    )
 
 
 def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> None:
@@ -304,10 +314,16 @@ def test_reliability_job_runs_the_canonical_journey_suite() -> None:
     assert "tests/integration/reliability/replays" in diagnostics
 
 
-def test_required_unit_workflow_runs_status_token_audit() -> None:
-    command = _run_command("ci-required", "Audit status token domains")
+def test_preflight_policy_runs_status_token_audit() -> None:
+    command = _run_command("preflight-policy", "Audit status tokens")
 
     assert "tools/audit_status_tokens.py --fail-on-unknown" in command
+
+    ci_required_scripts = "\n".join(
+        step.get("run", "")
+        for step in _load_workflow()["jobs"]["ci-required"]["steps"]
+    )
+    assert "audit_status_tokens.py" not in ci_required_scripts
 
 
 def test_required_unit_workflow_runs_for_merge_queue_candidates() -> None:
@@ -317,9 +333,175 @@ def test_required_unit_workflow_runs_for_merge_queue_candidates() -> None:
     assert triggers.get("merge_group", {}).get("types") == ["checks_requested"]
 
 
-def test_required_unit_workflow_checks_out_moonspec_submodule() -> None:
+def test_ci_required_is_pure_result_aggregator() -> None:
     workflow = _load_workflow()
-    checkout = workflow["jobs"]["ci-required"]["steps"][0]
+    job = workflow["jobs"]["ci-required"]
 
+    assert job["if"] == "always()"
+    assert int(job["timeout-minutes"]) <= 10
+
+    # No checkout, no action-based setup, no submodules of any kind.
+    for step in job["steps"]:
+        assert "uses" not in step, f"ci-required must not use actions: {step.get('uses')}"
+
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "actions/checkout" not in scripts
+    assert "submodule" not in scripts
+    assert "tools/" not in scripts
+    assert "pytest" not in scripts
+
+    for dependency in (
+        "select-test-suites",
+        "preflight-policy",
+        "moonspec-projection",
+        "unit-fast",
+        "unit-slow",
+        "api-component",
+        "temporal-boundary",
+        "integration-ci",
+        "reliability-journey-checkpoint-resume",
+        "verify-test-shard-ownership",
+    ):
+        assert dependency in job["needs"]
+
+
+def test_ci_required_reports_all_failures_before_exiting() -> None:
+    script = "\n".join(
+        step.get("run", "")
+        for step in _load_workflow()["jobs"]["ci-required"]["steps"]
+    )
+
+    # Accumulates failures instead of exiting on the first failing dependency.
+    assert "failures=$((failures + 1))" in script
+    assert 'if [[ "$failures" -gt 0 ]]; then' in script
+    assert "set -uo pipefail" in script
+    # Emits an annotation per failure rather than a single early exit.
+    assert script.count("::error::") >= 3
+
+    for name in (
+        "select-test-suites",
+        "preflight-policy",
+        "moonspec-projection",
+        "unit-fast",
+        "unit-slow",
+        "api-component",
+        "temporal-boundary",
+        "integration-ci",
+        "reliability-journey-checkpoint-resume",
+        "verify-test-shard-ownership",
+    ):
+        assert name in script
+
+
+def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["preflight-policy"]
+
+    # Starts immediately, in parallel with backend test selection.
+    assert "needs" not in job
+
+    checkout = job["steps"][0]
     assert checkout["uses"].startswith("actions/checkout@")
-    assert checkout["with"]["submodules"] == "recursive"
+    assert int(checkout["with"]["fetch-depth"]) == 1
+    assert "submodules" not in checkout.get("with", {})
+
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "./tools/check_terminology.sh" in scripts
+    assert "tools/verify_workflow_terminology.py --mode all" in scripts
+    assert "tools/check_removed_capability_semantics.py" in scripts
+    assert "tools/status_domain_audit.py" in scripts
+    assert "tools/audit_status_tokens.py --fail-on-unknown" in scripts
+    assert "tools/check_github_workflow_names.py" in scripts
+    assert (
+        "tools/validate_agent_session_deployment_safety.py --changed-files-file"
+        in scripts
+    )
+
+
+def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["unit-fast"]
+
+    checkout = job["steps"][0]
+    assert "submodules" not in checkout.get("with", {})
+
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "check_terminology.sh" not in scripts
+    assert "verify_workflow_terminology.py" not in scripts
+    assert "validate_agent_session_deployment_safety.py" not in scripts
+
+
+def test_selector_uses_shallow_submodule_free_checkout_and_shared_helper() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["select-test-suites"]
+
+    checkout = job["steps"][0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert int(checkout["with"]["fetch-depth"]) == 1
+    assert "submodules" not in checkout.get("with", {})
+
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "tools/ci/compute_changed_files.sh" in scripts
+    assert "tools/select_test_suites.py" in scripts
+
+
+def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> None:
+    job = _load_workflow()["jobs"]["preflight-policy"]
+    steps = {step["name"]: step for step in job["steps"]}
+
+    compute = steps["Compute changed files"]
+    assert compute["id"] == "changed-files"
+    assert '>> "$GITHUB_OUTPUT"' in compute["run"]
+    assert steps["Validate AgentSession deployment safety"]["if"] == (
+        "steps.changed-files.outputs.resolution == 'known'"
+    )
+    assert steps["Block deployment safety validation on an unknown diff"]["if"] == (
+        "steps.changed-files.outputs.resolution != 'known'"
+    )
+
+
+def test_unit_fast_initializes_moonspec_test_fixtures() -> None:
+    job = _load_workflow()["jobs"]["unit-fast"]
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "git submodule update --init --depth 1 -- moonspec" in scripts
+
+
+def test_moonspec_projection_initializes_only_moonspec_submodule() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["moonspec-projection"]
+
+    checkout = job["steps"][0]
+    assert "submodules" not in checkout.get("with", {})
+
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "git submodule update --init --depth 1 -- moonspec" in scripts
+    # Does not initialize Open WebUI or Omnigent.
+    assert "open-webui" not in scripts
+    assert "omnigent" not in scripts
+
+
+def test_no_backend_ci_job_uses_recursive_submodules() -> None:
+    assert "submodules: recursive" not in WORKFLOW_PATH.read_text(encoding="utf-8")
+
+
+def test_shared_changed_file_helper_covers_supported_events() -> None:
+    helper = REPO_ROOT / "tools" / "ci" / "compute_changed_files.sh"
+    assert helper.exists()
+
+    text = helper.read_text(encoding="utf-8")
+    assert "ensure_commit_available" in text
+    assert "pull_request" in text
+    assert "merge_group" in text
+    assert "push" in text
+    assert "resolution=unknown" in text
+    assert "resolution=known" in text
+
+
+def test_generated_contract_detector_uses_shared_helper() -> None:
+    command = _run_command(
+        "detect-openapi-contract-impact", "Detect OpenAPI-affecting changes"
+    )
+
+    assert "tools/ci/compute_changed_files.sh" in command
+    assert "tools/check_openapi_affecting_changes.sh" in command
+    assert "resolution=unknown" in command

@@ -40,24 +40,13 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-          submodules: recursive
+          fetch-depth: 1
 
       - name: Compute changed files
         shell: bash
         run: |
           set -euo pipefail
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base_sha="${{ github.event.pull_request.base.sha }}"
-            head_sha="${{ github.event.pull_request.head.sha }}"
-            git diff --name-only "$base_sha...$head_sha" > /tmp/changed-files.txt
-          elif [[ "${{ github.event_name }}" == "push" && -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > /tmp/changed-files.txt
-          else
-            : > /tmp/changed-files.txt
-          fi
-
+          bash tools/ci/compute_changed_files.sh /tmp/changed-files.txt
           echo "Changed files:"
           sed 's/^/  - /' /tmp/changed-files.txt || true
 
@@ -71,6 +60,100 @@ jobs:
           set -euo pipefail
           python3 tools/select_test_suites.py < /tmp/changed-files.txt
 
+  preflight-policy:
+    # Static repository policy checks run in parallel with test selection so they
+    # are off the serial tail of required CI (MoonLadderStudios/MoonMind#3326).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Compute changed files
+        id: changed-files
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/compute_changed_files.sh /tmp/changed-files.txt | tee /tmp/changed-files-resolution.txt
+          cat /tmp/changed-files-resolution.txt >> "$GITHUB_OUTPUT"
+          echo "Changed files:"
+          sed 's/^/  - /' /tmp/changed-files.txt || true
+      - name: Check docs terminology guardrails
+        run: |
+          set -euo pipefail
+          ./tools/check_terminology.sh
+      - name: Verify workflow terminology guardrails
+        run: |
+          set -euo pipefail
+          python3 tools/verify_workflow_terminology.py --mode all
+      - name: Check removed capability semantics
+        run: |
+          set -euo pipefail
+          python3 tools/check_removed_capability_semantics.py
+      - name: Audit status token domains
+        run: |
+          set -euo pipefail
+          python3 tools/status_domain_audit.py
+      - name: Audit status tokens
+        run: |
+          set -euo pipefail
+          python3 tools/audit_status_tokens.py --fail-on-unknown > /tmp/status-token-audit.csv
+      - name: Reject task-specific GitHub workflow names
+        run: |
+          set -euo pipefail
+          python3 tools/check_github_workflow_names.py
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install runtime dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .
+      - name: Validate AgentSession deployment safety
+        if: steps.changed-files.outputs.resolution == 'known'
+        run: |
+          set -euo pipefail
+          ./tools/validate_agent_session_deployment_safety.py --changed-files-file /tmp/changed-files.txt
+      - name: Block deployment safety validation on an unknown diff
+        if: steps.changed-files.outputs.resolution != 'known'
+        run: |
+          echo "Unable to resolve the exact changed-file set; deployment safety cannot be validated." >&2
+          exit 1
+      - name: Summarize policy checks
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Repository policy checks"
+            echo ""
+            echo "All static repository policy checks passed:"
+            echo ""
+            echo "- docs terminology guardrails"
+            echo "- workflow terminology guardrails"
+            echo "- removed capability semantics"
+            echo "- status token domains"
+            echo "- status token audit (\`--fail-on-unknown\`)"
+            echo "- GitHub workflow display-name guard"
+            echo "- AgentSession deployment safety (exact changed files)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload status token audit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: status-token-audit
+          path: /tmp/status-token-audit.csv
+          if-no-files-found: ignore
+
   unit-fast:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.unit_fast == 'true'
@@ -82,12 +165,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-          submodules: recursive
-      - name: Check docs terminology guardrails
-        run: |
-          set -euo pipefail
-          ./tools/check_terminology.sh
+          fetch-depth: 1
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -108,6 +186,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
+      - name: Initialize MoonSpec test fixtures
+        run: git submodule update --init --depth 1 -- moonspec
       - name: Run selected unit suite
         run: |
           set -euo pipefail
@@ -118,20 +198,6 @@ jobs:
             -m "unit_fast and not provider_verification and not requires_credentials" \
             -q -n auto --dist loadfile --durations=25 \
             --junitxml=artifacts/pytest-unit-fast.xml
-      - name: Verify workflow terminology guardrails
-        run: |
-          set -euo pipefail
-          python tools/verify_workflow_terminology.py --mode all
-      - name: Validate AgentSession deployment safety
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.pull_request.base.sha }}"
-          elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-            ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.before }}"
-          else
-            ./tools/validate_agent_session_deployment_safety.py --base-ref "HEAD~1"
-          fi
 
   moonspec-projection:
     runs-on: ubuntu-latest
@@ -143,7 +209,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
+      - name: Initialize MoonSpec submodule
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 -- moonspec
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -199,7 +268,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -261,7 +329,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
       - name: Run hermetic integration CI suite
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
@@ -316,7 +383,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-          submodules: recursive
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -390,8 +456,13 @@ jobs:
         run: python tools/verify_test_shard_ownership.py
 
   ci-required:
+    # Pure, no-checkout result aggregator for required backend CI
+    # (MoonLadderStudios/MoonMind#3326). It performs no repository operations:
+    # no checkout, no submodules, no Python/Node setup, no repository command.
+    # It evaluates every dependency and reports every failure before exiting.
     needs:
       - select-test-suites
+      - preflight-policy
       - moonspec-projection
       - unit-fast
       - unit-slow
@@ -402,81 +473,82 @@ jobs:
       - verify-test-shard-ownership
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1
-          submodules: recursive
-      - name: Check docs terminology guardrails
-        run: |
-          set -euo pipefail
-          ./tools/check_terminology.sh
-      - name: Audit status token domains
-        run: |
-          set -euo pipefail
-          python3 tools/audit_status_tokens.py --fail-on-unknown > /tmp/status-token-audit.csv
-      - name: Reject task-specific GitHub workflow names
-        run: |
-          set -euo pipefail
-          python3 tools/check_github_workflow_names.py
-      - name: Verify selected suites passed
+      - name: Aggregate required backend results
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
-          if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
-            echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
-            exit 1
-          fi
+          failures=0
 
-          if [[ "${{ needs.moonspec-projection.result }}" != "success" ]]; then
-            echo "::error::moonspec-projection ended with result=${{ needs.moonspec-projection.result }}"
-            exit 1
-          fi
+          {
+            echo "## Required backend CI"
+            echo ""
+            echo "| Check | Selected | Result |"
+            echo "|---|---:|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          check_result() {
-            local selected="$1"
-            local result="$2"
-            local name="$3"
+          record() {
+            local name="$1" selected="$2" result="$3"
+            echo "| \`$name\` | $selected | \`$result\` |" >> "$GITHUB_STEP_SUMMARY"
+          }
 
-            if [[ "$selected" == "true" && "$result" != "success" ]]; then
-              echo "::error::$name was selected but ended with result=$result"
-              exit 1
+          require_always() {
+            local name="$1" result="$2"
+            record "$name" "always" "$result"
+            if [[ "$result" != "success" ]]; then
+              echo "::error::$name is always required but ended with result=$result"
+              failures=$((failures + 1))
             fi
           }
 
-          check_result "${{ needs.select-test-suites.outputs.unit_fast }}" \
-                       "${{ needs.unit-fast.result }}" \
-                       "unit-fast"
+          require_selected() {
+            local name="$1" selected="$2" result="$3"
+            record "$name" "$selected" "$result"
+            if [[ "$selected" == "true" ]]; then
+              if [[ "$result" != "success" ]]; then
+                echo "::error::$name was selected but ended with result=$result"
+                failures=$((failures + 1))
+              fi
+            elif [[ "$result" != "skipped" ]]; then
+              echo "::error::$name was not selected but ended with result=$result (expected skipped)"
+              failures=$((failures + 1))
+            fi
+          }
 
-          check_result "${{ needs.select-test-suites.outputs.unit_slow }}" \
-                       "${{ needs.unit-slow.result }}" \
-                       "unit-slow"
+          require_always "select-test-suites" "${{ needs.select-test-suites.result }}"
+          require_always "preflight-policy" "${{ needs.preflight-policy.result }}"
+          require_always "moonspec-projection" "${{ needs.moonspec-projection.result }}"
 
-          check_result "${{ needs.select-test-suites.outputs.api_component }}" \
-                       "${{ needs.api-component.result }}" \
-                       "api-component"
+          require_selected "unit-fast" \
+            "${{ needs.select-test-suites.outputs.unit_fast }}" \
+            "${{ needs.unit-fast.result }}"
+          require_selected "unit-slow" \
+            "${{ needs.select-test-suites.outputs.unit_slow }}" \
+            "${{ needs.unit-slow.result }}"
+          require_selected "api-component" \
+            "${{ needs.select-test-suites.outputs.api_component }}" \
+            "${{ needs.api-component.result }}"
+          require_selected "temporal-boundary" \
+            "${{ needs.select-test-suites.outputs.temporal_boundary }}" \
+            "${{ needs.temporal-boundary.result }}"
+          require_selected "integration-ci" \
+            "${{ needs.select-test-suites.outputs.integration_ci }}" \
+            "${{ needs.integration-ci.result }}"
+          require_selected "reliability-journey-checkpoint-resume" \
+            "${{ needs.select-test-suites.outputs.reliability_journey }}" \
+            "${{ needs.reliability-journey-checkpoint-resume.result }}"
+          require_selected "verify-test-shard-ownership" \
+            "${{ needs.select-test-suites.outputs.full_backend }}" \
+            "${{ needs.verify-test-shard-ownership.result }}"
 
-          check_result "${{ needs.select-test-suites.outputs.temporal_boundary }}" \
-                       "${{ needs.temporal-boundary.result }}" \
-                       "temporal-boundary"
+          if [[ "$failures" -gt 0 ]]; then
+            echo "::error::$failures required backend check(s) did not pass; see annotations above."
+            exit 1
+          fi
 
-          check_result "${{ needs.select-test-suites.outputs.integration_ci }}" \
-                       "${{ needs.integration-ci.result }}" \
-                       "integration-ci"
-
-          check_result "${{ needs.select-test-suites.outputs.reliability_journey }}" \
-                       "${{ needs.reliability-journey-checkpoint-resume.result }}" \
-                       "reliability-journey-checkpoint-resume"
-
-          check_result "${{ needs.select-test-suites.outputs.full_backend }}" \
-                       "${{ needs.verify-test-shard-ownership.result }}" \
-                       "verify-test-shard-ownership"
-
-          echo "All selected backend suites passed."
+          echo "All required backend checks passed."
 
   frontend-static:
     needs: select-test-suites
@@ -601,34 +673,17 @@ jobs:
       run: |
         set -euo pipefail
 
-        ensure_commit_available() {
-          local sha="$1"
-
-          if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
-            return 0
-          fi
-
-          git fetch --no-tags --depth=1 origin "$sha"
-        }
-
-        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          base_sha="${{ github.event.pull_request.base.sha }}"
-          head_sha="${{ github.event.pull_request.head.sha }}"
-          ensure_commit_available "$base_sha"
-          ensure_commit_available "$head_sha"
-          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
-        elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
-          base_sha="${{ github.event.before }}"
-          head_sha="${{ github.sha }}"
-          ensure_commit_available "$base_sha"
-          ensure_commit_available "$head_sha"
-          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
-        else
+        # Reuse the shared event classifier so the detector, the selector, and
+        # deployment-safety validation share one changed-file resolution path
+        # (MoonLadderStudios/MoonMind#3326). An unknown change set stays
+        # conservative and runs the generated-contract check.
+        resolution="$(bash tools/ci/compute_changed_files.sh /tmp/contract-changed-files.txt)"
+        if [[ "$resolution" == "resolution=unknown" ]]; then
           echo "run_check=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        if bash tools/check_openapi_affecting_changes.sh <<< "$changed_files"; then
+        if bash tools/check_openapi_affecting_changes.sh < /tmp/contract-changed-files.txt; then
           echo "run_check=true" >> "$GITHUB_OUTPUT"
         else
           echo "run_check=false" >> "$GITHUB_OUTPUT"

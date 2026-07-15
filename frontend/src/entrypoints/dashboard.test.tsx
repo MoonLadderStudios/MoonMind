@@ -659,8 +659,10 @@ describe('Dashboard shared entry', () => {
 
     onChange?.({ matches: false } as MediaQueryListEvent);
 
-    await waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
-    expect(document.body.style.overflow).toBe('');
+    await waitFor(() => {
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      expect(document.body.style.overflow).toBe('');
+    });
     expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
   });
 
