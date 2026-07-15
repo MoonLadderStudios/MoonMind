@@ -18,6 +18,7 @@ import asyncio
 from copy import deepcopy
 import json
 import logging
+import mimetypes
 import os
 import shutil
 from contextlib import AsyncExitStack
@@ -2302,7 +2303,7 @@ def _container_job_evidence_content_type(name: str) -> str:
         return "application/json"
     if lowered.endswith((".tar.gz", ".tgz")):
         return "application/gzip"
-    return "text/plain"
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
 def _container_job_evidence_publisher(artifact_service: TemporalArtifactService):

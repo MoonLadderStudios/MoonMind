@@ -209,11 +209,10 @@ _PULL_DIAGNOSTICS_MAX_BYTES = 8192
 # the monotonic sequence carried in the resumable cursor.
 _MAX_LIVE_LOG_EVENTS = 5000
 _LIVE_LOG_ENTRY_MAX_CHARS = 8192
-_LIVE_LOG_SPOOL_DIRNAME = ".mm-container-job-logs"
 _LIVE_EVENTS_JOURNAL_NAME = "observability.events.jsonl"
 # ``docker logs --timestamps`` prefixes every line with an RFC3339Nano instant.
 _DOCKER_TS_LINE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s(?P<text>.*)$"
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))(?:\s(?P<text>.*))?$"
 )
 # File types accepted by declared-output collection. Anything else (device,
 # fifo, socket, symlink target escaping the workspace) is rejected, not copied.
@@ -262,18 +261,25 @@ def _parse_container_timing(
     return started, finished, duration_ms
 
 
-def _parse_log_cursor(cursor: str | None) -> tuple[datetime | None, int]:
-    """Decode a resumable live-log cursor into ``(since_datetime, sequence)``."""
+def _parse_log_cursor(cursor: str | None) -> tuple[datetime | None, int, int]:
+    """Decode ``timestamp|sequence|timestamp-offset`` (legacy cursors allowed)."""
 
     if not cursor:
-        return None, 0
-    raw_ts, _, raw_seq = str(cursor).rpartition("|")
+        return None, 0, 0
+    parts = str(cursor).split("|")
+    raw_ts = parts[0]
+    raw_seq = parts[1] if len(parts) > 1 else "0"
+    raw_offset = parts[2] if len(parts) > 2 else "0"
     since = _parse_rfc3339(raw_ts) if raw_ts else None
     try:
         sequence = max(0, int(raw_seq))
     except (TypeError, ValueError):
         sequence = 0
-    return since, sequence
+    try:
+        timestamp_offset = max(0, int(raw_offset))
+    except (TypeError, ValueError):
+        timestamp_offset = 0
+    return since, sequence, timestamp_offset
 
 
 class _OutputRejected(RuntimeError):
@@ -1022,11 +1028,13 @@ class DockerContainerJobBackend:
         if spool_dir is None:
             return request.log_cursor
         try:
-            since_dt, base_seq = _parse_log_cursor(request.log_cursor)
+            since_dt, base_seq, timestamp_offset = _parse_log_cursor(
+                request.log_cursor
+            )
             if base_seq >= self._live_log_max_events:
                 return request.log_cursor
             entries = await self._read_incremental_log_entries(
-                ref, since_dt, base_seq
+                ref, since_dt, base_seq, timestamp_offset
             )
             if not entries:
                 return request.log_cursor
@@ -1046,16 +1054,29 @@ class DockerContainerJobBackend:
                         else "stderr_chunk",
                     )
                 )
-            return f"{last.timestamp.isoformat()}|{last.sequence}"
+            prior_at_last = timestamp_offset if last.timestamp == since_dt else 0
+            emitted_at_last = sum(
+                entry.timestamp == last.timestamp for entry in entries
+            )
+            return (
+                f"{last.timestamp.isoformat()}|{last.sequence}|"
+                f"{prior_at_last + emitted_at_last}"
+            )
         except Exception:
             return request.log_cursor
 
     async def _read_incremental_log_entries(
-        self, ref: str, since_dt: datetime | None, base_seq: int
+        self,
+        ref: str,
+        since_dt: datetime | None,
+        base_seq: int,
+        timestamp_offset: int = 0,
     ) -> list[ContainerJobLogEntry]:
         """Read and merge the new stdout/stderr delta as bounded log entries."""
 
-        args: list[str] = ["logs", "--timestamps"]
+        # Bound the daemon response itself; slicing after the subprocess exits
+        # still permits a noisy container to exhaust worker memory.
+        args: list[str] = ["logs", "--timestamps", "--tail", str(MAX_LOG_PAGE_ENTRIES)]
         if since_dt is not None:
             args.extend(("--since", since_dt.isoformat()))
         args.append(ref)
@@ -1063,6 +1084,7 @@ class DockerContainerJobBackend:
         # ``docker logs`` writes container stdout/stderr to the corresponding
         # streams for a non-TTY container, so they can be attributed exactly.
         merged: list[tuple[datetime, str, str]] = []
+        seen_at_cursor = 0
         for stream, blob in (("stdout", stdout), ("stderr", stderr)):
             for line in blob.decode("utf-8", errors="replace").splitlines():
                 match = _DOCKER_TS_LINE.match(line)
@@ -1071,9 +1093,13 @@ class DockerContainerJobBackend:
                 ts = _parse_rfc3339(match.group("ts"))
                 if ts is None:
                     continue
-                if since_dt is not None and ts <= since_dt:
+                if since_dt is not None and ts < since_dt:
                     continue
-                text = redact_sensitive_text(match.group("text"))[
+                if since_dt is not None and ts == since_dt:
+                    seen_at_cursor += 1
+                    if seen_at_cursor <= timestamp_offset:
+                        continue
+                text = redact_sensitive_text(match.group("text") or "")[
                     :_LIVE_LOG_ENTRY_MAX_CHARS
                 ]
                 merged.append((ts, stream, text))
@@ -1336,9 +1362,12 @@ class DockerContainerJobBackend:
                     )
                 )
                 continue
-            name = f"{request.job_id}-output-{entry['name']}"
+            # Preserve the source suffix so the artifact publisher can assign
+            # the media type already detected during collection.
+            suffixes = "".join(Path(entry["relative_path"]).suffixes)
+            name = f"{request.job_id}-output-{entry['name']}{suffixes}"
             if entry["media_type"] == "application/gzip":
-                name += ".tar.gz"
+                name = name.removesuffix(suffixes) + ".tar.gz"
             ref = await self._publish(request, name, payload)
             manifest.append(
                 ContainerJobArtifact(
@@ -1442,9 +1471,12 @@ class DockerContainerJobBackend:
             data = spool_path.read_bytes()
         except OSError:
             return None
-        return await self._publish(
+        ref = await self._publish(
             request, f"{request.job_id}-{_LIVE_EVENTS_JOURNAL_NAME}", data
         )
+        # The durable journal is authoritative once publication succeeds.
+        shutil.rmtree(spool_dir, ignore_errors=True)
+        return ref
 
     async def project_status(self, request: ContainerJobActivityRequest):
         if self._write_projection is None:

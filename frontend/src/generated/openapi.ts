@@ -5481,7 +5481,7 @@ export interface components {
          * ContainerJobState
          * @enum {string}
          */
-        ContainerJobState: "queued" | "preparing" | "acquiring_image" | "running" | "canceling" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
+        ContainerJobState: "queued" | "preparing" | "resolving_workspace" | "workspace_not_visible" | "acquiring_image" | "starting" | "running" | "canceling" | "publishing_artifacts" | "cleaning_up" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
         /** ContainerJobStatus */
         ContainerJobStatus: {
             /**

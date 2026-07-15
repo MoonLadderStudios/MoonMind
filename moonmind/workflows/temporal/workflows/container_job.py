@@ -251,7 +251,9 @@ class MoonMindContainerJobWorkflow:
         if published is None:
             publication = AuxiliaryOutcome(state="failed")
         else:
-            publication = AuxiliaryOutcome(state="succeeded")
+            publication = AuxiliaryOutcome(
+                state="succeeded", diagnosticsRef=published.diagnostics_ref
+            )
             logs_ref = published.logs_ref
             artifacts_ref = published.artifacts_ref
             events_ref = published.events_ref

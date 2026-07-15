@@ -18,6 +18,7 @@ from moonmind.config.container_backend_settings import (
     resolve_container_backend_settings,
 )
 from moonmind.schemas.container_job_models import (
+    MAX_LOG_PAGE_ENTRIES,
     ArtifactCollectionStatus,
     ContainerJobActivityRequest,
     ContainerJobArtifactPage,
@@ -432,7 +433,7 @@ async def test_observe_publishes_bounded_incremental_live_logs(tmp_path) -> None
 
     first = await backend.observe_container(request)
     assert first.running is True
-    assert first.log_cursor is not None and first.log_cursor.endswith("|3")
+    assert first.log_cursor is not None and first.log_cursor.split("|")[1] == "3"
 
     events = _spool_events(spool_root)
     assert [event["sequence"] for event in events] == [1, 2, 3]
@@ -449,12 +450,17 @@ async def test_observe_publishes_bounded_incremental_live_logs(tmp_path) -> None
     # A newer line advances the cursor and appends exactly one event.
     log_state["stdout"] += "2024-01-01T00:00:04.000000000Z again\n"
     third = await backend.observe_container(request)
-    assert third.log_cursor.endswith("|4")
+    assert third.log_cursor.split("|")[1] == "4"
     events = _spool_events(spool_root)
     assert len(events) == 4
     assert events[-1]["text"] == "again"
     # The incremental fetch used a resumable --since cursor, not a full re-read.
     assert any("--since" in call for call in calls)
+    assert all(
+        "--tail" in call and str(MAX_LOG_PAGE_ENTRIES) in call
+        for call in calls
+        if call and call[0] == "logs"
+    )
 
 
 @pytest.mark.asyncio
@@ -507,3 +513,4 @@ async def test_publish_evidence_persists_live_events_journal(tmp_path) -> None:
     assert result.events_ref == f"artifact:{JOB_ID}-observability.events.jsonl"
     journal = publisher.artifacts[f"{JOB_ID}-observability.events.jsonl"]
     assert b'"sequence":1' in journal.replace(b" ", b"")
+    assert _spool_events(spool_root) == []

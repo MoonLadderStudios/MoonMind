@@ -492,6 +492,7 @@ async def test_terminal_projection_carries_timing_and_events(
             return ContainerJobActivityResult(
                 logsRef="art:logs",
                 artifactsRef="art:manifest",
+                diagnosticsRef="art:diagnostics",
                 eventsRef="art:events",
             )
         return _result_for(name)
@@ -504,6 +505,7 @@ async def test_terminal_projection_carries_timing_and_events(
     assert terminal.started_at is not None
     assert terminal.finished_at is not None
     assert terminal.events_ref == "art:events"
+    assert terminal.publication.diagnostics_ref == "art:diagnostics"
 
 
 @pytest.mark.asyncio
