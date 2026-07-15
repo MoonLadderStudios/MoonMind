@@ -49,8 +49,12 @@ Run the credentialed source-destroying canary for the exact deployed generation.
 Record it with cold-resume CI and shadow counts in
 `FEATURE_FLAGS__CHECKPOINT_RESUME_PROMOTION_EVIDENCE_JSON`. Evidence includes
 `deploymentGeneration`, `coldResumeCiPassed`, `shadowRestoreSamples`,
-`shadowRestoreSuccesses`, `integrityFailures`, `duplicateSideEffects`,
-`liveCanaryPassed`, and `recordedAt`; generation mismatch fails closed.
+`shadowRestoreSuccesses`, `captureSamples`, `sourceDestroyingRestoreSamples`,
+`internalResumeSamples`, `integrityFailures`, `duplicateSideEffects`,
+`falsePositiveEligibility`, `authorityViolations`, `credentialInclusions`,
+`idempotencyConflicts`, `sourceWorkspaceDependencies`, `rollbackDrillPassed`,
+`operationalAlertsReady`, `onCallOwnershipConfirmed`, `liveCanaryPassed`, and
+`recordedAt`; generation mismatch or incomplete evidence fails closed.
 
 Set capture, shadow restore, action exposure, and admission independently only
 after review. Also set generation, maximum archive size, explicit allowlists,
@@ -75,13 +79,15 @@ required main-branch journey pauses new admissions. Sustained failure-rate
 alerts do the same. Pause never interrupts an activity mid-write.
 
 Alert evaluation uses `evaluate_automatic_pause` with stable integrity,
-duplicate-side-effect, false-eligibility, and restore-rate reason codes. The
-dashboard series are `checkpoint_resume.eligibility_total`,
-`checkpoint_resume.admission_total`, `checkpoint_resume.capture_total`,
-`checkpoint_resume.shadow_restore_total`, `checkpoint_resume.restore_total`,
-`checkpoint_resume.outcome_total`, and
-`checkpoint_resume.automatic_pause_total`. Metric tags are restricted to
-runtime, deployment generation, and stable outcome.
+credential inclusion, authority routing, source-dependency,
+duplicate-side-effect, false-eligibility, readiness-divergence,
+capability-generation, required-journey, and restore-rate reason codes. The
+production series include the `checkpoint_resume.*` eligibility, admission,
+stale eligibility, end-to-end outcome, and pause counters plus the
+`managed_checkpoint.capture_*` and `managed_checkpoint.restore_*` operation,
+size, duration, retry, reuse, and integrity counters. Metric tags are restricted
+to bounded runtime, checkpoint, deployment generation, and stable outcome
+dimensions.
 
 ## Emergency rollback and drain
 

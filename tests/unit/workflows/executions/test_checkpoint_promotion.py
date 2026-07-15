@@ -36,6 +36,29 @@ def test_critical_health_pauses_only_new_admissions() -> None:
     assert decision.permit_in_flight_reconciliation is True
 
 
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("credentialInclusions", "credential_inclusion"),
+        ("managedWorkspaceSandboxRoutes", "managed_workspace_sandbox_route"),
+        ("sourceWorkspaceDependencies", "source_workspace_dependency"),
+        ("routeReadinessDivergences", "route_readiness_divergence"),
+        ("capabilityGenerationMismatches", "capability_generation_mismatch"),
+        ("requiredJourneyMissing", "required_journey_missing"),
+    ],
+)
+def test_all_zero_tolerance_conditions_pause_new_admissions(
+    field: str, reason: str
+) -> None:
+    decision = evaluate_automatic_pause(
+        CheckpointPromotionHealth.model_validate({field: 1}),
+        maximum_restore_failure_ratio=.05,
+    )
+    assert decision.pause_new_admissions is True
+    assert decision.reason_code == reason
+    assert decision.permit_in_flight_reconciliation is True
+
+
 def test_worker_generation_is_retained_until_frozen_histories_drain() -> None:
     blocked = evaluate_worker_drain(
         FrozenGenerationUsage(
@@ -66,3 +89,19 @@ def test_metric_tags_are_bounded_and_exclude_identifiers() -> None:
         "outcome": "eligible",
     }
     assert not ({"repository", "owner_id", "artifact_ref"} & tags.keys())
+
+
+def test_metric_catalog_covers_required_checkpoint_series() -> None:
+    from moonmind.workflows.executions.checkpoint_promotion import CHECKPOINT_METRIC_NAMES
+
+    assert {
+        "managed_checkpoint.capture_total",
+        "managed_checkpoint.capture_success_total",
+        "managed_checkpoint.capture_failure_total",
+        "managed_checkpoint.restore_total",
+        "managed_checkpoint.restore_success_total",
+        "managed_checkpoint.restore_failure_total",
+        "managed_checkpoint.restore_integrity_failure_total",
+        "checkpoint_resume.false_positive_eligibility_total",
+        "checkpoint_resume.duplicate_side_effect_total",
+    } <= CHECKPOINT_METRIC_NAMES

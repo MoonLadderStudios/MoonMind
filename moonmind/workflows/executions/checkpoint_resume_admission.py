@@ -14,6 +14,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.workflows.executions.runtime_capabilities import RuntimeExecutionCapabilities
+from moonmind.workflows.executions.checkpoint_promotion import (
+    CheckpointPromotionHealth,
+    evaluate_automatic_pause,
+)
 
 PromotionState = Literal[
     "disabled", "shadow_capture", "shadow_restore", "internal", "limited",
@@ -37,6 +41,18 @@ class CheckpointPromotionEvidence(BaseModel):
     internal_resume_samples: int = Field(0, ge=0, alias="internalResumeSamples")
     integrity_failures: int = Field(0, ge=0, alias="integrityFailures")
     duplicate_side_effects: int = Field(0, ge=0, alias="duplicateSideEffects")
+    false_positive_eligibility: int = Field(0, ge=0, alias="falsePositiveEligibility")
+    authority_violations: int = Field(0, ge=0, alias="authorityViolations")
+    credential_inclusions: int = Field(0, ge=0, alias="credentialInclusions")
+    idempotency_conflicts: int = Field(0, ge=0, alias="idempotencyConflicts")
+    source_workspace_dependencies: int = Field(
+        0, ge=0, alias="sourceWorkspaceDependencies"
+    )
+    rollback_drill_passed: bool = Field(False, alias="rollbackDrillPassed")
+    operational_alerts_ready: bool = Field(False, alias="operationalAlertsReady")
+    on_call_ownership_confirmed: bool = Field(
+        False, alias="onCallOwnershipConfirmed"
+    )
     live_canary_passed: bool = Field(False, alias="liveCanaryPassed")
     recorded_at: datetime = Field(alias="recordedAt")
 
@@ -52,6 +68,14 @@ class CheckpointPromotionEvidence(BaseModel):
             and self.internal_resume_samples >= 20
             and self.integrity_failures == 0
             and self.duplicate_side_effects == 0
+            and self.false_positive_eligibility == 0
+            and self.authority_violations == 0
+            and self.credential_inclusions == 0
+            and self.idempotency_conflicts == 0
+            and self.source_workspace_dependencies == 0
+            and self.rollback_drill_passed
+            and self.operational_alerts_ready
+            and self.on_call_ownership_confirmed
         )
 
 
@@ -132,8 +156,21 @@ def rollout_policy_from_settings(feature_flags: object) -> CheckpointResumeRollo
     generation = str(
         getattr(feature_flags, "checkpoint_resume_deployment_generation", "") or ""
     ).strip()
+    pause = evaluate_automatic_pause(
+        CheckpointPromotionHealth(
+            integrityFailures=evidence.integrity_failures if evidence else 0,
+            duplicateSideEffects=evidence.duplicate_side_effects if evidence else 0,
+            falsePositiveEligibility=evidence.false_positive_eligibility if evidence else 0,
+            credentialInclusions=evidence.credential_inclusions if evidence else 0,
+            sourceWorkspaceDependencies=evidence.source_workspace_dependencies if evidence else 0,
+        ),
+        maximum_restore_failure_ratio=0.05,
+    )
+    configured_state = getattr(
+        feature_flags, "checkpoint_resume_promotion_state", "disabled"
+    )
     return CheckpointResumeRolloutPolicy(
-        promotionState=getattr(feature_flags, "checkpoint_resume_promotion_state", "disabled"),
+        promotionState="paused" if pause.pause_new_admissions else configured_state,
         captureEnabled=bool(getattr(feature_flags, "managed_checkpoint_capture_enabled", False)),
         shadowRestoreEnabled=bool(getattr(feature_flags, "checkpoint_shadow_restore_enabled", False)),
         actionExposureEnabled=bool(getattr(feature_flags, "checkpoint_resume_action_enabled", False)),
@@ -148,7 +185,11 @@ def rollout_policy_from_settings(feature_flags: object) -> CheckpointResumeRollo
         promotionEvidence=evidence,
         minimumShadowSamples=int(getattr(feature_flags, "checkpoint_resume_minimum_shadow_samples", 10)),
         minimumShadowSuccessRatio=float(getattr(feature_flags, "checkpoint_resume_minimum_shadow_success_ratio", .99)),
-        reason="operator_settings",
+        reason=(
+            f"automatic_pause:{pause.reason_code}"
+            if pause.pause_new_admissions
+            else "operator_settings"
+        ),
     )
 
 

@@ -5,7 +5,9 @@ from moonmind.workflows.executions.checkpoint_resume_admission import (
     CheckpointResumeReadiness,
     CheckpointResumeRolloutPolicy,
     evaluate_checkpoint_resume_admission,
+    rollout_policy_from_settings,
 )
+from types import SimpleNamespace
 from moonmind.workflows.executions.runtime_capabilities import (
     RUNTIME_EXECUTION_CAPABILITIES,
     resolve_runtime_execution_capabilities,
@@ -29,7 +31,11 @@ def _policy(**updates):
         shadowRestoreSamples=100, shadowRestoreSuccesses=100,
         captureSamples=100, sourceDestroyingRestoreSamples=50,
         internalResumeSamples=20,
-        integrityFailures=0, duplicateSideEffects=0, liveCanaryPassed=True,
+        integrityFailures=0, duplicateSideEffects=0, falsePositiveEligibility=0,
+        authorityViolations=0, credentialInclusions=0, idempotencyConflicts=0,
+        sourceWorkspaceDependencies=0, rollbackDrillPassed=True,
+        operationalAlertsReady=True, onCallOwnershipConfirmed=True,
+        liveCanaryPassed=True,
         recordedAt=datetime.now(timezone.utc),
     )
     values = dict(
@@ -60,6 +66,16 @@ def test_codex_capability_and_admitted_decision_are_frozen() -> None:
     assert decision.restore_activity == "agent_runtime.restore_workspace_checkpoint"
     assert decision.runtime_capabilities.capability_set_version.endswith("v2")
     assert decision.runtime_capabilities.checkpoint_artifact_contract_version
+
+
+def test_codex_capability_admits_the_api_cold_restore_boundary() -> None:
+    decision = evaluate_checkpoint_resume_admission(
+        capabilities=resolve_runtime_execution_capabilities("codex_cli"),
+        policy=_policy(), readiness=_readiness(), checkpoint_kind="worktree_archive",
+        checkpoint_boundary="before_recovery_restoration",
+        resume_phase="retry_restoration", archive_bytes=100,
+    )
+    assert decision.admitted is True
 
 
 def test_shadow_and_paused_states_never_expose_resume() -> None:
@@ -129,3 +145,16 @@ def test_only_codex_cli_declares_managed_checkpoint_support() -> None:
             assert descriptor.checkpoint_restore_kinds == ("worktree_archive",)
         elif descriptor.runtime_family == "managed_cli":
             assert descriptor.checkpoint_restore_kinds == ()
+
+
+def test_critical_promotion_evidence_automatically_pauses_new_admission() -> None:
+    evidence = _policy().promotion_evidence.model_dump(by_alias=True, mode="json")
+    evidence["integrityFailures"] = 1
+    flags = SimpleNamespace(
+        checkpoint_resume_promotion_evidence_json=__import__("json").dumps(evidence),
+        checkpoint_resume_deployment_generation="generation-1",
+        checkpoint_resume_promotion_state="limited",
+    )
+    policy = rollout_policy_from_settings(flags)
+    assert policy.promotion_state == "paused"
+    assert policy.reason == "automatic_pause:checkpoint_integrity_failure"

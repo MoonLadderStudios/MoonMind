@@ -135,6 +135,7 @@ _DESCRIPTORS = (
         checkpointArtifactContractVersion="managed-worktree-archive-v1",
         checkpointBoundarySupport={
             "before_execution": ("rerun_failed_step",),
+            "before_recovery_restoration": ("retry_restoration",),
         },
         supportsSameSessionContinuation=True,
         supportsActiveCommandIntrospection=True,

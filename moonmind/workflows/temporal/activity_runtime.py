@@ -131,6 +131,22 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
+
+
+def _emit_checkpoint_metric(
+    metric: str, *, outcome: str, value: float = 1, observe: bool = False
+) -> None:
+    """Best-effort checkpoint telemetry with bounded, non-sensitive labels."""
+
+    try:
+        emitter = get_metrics_emitter()
+        tags = {"runtime": "codex_cli", "checkpoint_kind": "worktree_archive", "outcome": outcome}
+        if observe:
+            emitter.observe(metric, value=value, tags=tags)
+        else:
+            emitter.increment(metric, value=value, tags=tags)
+    except Exception:
+        logger.warning("Failed to emit checkpoint metric %s", metric, exc_info=True)
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
@@ -6906,19 +6922,32 @@ class TemporalAgentRuntimeActivities:
         """Restore and verify a cold checkpoint before any agent is launched."""
         from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
 
+        started = time.monotonic()
+        _emit_checkpoint_metric("managed_checkpoint.restore_total", outcome="requested")
         try:
             # Restore performs clone/extract/hash/rename work that can exceed the
             # activity heartbeat timeout on large archives or slow clones.
             # Heartbeat while it runs so Temporal does not time out and retry an
             # attempt that may still be mutating the destination. Outside an
             # activity context this simply awaits the coroutine.
-            return await _await_with_activity_heartbeats(
+            result = await _await_with_activity_heartbeats(
                 self._checkpoint_restore.restore(request),
                 heartbeat_payload={
                     "activity": "agent_runtime.restore_workspace_checkpoint"
                 },
             )
+            _emit_checkpoint_metric("managed_checkpoint.restore_success_total", outcome="success")
+            _emit_checkpoint_metric(
+                "managed_checkpoint.restore_duration_ms",
+                outcome="success", value=time.monotonic() - started, observe=True,
+            )
+            return result
         except CheckpointRestoreError as exc:
+            _emit_checkpoint_metric("managed_checkpoint.restore_failure_total", outcome=exc.code)
+            if "INTEGRITY" in exc.code or "DIGEST" in exc.code:
+                _emit_checkpoint_metric(
+                    "managed_checkpoint.restore_integrity_failure_total", outcome=exc.code
+                )
             # CheckpointRestoreError is a plain RuntimeError, so Temporal would
             # record type="CheckpointRestoreError" and the catalog's
             # non_retryable_error_types (keyed on the stable failure codes) would
@@ -6945,6 +6974,7 @@ class TemporalAgentRuntimeActivities:
         )
         locator = model.workspace_locator
         capture_started = time.monotonic()
+        _emit_checkpoint_metric("managed_checkpoint.capture_total", outcome="requested")
         logger.info("managed_checkpoint_capture_requested")
         lock = self._checkpoint_capture_locks.setdefault(
             model.idempotency_key, asyncio.Lock()
@@ -6955,7 +6985,7 @@ class TemporalAgentRuntimeActivities:
                     raise TemporalActivityRuntimeError(
                         "managed checkpoint capture requires run and artifact stores"
                     )
-                return await _await_with_activity_heartbeats(
+                result = await _await_with_activity_heartbeats(
                     self._capture_managed_checkpoint_locked(
                         model, locator, capture_started
                     ),
@@ -6964,8 +6994,22 @@ class TemporalAgentRuntimeActivities:
                         "phase": "capture",
                     },
                 )
+                workspace = result.get("workspace", {})
+                _emit_checkpoint_metric("managed_checkpoint.capture_success_total", outcome="success")
+                _emit_checkpoint_metric(
+                    "managed_checkpoint.capture_bytes", outcome="success",
+                    value=float(workspace.get("archiveBytes", 0) or 0),
+                )
+                _emit_checkpoint_metric(
+                    "managed_checkpoint.capture_duration_ms", outcome="success",
+                    value=time.monotonic() - capture_started, observe=True,
+                )
+                return result
             except Exception as exc:
                 failure_type = getattr(exc, "type", type(exc).__name__)
+                _emit_checkpoint_metric(
+                    "managed_checkpoint.capture_failure_total", outcome=str(failure_type)
+                )
                 logger.warning(
                     "managed_checkpoint_capture_failed failure_code=%s duration_ms=%s",
                     failure_type,
@@ -7285,13 +7329,15 @@ class TemporalAgentRuntimeActivities:
         """Restore and verify a cold checkpoint before any agent is launched."""
         from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
 
+        started = time.monotonic()
+        _emit_checkpoint_metric("managed_checkpoint.restore_total", outcome="requested")
         try:
             # Restore performs clone/extract/hash/rename work that can exceed the
             # activity heartbeat timeout on large archives or slow clones.
             # Heartbeat while it runs so Temporal does not time out and retry an
             # attempt that may still be mutating the destination. Outside an
             # activity context this simply awaits the coroutine.
-            return await _await_with_activity_heartbeats(
+            result = await _await_with_activity_heartbeats(
                 asyncio.to_thread(
                     lambda: asyncio.run(self._checkpoint_restore.restore(request))
                 ),
@@ -7299,7 +7345,18 @@ class TemporalAgentRuntimeActivities:
                     "activity": "agent_runtime.restore_workspace_checkpoint"
                 },
             )
+            _emit_checkpoint_metric("managed_checkpoint.restore_success_total", outcome="success")
+            _emit_checkpoint_metric(
+                "managed_checkpoint.restore_duration_ms",
+                outcome="success", value=time.monotonic() - started, observe=True,
+            )
+            return result
         except CheckpointRestoreError as exc:
+            _emit_checkpoint_metric("managed_checkpoint.restore_failure_total", outcome=exc.code)
+            if "INTEGRITY" in exc.code or "DIGEST" in exc.code:
+                _emit_checkpoint_metric(
+                    "managed_checkpoint.restore_integrity_failure_total", outcome=exc.code
+                )
             # CheckpointRestoreError is a plain RuntimeError, so Temporal would
             # record type="CheckpointRestoreError" and the catalog's
             # non_retryable_error_types (keyed on the stable failure codes) would

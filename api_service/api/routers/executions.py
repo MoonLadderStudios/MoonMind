@@ -14717,6 +14717,16 @@ def _checkpoint_resume_admission_for_request(
     metrics.increment("checkpoint_resume.eligibility_total", tags=metric_tags)
     metrics.increment("checkpoint_resume.admission_total", tags=metric_tags)
     if not decision.admitted:
+        metrics.increment("checkpoint_resume.ineligible_total", tags=metric_tags)
+        metrics.increment("checkpoint_resume.admission_rejected_total", tags=metric_tags)
+        if decision.reason_code in {
+            "deployment_generation_not_allowlisted",
+            "capability_snapshot_mismatch",
+            "deployment_not_ready",
+            "rollout_action_hidden",
+            "rollout_admission_disabled",
+        }:
+            metrics.increment("checkpoint_resume.stale_eligibility_total", tags=metric_tags)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -14725,6 +14735,7 @@ def _checkpoint_resume_admission_for_request(
                 "reason": decision.reason_code,
             },
         )
+    metrics.increment("checkpoint_resume.eligible_total", tags=metric_tags)
     return decision
 
 

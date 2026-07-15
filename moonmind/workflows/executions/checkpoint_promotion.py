@@ -43,6 +43,20 @@ class CheckpointPromotionHealth(BaseModel):
     false_positive_eligibility: int = Field(0, ge=0, alias="falsePositiveEligibility")
     restore_attempts: int = Field(0, ge=0, alias="restoreAttempts")
     restore_failures: int = Field(0, ge=0, alias="restoreFailures")
+    credential_inclusions: int = Field(0, ge=0, alias="credentialInclusions")
+    managed_workspace_sandbox_routes: int = Field(
+        0, ge=0, alias="managedWorkspaceSandboxRoutes"
+    )
+    source_workspace_dependencies: int = Field(
+        0, ge=0, alias="sourceWorkspaceDependencies"
+    )
+    route_readiness_divergences: int = Field(
+        0, ge=0, alias="routeReadinessDivergences"
+    )
+    capability_generation_mismatches: int = Field(
+        0, ge=0, alias="capabilityGenerationMismatches"
+    )
+    required_journey_missing: int = Field(0, ge=0, alias="requiredJourneyMissing")
 
 
 class AutomaticPauseDecision(BaseModel):
@@ -72,6 +86,18 @@ def evaluate_automatic_pause(
         reason = "duplicate_side_effect"
     elif health.false_positive_eligibility:
         reason = "false_positive_eligibility"
+    elif health.credential_inclusions:
+        reason = "credential_inclusion"
+    elif health.managed_workspace_sandbox_routes:
+        reason = "managed_workspace_sandbox_route"
+    elif health.source_workspace_dependencies:
+        reason = "source_workspace_dependency"
+    elif health.route_readiness_divergences:
+        reason = "route_readiness_divergence"
+    elif health.capability_generation_mismatches:
+        reason = "capability_generation_mismatch"
+    elif health.required_journey_missing:
+        reason = "required_journey_missing"
     elif failure_ratio > maximum_restore_failure_ratio:
         reason = "restore_failure_ratio_exceeded"
     return AutomaticPauseDecision(
@@ -119,6 +145,28 @@ CHECKPOINT_METRIC_NAMES = frozenset(
         "checkpoint_resume.restore_total",
         "checkpoint_resume.outcome_total",
         "checkpoint_resume.automatic_pause_total",
+        "managed_checkpoint.capture_total",
+        "managed_checkpoint.capture_success_total",
+        "managed_checkpoint.capture_failure_total",
+        "managed_checkpoint.capture_bytes",
+        "managed_checkpoint.capture_entries",
+        "managed_checkpoint.capture_duration_ms",
+        "managed_checkpoint.capture_idempotent_reuse_total",
+        "managed_checkpoint.restore_total",
+        "managed_checkpoint.restore_success_total",
+        "managed_checkpoint.restore_failure_total",
+        "managed_checkpoint.restore_bytes",
+        "managed_checkpoint.restore_entries",
+        "managed_checkpoint.restore_duration_ms",
+        "managed_checkpoint.restore_retry_total",
+        "managed_checkpoint.restore_idempotent_reuse_total",
+        "managed_checkpoint.restore_integrity_failure_total",
+        "checkpoint_resume.to_success_total",
+        "checkpoint_resume.to_failure_total",
+        "checkpoint_resume.to_full_retry_requested_total",
+        "checkpoint_resume.duplicate_side_effect_total",
+        "checkpoint_resume.false_positive_eligibility_total",
+        "checkpoint_resume.source_state_dependency_total",
     }
 )
 

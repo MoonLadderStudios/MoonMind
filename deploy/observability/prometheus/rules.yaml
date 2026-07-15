@@ -31,3 +31,32 @@ groups:
           query: Inspect bounded failure outcomes, then drill into Temporal by authorized link.
           recovery: Failure ratio remains below the calibrated threshold for one hour.
           dedupe_key: moonmind-workflow-budget-burn
+      - alert: MoonMindCheckpointResumeIntegrityFailure
+        expr: increase(moonmind_workflow_managed_checkpoint_restore_integrity_failure_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: An admitted checkpoint restore failed integrity verification
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new Resume admissions; preserve and reconcile in-flight evidence.
+      - alert: MoonMindCheckpointResumeFalseEligibility
+        expr: increase(moonmind_workflow_checkpoint_resume_false_positive_eligibility_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Checkpoint Resume eligibility was exposed for an unsupported request
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions and correct capability/readiness divergence.
+      - alert: MoonMindCheckpointResumeDuplicateSideEffect
+        expr: increase(moonmind_workflow_checkpoint_resume_duplicate_side_effect_total[5m]) > 0
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: A recovery produced a duplicate non-idempotent side effect
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions while allowing in-flight reconciliation.
+      - alert: MoonMindCheckpointRestoreFailureRate
+        expr: sum(rate(moonmind_workflow_managed_checkpoint_restore_failure_total[15m])) / clamp_min(sum(rate(moonmind_workflow_managed_checkpoint_restore_total[15m])), 1) > 0.05
+        for: 10m
+        labels: {severity: critical, owner: reliability}
+        annotations:
+          summary: Managed checkpoint restore failures exceed the promotion threshold
+          runbook: docs/Temporal/CheckpointResumePromotion.md
+          recovery: Pause new admissions and retain worker routes until recoveries drain.

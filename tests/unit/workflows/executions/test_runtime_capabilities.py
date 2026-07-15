@@ -85,7 +85,8 @@ def test_codex_declares_managed_capture_and_restore() -> None:
         "agent_runtime.restore_workspace_checkpoint"
     )
     assert codex.checkpoint_boundary_support == {
-        "before_execution": ("rerun_failed_step",)
+        "before_execution": ("rerun_failed_step",),
+        "before_recovery_restoration": ("retry_restoration",),
     }
 
 
