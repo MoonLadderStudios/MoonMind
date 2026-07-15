@@ -104,6 +104,14 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
     )
 
 
+def test_oauth_host_runtime_defaults_to_published_image(monkeypatch) -> None:
+    monkeypatch.delenv("OMNIGENT_HOST_IMAGE", raising=False)
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+
+    assert runtime._image == "ghcr.io/omnigent-ai/omnigent-host:latest"
+
+
 def test_deterministic_owner_reuses_activity_retry_identity() -> None:
     kwargs = {
         "profile_id": "codex",

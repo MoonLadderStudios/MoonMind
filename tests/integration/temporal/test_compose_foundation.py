@@ -500,7 +500,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["hostname"] == "omnigent-host-claude"
     assert host_service["image"] == (
         "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-0.2.11}"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
     assert host_service["command"] == [
         "omnigent",
@@ -558,9 +558,15 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
 def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     compose = _load_compose()
     host_service = compose["services"]["omnigent-host-codex"]
+    expected_image = (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
 
     assert host_service["profiles"] == ["omnigent-host-codex"]
     assert host_service["hostname"] == "omnigent-host-codex"
+    assert host_service["image"] == expected_image
+    assert compose["services"]["omnigent-host-codex-init"]["image"] == expected_image
     assert host_service["user"] == "1000:1000"
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {

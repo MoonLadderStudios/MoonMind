@@ -50,7 +50,7 @@ class OmnigentOAuthHostRuntime:
     ) -> None:
         self._client = client
         self._image = image or os.getenv(
-            "OMNIGENT_HOST_IMAGE", "ghcr.io/omnigent-ai/omnigent-host:0.2.11"
+            "OMNIGENT_HOST_IMAGE", "ghcr.io/omnigent-ai/omnigent-host:latest"
         )
         self._network = network or os.getenv(
             "OMNIGENT_HOST_NETWORK", "moonmind_local-network"
