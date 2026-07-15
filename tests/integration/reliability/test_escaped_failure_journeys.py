@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -18,6 +19,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRuntimeStepExecutionLaunch,
     AgentTerminalContract,
+    ManagedRunRecord,
 )
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 from moonmind.provider_profiles.lease_client import (
@@ -36,6 +38,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
 )
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
@@ -816,6 +819,111 @@ async def test_codex_oauth_failure_preserves_primary_error_and_managed_authority
         "agent_runtime.capture_workspace_checkpoint",
         "step_checkpoint.create",
     ]
+
+
+async def test_checkpoint_capture_heartbeat_backpressure_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:c2723c5c through the managed checkpoint activity boundary."""
+
+    replay_id = "checkpoint-heartbeat-backpressure"
+    manifest = load_replay(replay_id, "manifest.json")
+    workspace_manifest = load_replay(replay_id, "workspace-manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / manifest["incidentWorkflowId"] / "repo"
+    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    for artifact in workspace_manifest["artifacts"]:
+        (workspace / artifact["path"]).write_text(
+            artifact["content"], encoding="utf-8"
+        )
+    subprocess.run(["git", "add", "."], cwd=workspace, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=MoonMind Test", "-c",
+            "user.email=test@example.invalid", "commit", "-qm", "checkpoint replay",
+        ],
+        cwd=workspace,
+        check=True,
+    )
+
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    now = datetime.now(timezone.utc)
+    run_store.save(
+        ManagedRunRecord(
+            runId=manifest["incidentWorkflowId"],
+            workflowId=manifest["incidentWorkflowId"],
+            ownerRunId=manifest["incidentRunId"],
+            logicalStepId=manifest["logicalStepId"],
+            executionOrdinal=1,
+            agentId=manifest["runtime"],
+            runtimeId=manifest["runtime"],
+            status="completed",
+            startedAt=now,
+            finishedAt=now,
+            workspacePath=str(workspace),
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store, artifact_service=object(), client_adapter=object()
+    )
+
+    async def put(payload: bytes, _content_type: str, kind: str) -> str:
+        return f"artifact://{kind}/{hashlib.sha256(payload).hexdigest()}"
+
+    activities._put_managed_checkpoint_artifact = put
+    heartbeat_queue: asyncio.Queue[object] = asyncio.Queue(
+        maxsize=manifest["heartbeatQueueCapacity"]
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity, "in_activity", lambda: True
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: heartbeat_queue.put_nowait(payload),
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS",
+        manifest["heartbeatIntervalSeconds"],
+    )
+    capabilities = resolve_runtime_execution_capabilities(manifest["runtime"])
+
+    capture = await activities.agent_runtime_capture_workspace_checkpoint(
+        {
+            "schemaVersion": "v1",
+            "identity": {
+                "workflowId": manifest["incidentWorkflowId"],
+                "runId": manifest["incidentRunId"],
+                "logicalStepId": manifest["logicalStepId"],
+                "executionOrdinal": 1,
+            },
+            "boundary": "before_publication",
+            "checkpointKind": "worktree_archive",
+            "workspaceLocator": {
+                "kind": "managed_runtime",
+                "runtimeId": manifest["runtime"],
+                "agentRunId": manifest["incidentWorkflowId"],
+                "relativePath": "repo",
+            },
+            "expectedRuntimeId": manifest["runtime"],
+            "capabilitySetVersion": capabilities.capability_set_version,
+            "capabilityDigest": capabilities.capability_digest,
+            "artifactNamespace": "step-checkpoints/assessment",
+            "idempotencyKey": "checkpoint-heartbeat-backpressure:capture",
+            "capturePolicy": {
+                "includeTracked": True,
+                "includeUntracked": True,
+                "includeIgnored": False,
+                "redactionProfile": "managed-code-workspace-v1",
+            },
+        }
+    )
+
+    assert capture["status"] == expected["checkpointStatus"]
+    assert heartbeat_queue.qsize() <= expected["maxQueuedHeartbeats"]
 
 
 async def test_codex_system_error_waits_for_delayed_oauth_failure_log(

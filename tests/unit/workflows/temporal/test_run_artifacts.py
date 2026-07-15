@@ -5680,6 +5680,132 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         "even when child result metadata contains jules_session_id"
     )
 
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_native_pr_after_prepublication_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    create_pr_called = False
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Checkpoint Publish Plan",
+                        "created_at": "2026-07-14T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [_agent_runtime_step("assess")],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Assessment completed",
+            "metadata": {
+                "push_status": "pushed",
+                "push_branch": "feature/checkpoint-failure",
+            },
+            "output_refs": [],
+        }
+
+    async def fail_prepublication_checkpoint(
+        _logical_step_id: str,
+        *,
+        publish_mode: str,
+        updated_at: datetime,
+    ) -> bool:
+        assert publish_mode == "pr"
+        workflow._publish_status = "failed"
+        workflow._publish_reason = "pre-publication checkpoint failed"
+        return True
+
+    async def no_checkpoint(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def bind_existing_request(request: object) -> object:
+        return request
+
+    monkeypatch.setattr(
+        workflow,
+        "_record_prepublication_checkpoint",
+        fail_prepublication_checkpoint,
+    )
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", no_checkpoint)
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        bind_existing_request,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+            run_workflow_module.RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
+
+    assert not create_pr_called
+    assert workflow._publish_status == "failed"
+    assert workflow._pull_request_url is None
+
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_native_pr_after_push_failure(
     monkeypatch: pytest.MonkeyPatch,

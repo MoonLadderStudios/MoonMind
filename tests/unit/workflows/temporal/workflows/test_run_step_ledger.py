@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3703,6 +3704,42 @@ async def test_legacy_history_preserves_prepublication_checkpoint_command(
 
     assert failed is False
     assert calls == ["before_publication"]
+
+
+@pytest.mark.asyncio
+async def test_prepublication_checkpoint_failure_blocks_publish_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 7, 14, 7, 14, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "assess", "inputs": {"title": "Assess"}}],
+        dependency_map={"assess": []},
+        updated_at=now,
+    )
+    workflow._last_publish_repair_request = SimpleNamespace(agent_kind="managed")
+
+    async def fail_checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.QueueFull
+
+    monkeypatch.setattr(workflow, "_record_canonical_step_checkpoint", fail_checkpoint)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    failed = await workflow._record_prepublication_checkpoint(
+        "assess",
+        publish_mode="pr",
+        updated_at=now,
+    )
+
+    assert failed is True
+    assert workflow._publish_status == "failed"
+    assert workflow._publish_reason == (
+        "Execution succeeded; finalization failed during the pre-publication checkpoint."
+    )
+    assert workflow._publish_repair_is_available(parameters={"publishMode": "pr"}) is False
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+    assert workflow._publish_repair_is_available(parameters={"publishMode": "pr"}) is True
 
 
 @pytest.mark.asyncio
