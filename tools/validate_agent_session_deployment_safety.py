@@ -36,6 +36,22 @@ def _changed_paths(base_ref: str) -> list[str]:
     untracked = _run_git(["ls-files", "--others", "--exclude-standard"])
     return sorted(set(committed + staged + unstaged + untracked))
 
+
+def _changed_paths_from_file(path: str) -> list[str]:
+    """Load an exact, event-derived changed-file list produced by CI.
+
+    The file is written by ``tools/ci/compute_changed_files.sh`` from the exact
+    base/head tree diff, so no merge-base discovery is needed. An empty or
+    missing file means "no changed paths", which keeps the gate fail-open for
+    unknown or unavailable change sets.
+    """
+
+    file_path = Path(path)
+    if not file_path.is_file():
+        return []
+    lines = file_path.read_text(encoding="utf-8").splitlines()
+    return sorted({line.strip() for line in lines if line.strip()})
+
 def _repo_paths() -> list[str]:
     tracked = _run_git(["ls-files"])
     untracked = _run_git(["ls-files", "--others", "--exclude-standard"])
@@ -46,6 +62,16 @@ def main(argv: list[str] | None = None) -> int:
         description="Validate AgentSession workflow deployment-safety gates."
     )
     parser.add_argument("--base-ref", default="origin/main")
+    parser.add_argument(
+        "--changed-files-file",
+        default=None,
+        help=(
+            "Path to a newline-delimited list of exact changed files (as computed "
+            "by tools/ci/compute_changed_files.sh). When supplied, the validator "
+            "uses this exact event-derived list and skips merge-base discovery. "
+            "Preserves the --base-ref workflow for local development."
+        ),
+    )
     parser.add_argument(
         "--feature-dir",
         default=os.environ.get("SPECIFY_FEATURE"),
@@ -65,8 +91,12 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=REPO_ROOT,
             active_feature=args.feature_dir,
         )
+        if args.changed_files_file is not None:
+            changed_paths = _changed_paths_from_file(args.changed_files_file)
+        else:
+            changed_paths = _changed_paths(args.base_ref)
         report = validate_agent_session_deployment_safety(
-            changed_paths=_changed_paths(args.base_ref),
+            changed_paths=changed_paths,
             repo_paths=_repo_paths(),
             cutover_playbook_text=playbook_text,
             active_feature_dir=active_feature_dir,
