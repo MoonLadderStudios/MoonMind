@@ -886,7 +886,7 @@ async def test_checkpoint_capture_heartbeat_backpressure_replay(
     )
     monkeypatch.setattr(
         activity_runtime_module,
-        "_CHECKPOINT_CAPTURE_HEARTBEAT_INTERVAL_SECONDS",
+        "_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS",
         manifest["heartbeatIntervalSeconds"],
     )
     capabilities = resolve_runtime_execution_capabilities(manifest["runtime"])
