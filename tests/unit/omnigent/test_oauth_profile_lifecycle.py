@@ -219,6 +219,59 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
 
 
+@pytest.mark.asyncio
+async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    await runtime._compose_static_check()
+    await runtime.stop_static_host()
+
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert commands == [
+        (
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "up",
+            "-d",
+            "omnigent-host-codex",
+        ),
+        (
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "exec",
+            "-T",
+            "omnigent-host-codex",
+            "/opt/moonmind/check-codex-oauth-host.sh",
+        ),
+        (
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "stop",
+            "omnigent-host-codex",
+        ),
+    ]
+    assert all(
+        "docker-compose.codex-host.yaml" not in command for command in commands
+    )
+
+
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:
     result = {
         "providerProfileId": "codex",
