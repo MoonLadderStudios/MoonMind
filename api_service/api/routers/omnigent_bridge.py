@@ -483,6 +483,8 @@ _BRIDGE_TERMINAL_STATUSES = frozenset({"completed", "failed", "canceled", "timed
 
 def _bridge_event_kind(event_type: str | None) -> str:
     raw = str(event_type or "").strip()
+    if raw.startswith("lifecycle."):
+        return "system_annotation"
     if raw in {"session.created", "session.started"}:
         return "session_started"
     if raw.startswith("session.input") or raw in {"message.sent", "input.message"}:
@@ -516,6 +518,8 @@ def _bridge_event_stream(direction: str, event_type: str | None) -> str:
     if str(direction or "").strip() == "moonmind_to_host":
         return "stdout"
     event_type_str = str(event_type or "")
+    if event_type_str.startswith("lifecycle."):
+        return "session"
     if event_type_str.startswith("session.") or event_type_str.startswith("resource."):
         return "session"
     return "stdout"

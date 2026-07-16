@@ -534,12 +534,24 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("host_cleanup")
 
     class Store:
+        async def get_or_create(self, **_kwargs):
+            actions.append("bridge_reserved")
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
         async def bind_profile_authorization(self, **_kwargs):
             actions.append("bridge_bound")
             return SimpleNamespace(bridge_session_id="bridge-1")
 
-        async def record_lifecycle_event(self, _key, *, event_type, **_kwargs):
-            actions.append(event_type)
+        async def get_existing(self, _key):
+            return SimpleNamespace(
+                omnigent_session_id="session-1",
+                first_message_state="posted",
+                first_message_digest="sha256:test",
+                first_message_posted_at=object(),
+            )
+
+        async def record_lifecycle_event(self, _key, *, stage, status, **_kwargs):
+            actions.append(f"{stage}_{status}")
 
     async def execute(request, **_kwargs):
         assert request.parameters["omnigent"]["session"] == {
@@ -575,4 +587,8 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
-    assert actions[-3:] == ["host_stopped", "cleanup_completed", "provider_released"]
+    assert actions.index("bridge_reserved") < actions.index("provider_acquired")
+    assert actions.index("host_cleanup_completed") < actions.index(
+        "profile_lease_release_started"
+    )
+    assert actions[-2:] == ["profile_lease_release_completed", "terminal_completed"]

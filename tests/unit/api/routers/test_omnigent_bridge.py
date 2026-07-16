@@ -378,6 +378,31 @@ def test_list_bridge_session_events_handles_nullable_event_type() -> None:
     assert events[1]["kind"] == "assistant_message_delta"
 
 
+def test_list_bridge_session_events_projects_lifecycle_as_system_status() -> None:
+    row = SimpleNamespace(
+        event_id="evt-lifecycle",
+        bridge_session_id="brs-1",
+        sequence=1,
+        timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+        direction="system",
+        event_type="lifecycle.credential_preflight.failed",
+        normalized_status="failed",
+        text_preview="Codex OAuth validation failed",
+        artifact_ref="artifact://diagnostics/1",
+        metadata_={"remediation": "reconnect_codex_oauth"},
+    )
+    client, _, _ = _build(store=_FakeStore(rows=[row]))
+
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
+
+    assert resp.status_code == 200
+    event = resp.json()["events"][0]
+    assert event["stream"] == "session"
+    assert event["kind"] == "system_annotation"
+    assert event["artifactRef"] == "artifact://diagnostics/1"
+    assert event["metadata"]["remediation"] == "reconnect_codex_oauth"
+
+
 def test_stream_bridge_session_events_keeps_since_and_stops_on_terminal() -> None:
     rows = [
         SimpleNamespace(

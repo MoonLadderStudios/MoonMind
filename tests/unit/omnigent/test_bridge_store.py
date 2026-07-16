@@ -585,3 +585,59 @@ async def test_record_session_created_persists_across_get_or_create(store):
     )
     assert BRIDGE_EVENT_JOURNAL_KEY in row.metadata_
     assert len(row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]) == 1
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_event_is_secret_safe_idempotent_and_projected(store):
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    for _ in range(2):
+        await store.record_lifecycle_event(
+            "idem-1",
+            stage="credential_preflight",
+            status="failed",
+            code="credential_preflight_failed",
+            summary="token=secret-value was rejected",
+            remediation="reconnect_codex_oauth",
+            diagnostics_ref="artifact://diagnostics/1",
+            metadata={
+                "providerProfileId": "profile-1",
+                "expectedMountPath": "/home/codex/.codex",
+                "rawEnvironment": "must-not-persist",
+            },
+        )
+
+    stored = await store.get_existing("idem-1")
+    assert stored is not None
+    journal = stored.metadata_[BRIDGE_EVENT_JOURNAL_KEY]
+    assert len(journal) == 1
+    assert "secret-value" not in journal[0]["summary"]
+    assert "rawEnvironment" not in journal[0]["metadata"]
+    events = await store.list_events(row.bridge_session_id)
+    assert len(events) == 1
+    assert events[0].event_type == "lifecycle.credential_preflight.failed"
+    assert events[0].normalized_status == "failed"
+    assert events[0].artifact_ref == "artifact://diagnostics/1"
+    assert events[0].metadata_["remediation"] == "reconnect_codex_oauth"
+
+    await store.mark_terminal(
+        "idem-1",
+        status="failed",
+        events=[
+            {
+                "eventType": "response.failed",
+                "normalizedStatus": "failed",
+            }
+        ],
+    )
+    retained = await store.list_events(row.bridge_session_id)
+    assert [event.event_type for event in retained] == [
+        "lifecycle.credential_preflight.failed",
+        "response.failed",
+    ]

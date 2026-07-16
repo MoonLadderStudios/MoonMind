@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -31,7 +31,12 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
 # first-message idempotency state machine onto it from the superseded mapping.
-BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
+BRIDGE_STORE_TRACEABILITY_ISSUES = (
+    "MM-1152",
+    "MM-1156",
+    "MM-1140",
+    "MoonLadderStudios/MoonMind#3366",
+)
 
 FIRST_MESSAGE_NOT_PREPARED = "not_prepared"
 FIRST_MESSAGE_PREPARED = "prepared"
@@ -45,6 +50,36 @@ FIRST_MESSAGE_TERMINAL = "terminal"
 # first-message prepare/post.
 BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
 SESSION_CREATED_EVENT_TYPE = "session.created"
+LIFECYCLE_EVENT_PREFIX = "lifecycle."
+
+LIFECYCLE_STAGES = frozenset(
+    {
+        "request_validated",
+        "profile_resolution",
+        "profile_readiness",
+        "profile_lease_wait",
+        "profile_lease_acquired",
+        "host_binding_resolution",
+        "host_lease_created",
+        "container_start",
+        "credential_mount",
+        "credential_preflight",
+        "host_registration",
+        "harness_readiness",
+        "bridge_authentication",
+        "session_creation",
+        "first_message_prepare",
+        "first_message_post",
+        "session_running",
+        "resource_harvest",
+        "host_cleanup",
+        "profile_lease_release",
+        "terminal",
+    }
+)
+LIFECYCLE_TRANSITIONS = frozenset(
+    {"started", "waiting", "ready", "failed", "skipped", "completed"}
+)
 
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
@@ -253,31 +288,58 @@ class OmnigentBridgeSessionStore:
         self,
         idempotency_key: str,
         *,
-        event_type: str,
+        stage: str,
+        status: str,
         code: str | None = None,
         summary: str | None = None,
+        remediation: str | None = None,
+        diagnostics_ref: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> OmnigentBridgeSession:
-        """Append a bounded, secret-safe pre-stream lifecycle event."""
+        """Append one idempotent lifecycle transition to both durable projections."""
 
         from moonmind.utils.logging import redact_sensitive_text
 
+        stage_key = str(stage).strip().lower()
+        status_key = str(status).strip().lower()
+        if stage_key not in LIFECYCLE_STAGES:
+            raise ValueError(f"Unsupported Omnigent lifecycle stage: {stage!r}")
+        if status_key not in LIFECYCLE_TRANSITIONS:
+            raise ValueError(f"Unsupported Omnigent lifecycle status: {status!r}")
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .with_for_update()
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                raise OmnigentIdempotencyError("missing Omnigent bridge session row")
             row_metadata = dict(row.metadata_ or {})
             journal = list(row_metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
+            lifecycle_key = f"{stage_key}:{status_key}"
+            if any(entry.get("lifecycleKey") == lifecycle_key for entry in journal):
+                return _detached(session, row)
+            timestamp = datetime.now(tz=UTC)
             entry = {
-                "type": str(event_type)[:96],
+                "type": f"{LIFECYCLE_EVENT_PREFIX}{stage_key}.{status_key}",
+                "stage": stage_key,
+                "status": status_key,
+                "lifecycleKey": lifecycle_key,
                 "sequence": len(journal) + 1,
-                "timestamp": datetime.now(tz=UTC).isoformat(),
+                "timestamp": timestamp.isoformat(),
             }
             if code:
                 entry["code"] = str(code)[:96]
             if summary:
                 entry["summary"] = redact_sensitive_text(summary)[:512]
+            if remediation:
+                entry["remediation"] = str(remediation)[:96]
+            if diagnostics_ref:
+                entry["diagnosticsRef"] = str(diagnostics_ref)[:512]
             if metadata:
                 entry["metadata"] = {
-                    str(key)[:64]: value
+                    str(key)[:64]: _bounded_lifecycle_value(value)
                     for key, value in metadata.items()
                     if key
                     in {
@@ -287,11 +349,58 @@ class OmnigentBridgeSessionStore:
                         "hostBindingRef",
                         "hostLeaseRef",
                         "omnigentHostId",
+                        "omnigentSessionId",
+                        "workflowId",
+                        "stepExecutionId",
+                        "attemptId",
+                        "expectedMountPath",
+                        "sessionInterrupted",
+                        "hostStopped",
+                        "resourcesCleaned",
+                        "providerLeaseReleased",
+                        "janitorRequired",
+                        "failureClass",
                     }
                 }
             journal.append(entry)
             row_metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal[-100:]
             row.metadata_ = row_metadata
+            if stage_key == "terminal":
+                row.status = "completed" if status_key == "completed" else "failed"
+                row.first_message_state = FIRST_MESSAGE_TERMINAL
+            max_sequence_result = await session.execute(
+                select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id
+                    == row.bridge_session_id
+                )
+            )
+            sequence = int(max_sequence_result.scalar() or 0) + 1
+            event_metadata = {
+                "stage": stage_key,
+                "status": status_key,
+                "attemptId": idempotency_key[:128],
+                **dict(entry.get("metadata") or {}),
+            }
+            for key in ("code", "remediation", "diagnosticsRef"):
+                if key in entry:
+                    event_metadata[key] = entry[key]
+            session.add(
+                OmnigentBridgeSessionEvent(
+                    event_id=f"bse_{uuid4().hex}",
+                    bridge_session_id=row.bridge_session_id,
+                    sequence=sequence,
+                    timestamp=timestamp,
+                    direction="system",
+                    event_type=entry["type"],
+                    normalized_status=_lifecycle_normalized_status(
+                        stage_key, status_key
+                    ),
+                    text_preview=entry.get("summary")
+                    or _lifecycle_text(stage_key, status_key, code),
+                    artifact_ref=entry.get("diagnosticsRef"),
+                    metadata_=event_metadata,
+                )
+            )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -594,18 +703,34 @@ class OmnigentBridgeSessionStore:
                     setattr(row, column, value)
             if events:
                 # Terminal event indexing must be idempotent: a Temporal activity
-                # retry that reattaches to the durable session can call
-                # ``mark_terminal`` again for the same idempotency key. Replace the
-                # session's event rows rather than appending, so ``list_events``
-                # never returns duplicate sequences (§7.2).
-                await session.execute(
-                    delete(OmnigentBridgeSessionEvent).where(
+                # retry can call ``mark_terminal`` again. Once provider rows exist,
+                # preserve their original position relative to lifecycle evidence.
+                provider_count_result = await session.execute(
+                    select(func.count(OmnigentBridgeSessionEvent.event_id)).where(
                         OmnigentBridgeSessionEvent.bridge_session_id
-                        == row.bridge_session_id
+                        == row.bridge_session_id,
+                        ~OmnigentBridgeSessionEvent.event_type.startswith(
+                            LIFECYCLE_EVENT_PREFIX
+                        ),
                     )
                 )
-                for event_row in _build_event_rows(row.bridge_session_id, events):
-                    session.add(event_row)
+                if int(provider_count_result.scalar() or 0) == 0:
+                    max_sequence_result = await session.execute(
+                        select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                            OmnigentBridgeSessionEvent.bridge_session_id
+                            == row.bridge_session_id
+                        )
+                    )
+                    next_sequence = int(max_sequence_result.scalar() or 0) + 1
+                    indexed_events = []
+                    for offset, event in enumerate(events):
+                        indexed_event = dict(event)
+                        indexed_event["sequence"] = next_sequence + offset
+                        indexed_events.append(indexed_event)
+                    for event_row in _build_event_rows(
+                        row.bridge_session_id, indexed_events
+                    ):
+                        session.add(event_row)
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -801,6 +926,31 @@ def _string_or_none(value: object) -> str | None:
     return text or None
 
 
+def _bounded_lifecycle_value(value: object) -> object:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        return value
+    return str(value)[:256]
+
+
+def _lifecycle_normalized_status(stage: str, status: str) -> str:
+    if stage == "terminal":
+        return "completed" if status == "completed" else "failed"
+    if status == "failed":
+        return "failed"
+    if status == "waiting":
+        return "waiting"
+    if stage == "session_running":
+        return "running"
+    return "provisioning"
+
+
+def _lifecycle_text(stage: str, status: str, code: str | None) -> str:
+    text = f"{stage.replace('_', ' ').title()}: {status.replace('_', ' ')}"
+    return f"{text} ({str(code)[:96]})" if code else text
+
+
 def _detached(
     session: AsyncSession, row: OmnigentBridgeSession
 ) -> OmnigentBridgeSession:
@@ -814,6 +964,8 @@ __all__ = [
     "BRIDGE_PROVIDER",
     "BRIDGE_STORE_TRACEABILITY_ISSUES",
     "SESSION_CREATED_EVENT_TYPE",
+    "LIFECYCLE_STAGES",
+    "LIFECYCLE_TRANSITIONS",
     "FIRST_MESSAGE_NOT_PREPARED",
     "FIRST_MESSAGE_POSTED",
     "FIRST_MESSAGE_POSTING",
