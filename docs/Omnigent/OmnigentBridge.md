@@ -913,7 +913,44 @@ enter Temporal payloads, bridge rows, checkpoints, logs, or artifacts.
 
 ---
 
-## 17. Error classification
+## 17. Lifecycle and error vocabulary
+
+### 17.1 Operator-facing lifecycle stages
+
+The bridge owns one ordered, credential-safe lifecycle vocabulary across
+Workflow Detail, Workflow Chat, bridge rows, and diagnostics. Stages before a
+provider stream exists are bridge lifecycle evidence; streamed provider events
+join the same timeline after session creation.
+
+| Stage | Operator meaning | Durable evidence |
+|---|---|---|
+| `profile_resolution` | Resolve and authorize `executionProfileRef`. | Profile ref or a redacted `profile_resolution_failed` reason. |
+| `profile_lease_wait` / `profile_lease_acquired` | Wait for and acquire the Provider Profile capacity lease. | Provider lease ref and safe wait/acquisition metadata. |
+| `host_binding` / `host_start` | Resolve the binding and allocate or reuse its exact host lease. | Host binding ref, host lease ref, credential generation, and safe container state. |
+| `oauth_preflight` | Verify the selected OAuth home, CLI authentication, workspace mount, and generation. | `credential_preflight_ready` or a redacted preflight failure; never OAuth content. |
+| `host_registration` | Confirm the unchanged host is registered with the stock Omnigent server. | Omnigent host/runner IDs when available. |
+| `bridge_authorization` | Persist and validate the profile/lease/binding/host chain for the MoonMind principal. | Bridge-session ID and safe authorization refs. |
+| `session_creation` | Create and attach the Omnigent session on the authorized host. | Omnigent session ID and `session.created`; absence remains valid failed-start evidence. |
+| `first_message_posting` | Prepare, post, and reconcile the idempotent first message. | Digest/marker state and safe pending/item IDs. |
+| `running` | Replay and stream normalized session events. | Ordered bridge event journal and live stream cursor. |
+| `terminal_harvest` | Reconcile terminal state and harvest requested resources. | Terminal snapshot, capture manifest, artifact refs, and diagnostics ref. |
+| `cleanup` / `lease_release` | Drain and stop the host, then release capacity only when safe. | `cleanup_started`, `cleanup_completed`, or `cleanup_failed`, plus lease state. |
+
+Operator-facing status is stable and low-cardinality: bridge rows use
+`declared`, `creating`, or `active` before terminal normalization, and terminal
+status is `completed`, `failed`, `canceled`, or `timed_out`. Unknown values fail
+closed instead of being relabeled. A reason is a stable code plus a short,
+redacted summary and optional diagnostics ref; it must not contain credential
+values, authorization headers, cookies, tokens, or raw provider payloads.
+
+The repository currently persists the bridge states, normalized event journal,
+profile authorization refs, selected pre-stream events, first-message state,
+terminal evidence, and cleanup events. Uniform emission and presentation of
+every named stage is desired behavior for remaining producers and UI surfaces;
+the vocabulary is authoritative even where a stage is not yet emitted as a
+separate event.
+
+### 17.2 Error classification
 
 | Failure | MoonMind failure class | Notes |
 |---|---|---|

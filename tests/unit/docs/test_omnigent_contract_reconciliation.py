@@ -20,6 +20,10 @@ def test_named_docs_share_omnigent_authority_contract() -> None:
     assert "stock Omnigent server" in bridge
     assert "unchanged profile-bound Omnigent host" in bridge
     assert "Provider Profile lease" in bridge
+    assert "## 17. Lifecycle and error vocabulary" in bridge
+    assert "`profile_resolution`" in bridge
+    assert "`cleanup` / `lease_release`" in bridge
+    assert "stable code plus a short" in bridge
     assert "COMPOSE_PROFILES" in oauth
     assert "docker-compose.yaml" in oauth
     assert "executionProfileRef" in settings
