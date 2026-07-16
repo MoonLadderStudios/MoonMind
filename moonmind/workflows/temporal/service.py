@@ -2505,14 +2505,14 @@ class TemporalExecutionService:
 
         try:
             if graceful:
-                if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
-                    await self._client_adapter.update_workflow(
-                        record.workflow_id,
-                        "Cancel",
-                        reason_text,
-                    )
-                else:
-                    await self._client_adapter.cancel_workflow(record.workflow_id)
+                # Temporal cancellation is the authoritative terminal action.
+                # A workflow update can change MoonMind's projection while the
+                # main coroutine remains blocked awaiting an AgentRun child,
+                # leaving both executions live and eligible for provider slots.
+                # Cancel the execution itself so Temporal propagates
+                # cancellation through child-workflow ownership and runs the
+                # AgentRun cleanup path that releases provider leases.
+                await self._client_adapter.cancel_workflow(record.workflow_id)
             else:
                 await self._client_adapter.terminate_workflow(
                     record.workflow_id,

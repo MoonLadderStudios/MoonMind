@@ -637,6 +637,9 @@ RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
 )
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
+RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH = (
+    "run-propagate-agent-child-cancellation-v1"
+)
 # MM-880: compile + persist a versioned ResiliencePolicy envelope before step
 # execution begins so every step execution can be traced to the policy values
 # that governed it.
@@ -921,6 +924,13 @@ class MoonMindRunWorkflow:
         if "Timeout" in root_type_name or "Connection" in root_type_name:
             return "integration_error"
         return "execution_error"
+
+    @staticmethod
+    def _should_propagate_agent_child_cancellation(exc: BaseException) -> bool:
+        return isinstance(
+            exc,
+            (CancelledError, asyncio.CancelledError),
+        ) and workflow.patched(RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH)
 
     # Canonical errorCategory tokens. These are machine classifications, not
     # operator-readable messages, so they must never be surfaced verbatim as a
@@ -9724,6 +9734,8 @@ class MoonMindRunWorkflow:
                                 self._active_agent_id = None
                             execution_result = self._map_agent_run_result(child_result)
                         except Exception as exc:
+                            if self._should_propagate_agent_child_cancellation(exc):
+                                raise
                             diagnostic = self._record_failure_diagnostic(
                                 exc,
                                 stage=self._state,

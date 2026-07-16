@@ -2718,6 +2718,81 @@ class DockerCodexManagedSessionController:
             f"failed to inspect managed session container {container_id}: {details}"
         )
 
+    async def _container_uses_current_image(
+        self,
+        *,
+        container_id: str,
+        image_ref: str,
+    ) -> bool:
+        """Return whether a live session uses the image currently behind its ref.
+
+        Session records intentionally preserve the operator-facing image ref,
+        which may be mutable (for example ``:latest``). Comparing only that
+        string lets a pre-deployment container survive after the local tag has
+        moved to a corrected runtime image. Docker's container ``.Image`` and
+        image ``.Id`` values are immutable content identities, so they are the
+        authority for safe reuse.
+        """
+
+        container_result = await self._command_runner(
+            (
+                self._docker_binary,
+                "inspect",
+                "-f",
+                "{{.Image}}",
+                container_id,
+            ),
+            env=self._docker_env(),
+        )
+        container_returncode, container_stdout, container_stderr = container_result
+        if container_returncode != 0:
+            error_output = f"{container_stdout}\n{container_stderr}".lower()
+            if "no such object" in error_output or "no such container" in error_output:
+                return False
+            details = (
+                container_stderr.strip()
+                or container_stdout.strip()
+                or f"exit code {container_returncode}"
+            )
+            raise RuntimeError(
+                "failed to inspect managed session container image: " + details
+            )
+
+        image_result = await self._command_runner(
+            (
+                self._docker_binary,
+                "image",
+                "inspect",
+                "-f",
+                "{{.Id}}",
+                image_ref,
+            ),
+            env=self._docker_env(),
+        )
+        image_returncode, image_stdout, image_stderr = image_result
+        if image_returncode != 0:
+            error_output = f"{image_stdout}\n{image_stderr}".lower()
+            if "no such image" in error_output or "no such object" in error_output:
+                # A missing local ref must not authorize reuse. Relaunching lets
+                # Docker acquire the configured image through the normal path.
+                return False
+            details = (
+                image_stderr.strip()
+                or image_stdout.strip()
+                or f"exit code {image_returncode}"
+            )
+            raise RuntimeError(
+                "failed to inspect configured managed session image: " + details
+            )
+
+        container_image_id = container_stdout.strip()
+        current_image_id = image_stdout.strip()
+        return bool(
+            container_image_id
+            and current_image_id
+            and container_image_id == current_image_id
+        )
+
     @staticmethod
     def _build_generic_managed_agent_env(
         request: LaunchCodexManagedSessionRequest,
@@ -2757,6 +2832,10 @@ class DockerCodexManagedSessionController:
                 existing_record is not None
                 and self._request_matches_record(request, existing_record)
                 and await self._container_exists(existing_record.container_id)
+                and await self._container_uses_current_image(
+                    container_id=existing_record.container_id,
+                    image_ref=request.image_ref,
+                )
             ):
                 return CodexManagedSessionHandle(
                     runtimeFamily=request.runtime_family,
