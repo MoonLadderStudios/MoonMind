@@ -59,7 +59,10 @@ from .github_auth_broker import (
 )
 from .git_auth import build_github_token_git_environment
 from .managed_session_observability import ManagedSessionObservabilityBridge
-from .managed_session_store import ManagedSessionStore
+from .managed_session_store import (
+    TERMINAL_MANAGED_SESSION_STATUSES,
+    ManagedSessionStore,
+)
 from .managed_session_supervisor import ManagedSessionSupervisor
 
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
@@ -4174,11 +4177,11 @@ class DockerCodexManagedSessionController:
     async def _reap_orphan_sidecar_volumes(
         self,
         *,
+        volumes: Sequence[_ManagedSessionSidecarVolume],
         active_session_ids: set[str],
         grace_seconds: float,
         now: datetime,
     ) -> tuple[int, int, int, int]:
-        volumes = await self._list_managed_session_sidecar_volumes()
         if not volumes:
             return (0, 0, 0, 0)
         active_mounts = await self._list_active_docker_volume_mounts()
@@ -4249,8 +4252,18 @@ class DockerCodexManagedSessionController:
         by_session: dict[str, list[_ManagedSessionContainer]] = {}
         for container in containers:
             by_session.setdefault(container.session_id, []).append(container)
+        volumes = await self._list_managed_session_sidecar_volumes()
+        resource_session_ids = set(by_session)
+        resource_session_ids.update(
+            volume.session_id for volume in volumes if volume.session_id
+        )
+        all_records = {
+            record.session_id: record for record in self._session_store.iter_all()
+        }
         active_records = {
-            record.session_id: record for record in self._session_store.list_active()
+            session_id: record
+            for session_id, record in all_records.items()
+            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES
         }
         stale_active_session_ids = self._stale_active_session_ids(
             active_records=active_records,
@@ -4259,6 +4272,20 @@ class DockerCodexManagedSessionController:
             now=now,
         )
         active_session_ids = set(active_records) - stale_active_session_ids
+        # A terminal session-store status is not authoritative proof that the
+        # owning Temporal workflow has finished. Provider failures and retry
+        # cooldowns can make the record terminal while the workflow still owns
+        # and polls the container. Protect those containers unless Temporal
+        # positively confirms terminal ownership; lookup failures fail closed.
+        for session_id in resource_session_ids:
+            record = all_records.get(session_id)
+            if record is None:
+                continue
+            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
+                continue
+            terminal_owner_status = await self._terminal_owner_workflow_status(record)
+            if terminal_owner_status is None:
+                active_session_ids.add(session_id)
 
         skipped_active = 0
         skipped_recent = 0
@@ -4361,6 +4388,7 @@ class DockerCodexManagedSessionController:
             skipped_active_volumes,
             skipped_recent_volumes,
         ) = await self._reap_orphan_sidecar_volumes(
+            volumes=volumes,
             active_session_ids=active_session_ids,
             grace_seconds=grace_seconds,
             now=now,

@@ -5624,6 +5624,201 @@ async def test_controller_reaps_orphan_session_containers_and_skips_active(
 
 
 @pytest.mark.asyncio
+async def test_controller_reap_protects_terminal_record_until_owner_is_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    running_owner = _reap_active_record("sess-running-owner")
+    running_owner.agent_run_id = "workflow-running"
+    running_owner.status = "failed"
+    terminal_owner = _reap_active_record("sess-terminal-owner")
+    terminal_owner.agent_run_id = "workflow-completed"
+    terminal_owner.status = "failed"
+    store.save(running_owner)
+    store.save(terminal_owner)
+
+    async def _owner_workflow_status(workflow_id: str) -> str:
+        return {
+            "workflow-running": "RUNNING",
+            "workflow-completed": "COMPLETED",
+        }[workflow_id]
+
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:2] == ("docker", "ps"):
+            return 0, "c-running\nc-completed\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return (
+                0,
+                "c-running|sess-running-owner|managed-session"
+                "|2020-01-01T00:00:00Z\n"
+                "c-completed|sess-terminal-owner|managed-session"
+                "|2020-01-01T00:00:00Z\n",
+                "",
+            )
+        if command[:3] == ("docker", "rm", "-f"):
+            if command[-1].startswith("moonmind-session-"):
+                return 1, "", "No such container"
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+        owner_workflow_status_resolver=_owner_workflow_status,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.reaped_session_ids == ("sess-terminal-owner",)
+    assert result.reaped_containers == 1
+    assert result.skipped_active == 1
+    removed = {cmd[-1] for cmd in commands if cmd[:3] == ("docker", "rm", "-f")}
+    assert "c-completed" in removed
+    assert "c-running" not in removed
+
+
+@pytest.mark.asyncio
+async def test_controller_reap_protects_terminal_record_when_owner_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    record = _reap_active_record("sess-lookup-failed")
+    record.status = "failed"
+    store.save(record)
+
+    async def _owner_workflow_status(_workflow_id: str) -> str:
+        raise RuntimeError("Temporal unavailable")
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:2] == ("docker", "ps"):
+            return 0, "c-failed\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return (
+                0,
+                "c-failed|sess-lookup-failed|managed-session"
+                "|2020-01-01T00:00:00Z\n",
+                "",
+            )
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "", ""
+        raise AssertionError(f"protected session must not be removed: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+        owner_workflow_status_resolver=_owner_workflow_status,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.skipped_active == 1
+    assert result.reaped_containers == 0
+    assert result.reaped_session_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_controller_reap_limits_owner_lookups_to_sessions_with_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    volume_owner = _reap_active_record("sess-volume-owner")
+    volume_owner.agent_run_id = "workflow-volume-owner"
+    volume_owner.status = "failed"
+    retained_without_resources = _reap_active_record("sess-retained")
+    retained_without_resources.agent_run_id = "workflow-retained"
+    retained_without_resources.status = "failed"
+    store.save(volume_owner)
+    store.save(retained_without_resources)
+
+    owner_lookups: list[str] = []
+
+    async def _owner_workflow_status(workflow_id: str) -> str:
+        owner_lookups.append(workflow_id)
+        if workflow_id == "workflow-retained":
+            raise AssertionError("resource-free records must not query Temporal")
+        return "RUNNING"
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:2] == ("docker", "ps") and command != ("docker", "ps", "-q"):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "moonmind-session-sess-volume-owner-docker-graph\n", ""
+        if command[:3] == ("docker", "volume", "inspect"):
+            return (
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Name": "moonmind-session-sess-volume-owner-docker-graph",
+                            "CreatedAt": "2020-01-01T00:00:00Z",
+                            "Labels": {
+                                "moonmind.session_id": "sess-volume-owner",
+                                "moonmind.volume_role": "docker-graph",
+                                "moonmind.kind": "session-docker-sidecar-volume",
+                            },
+                        }
+                    ]
+                ),
+                "",
+            )
+        if command == ("docker", "ps", "-q"):
+            return 0, "", ""
+        raise AssertionError(f"protected volume must not be removed: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+        owner_workflow_status_resolver=_owner_workflow_status,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert owner_lookups == ["workflow-volume-owner"]
+    assert result.scanned_containers == 0
+    assert result.scanned_volumes == 1
+    assert result.reaped_volumes == 0
+    assert result.skipped_active_volumes == 1
+
+
+@pytest.mark.asyncio
 async def test_controller_reaps_stale_ready_session_after_max_age(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

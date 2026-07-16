@@ -49,7 +49,7 @@ from moonmind.workflows.temporal.managed_session_errors import (
     is_managed_session_locator_mismatch_error,
 )
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
-    _CODEX_PROVIDER_LIMIT_REACHED_REASON,
+    _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -2389,7 +2389,7 @@ async def test_start_recovers_after_second_empty_assistant_clear(
     ]
 
 
-async def test_start_does_not_clear_session_for_codex_no_credits_failure(
+async def test_start_does_not_clear_session_for_codex_usage_limit_failure(
     tmp_path: Path,
 ) -> None:
     binding = _binding()
@@ -2416,7 +2416,7 @@ async def test_start_does_not_clear_session_for_codex_no_credits_failure(
     async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
         send_turn_calls.append(request)
         metadata = {
-            "reason": _CODEX_PROVIDER_LIMIT_REACHED_REASON,
+            "reason": _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
             "failureClass": "integration_error",
         }
         _raise_activity_error_from_application_error(
