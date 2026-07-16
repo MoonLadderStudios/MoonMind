@@ -592,6 +592,8 @@ async def resolve_omnigent_bridge_session_projection(
 @router.get("/bridge-sessions/{bridge_session_id}/events", response_model=dict)
 async def list_omnigent_bridge_session_events(
     bridge_session_id: str,
+    after: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
@@ -606,10 +608,16 @@ async def list_omnigent_bridge_session_events(
         store=store,
     )
     events = await store.list_events(bridge_session_id)
+    if after is not None:
+        events = [event for event in events if event.sequence > after]
+    page = events[:limit]
+    has_more = len(events) > limit
     return {
         "bridgeSessionId": bridge_session_id,
-        "events": [_bridge_event_payload(row) for row in events],
-        "truncated": False,
+        "events": [_bridge_event_payload(row) for row in page],
+        "nextCursor": page[-1].sequence if has_more and page else None,
+        "truncated": has_more,
+        "retentionGap": False,
     }
 
 

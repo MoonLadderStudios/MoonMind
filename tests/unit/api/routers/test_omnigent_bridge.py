@@ -339,6 +339,39 @@ def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     assert event["metadata"]["source"] == "omnigent_bridge"
 
 
+def test_list_bridge_session_events_returns_bounded_cursor_pages() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id=f"evt-{sequence}",
+            bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.output_text.delta",
+            normalized_status="running",
+            text_preview=str(sequence),
+            artifact_ref=None,
+            metadata_={},
+        )
+        for sequence in range(1, 6)
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    first = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?limit=2"
+    ).json()
+    second = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?limit=2&after=2"
+    ).json()
+
+    assert [event["sequence"] for event in first["events"]] == [1, 2]
+    assert first["truncated"] is True
+    assert first["nextCursor"] == 2
+    assert first["retentionGap"] is False
+    assert [event["sequence"] for event in second["events"]] == [3, 4]
+    assert second["nextCursor"] == 4
+
+
 def test_list_bridge_session_events_handles_nullable_event_type() -> None:
     rows = [
         SimpleNamespace(

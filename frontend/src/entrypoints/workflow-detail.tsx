@@ -1390,6 +1390,8 @@ const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =
 const ObservabilityEventsResponseSchema = z.object({
   events: z.array(ObservabilityEventSchema).default([]),
   truncated: z.boolean().default(false),
+  nextCursor: z.number().nullable().optional(),
+  retentionGap: z.boolean().default(false),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
 });
 
@@ -2480,14 +2482,29 @@ async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
 ): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
-  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'events'), {
-    credentials: 'include',
-  });
-  if (!resp.ok) {
-    if (resp.status === 404) return null;
-    throw buildObservabilityRequestError(resp.status);
+  const events: ObservabilityEvent[] = [];
+  let cursor: number | null = null;
+  let retentionGap = false;
+  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+    const params = new URLSearchParams({ limit: '200' });
+    if (cursor !== null) params.set('after', String(cursor));
+    const resp = await fetch(`${bridgeSessionRoute(apiBase, bridgeSessionId, 'events')}?${params}`, {
+      credentials: 'include',
+    });
+    if (!resp.ok) {
+      if (resp.status === 404) return null;
+      throw buildObservabilityRequestError(resp.status);
+    }
+    const page = ObservabilityEventsResponseSchema.parse(await resp.json());
+    events.push(...page.events);
+    retentionGap ||= page.retentionGap;
+    if (!page.truncated || page.nextCursor == null) {
+      return { events, truncated: false, retentionGap };
+    }
+    if (page.nextCursor === cursor) throw new Error('Bridge replay cursor did not advance.');
+    cursor = page.nextCursor;
   }
-  return ObservabilityEventsResponseSchema.parse(await resp.json());
+  return { events, truncated: true, retentionGap };
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
@@ -5568,7 +5585,26 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
-  const historyRows = useMemo(() => mapEventsToTimelineRows(eventsQuery.data), [eventsQuery.data]);
+  const historyRows = useMemo(() => {
+    const rows = mapEventsToTimelineRows(eventsQuery.data);
+    if (!eventsQuery.data?.retentionGap) return rows;
+    return [{
+      id: `${bridgeSessionId}-retention-gap`,
+      text: 'Earlier bridge events are outside the retained replay window. Use diagnostic artifacts for missing evidence.',
+      stream: 'system' as TimelineStream,
+      kind: 'retention_gap',
+      sequence: 0,
+      timestamp: null,
+      sessionId: bridgeSessionId,
+      sessionEpoch: null,
+      containerId: null,
+      threadId: null,
+      turnId: null,
+      activeTurnId: null,
+      metadata: { degradedEvidence: true },
+      rowType: 'system' as const,
+    }, ...rows];
+  }, [bridgeSessionId, eventsQuery.data]);
 
   useEffect(() => {
     setLogContent([]);
@@ -5611,8 +5647,12 @@ function BridgeSessionLogsPanel({
       if (cancelled) return;
       try {
         const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
-        lastSeqRef.current = data.sequence;
-        setLogContent((prev) => [...prev, ...eventToTimelineRows(data)]);
+        lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, data.sequence);
+        setLogContent((prev) => {
+          const rowsById = new Map(prev.map((row) => [row.id, row]));
+          for (const row of eventToTimelineRows(data)) rowsById.set(row.id, row);
+          return Array.from(rowsById.values()).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+        });
       } catch {
         // Ignore malformed bridge events; the fetched event index remains visible.
       }
@@ -5659,9 +5699,10 @@ function BridgeSessionLogsPanel({
           <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
           <span className="small">Wrap lines</span>
         </label>
+        <button className="secondary small" onClick={() => void eventsQuery.refetch()}>Refresh replay</button>
         <button className="secondary small" onClick={handleCopy}>Copy</button>
       </div>
-      <p className="small">
+      <p className="small" role="status" aria-live="polite" aria-atomic="true">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
