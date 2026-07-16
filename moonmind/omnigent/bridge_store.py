@@ -414,6 +414,8 @@ class OmnigentBridgeSessionStore:
         workflow_id: str | None = None,
         agent_run_id: str | None = None,
         idempotency_key: str | None = None,
+        run_id: str | None = None,
+        step_execution_id: str | None = None,
     ) -> OmnigentBridgeSession | None:
         """Resolve the Workflow Chat bridge projection target (§15).
 
@@ -422,34 +424,51 @@ class OmnigentBridgeSessionStore:
         to the step/agent-run binding.
         """
 
+        workflow = (workflow_id or "").strip()
+        agent_run = (agent_run_id or "").strip()
+        run = (run_id or "").strip()
+        step = (step_execution_id or "").strip()
+
+        async def _by_workflow(*, scoped: bool) -> OmnigentBridgeSession | None:
+            if not workflow:
+                return None
+            async with self._session_factory() as session:
+                statement = select(OmnigentBridgeSession).where(
+                    OmnigentBridgeSession.moonmind_workflow_id == workflow
+                )
+                if scoped and run:
+                    statement = statement.where(
+                        OmnigentBridgeSession.moonmind_run_id == run
+                    )
+                if scoped and step:
+                    statement = statement.where(
+                        OmnigentBridgeSession.step_execution_id == step
+                    )
+                if scoped and agent_run:
+                    statement = statement.where(
+                        OmnigentBridgeSession.moonmind_agent_run_id == agent_run
+                    )
+                statement = statement.order_by(
+                    OmnigentBridgeSession.updated_at.desc(),
+                    OmnigentBridgeSession.first_message_post_attempted_at.desc().nulls_last(),
+                    OmnigentBridgeSession.created_at.desc(),
+                ).limit(1)
+                result = await session.execute(statement)
+                row = result.scalars().first()
+                return _detached(session, row) if row is not None else None
+
+        # Explicit run/step binding is authoritative, followed by an explicit
+        # idempotency key, then the workflow's latest eligible session.
+        if workflow and (agent_run or run or step):
+            row = await _by_workflow(scoped=True)
+            if row is not None:
+                return row
         key = (idempotency_key or "").strip()
         if key:
             row = await self.get_existing(key)
             if row is not None:
                 return row
-
-        workflow = (workflow_id or "").strip()
-        if not workflow:
-            return None
-        agent_run = (agent_run_id or "").strip()
-        async with self._session_factory() as session:
-            statement = select(OmnigentBridgeSession).where(
-                OmnigentBridgeSession.moonmind_workflow_id == workflow
-            )
-            if agent_run:
-                statement = statement.where(
-                    OmnigentBridgeSession.moonmind_agent_run_id == agent_run
-                )
-            statement = statement.order_by(
-                OmnigentBridgeSession.updated_at.desc(),
-                OmnigentBridgeSession.first_message_post_attempted_at.desc().nulls_last(),
-                OmnigentBridgeSession.created_at.desc(),
-            ).limit(1)
-            result = await session.execute(statement)
-            row = result.scalars().first()
-            if row is None:
-                return None
-            return _detached(session, row)
+        return await _by_workflow(scoped=False)
 
     async def attach_session(
         self, idempotency_key: str, session_id: str
@@ -627,6 +646,51 @@ class OmnigentBridgeSessionStore:
             for row in rows:
                 session.expunge(row)
             return rows
+
+    async def list_event_page(
+        self,
+        bridge_session_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[OmnigentBridgeSessionEvent], bool, int | None, int]:
+        """Return a bounded durable page plus the session's sequence bounds.
+
+        The extra row determines ``has_more`` without loading the remaining
+        history.  Minimum sequence is returned so callers can make retention
+        gaps explicit when an old cursor no longer precedes retained history.
+        """
+
+        async with self._session_factory() as session:
+            bounds = await session.execute(
+                select(
+                    func.min(OmnigentBridgeSessionEvent.sequence),
+                    func.max(OmnigentBridgeSessionEvent.sequence),
+                ).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id
+                )
+            )
+            minimum, maximum = bounds.one()
+            result = await session.execute(
+                select(OmnigentBridgeSessionEvent)
+                .where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id,
+                    OmnigentBridgeSessionEvent.sequence > after,
+                )
+                .order_by(OmnigentBridgeSessionEvent.sequence.asc())
+                .limit(limit + 1)
+            )
+            rows = list(result.scalars().all())
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            for row in rows:
+                session.expunge(row)
+            return (
+                rows,
+                has_more,
+                int(minimum) if minimum is not None else None,
+                int(maximum or 0),
+            )
 
     async def append_events(
         self,

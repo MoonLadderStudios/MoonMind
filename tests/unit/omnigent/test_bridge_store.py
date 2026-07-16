@@ -228,7 +228,9 @@ async def test_get_session_owner_resolves_by_session_id(store):
 
 
 @pytest.mark.asyncio
-async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(store):
+async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(
+    store,
+):
     first = await store.get_or_create(
         request=_request("idem-first"),
         endpoint_ref="default",
@@ -359,7 +361,11 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
             "sequence": 3,
         },
         {"eventType": "response.delta", "normalizedStatus": "running", "sequence": 4},
-        {"eventType": "response.failed", "normalizedStatus": "timed_out", "sequence": 5},
+        {
+            "eventType": "response.failed",
+            "normalizedStatus": "timed_out",
+            "sequence": 5,
+        },
     ]
 
     terminal = await store.mark_terminal(
@@ -403,20 +409,62 @@ async def test_mark_terminal_event_indexing_is_idempotent_on_retry(store):
     )
     stream = [
         {"eventType": "session.created", "normalizedStatus": "created", "sequence": 1},
-        {"eventType": "response.completed", "normalizedStatus": "completed", "sequence": 2},
+        {
+            "eventType": "response.completed",
+            "normalizedStatus": "completed",
+            "sequence": 2,
+        },
     ]
 
     await store.mark_terminal(
-        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+        "idem-1",
+        status="completed",
+        terminal_refs={"outputRefs": ["art"]},
+        events=stream,
     )
     # Retry: same key, same events.
     await store.mark_terminal(
-        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+        "idem-1",
+        status="completed",
+        terminal_refs={"outputRefs": ["art"]},
+        events=stream,
     )
 
     events = await store.list_events(created.bridge_session_id)
     assert [e.sequence for e in events] == [1, 2]
     assert [e.normalized_status for e in events] == ["created", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_list_event_page_is_bounded_and_reports_sequence_bounds(store):
+    created = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.mark_terminal(
+        "idem-1",
+        status="completed",
+        events=[
+            {
+                "eventType": "response.delta",
+                "normalizedStatus": "running",
+                "sequence": sequence,
+            }
+            for sequence in range(1, 6)
+        ],
+    )
+
+    rows, has_more, minimum, maximum = await store.list_event_page(
+        created.bridge_session_id, after=1, limit=2
+    )
+
+    assert [row.sequence for row in rows] == [2, 3]
+    assert has_more is True
+    assert minimum == 1
+    assert maximum == 5
 
 
 @pytest.mark.asyncio
@@ -493,7 +541,9 @@ async def test_unique_idempotency_key_enforced(store):
 
 
 @pytest.mark.asyncio
-async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(store):
+async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(
+    store,
+):
     row = await store.get_or_create(
         request=_request(),
         endpoint_ref="default",

@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -74,6 +75,7 @@ def get_bridge_config() -> OmnigentBridgeConfig:
     """Return the resolved, immutable bridge configuration."""
 
     return _BRIDGE_CONFIG
+
 
 router = APIRouter(tags=["Omnigent Bridge"])
 
@@ -168,8 +170,7 @@ def _get_bridge_proxy(
             detail={
                 "code": "omnigent_disabled",
                 "message": (
-                    f"{OMNIGENT_DISABLED_MESSAGE} (missing: "
-                    f"{', '.join(gate.missing)})"
+                    f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
                 ),
             },
         )
@@ -209,6 +210,7 @@ def _get_create_embedded_facade(
         run_store=OmnigentBridgeSessionStore(async_session_maker),
         config=_config,
     )
+
 
 def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     status_code = exc.status_code or _FAILURE_CLASS_STATUS.get(
@@ -289,8 +291,7 @@ async def _resolve_bridge_binding(
             detail={
                 "code": "workflow_ownership_denied",
                 "message": (
-                    "The authenticated principal does not own the referenced "
-                    "workflow."
+                    "The authenticated principal does not own the referenced workflow."
                 ),
             },
         )
@@ -331,7 +332,9 @@ async def create_omnigent_session(
                     failure_class="system_error",
                     status_code=501,
                 )
-            return await embedded_facade.create_session(request=payload, binding=binding)
+            return await embedded_facade.create_session(
+                request=payload, binding=binding
+            )
         if proxy is None:
             raise OmnigentBridgeError(
                 "Omnigent proxy is unavailable for the configured bridge mode",
@@ -373,8 +376,7 @@ async def get_omnigent_session(
             detail={
                 "code": "omnigent_bridge_session_unknown",
                 "message": (
-                    "No Omnigent bridge session is bound to the requested "
-                    "session id."
+                    "No Omnigent bridge session is bound to the requested session id."
                 ),
             },
         )
@@ -416,8 +418,7 @@ async def _authorize_session_control(
             detail={
                 "code": "omnigent_bridge_session_unknown",
                 "message": (
-                    "No Omnigent bridge session is bound to the requested "
-                    "session id."
+                    "No Omnigent bridge session is bound to the requested session id."
                 ),
             },
         )
@@ -479,6 +480,83 @@ async def _authorize_bridge_session_projection(
 
 
 _BRIDGE_TERMINAL_STATUSES = frozenset({"completed", "failed", "canceled", "timed_out"})
+_BRIDGE_PAGE_SCHEMA = "moonmind.bridge-session-events-page.v1"
+_BRIDGE_RESOLUTION_SCHEMA = "moonmind.bridge-session-resolution.v1"
+_BRIDGE_TERMINAL_SCHEMA = "moonmind.bridge-session-terminal.v1"
+_BRIDGE_PAGE_DEFAULT_LIMIT = 100
+_BRIDGE_PAGE_MAX_LIMIT = 500
+
+
+class BridgeRetentionGap(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    requested_after: int = Field(alias="requestedAfter")
+    earliest_available: int = Field(alias="earliestAvailable")
+    explanation: str
+
+
+class BridgeTerminalEnvelope(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    schema_version: Literal["moonmind.bridge-session-terminal.v1"] = Field(
+        alias="schemaVersion"
+    )
+    status: str
+    failure_class: str | None = Field(default=None, alias="failureClass")
+    failure_code: str | None = Field(default=None, alias="failureCode")
+    summary: str | None = None
+    diagnostics_ref: str | None = Field(default=None, alias="diagnosticsRef")
+    resource_refs: dict[str, Any] = Field(default_factory=dict, alias="resourceRefs")
+    cleanup_state: str | None = Field(default=None, alias="cleanupState")
+    lease_release_state: str | None = Field(default=None, alias="leaseReleaseState")
+    evidence_incomplete: bool = Field(alias="evidenceIncomplete")
+    explanation: str | None = None
+
+
+class BridgeEvent(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    sequence: int
+    timestamp: str
+    stream: str
+    text: str
+    kind: str
+    bridgeSessionId: str
+
+
+class BridgeEventPage(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    schema_version: Literal["moonmind.bridge-session-events-page.v1"] = Field(
+        alias="schemaVersion"
+    )
+    bridge_session_id: str = Field(alias="bridgeSessionId")
+    items: list[BridgeEvent]
+    after: int
+    next_cursor: str | None = Field(alias="nextCursor")
+    has_more: bool = Field(alias="hasMore")
+    terminal: bool
+    latest_sequence: int = Field(alias="latestSequence")
+    retention_gap: BridgeRetentionGap | None = Field(alias="retentionGap")
+    terminal_evidence: BridgeTerminalEnvelope | None = Field(alias="terminalEvidence")
+
+
+class BridgeSessionResolution(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    schema_version: Literal["moonmind.bridge-session-resolution.v1"] = Field(
+        alias="schemaVersion"
+    )
+    bridge_session_id: str = Field(alias="bridgeSessionId")
+    workflow_id: str = Field(alias="workflowId")
+    run_id: str | None = Field(alias="runId")
+    step_execution_id: str | None = Field(alias="stepExecutionId")
+    agent_run_id: str = Field(alias="agentRunId")
+    status: str
+    latest_sequence: int = Field(alias="latestSequence")
+    provider_profile_id: str | None = Field(alias="providerProfileId")
+    host_id: str | None = Field(alias="hostId")
+    provider_session_id: str | None = Field(alias="providerSessionId")
+    live_tailing_available: bool = Field(alias="liveTailingAvailable")
+    terminal_evidence_available: bool = Field(alias="terminalEvidenceAvailable")
+    resource_availability: dict[str, bool] = Field(alias="resourceAvailability")
+    compatibility_profile: str = Field(alias="compatibilityProfile")
 
 
 def _bridge_event_kind(event_type: str | None) -> str:
@@ -489,7 +567,10 @@ def _bridge_event_kind(event_type: str | None) -> str:
         return "user_message_submitted"
     if raw in {"response.delta", "response.output.delta"} or raw.endswith(".delta"):
         return "assistant_message_delta"
-    if raw.startswith("response.output") or raw in {"response.message", "message.received"}:
+    if raw.startswith("response.output") or raw in {
+        "response.message",
+        "message.received",
+    }:
         return "assistant_message"
     if raw in {"response.completed", "completed", "stream.done"}:
         return "response_completed"
@@ -531,7 +612,19 @@ def _bridge_event_text(row: Any) -> str:
 
 
 def _bridge_event_payload(row: Any) -> dict[str, Any]:
-    metadata = dict(row.metadata_ or {})
+    blocked_fragments = (
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "authorization",
+        "cookie",
+    )
+    metadata = {
+        key: value
+        for key, value in dict(row.metadata_ or {}).items()
+        if not any(fragment in str(key).lower() for fragment in blocked_fragments)
+    }
     if row.artifact_ref:
         metadata.setdefault("artifactRef", row.artifact_ref)
     metadata.setdefault("source", "omnigent_bridge")
@@ -552,11 +645,64 @@ def _bridge_event_payload(row: Any) -> dict[str, Any]:
     }
 
 
-@router.get("/bridge-sessions/resolve", response_model=dict)
+def _terminal_envelope(row: Any) -> dict[str, Any] | None:
+    if str(row.status or "").strip() not in _BRIDGE_TERMINAL_STATUSES:
+        return None
+    refs = dict(row.terminal_refs or {})
+    metadata_refs = dict(refs.get("metadataRefs") or {})
+    resource_refs = {
+        key: value
+        for key, value in {
+            "captureManifestRef": row.capture_manifest_ref,
+            "initialSnapshotRef": row.initial_snapshot_ref,
+            "finalSnapshotRef": row.final_snapshot_ref,
+            "rawEventsRef": row.raw_events_ref,
+            "normalizedEventsRef": row.normalized_events_ref,
+            "externalStateRef": row.external_state_ref,
+            **metadata_refs,
+        }.items()
+        if value
+    }
+    summary = (
+        str(refs.get("summary") or refs.get("message") or "").strip()[:2000] or None
+    )
+    evidence_incomplete = not bool(resource_refs or row.diagnostics_ref)
+    return {
+        "schemaVersion": _BRIDGE_TERMINAL_SCHEMA,
+        "status": row.status,
+        "failureClass": refs.get("failureClass"),
+        "failureCode": refs.get("failureCode") or refs.get("code"),
+        "summary": summary,
+        "diagnosticsRef": row.diagnostics_ref or refs.get("diagnosticsRef"),
+        "resourceRefs": resource_refs,
+        "cleanupState": refs.get("cleanupState"),
+        "leaseReleaseState": refs.get("leaseReleaseState"),
+        "evidenceIncomplete": evidence_incomplete,
+        "explanation": (
+            "The session reached a durable terminal state before complete terminal evidence was captured."
+            if evidence_incomplete
+            else None
+        ),
+    }
+
+
+def _retention_gap(after: int, minimum: int | None) -> dict[str, Any] | None:
+    if minimum is None or after == 0 or minimum <= after + 1:
+        return None
+    return {
+        "requestedAfter": after,
+        "earliestAvailable": minimum,
+        "explanation": "Events between the requested cursor and earliest retained sequence are unavailable.",
+    }
+
+
+@router.get("/bridge-sessions/resolve", response_model=BridgeSessionResolution)
 async def resolve_omnigent_bridge_session_projection(
     workflow_id: str | None = Query(default=None, alias="workflowId"),
     agent_run_id: str | None = Query(default=None, alias="agentRunId"),
     idempotency_key: str | None = Query(default=None, alias="idempotencyKey"),
+    run_id: str | None = Query(default=None, alias="runId"),
+    step_execution_id: str | None = Query(default=None, alias="stepExecutionId"),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
@@ -568,6 +714,8 @@ async def resolve_omnigent_bridge_session_projection(
         workflow_id=workflow_id,
         agent_run_id=agent_run_id,
         idempotency_key=idempotency_key,
+        run_id=run_id,
+        step_execution_id=step_execution_id,
     )
     if row is None:
         raise HTTPException(
@@ -580,18 +728,45 @@ async def resolve_omnigent_bridge_session_projection(
         service=service,
         store=store,
     )
+    _, _, _, latest_sequence = await store.list_event_page(
+        row.bridge_session_id, after=0, limit=1
+    )
+    terminal_evidence = _terminal_envelope(row)
     return {
+        "schemaVersion": _BRIDGE_RESOLUTION_SCHEMA,
         "bridgeSessionId": row.bridge_session_id,
         "workflowId": row.moonmind_workflow_id,
+        "runId": row.moonmind_run_id,
+        "stepExecutionId": row.step_execution_id,
         "agentRunId": row.moonmind_agent_run_id,
-        "idempotencyKey": row.idempotency_key,
         "status": row.status,
+        "latestSequence": latest_sequence,
+        "providerProfileId": row.provider_profile_id,
+        "hostId": row.omnigent_host_id,
+        "providerSessionId": row.omnigent_session_id,
+        "liveTailingAvailable": row.status not in _BRIDGE_TERMINAL_STATUSES,
+        "terminalEvidenceAvailable": terminal_evidence is not None,
+        "resourceAvailability": {
+            "captureManifest": bool(row.capture_manifest_ref),
+            "initialSnapshot": bool(row.initial_snapshot_ref),
+            "finalSnapshot": bool(row.final_snapshot_ref),
+            "diagnostics": bool(row.diagnostics_ref),
+            "externalState": bool(row.external_state_ref),
+        },
+        "compatibilityProfile": row.compatibility_profile,
     }
 
 
-@router.get("/bridge-sessions/{bridge_session_id}/events", response_model=dict)
+@router.get(
+    "/bridge-sessions/{bridge_session_id}/events", response_model=BridgeEventPage
+)
 async def list_omnigent_bridge_session_events(
     bridge_session_id: str,
+    after: int = Query(default=0, ge=0),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(
+        default=_BRIDGE_PAGE_DEFAULT_LIMIT, ge=1, le=_BRIDGE_PAGE_MAX_LIMIT
+    ),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
@@ -605,18 +780,45 @@ async def list_omnigent_bridge_session_events(
         service=service,
         store=store,
     )
-    events = await store.list_events(bridge_session_id)
+    if cursor is not None:
+        try:
+            after = int(cursor)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_bridge_cursor"}
+            ) from exc
+        if after < 0:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_bridge_cursor"}
+            )
+    row = await store.get_bridge_session(bridge_session_id)
+    events, has_more, minimum, latest = await store.list_event_page(
+        bridge_session_id, after=after, limit=limit
+    )
+    next_cursor = str(events[-1].sequence) if events else None
     return {
+        "schemaVersion": _BRIDGE_PAGE_SCHEMA,
         "bridgeSessionId": bridge_session_id,
-        "events": [_bridge_event_payload(row) for row in events],
-        "truncated": False,
+        "items": [_bridge_event_payload(event) for event in events],
+        "after": after,
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
+        "terminal": bool(
+            row and row.status in _BRIDGE_TERMINAL_STATUSES and not has_more
+        ),
+        "latestSequence": latest,
+        "retentionGap": _retention_gap(after, minimum),
+        "terminalEvidence": _terminal_envelope(row) if row else None,
     }
 
 
 @router.get("/bridge-sessions/{bridge_session_id}/stream")
 async def stream_omnigent_bridge_session_events(
     bridge_session_id: str,
+    request: Request,
     since: int | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
@@ -630,21 +832,42 @@ async def stream_omnigent_bridge_session_events(
         service=service,
         store=store,
     )
+    cursor_value = last_event_id or cursor
+    try:
+        initial_after = (
+            int(cursor_value) if cursor_value is not None else int(since or 0)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail={"code": "invalid_bridge_cursor"}
+        ) from exc
+    if initial_after < 0:
+        raise HTTPException(status_code=400, detail={"code": "invalid_bridge_cursor"})
+
     async def _event_stream():
-        last_sequence = since
+        last_sequence = initial_after
         idle_polls = 0
         while True:
-            rows = await store.list_events(bridge_session_id)
-            if last_sequence is not None:
-                rows = [row for row in rows if row.sequence > last_sequence]
-            rows.sort(key=lambda row: row.sequence)
+            if await request.is_disconnected():
+                return
+            rows, has_more, minimum, _ = await store.list_event_page(
+                bridge_session_id, after=last_sequence, limit=_BRIDGE_PAGE_MAX_LIMIT
+            )
+            gap = _retention_gap(last_sequence, minimum)
+            if gap:
+                yield f"event: retention_gap\ndata: {json.dumps(gap, separators=(',', ':'))}\n\n"
             for row in rows:
                 last_sequence = row.sequence
                 idle_polls = 0
                 payload = json.dumps(_bridge_event_payload(row), separators=(",", ":"))
-                yield f"event: bridge_event\ndata: {payload}\n\n"
-                if str(row.normalized_status or "").strip() in _BRIDGE_TERMINAL_STATUSES:
-                    return
+                yield f"id: {row.sequence}\nevent: bridge_event\ndata: {payload}\n\n"
+            if has_more:
+                continue
+            session_row = await store.get_bridge_session(bridge_session_id)
+            if session_row and session_row.status in _BRIDGE_TERMINAL_STATUSES:
+                terminal = _terminal_envelope(session_row)
+                yield f"event: terminal\ndata: {json.dumps(terminal, separators=(',', ':'))}\n\n"
+                return
             idle_polls += 1
             yield ": keepalive\n\n"
             await asyncio.sleep(1.0 if idle_polls < 30 else 5.0)
