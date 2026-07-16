@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -52,11 +53,7 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
-    resolved_api_token,
-    resolved_default_agent_name,
     resolved_host_runner_token,
-    resolved_proxy_forward_headers,
-    resolved_server_url,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -164,7 +161,15 @@ def _get_bridge_proxy(
                 "message": "Unsupported Omnigent bridge host protocol mode.",
             },
         )
-    gate = build_omnigent_gate()
+    url_ref = _config.host_connection.upstream_server_url_ref
+    token_ref = _config.host_connection.upstream_api_token_ref
+    server_url_key = "OMNIGENT_SERVER_URL" if url_ref == "default" else url_ref
+    token_key = "OMNIGENT_API_TOKEN" if token_ref == "default" else token_ref
+    server_url = str(os.environ.get(server_url_key, "")).strip()
+    api_token = str(os.environ.get(token_key, "")).strip()
+    gate = build_omnigent_gate(
+        env={**os.environ, "OMNIGENT_SERVER_URL": server_url}
+    )
     if not gate.enabled:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -176,16 +181,18 @@ def _get_bridge_proxy(
             },
         )
     client = OmnigentHttpClient(
-        base_url=resolved_server_url(),
-        api_token=resolved_api_token(),
+        base_url=server_url,
+        api_token=api_token,
         forward_headers=request.headers,
-        upstream_header_allowlist=resolved_proxy_forward_headers(),
+        upstream_header_allowlist=frozenset(
+            _config.host_connection.upstream_header_allowlist
+        ),
     )
     return OmnigentBridgeSessionProxy(
         run_store=OmnigentBridgeSessionStore(async_session_maker),
         client=client,
         config=_config,
-        default_agent_name=resolved_default_agent_name(),
+        default_agent_name=_config.host_connection.default_agent_name,
     )
 
 

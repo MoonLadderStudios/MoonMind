@@ -358,6 +358,30 @@ def test_deployment_configuration_is_accepted() -> None:
     assert config.host_connection.embedded.port == 7000
 
 
+def test_proxy_connection_policy_is_resolved_from_bridge_config() -> None:
+    config = parse_bridge_config(
+        {"hostConnection": {
+            "upstreamServerUrlRef": "OMNIGENT_PROD_URL",
+            "upstreamApiTokenRef": "OMNIGENT_PROD_TOKEN",
+            "upstreamHeaderAllowlist": ["X-Trace-ID", "x-profile"],
+            "defaultAgentName": "codex",
+        }}
+    )
+    connection = config.host_connection
+    assert connection.upstream_server_url_ref == "OMNIGENT_PROD_URL"
+    assert connection.upstream_api_token_ref == "OMNIGENT_PROD_TOKEN"
+    assert connection.upstream_header_allowlist == ("x-trace-id", "x-profile")
+    assert connection.default_agent_name == "codex"
+
+
+@pytest.mark.parametrize("header", ["Authorization", "Cookie", "Proxy-Authorization"])
+def test_proxy_header_allowlist_rejects_credentials(header: str) -> None:
+    with pytest.raises(BridgeConfigError, match="credential-bearing"):
+        parse_bridge_config(
+            {"hostConnection": {"upstreamHeaderAllowlist": [header]}}
+        )
+
+
 def test_host_dispatch_is_not_rejected_as_custom_build() -> None:
     # "hostDispatch" normalizes to contain "patch" (from "dispatch") but must not
     # be treated as a custom host build request. It still fails structural

@@ -428,9 +428,37 @@ class BridgeHostConnection(BaseModel):
 
     mode: HostProtocolMode | None = None
     upstream_server_url_ref: str = Field("default", alias="upstreamServerUrlRef")
+    upstream_api_token_ref: str = Field("default", alias="upstreamApiTokenRef")
+    upstream_header_allowlist: tuple[str, ...] = Field(
+        default=(), alias="upstreamHeaderAllowlist"
+    )
+    default_agent_name: str = Field("", alias="defaultAgentName")
     embedded: BridgeEmbeddedHostConnection = Field(
         default_factory=BridgeEmbeddedHostConnection
     )
+
+    @field_validator("upstream_server_url_ref", "upstream_api_token_ref")
+    @classmethod
+    def _refs_are_non_empty(cls, value: Any) -> str:
+        candidate = str(value).strip()
+        if not candidate:
+            raise BridgeConfigError("upstream endpoint references must not be empty")
+        return candidate
+
+    @field_validator("upstream_header_allowlist")
+    @classmethod
+    def _validate_header_allowlist(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        forbidden = {"authorization", "cookie", "proxy-authorization"}
+        normalized = tuple(dict.fromkeys(str(item).strip().lower() for item in value))
+        if any(not item for item in normalized):
+            raise BridgeConfigError("upstreamHeaderAllowlist entries must not be empty")
+        rejected = sorted(forbidden.intersection(normalized))
+        if rejected:
+            raise BridgeConfigError(
+                "upstreamHeaderAllowlist must not contain credential-bearing headers: "
+                + ", ".join(rejected)
+            )
+        return normalized
 
 
 class BridgeCaptureDefaults(BaseModel):

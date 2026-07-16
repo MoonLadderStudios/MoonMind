@@ -19,6 +19,8 @@ from api_service.db.models import OmnigentBridgeSession
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
+    BridgeSessionEventRequest,
+    OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import (
@@ -132,3 +134,57 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
         BRIDGE_EVENT_JOURNAL_KEY
     ]
     assert len(journal_after) == 1
+
+
+async def test_bridge_proxy_complete_control_and_resource_matrix(fake_server, store) -> None:
+    server, base_url = fake_server
+    run_store, _ = store
+    proxy = _proxy(run_store, base_url)
+    binding = BridgePrincipalBinding(
+        workflow_id="mm:w2", correlation_id="corr-2",
+        idempotency_key="idem-2", agent_run_id="ar-2",
+    )
+    await proxy.create_session(
+        request=BridgeSessionCreateRequest(agent_id="agent-1", host_type="managed"),
+        binding=binding,
+    )
+
+    attached = await proxy.attach_session(session_id="session-1", binding=binding)
+    assert attached["id"] == "session-1"
+    assert await proxy.list_hosts() == [{"id": "profile-host", "status": "ready"}]
+    assert await proxy.post_event(
+        session_id="session-1", event=BridgeSessionEventRequest(type="interrupt")
+    ) == {"pending_id": "pending-1", "item_id": "item-1"}
+    await proxy.post_event(
+        session_id="session-1", event=BridgeSessionEventRequest(type="message")
+    )
+    assert await proxy.resolve_elicitation(
+        session_id="session-1", elicitation_id="el-1", payload={"value": "yes"}
+    ) == {"ok": True}
+
+    assert (await proxy.get_resource("changed_files", "session-1"))["items"]
+    assert (await proxy.get_resource("workspace_files", "session-1"))["items"]
+    assert await proxy.get_resource("workspace_file", "session-1", "src/app.py") == b"print('fake')\n"
+    assert (await proxy.get_resource("workspace_diff", "session-1", "src/app.py")).startswith(b"diff --git")
+    assert (await proxy.get_resource("session_files", "session-1"))["items"]
+    assert await proxy.get_resource("session_file", "session-1", "file-1") == b"session file evidence\n"
+
+    streamed = [event async for event in proxy.stream_events("session-1")]
+    assert streamed[-1]["type"] == "response.completed"
+    with pytest.raises(OmnigentBridgeError, match="deletion is disabled") as exc:
+        await proxy.delete_session("session-1")
+    assert exc.value.code == "omnigent_bridge_capability_unavailable"
+
+
+async def test_bridge_proxy_optional_diff_degrades_to_stable_capability_error(store) -> None:
+    server = FakeOmnigentServer(supports_diff=False)
+    running = await start_fake_omnigent_server(server)
+    try:
+        run_store, _ = store
+        proxy = _proxy(run_store, running.base_url)
+        with pytest.raises(OmnigentBridgeError) as exc:
+            await proxy.get_resource("workspace_diff", "session-1", "src/app.py")
+        assert exc.value.code == "omnigent_bridge_capability_unavailable"
+        assert exc.value.failure_class == "user_error"
+    finally:
+        await running.runner.cleanup()

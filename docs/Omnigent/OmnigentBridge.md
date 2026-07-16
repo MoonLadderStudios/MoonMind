@@ -326,6 +326,9 @@ publicApi:
 hostConnection:
   mode: upstream_omnigent_server_proxy
   upstreamServerUrlRef: default
+  upstreamApiTokenRef: default
+  upstreamHeaderAllowlist: []
+  defaultAgentName: ""
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
