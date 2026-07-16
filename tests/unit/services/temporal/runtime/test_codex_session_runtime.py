@@ -1235,9 +1235,7 @@ def test_runtime_send_turn_classifies_explicit_limit_token_count_as_provider_fai
                     "type": "token_count",
                     "rate_limits": {
                         "limit_id": "premium",
-                        "rate_limit_reached_type": (
-                            "workspace_member_credits_depleted"
-                        ),
+                        "rate_limit_reached_type": "workspace_member_credits_depleted",
                         "credits": {
                             "has_credits": False,
                             "unlimited": False,
