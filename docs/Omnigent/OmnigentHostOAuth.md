@@ -2,7 +2,7 @@
 
 **Status:** Desired-state design  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-16
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or in issue/PR tracking. This document defines the durable target-state contract.
 
@@ -14,6 +14,8 @@
 - [`docs/ManagedAgents/ClaudeAnthropicOAuth.md`](../ManagedAgents/ClaudeAnthropicOAuth.md)
 - [`docs/Omnigent/OmnigentAdapter.md`](./OmnigentAdapter.md)
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)
+- [`docs/Security/SettingsSystem.md`](../Security/SettingsSystem.md)
+- [`docs/UI/WorkflowDetailsPage.md`](../UI/WorkflowDetailsPage.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Workflows/CheckpointBranchSystem.md`](../Workflows/CheckpointBranchSystem.md)
 - [`docs/MoonMindRoadmap.md`](../MoonMindRoadmap.md)
@@ -465,7 +467,12 @@ If any step fails, MoonMind must not fall back to another credential method or g
 
 ### 9.3 Static Compose slice
 
-The first local-development slice may use one dedicated Compose service per first-party OAuth profile:
+The canonical local bootstrap is the repository's single
+`docker-compose.yaml`. Operators enable dedicated OAuth hosts with
+`COMPOSE_PROFILES` (for example `COMPOSE_PROFILES="omnigent-host-codex"`) and
+run `docker compose up -d`; removed overlay files and platform-specific
+`COMPOSE_FILE` lists are not part of this contract. The first local-development
+slice uses one dedicated Compose service per first-party OAuth profile:
 
 ```text
 omnigent-host-claude
@@ -484,6 +491,11 @@ Compose and init scripts should automatically provide:
 - restart behavior.
 
 MoonMind must discover the configured binding and host ID. Operators should not extract host IDs or manually edit workflow JSON.
+
+The init service and host startup/check path perform state initialization,
+ownership repair, credential preflight, and deterministic host registration.
+The on-demand target in §9.4 uses the same binding and readiness contract after
+lease acquisition; it does not introduce manual `hostId` configuration.
 
 This static slice is a trusted local/single-tenant transitional topology. The profile lease still controls session assignment, and each host runs at most one active runner.
 

@@ -1,10 +1,10 @@
 # Settings System
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [OmnigentHostOAuth.md](../Omnigent/OmnigentHostOAuth.md), [OmnigentBridge.md](../Omnigent/OmnigentBridge.md)
 
 Status: **Desired-State Design**
 Owners: MoonMind Engineering
-Last Updated: 2026-04-27
+Last Updated: 2026-07-16
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Settings System.
@@ -1099,6 +1099,28 @@ If a setting or provider profile references a missing, disabled, or revoked secr
 ## 15. Provider Profiles Integration
 
 Provider Profiles are first-class resources inside Providers & Secrets.
+
+For Codex-through-Omnigent, Settings is the enrollment and status surface, not
+the execution authority. A workflow selects `executionProfileRef`; the Provider
+Profile and its shared capacity-one lease authorize OAuth selection and prevent
+direct Codex and Omnigent-backed consumers from using the same mutable OAuth
+home concurrently. The complete profile-to-host lifecycle, including credential
+generation, binding, host lease, preflight, cleanup, and Compose bootstrap, is
+owned by [Omnigent Host OAuth](../Omnigent/OmnigentHostOAuth.md). Bridge session,
+event, resource, and artifact authorization is owned by the
+[Omnigent Bridge](../Omnigent/OmnigentBridge.md).
+
+These are four separate authentication boundaries: MoonMind user
+authentication, MoonMind bridge-to-Omnigent server credentials, Omnigent
+host/server credentials, and Codex/OpenAI OAuth state. Settings may display
+redacted readiness and lifecycle status for each boundary, but it never copies
+one credential into another boundary or exposes credential bodies.
+
+The canonical local operator path remains `docker-compose.yaml` with a
+dedicated `COMPOSE_PROFILES` value such as `omnigent-host-codex`. Settings does
+not ask operators to copy an Omnigent `hostId` into a workflow. Deterministic
+binding and on-demand launch resolve the selected profile to its authorized
+host.
 
 The Settings UI may create, update, delete, validate, enable, disable, and select defaults for provider profiles.
 

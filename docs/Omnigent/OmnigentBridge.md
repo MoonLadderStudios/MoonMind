@@ -2,7 +2,7 @@
 
 Status: Proposed design  
 Owners: MoonMind Platform  
-Last updated: 2026-07-08
+Last updated: 2026-07-16
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs should live under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -10,6 +10,10 @@ Last updated: 2026-07-08
 
 - [`docs/Omnigent/OmnigentAdapter.md`](./OmnigentAdapter.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md)
+- [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
+- [`docs/Security/SettingsSystem.md`](../Security/SettingsSystem.md)
+- [`docs/UI/WorkflowChatPanel.md`](../UI/WorkflowChatPanel.md)
+- [`docs/UI/WorkflowDetailsPage.md`](../UI/WorkflowDetailsPage.md)
 - [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/WorkflowArtifactSystemDesign.md`](../Temporal/WorkflowArtifactSystemDesign.md)
@@ -110,6 +114,29 @@ The declarative contract should support both modes.
 ---
 
 ## 3. Topologies
+
+The supported first production topology is one proxy-first, Codex-first path:
+
+```text
+MoonMind Workflow / API / Workflow Detail
+  -> MoonMind Omnigent bridge facade
+    -> stock Omnigent server
+      -> unchanged profile-bound Omnigent host
+        -> Codex CLI using the selected MoonMind-managed OAuth home
+```
+
+MoonMind/Temporal owns orchestration. `executionProfileRef` and the shared
+Provider Profile lease own credential selection and capacity. The OAuth host
+runtime owns binding, launch, preflight, cleanup, and lease release. The stock
+Omnigent server and unchanged host own live execution and event transport.
+Bridge rows and MoonMind artifacts own durable evidence; MoonMind workflow
+authorization owns access to bridge evidence and harvested artifacts.
+
+The current repository ships the proxy facade, bridge-session persistence,
+event normalization, resource harvesting, profile-bound host lifecycle, and
+Workflow Detail projection scaffolding. Complete bridge-first UI presentation
+remains desired behavior. Direct Codex is a temporary compatibility producer
+(§3.3), and embedded mode remains gated (§3.2 and §18.3).
 
 ### 3.1 Proxy mode
 
@@ -860,9 +887,29 @@ Auth topology:
 MoonMind user/operator -> MoonMind API authorization
 MoonMind Bridge -> Omnigent Server/API credentials
 Omnigent Host -> Omnigent host/runner auth profile
+Codex CLI -> selected MoonMind-managed OpenAI OAuth home
 ```
 
 In proxy mode, the host still authenticates to stock Omnigent Server. In embedded mode, MoonMind must implement the host-facing auth expected by the unchanged host.
+
+The persisted authorization chain is:
+
+```text
+executionProfileRef / Provider Profile
+  -> Provider Profile lease
+    -> OAuth host binding
+      -> host lease
+        -> Omnigent host and runner
+          -> bridge session
+            -> Omnigent session
+```
+
+Every lookup must also verify the requesting MoonMind principal owns or may
+inspect the workflow/run/step/AgentRun associated with the bridge session.
+Credential generation, endpoint and idempotency refs, and artifact/diagnostics
+refs may cross durable boundaries. Raw OAuth state, Omnigent host/server tokens,
+MoonMind cookies or JWTs, and arbitrary upstream authorization headers may not
+enter Temporal payloads, bridge rows, checkpoints, logs, or artifacts.
 
 ---
 

@@ -1,5 +1,7 @@
 # Workflow Details Page
 
+**Related design documents:** [WorkflowChatPanel.md](./WorkflowChatPanel.md), [OmnigentBridge.md](../Omnigent/OmnigentBridge.md), [OmnigentHostOAuth.md](../Omnigent/OmnigentHostOAuth.md), [SettingsSystem.md](../Security/SettingsSystem.md)
+
 ## Purpose
 
 The Workflow Details page is the canonical view for inspecting a single MoonMind Workflow Execution. It presents the Workflow identity, current state, original Workflow configuration, execution history, outputs, errors, and all actions that are available for the Workflow in its current state.
@@ -51,6 +53,33 @@ type WorkflowDetailsPageData = {
   auditEvents: WorkflowAuditEvent[];
 };
 ```
+
+### Omnigent evidence contract
+
+For an Omnigent-backed execution, the page resolves evidence bridge-first using
+the order owned by
+[`OmnigentBridge.md` §15](../Omnigent/OmnigentBridge.md#15-workflow-chat-integration).
+The page must check execution- and step-scoped AgentRun bindings and durable
+bridge sessions before showing a missing-observability state. Legacy managed-run
+and merged-log evidence remains a terminal migration fallback for direct Codex
+runs.
+
+The page presents pre-stream lifecycle evidence (profile resolution, lease
+wait/acquisition, host binding and container start, OAuth preflight, host
+registration, bridge authorization, session creation, and first-message
+posting), active replay plus live events, and terminal harvest/cleanup/lease
+release. A launch that fails before an Omnigent session or stream exists still
+shows its stable stage, redacted reason, diagnostics ref, and any available host
+or lease refs. It does not synthesize a provider session ID.
+
+Bridge resources and provider-native IDs are navigation metadata only. Durable
+outputs, changed files, snapshots, event journals, and diagnostics are opened
+through authorized MoonMind artifact refs. The page never forwards MoonMind
+cookies/JWTs to Omnigent or renders bridge/server/host credentials or Codex OAuth
+state. Settings enrollment and status are governed by
+[SettingsSystem.md](../Security/SettingsSystem.md); profile capacity and the
+profile-to-lease-to-host authorization chain are governed by
+[OmnigentHostOAuth.md](../Omnigent/OmnigentHostOAuth.md).
 
 Required capability fields:
 

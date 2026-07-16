@@ -2,7 +2,7 @@
 
 **Status:** Design Draft  
 **Owner:** MoonMind Dashboard  
-**Last updated:** 2026-07-02  
+**Last updated:** 2026-07-16
 **Audience:** dashboard, backend, workflow authors
 
 **Implementation tracking:** Rollout tasks belong under `docs/tmp/`, issues, or pull requests.
@@ -16,6 +16,8 @@ This is a UI companion to:
 - `docs/Workflows/ChatInstructionIntervention.md`
 - `docs/Api/ChatInstructionsApiContract.md`
 - `docs/Temporal/ChatInstructionTemporalContract.md`
+- `docs/Omnigent/OmnigentBridge.md`
+- `docs/Omnigent/OmnigentHostOAuth.md`
 
 ## 2. Product stance
 
@@ -91,6 +93,30 @@ When chat changes Step state, the UI should refetch or subscribe to server state
 - superseded future Steps,
 - plan revision refs,
 - follow-up links for terminal source executions.
+
+## 7.1 Omnigent evidence resolution
+
+The chat timeline uses the bridge-owned lookup order from
+[`OmnigentBridge.md` §15](../Omnigent/OmnigentBridge.md#15-workflow-chat-integration):
+explicit execution AgentRun, step AgentRun, bridge session by workflow/latest
+run, bridge session by idempotency key, legacy managed-run observability, then
+legacy merged logs. It must check bridge-session evidence before declaring
+managed-runtime observability missing.
+
+For an active bridge session, the panel replays persisted normalized events and
+then follows the bridge stream, de-duplicating by stable event identity and
+sequence. Pre-stream lifecycle events remain visible when failure occurs during
+profile resolution, lease acquisition, host binding/start, OAuth preflight,
+host registration, bridge authorization, session creation, or first-message
+posting. Running events, approval/elicitation items, interruptions, terminal
+status, harvested resources, diagnostics, and MoonMind artifact links share the
+same ordered timeline.
+
+If live streaming is unavailable, the panel uses the terminal bridge snapshot,
+event journal, diagnostics, and capture manifest. Legacy direct-Codex evidence
+is the final migration fallback, not a peer source that may override a bridge
+session. Access to every bridge event or artifact remains subject to MoonMind
+workflow authorization; no upstream credential is rendered or forwarded.
 
 ## 8. Terminal follow-up UI
 
