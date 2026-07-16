@@ -4461,8 +4461,12 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
     ) -> tuple[int, str, str]:
         del input_text, env
         commands.append(command)
-        if command[:3] == ("docker", "inspect", "-f"):
+        if command == ("docker", "inspect", "-f", "{{.Id}}", "ctr-1"):
             return 0, "ctr-1\n", ""
+        if command == ("docker", "inspect", "-f", "{{.Image}}", "ctr-1"):
+            return 0, "sha256:current\n", ""
+        if command == ("docker", "image", "inspect", "-f", "{{.Id}}", "img"):
+            return 0, "sha256:current\n", ""
         raise AssertionError(f"unexpected command: {command}")
 
     controller = DockerCodexManagedSessionController(
@@ -4477,7 +4481,82 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
 
     assert handle.status == "ready"
     assert handle.session_state.container_id == "ctr-1"
-    assert commands == [("docker", "inspect", "-f", "{{.Id}}", "ctr-1")]
+    assert commands == [
+        ("docker", "inspect", "-f", "{{.Id}}", "ctr-1"),
+        ("docker", "inspect", "-f", "{{.Image}}", "ctr-1"),
+        ("docker", "image", "inspect", "-f", "{{.Id}}", "img"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_controller_duplicate_launch_recreates_stale_mutable_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(tmp_path / "agent_jobs" / "task-1" / "repo"),
+        sessionWorkspacePath=str(tmp_path / "agent_jobs" / "task-1" / "session"),
+        artifactSpoolPath=str(tmp_path / "agent_jobs" / "task-1" / "artifacts"),
+        codexHomePath="/tmp/codex-home",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-old",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef=request.image_ref,
+            controlUrl="docker-exec://ctr-old",
+            status="ready",
+            workspacePath=request.workspace_path,
+            sessionWorkspacePath=request.session_workspace_path,
+            artifactSpoolPath=request.artifact_spool_path,
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    async def runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command == ("docker", "inspect", "-f", "{{.Id}}", "ctr-old"):
+            return 0, "ctr-old\n", ""
+        if command == ("docker", "inspect", "-f", "{{.Image}}", "ctr-old"):
+            return 0, "sha256:stale\n", ""
+        if command == (
+            "docker",
+            "image",
+            "inspect",
+            "-f",
+            "{{.Id}}",
+            request.image_ref,
+        ):
+            return 0, "sha256:current\n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_store=store,
+        command_runner=runner,
+    )
+    relaunch = AsyncMock(side_effect=RuntimeError("stale image relaunch"))
+    monkeypatch.setattr(controller, "_ensure_workspace_paths", relaunch)
+
+    with pytest.raises(RuntimeError, match="stale image relaunch"):
+        await controller.launch_session(request)
+
+    relaunch.assert_awaited_once_with(request)
 
 def test_controller_launch_duplicate_match_requires_epoch_and_thread(
     tmp_path: Path,
