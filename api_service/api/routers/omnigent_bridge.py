@@ -508,7 +508,13 @@ def _bridge_event_kind(event_type: str | None) -> str:
             return "tool_call_output"
         return "tool_call_started"
     if raw.startswith("resource."):
-        return "summary_published"
+        if "snapshot" in raw:
+            return "snapshot_available"
+        if "manifest" in raw:
+            return "manifest_available"
+        if "diagnostic" in raw or "log" in raw:
+            return "diagnostics_available"
+        return "resource_available"
     return raw.replace(".", "_") or "system_annotation"
 
 
@@ -608,6 +614,12 @@ async def list_omnigent_bridge_session_events(
         store=store,
     )
     events = await store.list_events(bridge_session_id)
+    earliest_sequence = min((event.sequence for event in events), default=None)
+    retention_gap = bool(
+        after is not None
+        and earliest_sequence is not None
+        and earliest_sequence > after + 1
+    )
     if after is not None:
         events = [event for event in events if event.sequence > after]
     page = events[:limit]
@@ -617,7 +629,7 @@ async def list_omnigent_bridge_session_events(
         "events": [_bridge_event_payload(row) for row in page],
         "nextCursor": page[-1].sequence if has_more and page else None,
         "truncated": has_more,
-        "retentionGap": False,
+        "retentionGap": retention_gap,
     }
 
 

@@ -372,6 +372,31 @@ def test_list_bridge_session_events_returns_bounded_cursor_pages() -> None:
     assert second["nextCursor"] == 4
 
 
+def test_list_bridge_session_events_reports_cursor_retention_gap() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-5",
+            bridge_session_id="brs-1",
+            sequence=5,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="resource.snapshot",
+            normalized_status="running",
+            text_preview="Snapshot ready",
+            artifact_ref="artifact-1",
+            metadata_={},
+        )
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    body = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?after=2"
+    ).json()
+
+    assert body["retentionGap"] is True
+    assert body["events"][0]["kind"] == "snapshot_available"
+
+
 def test_list_bridge_session_events_handles_nullable_event_type() -> None:
     rows = [
         SimpleNamespace(

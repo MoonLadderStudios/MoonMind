@@ -417,21 +417,15 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession | None:
         """Resolve the Workflow Chat bridge projection target (§15).
 
-        Resolution prefers an explicit idempotency key when supplied; otherwise
-        it returns the latest bridge session for the workflow, optionally scoped
-        to the step/agent-run binding.
+        Resolution prefers the explicit agent-run/step binding when supplied,
+        then an explicit idempotency binding, then the latest workflow session.
         """
-
-        key = (idempotency_key or "").strip()
-        if key:
-            row = await self.get_existing(key)
-            if row is not None:
-                return row
 
         workflow = (workflow_id or "").strip()
         if not workflow:
             return None
         agent_run = (agent_run_id or "").strip()
+        key = (idempotency_key or "").strip()
         async with self._session_factory() as session:
             statement = select(OmnigentBridgeSession).where(
                 OmnigentBridgeSession.moonmind_workflow_id == workflow
@@ -439,6 +433,10 @@ class OmnigentBridgeSessionStore:
             if agent_run:
                 statement = statement.where(
                     OmnigentBridgeSession.moonmind_agent_run_id == agent_run
+                )
+            elif key:
+                statement = statement.where(
+                    OmnigentBridgeSession.idempotency_key == key
                 )
             statement = statement.order_by(
                 OmnigentBridgeSession.updated_at.desc(),

@@ -4,6 +4,7 @@ import { screen, waitFor, act, fireEvent, within, cleanup } from '@testing-libra
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import {
+  bridgeChatCapabilities,
   expandRouteTemplate,
   getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
@@ -149,6 +150,17 @@ async function waitForEventSourceInstance() {
 }
 
 describe('Workflow Detail Entrypoint', () => {
+  it('derives bridge controls only from server-advertised capabilities', () => {
+    expect(bridgeChatCapabilities({ capabilities: ['sendMessage', 'turn.interrupt'] })).toEqual({
+      send: true, interrupt: true, stop: false, cancel: false, resolveElicitation: false,
+    });
+    expect(bridgeChatCapabilities({ capabilities: { stopSession: true, cancelSession: true } })).toEqual({
+      send: false, interrupt: false, stop: true, cancel: true, resolveElicitation: false,
+    });
+    expect(bridgeChatCapabilities({ runtime: 'omnigent' })).toEqual({
+      send: false, interrupt: false, stop: false, cancel: false, resolveElicitation: false,
+    });
+  });
   const mockPayload: BootPayload = {
     page: 'workflow-detail',
     apiBase: '/api',
@@ -7884,6 +7896,33 @@ describe('Workflow Detail Entrypoint', () => {
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);
+  });
+
+  it('prefers bridge transcript and keeps AgentRun logs as secondary diagnostics', async () => {
+    window.history.pushState({}, 'Bridge Primary Test', '/workflows/test-123/chat?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default', temporalRunId: 'run-1',
+      runId: 'run-1', agentRunId: 'ar-1', source: 'temporal', title: 'Bridge primary',
+      summary: 'Completed', status: 'completed', state: 'completed', rawState: 'completed',
+      closedAt: '2026-07-09T00:00:10Z', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:10Z', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({
+        ok: true, json: async () => ({ bridgeSessionId: 'brs-1', agentRunId: 'ar-1', status: 'active' }),
+      } as Response);
+      if (url.includes('/omnigent/bridge-sessions/brs-1/events')) return Promise.resolve({
+        ok: true, json: async () => ({ events: [{ sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'stdout', text: 'Canonical bridge output', kind: 'assistant_message', metadata: {} }], truncated: false, retentionGap: false }),
+      } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getAllByText('Canonical bridge output').length).toBeGreaterThan(0));
+    expect(screen.getByText('Legacy managed logs (diagnostic source)')).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('agentRunId=ar-1'))).toBe(true);
   });
 
   it('renders artifact download link using explicit downloadUrl when present', async () => {

@@ -42,6 +42,9 @@ export type ChatBlockKind =
   | 'assistant'
   | 'tool'
   | 'approval'
+  | 'resource'
+  | 'diagnostic'
+  | 'control'
   | 'system'
   | 'status'
   | 'error'
@@ -101,6 +104,8 @@ export type OptimisticUserMessage = {
   sessionEpoch?: number | undefined;
   turnIndex?: number | undefined;
   timestamp?: string | undefined;
+  deliveryState?: 'pending' | 'failed' | 'delivery_unknown' | undefined;
+  error?: string | undefined;
 };
 
 const USER_MESSAGE_KINDS = new Set(['user_message_submitted']);
@@ -185,7 +190,8 @@ export function seedOptimisticUserMessages(
       sessionId: message.sessionId,
       sessionEpoch: message.sessionEpoch,
       turnIndex: message.turnIndex,
-      metadata: { optimisticKey: message.key },
+      status: message.deliveryState || 'pending',
+      metadata: { optimisticKey: message.key, deliveryState: message.deliveryState || 'pending', error: message.error },
     };
     const updated = cloneState(next);
     updated.blocks = [...updated.blocks, block];
@@ -340,9 +346,13 @@ export function reduceChatSessionEvent(
       appendBlock(next, event, 'error', event.text || 'This event requires a newer Workflow Chat schema.');
       break;
     case 'resource':
+      appendBlock(next, event, 'resource', event.text || event.status || 'Resource available.');
+      break;
     case 'diagnostic':
+      appendBlock(next, event, 'diagnostic', event.text || event.status || 'Diagnostic evidence updated.');
+      break;
     case 'control':
-      appendBlock(next, event, 'system', event.text || event.status || 'Session evidence updated.');
+      appendBlock(next, event, 'control', event.text || event.status || 'Session control updated.');
       break;
     case 'system_status':
       appendBlock(next, event, 'system', event.text || event.status || 'System event.');

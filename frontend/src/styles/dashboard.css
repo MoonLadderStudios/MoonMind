@@ -9880,3 +9880,27 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory table { border-collapse: collapse; width: 100%; }
 .omnigent-inventory th,
 .omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; }
+.chat-session-terminal-details {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.65rem 0 0;
+}
+
+.chat-session-terminal-details > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) 1fr;
+  gap: 0.75rem;
+}
+
+.chat-session-terminal-details dt { font-weight: 600; }
+.chat-session-terminal-details dd { margin: 0; }
+
+.chat-session-block-resource,
+.chat-session-block-diagnostic,
+.chat-session-block-control {
+  border-inline-start: 3px solid var(--mm-accent, currentColor);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-session-blocks { scroll-behavior: auto; }
+}

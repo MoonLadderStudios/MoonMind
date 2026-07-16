@@ -82,6 +82,15 @@ describe('chat session observability projection for MM-1013', () => {
 
     expect(cases.map(([kind]) => mapObservabilityEventToChatSessionEvent(row(1, kind, kind)).type))
       .toEqual(cases.map(([, type]) => type));
+
+    const projected = projectChatSessionBlocks([
+      row(1, 'resource_available', 'Artifact ready', { artifactRef: 'artifact-1' }),
+      row(2, 'diagnostics_available', 'Diagnostics ready', { diagnosticsRef: 'diag-1' }),
+      row(3, 'elicitation_requested', 'Approval needed', { state: 'pending' }),
+    ]);
+    expect(projected.blocks.map((block) => block.kind)).toEqual([
+      'resource', 'diagnostic', 'control',
+    ]);
   });
 
   it('renders execution-critical future schema events as incompatibilities', () => {
