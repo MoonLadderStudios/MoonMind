@@ -87,6 +87,10 @@ class OmnigentDigestMismatchError(OmnigentIdempotencyError):
     """Raised when an idempotency key is reused for different first-message text."""
 
 
+class OmnigentProjectionAmbiguityError(RuntimeError):
+    """Raised when an explicit projection scope matches multiple sessions."""
+
+
 def coalesce_bridge_status(value: str) -> str:
     """Coalesce a normalized/lifecycle status into a bridge session status.
 
@@ -452,9 +456,14 @@ class OmnigentBridgeSessionStore:
                     OmnigentBridgeSession.updated_at.desc(),
                     OmnigentBridgeSession.first_message_post_attempted_at.desc().nulls_last(),
                     OmnigentBridgeSession.created_at.desc(),
-                ).limit(1)
+                ).limit(2 if scoped else 1)
                 result = await session.execute(statement)
-                row = result.scalars().first()
+                rows = list(result.scalars().all())
+                if scoped and len(rows) > 1:
+                    raise OmnigentProjectionAmbiguityError(
+                        "multiple bridge sessions match the explicit projection scope"
+                    )
+                row = rows[0] if rows else None
                 return _detached(session, row) if row is not None else None
 
         # Explicit run/step binding is authoritative, followed by an explicit

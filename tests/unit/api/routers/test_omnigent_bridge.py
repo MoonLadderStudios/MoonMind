@@ -21,6 +21,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_create_embedded_facade,
     _get_execution_service,
     _require_bridge_enabled,
+    _bridge_cursor,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -366,7 +367,7 @@ def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     assert body["bridgeSessionId"] == "brs-1"
     assert body["schemaVersion"] == "moonmind.bridge-session-events-page.v1"
     assert body["hasMore"] is False
-    assert body["nextCursor"] == "1"
+    assert body["nextCursor"] == _bridge_cursor("brs-1", 1)
     event = body["items"][0]
     assert event["sequence"] == 1
     assert event["stream"] == "stdout"
@@ -436,13 +437,13 @@ def test_list_bridge_session_events_is_bounded_and_cursor_based() -> None:
     client, _, _ = _build(store=store)
 
     resp = client.get(
-        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?cursor=1&limit=2"
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?after=1&limit=2"
     )
 
     assert resp.status_code == 200
     body = resp.json()
     assert [item["sequence"] for item in body["items"]] == [2, 3]
-    assert body["nextCursor"] == "3"
+    assert body["nextCursor"] == _bridge_cursor("brs-1", 3)
     assert body["hasMore"] is True
     assert body["latestSequence"] == 4
 
@@ -508,7 +509,7 @@ def test_stream_bridge_session_events_keeps_since_and_stops_on_terminal() -> Non
     assert "evt-1" not in body
     assert "evt-2" in body
     assert "event: bridge_event" in body
-    assert "id: 2" in body
+    assert f"id: {_bridge_cursor('brs-1', 2)}" in body
 
 
 def test_stream_bridge_session_events_honors_last_event_id() -> None:
@@ -534,13 +535,61 @@ def test_stream_bridge_session_events_honors_last_event_id() -> None:
     with client.stream(
         "GET",
         f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream",
-        headers={"Last-Event-ID": "1"},
+        headers={"Last-Event-ID": _bridge_cursor("brs-1", 1)},
     ) as resp:
         body = resp.read().decode()
 
     assert "evt-1" not in body
-    assert "id: 2" in body
+    assert f"id: {_bridge_cursor('brs-1', 2)}" in body
     assert "event: terminal" in body
+
+
+def test_bridge_cursor_rejects_malformed_and_foreign_session_values() -> None:
+    client, _, _ = _build()
+    path = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events"
+
+    malformed = client.get(f"{path}?cursor=not-a-cursor")
+    foreign = client.get(
+        f"{path}?cursor={_bridge_cursor('brs-foreign', 1)}"
+    )
+
+    assert malformed.status_code == 400
+    assert malformed.json()["detail"]["code"] == "invalid_bridge_cursor"
+    assert foreign.status_code == 400
+    assert foreign.json()["detail"]["code"] == "invalid_bridge_cursor"
+
+
+def test_page_and_stream_report_retention_gap() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-5",
+            bridge_session_id="brs-1",
+            sequence=5,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.completed",
+            normalized_status="completed",
+            text_preview="done",
+            artifact_ref=None,
+            metadata_={},
+        )
+    ]
+    store = _FakeStore(rows=rows)
+    store._session.status = "completed"
+    client, _, _ = _build(store=store)
+    cursor = _bridge_cursor("brs-1", 1)
+
+    page = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?cursor={cursor}"
+    )
+    with client.stream(
+        "GET",
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?cursor={cursor}",
+    ) as response:
+        stream = response.read().decode()
+
+    assert page.json()["retentionGap"]["earliestAvailable"] == 5
+    assert "event: retention_gap" in stream
 
 
 def test_list_bridge_session_events_denies_non_owner() -> None:

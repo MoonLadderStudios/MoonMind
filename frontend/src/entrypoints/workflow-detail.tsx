@@ -82,6 +82,12 @@ import {
   workflowDetailSubrouteFromPath,
   workflowDetailSubrouteHref,
 } from '../lib/workflowDetailRoutes';
+import {
+  BridgeEventSchema,
+  BridgeSessionResolutionSchema,
+  bridgeEventStreamRoute,
+  fetchBridgeEventPage,
+} from '../lib/bridgeSessionProjection';
 
 export {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
@@ -2424,20 +2430,7 @@ async function fetchObservabilityEvents(
   return ObservabilityEventsResponseSchema.parse(await resp.json());
 }
 
-type BridgeSessionProjection = {
-  bridgeSessionId: string;
-  workflowId?: string | undefined;
-  agentRunId?: string | undefined;
-  idempotencyKey?: string | undefined;
-  status?: string | undefined;
-};
-
-function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream'): string {
-  return joinApiBasePath(
-    apiBase,
-    `/omnigent/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/${suffix}`,
-  );
-}
+type BridgeSessionProjection = z.infer<typeof BridgeSessionResolutionSchema>;
 
 async function resolveBridgeSessionProjection({
   apiBase,
@@ -2464,30 +2457,17 @@ async function resolveBridgeSessionProjection({
     if (resp.status === 404) return null;
     throw buildObservabilityRequestError(resp.status);
   }
-  const body = (await resp.json()) as Record<string, unknown>;
-  const bridgeSessionId = typeof body.bridgeSessionId === 'string' ? body.bridgeSessionId.trim() : '';
-  if (!bridgeSessionId) return null;
-  return {
-    bridgeSessionId,
-    workflowId: typeof body.workflowId === 'string' ? body.workflowId : undefined,
-    agentRunId: typeof body.agentRunId === 'string' ? body.agentRunId : undefined,
-    idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined,
-    status: typeof body.status === 'string' ? body.status : undefined,
-  };
+  return BridgeSessionResolutionSchema.parse(await resp.json());
 }
 
 async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
-): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
-  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'events'), {
-    credentials: 'include',
-  });
-  if (!resp.ok) {
-    if (resp.status === 404) return null;
-    throw buildObservabilityRequestError(resp.status);
-  }
-  return ObservabilityEventsResponseSchema.parse(await resp.json());
+): Promise<(z.infer<typeof ObservabilityEventsResponseSchema> & { nextCursor: string | null }) | null> {
+  const page = await fetchBridgeEventPage(apiBase, bridgeSessionId);
+  return page
+    ? { ...ObservabilityEventsResponseSchema.parse({ events: page.items }), nextCursor: page.nextCursor }
+    : null;
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
@@ -5553,7 +5533,7 @@ function BridgeSessionLogsPanel({
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const [wrapLines, setWrapLines] = useState(true);
-  const lastSeqRef = useRef<number | null>(null);
+  const lastCursorRef = useRef<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const isVisible = usePageVisibility();
   const chatBlocks = useMemo(
@@ -5572,15 +5552,13 @@ function BridgeSessionLogsPanel({
 
   useEffect(() => {
     setLogContent([]);
-    lastSeqRef.current = null;
+    lastCursorRef.current = null;
     setViewerState('starting');
   }, [bridgeSessionId]);
 
   useEffect(() => {
     if (!eventsQuery.isSuccess) return;
-    const sequences = eventsQuery.data?.events
-      .map((event) => event.sequence)
-      .filter((sequence) => Number.isFinite(sequence));
+    lastCursorRef.current = eventsQuery.data?.nextCursor ?? null;
     setLogContent((prev) => {
       const rowsById = new Map(prev.map((row) => [row.id, row]));
       for (const row of historyRows) {
@@ -5588,9 +5566,6 @@ function BridgeSessionLogsPanel({
       }
       return Array.from(rowsById.values()).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
     });
-    if (sequences && sequences.length > 0) {
-      lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, ...sequences);
-    }
     setViewerState('live');
   }, [eventsQuery.data, eventsQuery.isSuccess, historyRows]);
 
@@ -5601,8 +5576,7 @@ function BridgeSessionLogsPanel({
   useEffect(() => {
     if (!bridgeSessionId || !eventsQuery.isSuccess || isTerminal || !isVisible) return;
     let cancelled = false;
-    const since = lastSeqRef.current != null ? `?since=${lastSeqRef.current}` : '';
-    const es = new EventSource(`${bridgeSessionRoute(apiBase, bridgeSessionId, 'stream')}${since}`, {
+    const es = new EventSource(bridgeEventStreamRoute(apiBase, bridgeSessionId, lastCursorRef.current), {
       withCredentials: true,
     });
     esRef.current = es;
@@ -5610,8 +5584,9 @@ function BridgeSessionLogsPanel({
     const handleBridgeEvent = (event: MessageEvent) => {
       if (cancelled) return;
       try {
-        const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
-        lastSeqRef.current = data.sequence;
+        const bridgeEvent = BridgeEventSchema.parse(JSON.parse(event.data));
+        const data = ObservabilityEventSchema.parse(bridgeEvent);
+        lastCursorRef.current = event.lastEventId || lastCursorRef.current;
         setLogContent((prev) => [...prev, ...eventToTimelineRows(data)]);
       } catch {
         // Ignore malformed bridge events; the fetched event index remains visible.

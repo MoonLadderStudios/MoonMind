@@ -7843,9 +7843,21 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
+            schemaVersion: 'moonmind.bridge-session-resolution.v1',
             bridgeSessionId: 'brs-1',
             workflowId: 'test-123',
+            runId: 'non-uuid-run',
+            stepExecutionId: null,
+            agentRunId: 'non-uuid-run',
             status: 'completed',
+            latestSequence: 1,
+            providerProfileId: null,
+            hostId: null,
+            providerSessionId: null,
+            liveTailingAvailable: false,
+            terminalEvidenceAvailable: false,
+            resourceAvailability: {},
+            compatibilityProfile: 'omnigent.server.v1',
           }),
         } as Response);
       }
@@ -7853,19 +7865,27 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
+            schemaVersion: 'moonmind.bridge-session-events-page.v1',
             bridgeSessionId: 'brs-1',
-            events: [
+            items: [
               {
+                id: 'evt-1',
                 sequence: 1,
                 timestamp: '2026-07-09T00:00:10Z',
                 stream: 'stdout',
                 text: 'Bridge assistant output',
                 kind: 'assistant_message',
-                sessionId: 'brs-1',
+                bridgeSessionId: 'brs-1',
                 metadata: { responseId: 'resp-1', source: 'omnigent_bridge' },
               },
             ],
-            truncated: false,
+            after: 0,
+            nextCursor: 'cursor-1',
+            hasMore: false,
+            terminal: true,
+            latestSequence: 1,
+            retentionGap: null,
+            terminalEvidence: null,
           }),
         } as Response);
       }

@@ -14,6 +14,7 @@ maps bridge failure classes onto HTTP status codes.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from typing import Any, Literal
 
@@ -49,7 +50,10 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
+    OmnigentProjectionAmbiguityError,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -696,6 +700,34 @@ def _retention_gap(after: int, minimum: int | None) -> dict[str, Any] | None:
     }
 
 
+def _bridge_cursor(bridge_session_id: str, sequence: int) -> str:
+    payload = json.dumps(
+        {"bridgeSessionId": bridge_session_id, "sequence": sequence},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _parse_bridge_cursor(cursor: str, bridge_session_id: str) -> int:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.b64decode(padded, altchars=b"-_", validate=True))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("bridgeSessionId") != bridge_session_id
+            or not isinstance(payload.get("sequence"), int)
+            or isinstance(payload.get("sequence"), bool)
+            or payload["sequence"] < 0
+        ):
+            raise ValueError
+        return payload["sequence"]
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=400, detail={"code": "invalid_bridge_cursor"}
+        ) from exc
+
+
 @router.get("/bridge-sessions/resolve", response_model=BridgeSessionResolution)
 async def resolve_omnigent_bridge_session_projection(
     workflow_id: str | None = Query(default=None, alias="workflowId"),
@@ -710,13 +742,19 @@ async def resolve_omnigent_bridge_session_projection(
 ) -> dict[str, Any]:
     """Resolve the bridge session Workflow Chat should read before legacy logs."""
 
-    row = await store.resolve_projection_session(
-        workflow_id=workflow_id,
-        agent_run_id=agent_run_id,
-        idempotency_key=idempotency_key,
-        run_id=run_id,
-        step_execution_id=step_execution_id,
-    )
+    try:
+        row = await store.resolve_projection_session(
+            workflow_id=workflow_id,
+            agent_run_id=agent_run_id,
+            idempotency_key=idempotency_key,
+            run_id=run_id,
+            step_execution_id=step_execution_id,
+        )
+    except OmnigentProjectionAmbiguityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "omnigent_bridge_session_ambiguous"},
+        ) from exc
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -781,21 +819,14 @@ async def list_omnigent_bridge_session_events(
         store=store,
     )
     if cursor is not None:
-        try:
-            after = int(cursor)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail={"code": "invalid_bridge_cursor"}
-            ) from exc
-        if after < 0:
-            raise HTTPException(
-                status_code=400, detail={"code": "invalid_bridge_cursor"}
-            )
+        after = _parse_bridge_cursor(cursor, bridge_session_id)
     row = await store.get_bridge_session(bridge_session_id)
     events, has_more, minimum, latest = await store.list_event_page(
         bridge_session_id, after=after, limit=limit
     )
-    next_cursor = str(events[-1].sequence) if events else None
+    next_cursor = (
+        _bridge_cursor(bridge_session_id, events[-1].sequence) if events else None
+    )
     return {
         "schemaVersion": _BRIDGE_PAGE_SCHEMA,
         "bridgeSessionId": bridge_session_id,
@@ -833,16 +864,11 @@ async def stream_omnigent_bridge_session_events(
         store=store,
     )
     cursor_value = last_event_id or cursor
-    try:
-        initial_after = (
-            int(cursor_value) if cursor_value is not None else int(since or 0)
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400, detail={"code": "invalid_bridge_cursor"}
-        ) from exc
-    if initial_after < 0:
-        raise HTTPException(status_code=400, detail={"code": "invalid_bridge_cursor"})
+    initial_after = (
+        _parse_bridge_cursor(cursor_value, bridge_session_id)
+        if cursor_value is not None
+        else int(since or 0)
+    )
 
     async def _event_stream():
         last_sequence = initial_after
@@ -860,7 +886,7 @@ async def stream_omnigent_bridge_session_events(
                 last_sequence = row.sequence
                 idle_polls = 0
                 payload = json.dumps(_bridge_event_payload(row), separators=(",", ":"))
-                yield f"id: {row.sequence}\nevent: bridge_event\ndata: {payload}\n\n"
+                yield f"id: {_bridge_cursor(bridge_session_id, row.sequence)}\nevent: bridge_event\ndata: {payload}\n\n"
             if has_more:
                 continue
             session_row = await store.get_bridge_session(bridge_session_id)

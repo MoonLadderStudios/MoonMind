@@ -26,6 +26,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
+    OmnigentProjectionAmbiguityError,
     bridge_failure_class,
     coalesce_bridge_status,
 )
@@ -272,6 +273,25 @@ async def test_resolve_projection_session_prefers_idempotency_then_latest_workfl
     )
     assert scoped is not None
     assert scoped.bridge_session_id == first.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_rejects_ambiguous_explicit_scope(store):
+    for key in ("idem-first", "idem-second"):
+        await store.get_or_create(
+            request=_request(key),
+            endpoint_ref="default",
+            agent_id="ag_1",
+            agent_name="Agent One",
+            target_metadata={"hostType": "managed"},
+            workflow_id="mm:wf-owner",
+            agent_run_id="ar-shared",
+        )
+
+    with pytest.raises(OmnigentProjectionAmbiguityError):
+        await store.resolve_projection_session(
+            workflow_id="mm:wf-owner", agent_run_id="ar-shared"
+        )
 
 
 @pytest.mark.asyncio
