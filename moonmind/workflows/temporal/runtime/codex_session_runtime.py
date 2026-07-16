@@ -84,9 +84,10 @@ def _is_empty_assistant_failure_reason(value: str | None) -> bool:
         value
         and value.strip().lower() in _EMPTY_ASSISTANT_FAILURE_REASONS
     )
-_CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON = (
-    "Codex provider reported no remaining credits (usage limit reached); "
-    "retry after a profile cooldown or update the provider profile."
+_CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON = (
+    "Codex provider reported that its usage limit was reached and no additional "
+    "credits are available; retry after a profile cooldown or update the provider "
+    "profile."
 )
 _DIAGNOSTIC_TEXT_MAX_CHARS = 1000
 _RPC_TRACE_MAX_ENTRIES = 80
@@ -1193,13 +1194,35 @@ class CodexManagedSessionRuntime:
         rate_limits = event_payload.get("rate_limits")
         if not isinstance(rate_limits, Mapping):
             return None
+        reached_type = str(
+            rate_limits.get("rate_limit_reached_type") or ""
+        ).strip()
+        if reached_type:
+            return _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON
         credits = rate_limits.get("credits")
         if not isinstance(credits, Mapping):
             return None
         has_credits = credits.get("has_credits")
         unlimited = credits.get("unlimited")
-        if has_credits is False and unlimited is not True:
-            return _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+        if has_credits is not False or unlimited is True:
+            return None
+        # ``credits`` describes optional purchased add-on credits. A zero
+        # balance is normal while included ChatGPT plan usage remains. Older
+        # Codex payloads may omit ``rate_limit_reached_type``, so only infer
+        # exhaustion when an included usage window is itself at 100%.
+        for limit_name in ("primary", "secondary", "individual_limit"):
+            limit = rate_limits.get(limit_name)
+            if not isinstance(limit, Mapping):
+                continue
+            used_percent = limit.get("used_percent")
+            if isinstance(used_percent, bool):
+                continue
+            try:
+                exhausted = float(used_percent) >= 100.0
+            except (TypeError, ValueError):
+                exhausted = False
+            if exhausted:
+                return _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON
         return None
 
     @staticmethod
