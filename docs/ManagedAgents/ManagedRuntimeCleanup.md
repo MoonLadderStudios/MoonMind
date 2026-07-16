@@ -123,10 +123,11 @@ candidateSource:
     moonmind.session_id: required
 truthSource:
   store: ManagedSessionStore
+  temporalOwnerStatus: required for terminal records
   activePredicate: status not in [terminated, degraded, failed]
 eligibility:
   deleteWhen:
-    - session record is absent or terminal
+    - session record is absent, or both the record and Temporal owner are terminal
     - container age >= MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS
   forceTerminalWhen:
     - session record is active
@@ -134,6 +135,7 @@ eligibility:
     - or ready session has no activeTurnId beyond max age
 safety:
   failClosedWhenStoreUnavailable: true
+  failClosedWhenTerminalOwnerStatusUnavailable: true
   skipWhenSessionActive: true
   skipWhenYoungerThanGrace: true
 deletionAuthority: DockerCodexManagedSessionController.reap_orphan_session_containers
@@ -340,9 +342,12 @@ The schedule should continue to run every 10 minutes by default. Its activity re
 A managed-session container is eligible for orphan reaping when:
 
 1. it carries the managed-session Docker labels required for ownership discovery;
-2. its session is not active in `ManagedSessionStore`, or its active record was proven stale;
+2. its session record is absent, both its session record and Temporal owner are
+   terminal, or its active record was proven stale;
 3. it is older than the configured grace window unless it is being force-reaped as stale;
-4. the session store was readable for the pass.
+4. the session store was readable for the pass;
+5. a terminal session record is protected when Temporal owner status is
+   non-terminal or unavailable.
 
 A sidecar volume is eligible when:
 

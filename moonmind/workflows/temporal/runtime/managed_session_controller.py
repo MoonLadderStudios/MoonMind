@@ -59,7 +59,10 @@ from .github_auth_broker import (
 )
 from .git_auth import build_github_token_git_environment
 from .managed_session_observability import ManagedSessionObservabilityBridge
-from .managed_session_store import ManagedSessionStore
+from .managed_session_store import (
+    TERMINAL_MANAGED_SESSION_STATUSES,
+    ManagedSessionStore,
+)
 from .managed_session_supervisor import ManagedSessionSupervisor
 
 _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
@@ -4249,8 +4252,13 @@ class DockerCodexManagedSessionController:
         by_session: dict[str, list[_ManagedSessionContainer]] = {}
         for container in containers:
             by_session.setdefault(container.session_id, []).append(container)
+        all_records = {
+            record.session_id: record for record in self._session_store.iter_all()
+        }
         active_records = {
-            record.session_id: record for record in self._session_store.list_active()
+            session_id: record
+            for session_id, record in all_records.items()
+            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES
         }
         stale_active_session_ids = self._stale_active_session_ids(
             active_records=active_records,
@@ -4259,6 +4267,17 @@ class DockerCodexManagedSessionController:
             now=now,
         )
         active_session_ids = set(active_records) - stale_active_session_ids
+        # A terminal session-store status is not authoritative proof that the
+        # owning Temporal workflow has finished. Provider failures and retry
+        # cooldowns can make the record terminal while the workflow still owns
+        # and polls the container. Protect those containers unless Temporal
+        # positively confirms terminal ownership; lookup failures fail closed.
+        for session_id, record in all_records.items():
+            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
+                continue
+            terminal_owner_status = await self._terminal_owner_workflow_status(record)
+            if terminal_owner_status is None:
+                active_session_ids.add(session_id)
 
         skipped_active = 0
         skipped_recent = 0

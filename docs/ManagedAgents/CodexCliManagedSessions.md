@@ -275,6 +275,12 @@ Codex turns surface provider rate limits through the shared managed-runtime
 failure taxonomy. The controller applies bounded exponential backoff with jitter,
 honors retry hints where available, and keeps attempt evidence bounded.
 
+Codex `token_count.rate_limits.credits` telemetry describes optional purchased
+add-on credits. `has_credits: false` or a zero balance is not evidence that the
+included ChatGPT plan allowance is exhausted. MoonMind classifies exhaustion
+only from an explicit reached-limit signal or an included primary, secondary,
+or individual usage window at 100 percent when no add-on credits are available.
+
 If retries are exhausted, summaries and diagnostics explicitly classify the
 rate-limit failure and set the canonical `AgentRunResult` metadata.
 
