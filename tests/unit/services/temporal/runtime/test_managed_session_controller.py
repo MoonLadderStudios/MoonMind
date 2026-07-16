@@ -483,6 +483,10 @@ async def test_mm866_docker_enabled_session_launches_agent_with_sidecar(
                 return 0, "sidecar-ctr\n", ""
             if name.endswith("-agent"):
                 return 0, "agent-ctr\n", ""
+        if command[:3] == ("docker", "exec", "-e") and "volume" in command:
+            if "inspect" in command:
+                return 1, "", "No such volume"
+            return 0, command[-1] + "\n", ""
         if command[:3] == ("docker", "exec", "-e") and "docker" in command:
             return 0, '"27.0.0"\n', ""
         if "ready" in command:
@@ -1033,6 +1037,10 @@ async def test_mm866_ensure_docker_sidecar_starts_sidecar_on_demand(
             return 0, command[-1] + "\n", ""
         if command[:2] == ("docker", "run"):
             return 0, "sidecar-ctr\n", ""
+        if command[:3] == ("docker", "exec", "-e") and "volume" in command:
+            if "inspect" in command:
+                return 1, "", "No such volume"
+            return 0, command[-1] + "\n", ""
         if command[:3] == ("docker", "exec", "-e"):
             return 0, '"27.0.0"\n', ""
         if command[:4] == ("docker", "exec", "agent-ctr", "docker"):
@@ -1110,6 +1118,10 @@ async def test_mm866_ensure_docker_sidecar_starts_existing_sidecar_before_ready(
             return 0, "true\n", ""
         if command[:3] == ("docker", "start", "moonmind-session-sess-1-docker"):
             return 0, "moonmind-session-sess-1-docker\n", ""
+        if command[:3] == ("docker", "exec", "-e") and "volume" in command:
+            if "inspect" in command:
+                return 0, "{}\n", ""
+            return 0, command[-1] + "\n", ""
         if command[:3] == ("docker", "exec", "-e"):
             return 0, '"27.0.0"\n', ""
         if command[:4] == ("docker", "exec", "agent-ctr", "docker"):
@@ -1136,6 +1148,17 @@ async def test_mm866_ensure_docker_sidecar_starts_existing_sidecar_before_ready(
 
     assert response.state == "ready"
     assert ("docker", "start", "moonmind-session-sess-1-docker") in commands
+    remove_index = next(
+        index
+        for index, command in enumerate(commands)
+        if "volume" in command and "rm" in command
+    )
+    create_index = next(
+        index
+        for index, command in enumerate(commands)
+        if "volume" in command and "create" in command
+    )
+    assert remove_index < create_index
     assert any(
         command[:8]
         == (

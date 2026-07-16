@@ -3602,6 +3602,7 @@ class TemporalArtifactActivities:
         requester_pending = False
         requester_queue_position = None
         requester_request: dict[str, Any] | None = None
+        pending_requests_ordered = state.get("pending_requests_ordered") is True
         if requester_workflow_id and isinstance(pending_requests, list):
             for index, pending_request in enumerate(pending_requests):
                 if (
@@ -3610,7 +3611,8 @@ class TemporalArtifactActivities:
                     == requester_workflow_id
                 ):
                     requester_pending = True
-                    requester_queue_position = index + 1
+                    if pending_requests_ordered:
+                        requester_queue_position = index + 1
                     requester_request = pending_request
                     break
 
@@ -3622,6 +3624,43 @@ class TemporalArtifactActivities:
         requested_profile: dict[str, Any] | None = None
         if isinstance(profiles, dict):
             raw_profile = profiles.get(requested_profile_ref)
+            profile_selector = (
+                requester_request.get("profile_selector")
+                if requester_request is not None
+                else None
+            )
+            if not isinstance(raw_profile, dict) and isinstance(
+                profile_selector, dict
+            ):
+                matching_profiles = [
+                    profile
+                    for profile in profiles.values()
+                    if isinstance(profile, dict)
+                    and (
+                        not profile_selector.get("providerId")
+                        or profile.get("provider_id")
+                        == profile_selector.get("providerId")
+                    )
+                    and (
+                        not profile_selector.get("runtimeMaterializationMode")
+                        or profile.get("runtime_materialization_mode")
+                        == profile_selector.get("runtimeMaterializationMode")
+                    )
+                    and (
+                        not profile_selector.get("tagsAny")
+                        or set(profile.get("tags") or {}).intersection(
+                            profile_selector.get("tagsAny") or []
+                        )
+                    )
+                    and (
+                        not profile_selector.get("tagsAll")
+                        or set(profile_selector.get("tagsAll") or []).issubset(
+                            profile.get("tags") or []
+                        )
+                    )
+                ]
+                if len(matching_profiles) == 1:
+                    raw_profile = matching_profiles[0]
             if not isinstance(raw_profile, dict) and len(profiles) == 1:
                 only_profile = next(iter(profiles.values()))
                 raw_profile = only_profile if isinstance(only_profile, dict) else None

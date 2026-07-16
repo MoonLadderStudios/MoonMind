@@ -1019,6 +1019,15 @@ class MoonMindAgentRun:
 
         profile_id = str(profile.get("profile_id") or "").strip()
         profile_suffix = f"; profile={profile_id}" if profile_id else ""
+        slots_in_use = profile.get("current_leases_count")
+        max_parallel_runs = profile.get("max_parallel_runs")
+        if profile.get("enabled") is False or profile.get("launch_ready") is False:
+            return (
+                "Waiting for provider profile readiness; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                f"missing_condition=profile_not_launch_ready{queue_suffix}."
+            )
+
         cooldown_until = str(profile.get("cooldown_until") or "").strip()
         if cooldown_until:
             return (
@@ -1028,8 +1037,6 @@ class MoonMindAgentRun:
                 f"{queue_suffix}."
             )
 
-        slots_in_use = profile.get("current_leases_count")
-        max_parallel_runs = profile.get("max_parallel_runs")
         if (
             isinstance(slots_in_use, int)
             and isinstance(max_parallel_runs, int)
@@ -1041,13 +1048,6 @@ class MoonMindAgentRun:
                 "missing_condition=moonmind_slot_capacity; "
                 f"slots_in_use={slots_in_use}; max_parallel_runs={max_parallel_runs}"
                 f"{queue_suffix}."
-            )
-
-        if profile.get("enabled") is False or profile.get("launch_ready") is False:
-            return (
-                "Waiting for provider profile readiness; "
-                f"runtime={runtime_id}; {intent}{profile_suffix}; "
-                f"missing_condition=profile_not_launch_ready{queue_suffix}."
             )
 
         return (
@@ -2669,18 +2669,53 @@ class MoonMindAgentRun:
     ) -> dict[str, Any]:
         """Fetch a compact manager-health snapshot before resetting it."""
 
+        payload = {
+            "runtime_id": runtime_id,
+            "requester_workflow_id": requester_workflow_id,
+        }
+        if execution_profile_ref is not None:
+            payload["execution_profile_ref"] = execution_profile_ref
         result = await self._execute_routed_activity(
             "provider_profile.manager_state",
-            {
-                "runtime_id": runtime_id,
-                "requester_workflow_id": requester_workflow_id,
-                "execution_profile_ref": execution_profile_ref,
-            },
+            payload,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
         if isinstance(result, dict):
             return result
         return {"running": False, "error": "invalid_manager_state_payload"}
+
+    async def _inspected_provider_slot_waiting_reason(
+        self,
+        *,
+        manager_id: str,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> str:
+        waiting_reason = self._build_provider_slot_waiting_reason(
+            runtime_id=runtime_id,
+            request=request,
+        )
+        try:
+            manager_state = await self._manager_state_for_slot_wait(
+                runtime_id=runtime_id,
+                requester_workflow_id=workflow.info().workflow_id,
+                execution_profile_ref=request.execution_profile_ref,
+            )
+            if manager_state.get("running") is True:
+                waiting_reason = self._build_manager_slot_waiting_reason(
+                    runtime_id=runtime_id,
+                    request=request,
+                    manager_state=manager_state,
+                )
+        except CancelledError:
+            raise
+        except Exception as exc:
+            self._get_logger().warning(
+                "Auth profile manager %s state inspection failed while building the slot wait reason; using generic reason: %s",
+                manager_id,
+                exc,
+            )
+        return waiting_reason
 
     async def _reset_and_request_slot(
         self,
@@ -3924,34 +3959,20 @@ class MoonMindAgentRun:
                             self._awaiting_slot_reason_override is None
                             and workflow.patched(ACCURATE_SLOT_WAIT_REASON_PATCH_ID)
                         ):
-                            try:
-                                manager_state = (
-                                    await self._manager_state_for_slot_wait(
-                                        runtime_id=runtime_id,
-                                        requester_workflow_id=workflow.info().workflow_id,
-                                        execution_profile_ref=request.execution_profile_ref,
-                                    )
+                            waiting_reason = (
+                                await self._inspected_provider_slot_waiting_reason(
+                                    manager_id=manager_id,
+                                    runtime_id=runtime_id,
+                                    request=request,
                                 )
-                                if manager_state.get("running") is True:
-                                    waiting_reason = (
-                                        self._build_manager_slot_waiting_reason(
-                                            runtime_id=runtime_id,
-                                            request=request,
-                                            manager_state=manager_state,
-                                        )
-                                    )
-                            except CancelledError:
-                                raise
-                            except Exception as exc:
-                                self._get_logger().warning(
-                                    "Auth profile manager %s state inspection failed while building the slot wait reason; using generic reason: %s",
-                                    manager_id,
-                                    exc,
-                                )
+                            )
                         self._awaiting_slot_reason_override = None
                         # The inspection activity creates a workflow-task boundary;
                         # the manager can assign the slot while it runs.
-                        if not self.slot_assigned_event.is_set():
+                        if (
+                            not self.slot_assigned_event.is_set()
+                            and not self.runtime_selection_updated_event.is_set()
+                        ):
                             self.run_status = RunStatus.awaiting_slot
                             await self._signal_parent_child_state_changed(
                                 parent_info,
@@ -3961,11 +3982,36 @@ class MoonMindAgentRun:
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0
+                        refresh_waiting_reason = False
                         while (
                             not self.slot_assigned_event.is_set()
                             or self.runtime_selection_updated_event.is_set()
                         ):
                             try:
+                                if (
+                                    refresh_waiting_reason
+                                    and not self.slot_assigned_event.is_set()
+                                    and not self.runtime_selection_updated_event.is_set()
+                                    and workflow.patched(
+                                        ACCURATE_SLOT_WAIT_REASON_PATCH_ID
+                                    )
+                                ):
+                                    waiting_reason = await self._inspected_provider_slot_waiting_reason(
+                                        manager_id=manager_id,
+                                        runtime_id=runtime_id,
+                                        request=request,
+                                    )
+                                    if (
+                                        not self.slot_assigned_event.is_set()
+                                        and not self.runtime_selection_updated_event.is_set()
+                                    ):
+                                        self.run_status = RunStatus.awaiting_slot
+                                        await self._signal_parent_child_state_changed(
+                                            parent_info,
+                                            "awaiting_slot",
+                                            waiting_reason,
+                                        )
+                                        refresh_waiting_reason = False
                                 if self.runtime_selection_updated_event.is_set():
                                     (
                                         manager_handle,
@@ -3979,6 +4025,7 @@ class MoonMindAgentRun:
                                     requested_execution_profile_ref = (
                                         request.execution_profile_ref
                                     )
+                                    refresh_waiting_reason = True
                                     continue
                                 slot_wait_timeout_seconds = (
                                     self._slot_wait_timeout_override_seconds
@@ -4002,6 +4049,7 @@ class MoonMindAgentRun:
                                     requested_execution_profile_ref = (
                                         request.execution_profile_ref
                                     )
+                                    refresh_waiting_reason = True
                                     continue
                             except TimeoutError:
                                 if slot_resets >= _SLOT_WAIT_MAX_RESETS:

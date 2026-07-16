@@ -803,14 +803,67 @@ class DockerCodexManagedSessionController:
     ) -> None:
         """Map the inner daemon's workspace volume to the mounted outer workspace."""
 
+        inner_docker_command = (
+            self._docker_binary,
+            "exec",
+            "-e",
+            f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            sidecar_id,
+            "docker",
+        )
+        inspect_command = (
+            *inner_docker_command,
+            "volume",
+            "inspect",
+            "--format",
+            "{{json .Options}}",
+            self._workspace_volume_name,
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            inspect_command,
+            env=self._docker_env(),
+        )
+        existing_options: dict[str, Any] | None = None
+        if returncode == 0:
+            try:
+                decoded_options = json.loads(stdout.strip() or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "failed to inspect the Docker sidecar workspace volume"
+                ) from exc
+            existing_options = (
+                decoded_options if isinstance(decoded_options, dict) else {}
+            )
+        elif "no such volume" not in (stderr or stdout).lower():
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                inspect_command,
+                stderr.strip() or stdout.strip(),
+            )
+            raise RuntimeError(
+                f"{rendered_command} failed with exit code {returncode}: "
+                f"{rendered_detail}"
+            )
+
+        expected_options = {
+            "device": self._workspace_root,
+            "o": "bind",
+            "type": "none",
+        }
+        if existing_options == expected_options:
+            return
+        if existing_options is not None:
+            await self._run(
+                (
+                    *inner_docker_command,
+                    "volume",
+                    "rm",
+                    "-f",
+                    self._workspace_volume_name,
+                )
+            )
         await self._run(
             (
-                self._docker_binary,
-                "exec",
-                "-e",
-                f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
-                sidecar_id,
-                "docker",
+                *inner_docker_command,
                 "volume",
                 "create",
                 "--driver",
