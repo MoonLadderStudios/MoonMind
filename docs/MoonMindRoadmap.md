@@ -20,7 +20,7 @@ The target split is:
 - **Omnigent host owns** live Codex process lifecycle inside the host environment, host-side workspace resources, live session events, and harness-specific launch details.
 - **The MoonMind Omnigent bridge owns** the compatibility boundary between those systems: profile-authorized session creation/attachment, event streaming, Workflow Detail chat projection, resource harvesting, artifact publication, and retry-safe external-state evidence.
 - **Direct Codex managed-session code remains compatibility substrate** until the Codex Omnigent path is reliable enough to cut over. New Codex roadmap work should land through the Omnigent host/bridge path or emit evidence compatible with it.
-- **Claude Code remains outside the current Omnigent critical path.** Existing direct Claude support and experimental Compose wiring may remain, but new Omnigent parity work belongs only in the late Claude milestone.
+- **Claude Code remains outside the current Omnigent critical path.** Existing direct Claude support and the already-supported static `omnigent-host-claude` Compose slice remain, but new Omnigent parity work belongs only in the late Claude milestone.
 
 The critical path is intentionally ordered:
 
@@ -31,7 +31,7 @@ The critical path is intentionally ordered:
 5. cut over documentation and compatibility policy to Codex-through-Omnigent as the primary managed-runtime story; and
 6. add Claude Code Omnigent parity later without blocking the Codex cutover.
 
-Completed milestones are removed from this active roadmap. Milestone numbers are compact execution order rather than permanent external identifiers.
+Completed historical milestones have been removed from the active roadmap. Milestone numbers below are compact execution order and are re-compacted as milestones complete; the durable acceptance-claim identifiers pinned by documentation contract tests are listed under [Durable acceptance-claim identifiers](#durable-acceptance-claim-identifiers) and stay stable across that renumbering.
 
 ---
 
@@ -81,10 +81,26 @@ These are not active roadmap milestones. They are shipped assumptions for the re
 - The on-demand runtime uses deterministic names and labels, a lease-owned Omnigent state volume, a read-only root filesystem with bounded temporary storage, a workflow workspace mount, and the configured MoonMind/Omnigent network.
 - A janitor workflow and generation-drain paths exist for expired, missing, orphaned, or stale-credential hosts.
 - Host-independent checkpoint identity and recovery-decision primitives exist for live reattach, cold restore, and branch isolation; the full operator and default-recovery flows remain roadmap work.
+- The run workflow records per-step Omnigent external-agent identity and passes it into checkpoint policy resolution, so Omnigent checkpoint captures select the `external_state_ref` lane.
 - The generic Container Jobs/workload service plane now owns canonical `WorkspaceLocator` semantics, daemon-visible workspace resolution, bounded/redacted logs, declared-output manifests, runtime diagnostics, lifecycle projections, cancellation, and cleanup for one-shot Docker workloads. Omnigent host work should reuse those shared primitives where compatible while preserving the distinct long-lived host/session lease model.
 - Workflow RAG already has the core ContextPack, gateway/direct transport, Qdrant, multi-collection, overlay, budgeting, and artifact/ref model used by the current managed-session path.
 - The Checkpoint Branch API and persistence model already support branch create, turn launch, continue, fork, compare, promote, archive, source checkpoint identity, instruction digest, workspace policy, turn ids, git binding, and remediation-created branches.
 - The remediation context builder writes a restricted `reports/remediation_context.json` artifact during remediation execution creation.
+
+---
+
+## Durable acceptance-claim identifiers
+
+Milestone numbers above are compact execution order and are re-compacted as milestones complete. A small set of acceptance claims, however, carry **durable identifiers pinned by documentation contract tests** (`tests/unit/docs/test_final_docs_cleanup_policy.py` and `tests/integration/docs/test_final_docs_cleanup_contract.py`). These identifiers encode safety and evidence invariants — the checkpoint-resume, remediation-evidence, RAG-injection, and PentestGPT external-egress-gate acceptance claims — so they stay stable even when the milestone numbers change. Each maps to its current execution task:
+
+- [ ] **5.1 Checkpoint boundary and completeness** — now tracked as Milestone 3.1.
+- [ ] **5.4 Resume-from-checkpoint default flow** — now tracked as Milestone 3.4.
+- [ ] **5.5 Checkpoint Branch UI and runtime-profile gaps** — now tracked as Milestone 3.5.
+- [ ] **6.2 Omnigent remediation context enrichment** — now tracked as Milestone 4.2.
+- [ ] **7.1 Initial context injection for Omnigent** — now tracked as Milestone 5.1.
+- [ ] **11.1 Restricted egress boundary for PentestGPT external targets** — now tracked as Milestone 10.2.
+
+Changing any identifier above is a deliberate, owner-approved invariant change: update the pinning contract tests in the same change rather than dropping the identifier to make a roadmap edit pass.
 
 ---
 
@@ -266,13 +282,13 @@ These are not active roadmap milestones. They are shipped assumptions for the re
 
 **Goal:** Add Claude Code to the Omnigent runtime only after the Codex path has completed its core product and cutover milestones.
 
-**Why it is late:** Codex now has verified OAuth reuse and automatic Omnigent host registration. Splitting focus would slow the bridge, host lifecycle, checkpoint, and product-surface work needed to make that path reliable. Existing direct Claude support remains available; existing static Compose wiring is retained as experimental substrate, not as a current acceptance gate.
+**Why it is late:** Codex now has verified OAuth reuse and automatic Omnigent host registration. Splitting focus would slow the bridge, host lifecycle, checkpoint, and product-surface work needed to make that path reliable. Existing direct Claude support remains available, and the static `omnigent-host-claude` Compose slice is already a supported host per `docs/Omnigent/OmnigentHostOAuth.md` and `docs/Omnigent/CombinedStackValidationAndRollback.md` (which the roadmap defers to when the two disagree). This milestone therefore scopes the remaining Claude parity work *beyond* that already-supported static slice rather than re-litigating it.
 
 ### Deferred work
 
 - [ ] **9.0 Declarative design reconciliation** — revisit `docs/Omnigent/OmnigentHostOAuth.md`, `docs/ManagedAgents/ClaudeAnthropicOAuth.md`, bridge, checkpoint, RAG, remediation, and UI docs after the Codex contracts stabilize.
 - [ ] **9.1 Claude OAuth host binding** — reuse the shared Provider Profile capacity and host-lease framework for the Claude OAuth volume, correct home/config paths, `.claude.json` handling, competing-credential removal, exact-environment `claude auth status`, and credential-generation drain.
-- [ ] **9.2 Supported static Claude host** — turn the existing `omnigent-host-claude` Compose profile into a live-verified supported path with automatic registration, readiness checks, diagnostics, restart behavior, and no second login ceremony.
+- [ ] **9.2 Static Claude host parity hardening** — the static `omnigent-host-claude` Compose slice is already a supported host in the canonical docs; extend it to full Codex parity for automatic registration evidence, readiness checks, diagnostics, restart behavior, and no second login ceremony under the shared host-lease model.
 - [ ] **9.3 Profile-aware Claude routing** — resolve Claude Provider Profiles and `claude-native` harness compatibility automatically through `executionProfileRef`, with the same authorization and first-message ordering as Codex.
 - [ ] **9.4 On-demand Claude host parity** — add deterministic on-demand launch, workspace/artifact mounts, policy enforcement, cleanup, janitor reconciliation, and real-Docker tests using the shared host lifecycle substrate.
 - [ ] **9.5 Bridge and Workflow Detail parity** — prove Claude sessions produce the same normalized chat, approval, resource, diagnostic, and artifact projections as Codex.
@@ -285,7 +301,7 @@ These are not active roadmap milestones. They are shipped assumptions for the re
 
 ## Milestone 10 — Pentest De-scoped; External-Egress Safety Gate Retained 🔒
 
-**Goal:** Pentest is not a first-class product feature. Keep only a thin skill/preset over the generic one-shot Container Jobs/workload path, keep it disabled by default and lab-only, and retain the external-target egress gate until the shared Docker/network substrate enforces restricted egress.
+**Goal:** Pentest is not a first-class product feature. Keep only a thin skill/preset over the generic one-shot Container Jobs/workload path, keep it disabled by default and lab-only, and retain the external-target egress gate until the shared Docker/network substrate enforces restricted egress; external targets stay gated until enforcement exists.
 
 **Why the change:** The bespoke runner, scope-governance, provider-lease, heartbeat, settings, and scope-authoring machinery grew into a maintenance surface disproportionate to its value. MoonMind should consume the upstream PentestGPT container through the generic workload launcher rather than carry a separate execution and governance stack. What must not regress is safety: Docker `bridge` alone is not an enforced egress boundary.
 
@@ -321,13 +337,13 @@ These are not active roadmap milestones. They are shipped assumptions for the re
 
 | Priority | Milestone | Status | Primary dependency |
 | --- | --- | --- | --- |
-| 🔴 P0 | 1 — Bridge communication and Workflow Detail chat | 🚧 Active | Builds on the shipped profile-bound Codex host and registration path |
-| 🔴 P0 | 2 — Workflow-requested Codex Omnigent host containers | 🚧 Active | Uses Milestone 1 for durable communication and visibility |
-| 🔴 P0 | 3 — Host-session checkpoints, resume, and branching | 🔧 Partial | Depends on stable bridge evidence and host lifecycle from 1 and 2 |
-| 🔴 P0 | 4 — Remediation workflows and evidence-based repair | 🚧 Active | Depends on 1 and 3 for full power |
-| 🟠 P1 | 5 — RAG for Codex Omnigent host agents | 🔧 Partial | Depends on basic Codex Omnigent execution and profile selection |
-| 🟠 P1 | 6 — Omnigent policy management UI | 📐 Designed | Depends on launch and bridge enforcement points |
-| 🟠 P1 | 7 — Omnigent agent profiles UI | 📐 Designed | Depends on endpoint, host-mode, Provider Profile, and policy data models |
-| 🟡 P2 | 8 — Codex cutover, docs, and compatibility cleanup | 🔧 Partial | Follows P0/P1 stabilization |
-| 🔒 Later | 9 — Claude Code Omnigent parity | 🔒 Gated | Starts only after Codex cutover contracts are stable |
-| 🔒 Gate | 10 — Pentest de-scoped; external-egress safety retained | 🔒 Gated | External targets blocked until shared substrate egress enforcement exists |
+| 🔴 P0 | 1 — Omnigent Bridge Communication & Workflow Detail Chat | 🚧 Active | Builds on the shipped profile-bound Codex host and registration path |
+| 🔴 P0 | 2 — Workflow-Requested Codex Omnigent Host Containers | 🚧 Active | Uses Milestone 1 for durable communication and visibility |
+| 🔴 P0 | 3 — Omnigent Host Session Checkpoints, Resume & Branching | 🔧 Partial | Depends on stable bridge evidence and host lifecycle from 1 and 2 |
+| 🔴 P0 | 4 — Remediation Workflows & Evidence-Based Repair | 🚧 Active | Depends on 1 and 3 for full power |
+| 🟠 P1 | 5 — RAG for Codex Omnigent Host Agents | 🔧 Partial | Depends on basic Codex Omnigent execution and profile selection |
+| 🟠 P1 | 6 — Omnigent Policy Management UI | 📐 Designed | Depends on launch and bridge enforcement points |
+| 🟠 P1 | 7 — Omnigent Agent Profiles UI | 📐 Designed | Depends on endpoint, host-mode, Provider Profile, and policy data models |
+| 🟡 P2 | 8 — Codex Cutover, Documentation & Compatibility Cleanup | 🔧 Partial | Follows P0/P1 stabilization |
+| 🔒 Later | 9 — Claude Code Omnigent Parity | 🔒 Gated | Starts only after Codex cutover contracts are stable |
+| 🔒 Gate | 10 — Pentest De-scoped; External-Egress Safety Gate Retained | 🔒 Gated | External targets blocked until shared substrate egress enforcement exists |
