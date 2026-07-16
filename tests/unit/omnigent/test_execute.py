@@ -697,6 +697,17 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     )
     manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schemaVersion"] == "moonmind.omnigent.capture_manifest.v1"
+    assert manifest["limits"]["maximumHarvestedFiles"] == 100
+    assert manifest["evidenceCompleteness"] == "complete"
+    groups = {
+        group["groupKey"]: group
+        for group in manifest["resourceProjection"]["groups"]
+    }
+    changed_resource = groups["changed_files"]["resources"][0]
+    assert changed_resource["artifactRef"].startswith("artifact://omnigent/")
+    assert groups["diffs"]["resources"][0]["status"] == "available"
+    assert groups["diagnostics"]["resources"][0]["status"] == "available"
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
     external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"

@@ -2432,11 +2432,27 @@ type BridgeSessionProjection = {
   status?: string | undefined;
 };
 
-function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream'): string {
+function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream' | 'resources'): string {
   return joinApiBasePath(
     apiBase,
     `/omnigent/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/${suffix}`,
   );
+}
+
+type BridgeResourceProjection = {
+  completeness: string;
+  groups: Array<{ groupKey: string; title: string; resources: Array<{
+    label: string; artifactRef?: string; path?: string; status: string;
+    unavailableReason?: string; sourceEventSequence?: number;
+    previewAvailable?: boolean; downloadAvailable?: boolean;
+  }> }>;
+};
+
+async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
+  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'resources'), { credentials: 'include' });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+  const body = (await resp.json()) as Partial<BridgeResourceProjection>;
+  return { completeness: body.completeness || 'pending', groups: Array.isArray(body.groups) ? body.groups : [] };
 }
 
 async function resolveBridgeSessionProjection({
@@ -5568,6 +5584,13 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
+  const resourcesQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-resources', bridgeSessionId],
+    queryFn: () => fetchBridgeSessionResources(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    refetchInterval: isTerminal ? false : SESSION_PROJECTION_POLL_MS,
+    retry: false,
+  });
   const historyRows = useMemo(() => mapEventsToTimelineRows(eventsQuery.data), [eventsQuery.data]);
 
   useEffect(() => {
@@ -5664,6 +5687,30 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      <details className="card bridge-resource-evidence" open={isTerminal}>
+        <summary>Resource evidence — {resourcesQuery.data?.completeness || 'harvesting'}</summary>
+        {resourcesQuery.data?.groups.length ? (
+          <div className="stack" style={{ marginTop: '0.75rem' }}>
+            {resourcesQuery.data.groups.map((group) => (
+              <section key={group.groupKey} aria-label={group.title}>
+                <h4>{group.title}</h4>
+                <ul className="stack gap-1">
+                  {group.resources.map((resource, index) => {
+                    const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+                    return <li key={`${group.groupKey}-${resource.label}-${index}`}>
+                      <span>{resource.label}</span>{resource.path ? <code className="text-xs break-all"> — {resource.path}</code> : null}
+                      {resource.sourceEventSequence != null ? <span className="small"> (event {resource.sourceEventSequence})</span> : null}
+                      {href && resource.previewAvailable ? <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a> : null}
+                      {resource.unavailableReason ? <div className="small">Unavailable: {resource.unavailableReason}</div> : null}
+                      {!href && resource.artifactRef ? <code className="text-xs break-all">{resource.artifactRef}</code> : null}
+                    </li>;
+                  })}
+                </ul>
+              </section>
+            ))}
+          </div>
+        ) : <p className="small">{isTerminal ? 'No harvested resource evidence is available.' : 'Harvesting resource evidence…'}</p>}
+      </details>
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
         {logContent.length === 0 ? (
           <div className="live-logs-empty">(waiting for bridge session events...)</div>

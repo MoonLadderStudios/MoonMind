@@ -25,6 +25,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
+CAPTURE_MANIFEST_SCHEMA_VERSION = "moonmind.omnigent.capture_manifest.v1"
 
 
 class OmnigentContractError(RuntimeError):
@@ -46,6 +47,107 @@ class OmnigentCaptureBundle:
     metadata_refs: dict[str, str] = field(default_factory=dict)
     optional_harvest_failed: bool = False
     resource_harvest_failure_class: str | None = None
+    resource_projection: dict[str, Any] = field(default_factory=dict)
+
+
+def _capture_resource_projection(
+    manifest: dict[str, Any], normalized_events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build the bounded, artifact-ref-only bridge evidence projection."""
+
+    groups: list[dict[str, Any]] = []
+    changed_sequences: dict[str, int] = {}
+    session_file_sequences: dict[str, int] = {}
+    for event in normalized_events:
+        event_type = str(event.get("eventType") or event.get("type") or "")
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        path = _resource_path(data)
+        sequence = event.get("sequence")
+        if path and isinstance(sequence, int):
+            if event_type == "resource.changed_file":
+                changed_sequences.setdefault(path, sequence)
+            elif event_type == "resource.session_file":
+                session_file_sequences.setdefault(path, sequence)
+
+    def add_group(key: str, title: str, values: list[dict[str, Any]]) -> None:
+        resources: list[dict[str, Any]] = []
+        for value in values[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+            artifact_ref = str(
+                value.get("artifactRef")
+                or value.get("diffRef")
+                or value.get("snapshotRef")
+                or ""
+            ).strip()
+            path = str(value.get("path") or value.get("name") or "").strip()
+            reason = str(
+                value.get("unavailable") or value.get("skipped") or ""
+            ).strip()
+            resource: dict[str, Any] = {
+                "label": path or title,
+                "status": "available" if artifact_ref else ("unavailable" if reason else "pending"),
+                "previewAvailable": bool(artifact_ref),
+                "downloadAvailable": bool(artifact_ref),
+            }
+            if artifact_ref:
+                resource["artifactRef"] = artifact_ref
+            if path:
+                resource["path"] = path[:512]
+            if reason:
+                resource["unavailableReason"] = reason[:512]
+            source_sequence = (
+                session_file_sequences.get(path)
+                if key == "session_files"
+                else changed_sequences.get(path)
+            )
+            if source_sequence is not None:
+                resource["sourceEventSequence"] = source_sequence
+            resources.append(resource)
+        if resources:
+            groups.append({"groupKey": key, "title": title, "resources": resources})
+
+    add_group("changed_files", "Changed files", list(manifest.get("changedFiles") or []))
+    add_group("diffs", "Diffs", list(manifest.get("workspaceDiffs") or []))
+    add_group("workspace_files", "Workspace files", list(manifest.get("workspaceFiles") or []))
+    add_group("session_files", "Session files", list(manifest.get("sessionFiles") or []))
+    add_group("snapshots", "Snapshots", [
+        {
+            "name": "Initial snapshot",
+            "artifactRef": manifest.get("artifactRefs", {}).get("initialSnapshotRef"),
+        },
+        {
+            "name": "Final snapshot",
+            "artifactRef": manifest.get("artifactRefs", {}).get("finalSnapshotRef"),
+        },
+        *list(manifest.get("childSessionEvidence") or []),
+    ])
+    add_group("logs", "Logs and event journals", [
+        {
+            "name": "Raw event journal",
+            "artifactRef": manifest.get("artifactRefs", {}).get("rawSseStreamRef"),
+        },
+        {
+            "name": "Normalized event journal",
+            "artifactRef": manifest.get("artifactRefs", {}).get(
+                "normalizedEventStreamRef"
+            ),
+        },
+    ])
+    unavailable = [
+        {"kind": key, "reason": str(value)[:512]}
+        for key, value in manifest.items()
+        if (key.endswith("Unavailable") or key.endswith("UnavailableReason")) and value
+    ]
+    return {
+        "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+        "completeness": (
+            "degraded"
+            if unavailable
+            or manifest.get("optionalResourceHarvest", {}).get("failed")
+            else "complete"
+        ),
+        "groups": groups,
+        "unavailable": unavailable,
+    }
 
 
 class OmnigentArtifactGateway:
@@ -394,6 +496,7 @@ def build_omnigent_terminal_refs(
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
+        "resourceProjection": dict(capture_bundle.resource_projection),
     }
 
 
@@ -1177,12 +1280,19 @@ async def _build_capture_bundle(
         link_type="output.omnigent.snapshot.final",
     )
     manifest: dict[str, Any] = {
+        "schemaVersion": CAPTURE_MANIFEST_SCHEMA_VERSION,
+        "sourceIssue": "MoonLadderStudios/MoonMind#3365",
         "provider": "omnigent",
         "omnigentSessionId": session_id,
         "omnigentAgentId": agent_id,
         "terminalStatus": terminal_status,
         "artifactRefs": refs,
         "patchUnavailable": True,
+        "capturePolicy": dict(capture_policy or {}),
+        "limits": {
+            "maximumListEntries": _MAX_OMNIGENT_HARVEST_ITEMS,
+            "maximumHarvestedFiles": _MAX_OMNIGENT_HARVEST_ITEMS,
+        },
     }
     child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
     manifest["childSessions"] = len(child_session_ids)
@@ -1399,6 +1509,46 @@ async def _build_capture_bundle(
             link_type="checkpoint.omnigent.external_state_ref",
         )
         manifest["externalStateRef"] = external_state_ref
+    projection = _capture_resource_projection(manifest, normalized_events)
+    projection["groups"].extend(
+        [
+            {
+                "groupKey": "diagnostics",
+                "title": "Diagnostics",
+                "resources": [{
+                    "label": "Diagnostics",
+                    "artifactRef": diagnostics_ref,
+                    "status": "available",
+                    "previewAvailable": True,
+                    "downloadAvailable": True,
+                }],
+            },
+            {
+                "groupKey": "capture_manifests",
+                "title": "Capture and checkpoint manifests",
+                "resources": [
+                    {
+                        "label": "External-state checkpoint",
+                        "artifactRef": refs.get("externalStateRef"),
+                        "status": "available" if refs.get("externalStateRef") else "unavailable",
+                        "previewAvailable": bool(refs.get("externalStateRef")),
+                        "downloadAvailable": bool(refs.get("externalStateRef")),
+                        **(
+                            {}
+                            if refs.get("externalStateRef")
+                            else {
+                                "unavailableReason": (
+                                    "No external-state checkpoint was requested."
+                                )
+                            }
+                        ),
+                    }
+                ],
+            },
+        ]
+    )
+    manifest["resourceProjection"] = projection
+    manifest["evidenceCompleteness"] = projection["completeness"]
     manifest_ref = await _capture_artifact_json(
         artifact_gateway,
         request,
@@ -1438,6 +1588,7 @@ async def _build_capture_bundle(
         metadata_refs=metadata_refs,
         optional_harvest_failed=optional_harvest_failed,
         resource_harvest_failure_class=resource_harvest_failure_class,
+        resource_projection=projection,
     )
 
 

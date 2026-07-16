@@ -613,6 +613,40 @@ async def list_omnigent_bridge_session_events(
     }
 
 
+@router.get("/bridge-sessions/{bridge_session_id}/resources", response_model=dict)
+async def get_omnigent_bridge_session_resources(
+    bridge_session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> dict[str, Any]:
+    """Return the owner-authorized, artifact-ref-only harvest projection."""
+
+    await _authorize_bridge_session_projection(
+        bridge_session_id=bridge_session_id,
+        user=user,
+        service=service,
+        store=store,
+    )
+    row = await store.get_bridge_session(bridge_session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    projection = dict((row.terminal_refs or {}).get("resourceProjection") or {})
+    if not projection:
+        return {
+            "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+            "completeness": (
+                "pending"
+                if row.status not in _BRIDGE_TERMINAL_STATUSES
+                else "unavailable"
+            ),
+            "groups": [],
+            "unavailable": [],
+        }
+    return projection
+
+
 @router.get("/bridge-sessions/{bridge_session_id}/stream")
 async def stream_omnigent_bridge_session_events(
     bridge_session_id: str,

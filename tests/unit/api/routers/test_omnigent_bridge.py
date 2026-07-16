@@ -135,6 +135,27 @@ class _FakeStore:
     async def list_events(self, bridge_session_id: str):
         return self._rows
 
+    async def get_bridge_session(self, bridge_session_id: str):
+        if self._owner is None:
+            return None
+        return SimpleNamespace(
+            status="completed",
+            terminal_refs={
+                "resourceProjection": {
+                    "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+                    "completeness": "complete",
+                    "groups": [
+                        {
+                            "groupKey": "changed_files",
+                            "title": "Changed files",
+                            "resources": [],
+                        }
+                    ],
+                    "unavailable": [],
+                }
+            },
+        )
+
     async def resolve_projection_session(self, **kwargs):
         if self._owner is None:
             return None
@@ -337,6 +358,14 @@ def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     assert event["kind"] == "assistant_message_delta"
     assert event["sessionId"] == "brs-1"
     assert event["metadata"]["source"] == "omnigent_bridge"
+
+
+def test_get_bridge_session_resources_returns_authorized_terminal_projection() -> None:
+    client, _, _ = _build()
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/resources")
+    assert resp.status_code == 200
+    assert resp.json()["schemaVersion"] == "moonmind.omnigent.resource_projection.v1"
+    assert resp.json()["groups"][0]["groupKey"] == "changed_files"
 
 
 def test_list_bridge_session_events_handles_nullable_event_type() -> None:
