@@ -14,6 +14,7 @@ from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
     OmnigentCaptureBundle,
+    _capture_resource_projection,
     build_omnigent_result,
 )
 from moonmind.omnigent.execute import (
@@ -51,6 +52,23 @@ def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
     }
     payload.update(overrides)
     return OmnigentCaptureBundle(**payload)
+
+
+def test_capture_projection_includes_child_session_journal_metadata() -> None:
+    child_ref = "artifact://omnigent/corr-1/runtime.omnigent.child_sessions.jsonl"
+    projection = _capture_resource_projection(
+        {
+            "artifactRefs": {"childSessionsRef": child_ref},
+            "artifactMetadata": {
+                child_ref: {"contentType": "application/x-ndjson", "sizeBytes": 31}
+            },
+        },
+        [],
+    )
+    logs = next(group for group in projection["groups"] if group["groupKey"] == "logs")
+    child = next(item for item in logs["resources"] if item["label"] == "Child-session journal")
+    assert child["contentType"] == "application/x-ndjson"
+    assert child["sizeBytes"] == 31
 
 
 def test_normalize_waiting_with_elicitation_is_internal_awaiting_approval() -> None:
@@ -706,8 +724,19 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     }
     changed_resource = groups["changed_files"]["resources"][0]
     assert changed_resource["artifactRef"].startswith("artifact://omnigent/")
+    assert changed_resource["contentType"] == "application/octet-stream"
+    assert changed_resource["sizeBytes"] > 0
+    assert changed_resource["previewAvailable"] is False
     assert groups["diffs"]["resources"][0]["status"] == "available"
     assert groups["diagnostics"]["resources"][0]["status"] == "available"
+    # The persisted manifest cannot self-reference without recursively changing
+    # its own payload. The terminal resource projection is enriched with its
+    # manifest ref immediately after this immutable artifact is published.
+    assert manifest["limits"]["maximumContentBytes"] == 10 * 1024 * 1024
+    assert manifest["limits"]["maximumPreviewBytes"] == 256 * 1024
+    assert manifest["harvestSafetyPolicy"]["pathTraversal"] == (
+        "rejected_by_moonmind_artifact_boundary"
+    )
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
     external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"

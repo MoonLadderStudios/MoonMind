@@ -2445,6 +2445,7 @@ type BridgeResourceProjection = {
     label: string; artifactRef?: string; path?: string; status: string;
     unavailableReason?: string; sourceEventSequence?: number;
     previewAvailable?: boolean; downloadAvailable?: boolean;
+    contentType?: string; sizeBytes?: number;
   }> }>;
 };
 
@@ -5700,7 +5701,10 @@ function BridgeSessionLogsPanel({
                     return <li key={`${group.groupKey}-${resource.label}-${index}`}>
                       <span>{resource.label}</span>{resource.path ? <code className="text-xs break-all"> — {resource.path}</code> : null}
                       {resource.sourceEventSequence != null ? <span className="small"> (event {resource.sourceEventSequence})</span> : null}
-                      {href && resource.previewAvailable ? <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a> : null}
+                      {resource.contentType ? <span className="small"> — {resource.contentType}</span> : null}
+                      {resource.sizeBytes != null ? <span className="small"> ({resource.sizeBytes} bytes)</span> : null}
+                      {href && resource.previewAvailable ? <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Preview ${resource.label}`}>Preview</a> : null}
+                      {href && resource.downloadAvailable ? <a className="button secondary small" href={href} download aria-label={`Download ${resource.label}`}>Download</a> : null}
                       {resource.unavailableReason ? <div className="small">Unavailable: {resource.unavailableReason}</div> : null}
                       {!href && resource.artifactRef ? <code className="text-xs break-all">{resource.artifactRef}</code> : null}
                     </li>;

@@ -7869,6 +7869,40 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/omnigent/bridge-sessions/brs-1/resources')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: 'moonmind.omnigent.resource_projection.v1',
+            completeness: 'degraded',
+            groups: [{
+              groupKey: 'changed_files',
+              title: 'Changed files',
+              resources: [
+                {
+                  label: 'src/example.ts',
+                  path: '/untrusted/provider/src/example.ts',
+                  artifactRef: '11111111-1111-4111-8111-111111111111',
+                  status: 'available',
+                  contentType: 'text/plain',
+                  sizeBytes: 42,
+                  sourceEventSequence: 7,
+                  previewAvailable: true,
+                  downloadAvailable: true,
+                },
+                {
+                  label: 'large.bin',
+                  path: '/untrusted/provider/large.bin',
+                  status: 'unavailable',
+                  previewAvailable: false,
+                  downloadAvailable: false,
+                  unavailableReason: 'Resource exceeds the capture limit.',
+                },
+              ],
+            }],
+          }),
+        } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -7881,6 +7915,11 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Bridge assistant output').length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(screen.getByText(/Resource evidence — degraded/i)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Preview src/example.ts' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Download src/example.ts' })).toBeTruthy();
+    expect(screen.getByText(/Unavailable: Resource exceeds the capture limit/i)).toBeTruthy();
+    expect(screen.getByText(/\/untrusted\/provider\/src\/example.ts/i).closest('a')).toBeNull();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);

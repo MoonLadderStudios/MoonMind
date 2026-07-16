@@ -25,7 +25,24 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
+_MAX_OMNIGENT_RESOURCE_BYTES = 10 * 1024 * 1024
+_MAX_OMNIGENT_PREVIEW_BYTES = 256 * 1024
 CAPTURE_MANIFEST_SCHEMA_VERSION = "moonmind.omnigent.capture_manifest.v1"
+
+
+def _resource_metadata(content: bytes, content_type: str) -> dict[str, Any]:
+    return {"contentType": content_type, "sizeBytes": len(content)}
+
+
+def _bounded_resource_metadata(content: bytes, content_type: str) -> tuple[dict[str, Any], bool]:
+    metadata = _resource_metadata(content, content_type)
+    if len(content) > _MAX_OMNIGENT_RESOURCE_BYTES:
+        metadata["unavailable"] = (
+            f"Resource is {len(content)} bytes and exceeds the "
+            f"{_MAX_OMNIGENT_RESOURCE_BYTES}-byte capture limit."
+        )
+        return metadata, False
+    return metadata, True
 
 
 class OmnigentContractError(RuntimeError):
@@ -56,6 +73,7 @@ def _capture_resource_projection(
     """Build the bounded, artifact-ref-only bridge evidence projection."""
 
     groups: list[dict[str, Any]] = []
+    artifact_metadata = manifest.get("artifactMetadata", {})
     changed_sequences: dict[str, int] = {}
     session_file_sequences: dict[str, int] = {}
     for event in normalized_events:
@@ -88,8 +106,19 @@ def _capture_resource_projection(
                 "previewAvailable": bool(artifact_ref),
                 "downloadAvailable": bool(artifact_ref),
             }
+            if value.get("contentType"):
+                resource["contentType"] = str(value["contentType"])[:255]
+            if isinstance(value.get("sizeBytes"), int):
+                resource["sizeBytes"] = value["sizeBytes"]
             if artifact_ref:
                 resource["artifactRef"] = artifact_ref
+                stored_metadata = artifact_metadata.get(artifact_ref, {})
+                if stored_metadata.get("contentType"):
+                    resource.setdefault("contentType", stored_metadata["contentType"])
+                if isinstance(stored_metadata.get("sizeBytes"), int):
+                    resource.setdefault("sizeBytes", stored_metadata["sizeBytes"])
+                if resource.get("contentType") == "application/octet-stream":
+                    resource["previewAvailable"] = False
             if path:
                 resource["path"] = path[:512]
             if reason:
@@ -120,7 +149,7 @@ def _capture_resource_projection(
         },
         *list(manifest.get("childSessionEvidence") or []),
     ])
-    add_group("logs", "Logs and event journals", [
+    log_resources = [
         {
             "name": "Raw event journal",
             "artifactRef": manifest.get("artifactRefs", {}).get("rawSseStreamRef"),
@@ -131,7 +160,17 @@ def _capture_resource_projection(
                 "normalizedEventStreamRef"
             ),
         },
-    ])
+        {
+            "name": "Child-session journal",
+            "artifactRef": manifest.get("artifactRefs", {}).get("childSessionsRef")
+            or manifest.get("childSessionsRef"),
+        },
+    ]
+    add_group(
+        "logs",
+        "Logs and event journals",
+        [value for value in log_resources if value.get("artifactRef")],
+    )
     unavailable = [
         {"kind": key, "reason": str(value)[:512]}
         for key, value in manifest.items()
@@ -187,6 +226,11 @@ class OmnigentArtifactGateway:
 
     async def read_text(self, artifact_ref: str) -> str:
         raise NotImplementedError
+
+    async def metadata(self, artifact_ref: str) -> dict[str, Any]:
+        """Return safe MoonMind-owned metadata for a published artifact."""
+
+        return {}
 
 
 class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
@@ -292,6 +336,24 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             if path.is_file():
                 return path.read_text(encoding="utf-8")
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
+
+    async def metadata(self, artifact_ref: str) -> dict[str, Any]:
+        prefix = "artifact://omnigent/"
+        if not artifact_ref.startswith(prefix):
+            return {}
+        path = (self._root / artifact_ref[len(prefix) :]).resolve()
+        if not path.is_relative_to(self._root):
+            return {}
+        metadata_path = path.with_suffix(f"{path.suffix}.metadata.json")
+        try:
+            value = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {
+            key: value[key]
+            for key in ("contentType", "sizeBytes")
+            if key in value
+        }
 
 
 def _safe_artifact_segment(value: object) -> str:
@@ -641,13 +703,19 @@ class BridgeResourceHarvester:
                     }
                 )
                 continue
+            metadata, capturable = _bounded_resource_metadata(
+                content, "application/octet-stream"
+            )
+            if not capturable:
+                harvested.append({"path": path, **metadata})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.changed_files/{path}",
                 payload=content,
                 link_type="output.omnigent.changed_file",
             )
-            harvested.append({"path": path, "artifactRef": ref})
+            harvested.append({"path": path, "artifactRef": ref, **metadata})
         self._manifest["changedFiles"] = harvested
         self._manifest.setdefault("patchUnavailable", True)
         return file_items
@@ -696,13 +764,19 @@ class BridgeResourceHarvester:
                     }
                 )
                 continue
+            metadata, capturable = _bounded_resource_metadata(
+                content, "application/octet-stream"
+            )
+            if not capturable:
+                harvested.append({"path": path, **metadata})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.workspace_files/{path}",
                 payload=content,
                 link_type="output.omnigent.workspace_file",
             )
-            harvested.append({"path": path, "artifactRef": ref})
+            harvested.append({"path": path, "artifactRef": ref, **metadata})
         self._manifest["workspaceFiles"] = harvested
 
     async def harvest_workspace_diffs(
@@ -730,6 +804,10 @@ class BridgeResourceHarvester:
                 )
                 self._manifest["patchUnavailable"] = True
                 return
+            metadata, capturable = _bounded_resource_metadata(diff, "text/x-diff")
+            if not capturable:
+                harvested.append({"path": path, **metadata})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.workspace_diffs/{path}.diff",
@@ -737,7 +815,7 @@ class BridgeResourceHarvester:
                 link_type="output.omnigent.workspace_diff",
                 content_type="text/x-diff",
             )
-            harvested.append({"path": path, "artifactRef": ref})
+            harvested.append({"path": path, "artifactRef": ref, **metadata})
         self._manifest["workspaceDiffs"] = harvested
         self._manifest["patchUnavailable"] = not bool(harvested)
 
@@ -785,6 +863,12 @@ class BridgeResourceHarvester:
                     }
                 )
                 continue
+            metadata, capturable = _bounded_resource_metadata(
+                content, "application/octet-stream"
+            )
+            if not capturable:
+                harvested.append({"fileId": file_id, "filename": filename, **metadata})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.session_files/{file_id}/{filename}",
@@ -806,6 +890,7 @@ class BridgeResourceHarvester:
                     "filename": filename,
                     "artifactRef": ref,
                     "metadataRef": metadata_ref,
+                    **metadata,
                 }
             )
         self._manifest["sessionFiles"] = harvested
@@ -869,13 +954,19 @@ async def _harvest_changed_files(
                 }
             )
             continue
+        metadata, capturable = _bounded_resource_metadata(
+            content, "application/octet-stream"
+        )
+        if not capturable:
+            harvested.append({"path": path, **metadata})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.changed_files/{path}",
             payload=content,
             link_type="output.omnigent.changed_file",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append({"path": path, "artifactRef": ref, **metadata})
     manifest["changedFiles"] = harvested
     manifest.setdefault("patchUnavailable", True)
     return file_items
@@ -933,13 +1024,19 @@ async def _harvest_workspace_files(
                 }
             )
             continue
+        metadata, capturable = _bounded_resource_metadata(
+            content, "application/octet-stream"
+        )
+        if not capturable:
+            harvested.append({"path": path, **metadata})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.workspace_files/{path}",
             payload=content,
             link_type="output.omnigent.workspace_file",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append({"path": path, "artifactRef": ref, **metadata})
     manifest["workspaceFiles"] = harvested
 
 
@@ -973,6 +1070,10 @@ async def _harvest_workspace_diffs(
             )
             manifest["patchUnavailable"] = True
             return
+        metadata, capturable = _bounded_resource_metadata(diff, "text/x-diff")
+        if not capturable:
+            harvested.append({"path": path, **metadata})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.workspace_diffs/{path}.diff",
@@ -980,7 +1081,7 @@ async def _harvest_workspace_diffs(
             link_type="output.omnigent.workspace_diff",
             content_type="text/x-diff",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append({"path": path, "artifactRef": ref, **metadata})
     manifest["workspaceDiffs"] = harvested
     manifest["patchUnavailable"] = not bool(harvested)
 
@@ -1032,6 +1133,12 @@ async def _harvest_session_files(
                 }
             )
             continue
+        metadata, capturable = _bounded_resource_metadata(
+            content, "application/octet-stream"
+        )
+        if not capturable:
+            harvested.append({"fileId": file_id, "filename": filename, **metadata})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.session_files/{file_id}/{filename}",
@@ -1053,6 +1160,7 @@ async def _harvest_session_files(
                 "filename": filename,
                 "artifactRef": ref,
                 "metadataRef": metadata_ref,
+                **metadata,
             }
         )
     manifest["sessionFiles"] = harvested
@@ -1292,6 +1400,23 @@ async def _build_capture_bundle(
         "limits": {
             "maximumListEntries": _MAX_OMNIGENT_HARVEST_ITEMS,
             "maximumHarvestedFiles": _MAX_OMNIGENT_HARVEST_ITEMS,
+            "maximumContentBytes": _MAX_OMNIGENT_RESOURCE_BYTES,
+            "maximumPreviewBytes": _MAX_OMNIGENT_PREVIEW_BYTES,
+        },
+        "harvestSafetyPolicy": {
+            "supportedContentTypes": [
+                "application/json",
+                "application/octet-stream",
+                "application/x-ndjson",
+                "text/plain",
+                "text/x-diff",
+            ],
+            "unsupportedContentBehavior": "metadata_with_unavailable_reason",
+            "binaryHandling": "bounded_artifact_no_inline_preview",
+            "pathTraversal": "rejected_by_moonmind_artifact_boundary",
+            "symlinks": "not_followed_by_moonmind_artifact_boundary",
+            "requestTimeoutSeconds": 60,
+            "retryPolicy": "activity_owned_bounded_retry",
         },
     }
     child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
@@ -1509,6 +1634,11 @@ async def _build_capture_bundle(
             link_type="checkpoint.omnigent.external_state_ref",
         )
         manifest["externalStateRef"] = external_state_ref
+    manifest["artifactMetadata"] = {
+        ref: metadata
+        for ref in refs.values()
+        if (metadata := await artifact_gateway.metadata(ref))
+    }
     projection = _capture_resource_projection(manifest, normalized_events)
     projection["groups"].extend(
         [
@@ -1521,6 +1651,7 @@ async def _build_capture_bundle(
                     "status": "available",
                     "previewAvailable": True,
                     "downloadAvailable": True,
+                    **manifest["artifactMetadata"].get(diagnostics_ref, {}),
                 }],
             },
             {
@@ -1533,6 +1664,9 @@ async def _build_capture_bundle(
                         "status": "available" if refs.get("externalStateRef") else "unavailable",
                         "previewAvailable": bool(refs.get("externalStateRef")),
                         "downloadAvailable": bool(refs.get("externalStateRef")),
+                        **manifest["artifactMetadata"].get(
+                            refs.get("externalStateRef", ""), {}
+                        ),
                         **(
                             {}
                             if refs.get("externalStateRef")
@@ -1557,6 +1691,18 @@ async def _build_capture_bundle(
         name="output.omnigent.capture_manifest.json",
         payload=manifest,
         link_type="output.omnigent.capture_manifest",
+    )
+    manifest_metadata = await artifact_gateway.metadata(manifest_ref)
+    projection["groups"][-1]["resources"].insert(
+        0,
+        {
+            "label": "Capture manifest",
+            "artifactRef": manifest_ref,
+            "status": "available",
+            "previewAvailable": True,
+            "downloadAvailable": True,
+            **manifest_metadata,
+        },
     )
     metadata_refs = {
         "captureManifestRef": manifest_ref,

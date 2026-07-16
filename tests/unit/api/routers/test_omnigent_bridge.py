@@ -368,6 +368,27 @@ def test_get_bridge_session_resources_returns_authorized_terminal_projection() -
     assert resp.json()["groups"][0]["groupKey"] == "changed_files"
 
 
+def test_get_bridge_session_resources_denies_non_owner() -> None:
+    client, _, _ = _build(owner_id=uuid4())
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/resources")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
+
+
+def test_get_bridge_session_resources_reports_pending_before_terminal_capture() -> None:
+    store = _FakeStore()
+
+    async def active_session(_bridge_session_id: str):
+        return SimpleNamespace(status="active", terminal_refs={})
+
+    store.get_bridge_session = active_session
+    client, _, _ = _build(store=store)
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/resources")
+    assert resp.status_code == 200
+    assert resp.json()["completeness"] == "pending"
+    assert resp.json()["groups"] == []
+
+
 def test_list_bridge_session_events_handles_nullable_event_type() -> None:
     rows = [
         SimpleNamespace(
