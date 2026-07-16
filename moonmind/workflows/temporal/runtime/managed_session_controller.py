@@ -794,7 +794,36 @@ class DockerCodexManagedSessionController:
         if not sidecar_id:
             raise RuntimeError("docker sidecar run returned a blank container id")
         await self._wait_docker_sidecar_ready(sidecar_id)
+        await self._prepare_docker_sidecar_workspace_volume(sidecar_id)
         return sidecar_id
+
+    async def _prepare_docker_sidecar_workspace_volume(
+        self,
+        sidecar_id: str,
+    ) -> None:
+        """Map the inner daemon's workspace volume to the mounted outer workspace."""
+
+        await self._run(
+            (
+                self._docker_binary,
+                "exec",
+                "-e",
+                f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+                sidecar_id,
+                "docker",
+                "volume",
+                "create",
+                "--driver",
+                "local",
+                "--opt",
+                "type=none",
+                "--opt",
+                "o=bind",
+                "--opt",
+                f"device={self._workspace_root}",
+                self._workspace_volume_name,
+            )
+        )
 
     async def _prepare_docker_sidecar_socket_volume(
         self,
@@ -1504,6 +1533,7 @@ class DockerCodexManagedSessionController:
         else:
             await self._run((self._docker_binary, "start", sidecar_name))
             await self._wait_docker_sidecar_ready(sidecar_name)
+            await self._prepare_docker_sidecar_workspace_volume(sidecar_name)
 
         probe_capability = ManagedSessionDockerCapabilityRequest(
             allowed=True,

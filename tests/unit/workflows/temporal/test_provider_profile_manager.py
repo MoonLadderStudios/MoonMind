@@ -2686,9 +2686,22 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         async def query(self, query_name):
             assert query_name == "get_state"
             return {
-                "profiles": {"p1": {}, "p2": {}},
+                "profiles": {
+                    "p1": {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 1,
+                        "current_leases": ["agent-run-active"],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                    "p2": {},
+                },
                 "pending_requests": [
-                    {"requester_workflow_id": "agent-run-1"},
+                    {
+                        "requester_workflow_id": "agent-run-1",
+                        "execution_profile_ref": "p1",
+                    },
                     {"requester_workflow_id": "agent-run-2"},
                 ],
                 "event_count": 7,
@@ -2723,6 +2736,15 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "pending_requests_count": 2,
         "event_count": 7,
         "requester_pending": True,
+        "requester_queue_position": 1,
+        "requested_profile": {
+            "profile_id": "p1",
+            "max_parallel_runs": 1,
+            "current_leases_count": 1,
+            "cooldown_until": None,
+            "enabled": True,
+            "launch_ready": True,
+        },
     }
     assert "state" not in result
 

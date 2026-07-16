@@ -541,6 +541,25 @@ async def test_mm866_docker_enabled_session_launches_agent_with_sidecar(
         and "moonmind-session-sess-1-docker" in command
         for command in commands
     )
+    assert (
+        "docker",
+        "exec",
+        "-e",
+        "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock",
+        "sidecar-ctr",
+        "docker",
+        "volume",
+        "create",
+        "--driver",
+        "local",
+        "--opt",
+        "type=none",
+        "--opt",
+        "o=bind",
+        "--opt",
+        f"device={workspace_root}",
+        "agent_workspaces",
+    ) in commands
     agent_run = next(
         command
         for command in commands
@@ -1117,6 +1136,21 @@ async def test_mm866_ensure_docker_sidecar_starts_existing_sidecar_before_ready(
 
     assert response.state == "ready"
     assert ("docker", "start", "moonmind-session-sess-1-docker") in commands
+    assert any(
+        command[:8]
+        == (
+            "docker",
+            "exec",
+            "-e",
+            "DOCKER_HOST=unix:///var/run/moonmind-docker/docker.sock",
+            "moonmind-session-sess-1-docker",
+            "docker",
+            "volume",
+            "create",
+        )
+        and command[-1] == "agent_workspaces"
+        for command in commands
+    )
 
 
 @pytest.mark.asyncio

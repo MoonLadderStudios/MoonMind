@@ -330,6 +330,7 @@ PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID = (
     "agent-run-pr-resolver-merge-gate-ownership-v1"
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
+ACCURATE_SLOT_WAIT_REASON_PATCH_ID = "agent-run-accurate-slot-wait-reason-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-sync-profiles-before-slot-request-v1"
@@ -990,6 +991,69 @@ class MoonMindAgentRun:
         return (
             "Waiting for provider profile slot; "
             f"runtime={runtime_id}; {intent}; missing_condition=capacity_or_cooldown."
+        )
+
+    def _build_manager_slot_waiting_reason(
+        self,
+        *,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+        manager_state: Mapping[str, Any],
+    ) -> str:
+        """Describe the manager-owned condition that is blocking slot assignment."""
+
+        intent = self._provider_slot_intent_summary(request)
+        queue_position = manager_state.get("requester_queue_position")
+        queue_suffix = (
+            f"; queue_position={queue_position}"
+            if isinstance(queue_position, int) and queue_position > 0
+            else ""
+        )
+        profile = manager_state.get("requested_profile")
+        if not isinstance(profile, Mapping):
+            return (
+                "Waiting in MoonMind provider profile queue; "
+                f"runtime={runtime_id}; {intent}; missing_condition=manager_queue"
+                f"{queue_suffix}."
+            )
+
+        profile_id = str(profile.get("profile_id") or "").strip()
+        profile_suffix = f"; profile={profile_id}" if profile_id else ""
+        cooldown_until = str(profile.get("cooldown_until") or "").strip()
+        if cooldown_until:
+            return (
+                "Waiting for provider cooldown to expire; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                f"missing_condition=provider_cooldown; cooldown_until={cooldown_until}"
+                f"{queue_suffix}."
+            )
+
+        slots_in_use = profile.get("current_leases_count")
+        max_parallel_runs = profile.get("max_parallel_runs")
+        if (
+            isinstance(slots_in_use, int)
+            and isinstance(max_parallel_runs, int)
+            and slots_in_use >= max_parallel_runs
+        ):
+            return (
+                "Waiting for MoonMind provider profile slot; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                "missing_condition=moonmind_slot_capacity; "
+                f"slots_in_use={slots_in_use}; max_parallel_runs={max_parallel_runs}"
+                f"{queue_suffix}."
+            )
+
+        if profile.get("enabled") is False or profile.get("launch_ready") is False:
+            return (
+                "Waiting for provider profile readiness; "
+                f"runtime={runtime_id}; {intent}{profile_suffix}; "
+                f"missing_condition=profile_not_launch_ready{queue_suffix}."
+            )
+
+        return (
+            "Waiting in MoonMind provider profile queue; "
+            f"runtime={runtime_id}; {intent}{profile_suffix}; "
+            f"missing_condition=manager_queue{queue_suffix}."
         )
 
     @staticmethod
@@ -2601,6 +2665,7 @@ class MoonMindAgentRun:
         *,
         runtime_id: str,
         requester_workflow_id: str,
+        execution_profile_ref: str | None = None,
     ) -> dict[str, Any]:
         """Fetch a compact manager-health snapshot before resetting it."""
 
@@ -2609,6 +2674,7 @@ class MoonMindAgentRun:
             {
                 "runtime_id": runtime_id,
                 "requester_workflow_id": requester_workflow_id,
+                "execution_profile_ref": execution_profile_ref,
             },
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
@@ -3847,7 +3913,6 @@ class MoonMindAgentRun:
                     # the parent sees awaiting_slot→launching in the same
                     # workflow task and the "queued" state is never visible.
                     if not self.slot_assigned_event.is_set():
-                        self.run_status = RunStatus.awaiting_slot
                         waiting_reason = (
                             self._awaiting_slot_reason_override
                             or self._build_provider_slot_waiting_reason(
@@ -3855,12 +3920,44 @@ class MoonMindAgentRun:
                                 request=request,
                             )
                         )
+                        if (
+                            self._awaiting_slot_reason_override is None
+                            and workflow.patched(ACCURATE_SLOT_WAIT_REASON_PATCH_ID)
+                        ):
+                            try:
+                                manager_state = (
+                                    await self._manager_state_for_slot_wait(
+                                        runtime_id=runtime_id,
+                                        requester_workflow_id=workflow.info().workflow_id,
+                                        execution_profile_ref=request.execution_profile_ref,
+                                    )
+                                )
+                                if manager_state.get("running") is True:
+                                    waiting_reason = (
+                                        self._build_manager_slot_waiting_reason(
+                                            runtime_id=runtime_id,
+                                            request=request,
+                                            manager_state=manager_state,
+                                        )
+                                    )
+                            except CancelledError:
+                                raise
+                            except Exception as exc:
+                                self._get_logger().warning(
+                                    "Auth profile manager %s state inspection failed while building the slot wait reason; using generic reason: %s",
+                                    manager_id,
+                                    exc,
+                                )
                         self._awaiting_slot_reason_override = None
-                        await self._signal_parent_child_state_changed(
-                            parent_info,
-                            "awaiting_slot",
-                            waiting_reason,
-                        )
+                        # The inspection activity creates a workflow-task boundary;
+                        # the manager can assign the slot while it runs.
+                        if not self.slot_assigned_event.is_set():
+                            self.run_status = RunStatus.awaiting_slot
+                            await self._signal_parent_child_state_changed(
+                                parent_info,
+                                "awaiting_slot",
+                                waiting_reason,
+                            )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0

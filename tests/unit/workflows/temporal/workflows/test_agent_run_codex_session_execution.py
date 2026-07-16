@@ -546,6 +546,62 @@ async def test_slot_waiting_reason_summarizes_capacity_or_cooldown() -> None:
     assert "provider=openai" in reason
     assert "missing_condition=capacity_or_cooldown" in reason
 
+
+async def test_manager_slot_waiting_reason_identifies_moonmind_capacity() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requester_queue_position": 3,
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 1,
+                "cooldown_until": None,
+                "enabled": True,
+                "launch_ready": True,
+            },
+        },
+    )
+
+    assert "missing_condition=moonmind_slot_capacity" in reason
+    assert "slots_in_use=1" in reason
+    assert "max_parallel_runs=1" in reason
+    assert "queue_position=3" in reason
+    assert "capacity_or_cooldown" not in reason
+
+
+async def test_manager_slot_waiting_reason_identifies_provider_cooldown() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requester_queue_position": 1,
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 0,
+                "cooldown_until": "2026-07-16T22:00:00+00:00",
+                "enabled": True,
+                "launch_ready": True,
+            },
+        },
+    )
+
+    assert "missing_condition=provider_cooldown" in reason
+    assert "cooldown_until=2026-07-16T22:00:00+00:00" in reason
+    assert "moonmind_slot_capacity" not in reason
+
 async def test_provider_cooldown_backoff_doubles_and_caps_per_profile() -> None:
     run = MoonMindAgentRun()
 
