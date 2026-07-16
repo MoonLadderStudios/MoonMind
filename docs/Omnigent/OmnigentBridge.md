@@ -135,8 +135,10 @@ authorization owns access to bridge evidence and harvested artifacts.
 The current repository ships the proxy facade, bridge-session persistence,
 event normalization, resource harvesting, profile-bound host lifecycle, and
 Workflow Detail projection scaffolding. Complete bridge-first UI presentation
-remains desired behavior. Direct Codex is a temporary compatibility producer
-(§3.3), and embedded mode remains gated (§3.2 and §18.3).
+remains desired behavior owned by the session-aware Live Logs work
+([#2558](https://github.com/MoonLadderStudios/MoonMind/issues/2558)). Direct
+Codex is a temporary compatibility producer (§3.3), and embedded mode remains
+gated (§3.2 and §18.3).
 
 ### 3.1 Proxy mode
 
@@ -948,7 +950,10 @@ profile authorization refs, selected pre-stream events, first-message state,
 terminal evidence, and cleanup events. Uniform emission and presentation of
 every named stage is desired behavior for remaining producers and UI surfaces;
 the vocabulary is authoritative even where a stage is not yet emitted as a
-separate event.
+separate event. Uniform event production and operator presentation remain owned
+by the OpenTelemetry and production-observability work
+([#2559](https://github.com/MoonLadderStudios/MoonMind/issues/2559) and
+[#2561](https://github.com/MoonLadderStudios/MoonMind/issues/2561)).
 
 ### 17.2 Error classification
 

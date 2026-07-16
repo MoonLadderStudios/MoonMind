@@ -43,3 +43,11 @@ def test_settings_and_ui_docs_link_to_canonical_omnigent_owners() -> None:
         text = _read(path)
         assert "OmnigentBridge.md" in text
         assert "OmnigentHostOAuth.md" in text
+
+
+def test_intentional_gaps_link_to_remaining_milestone_issues() -> None:
+    bridge = _read("docs/Omnigent/OmnigentBridge.md")
+
+    assert "MoonLadderStudios/MoonMind/issues/2558" in bridge
+    assert "MoonLadderStudios/MoonMind/issues/2559" in bridge
+    assert "MoonLadderStudios/MoonMind/issues/2561" in bridge
