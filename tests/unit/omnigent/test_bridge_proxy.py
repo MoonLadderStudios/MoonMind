@@ -19,6 +19,8 @@ from moonmind.omnigent.bridge_proxy import (
     BridgeSessionEventRequest,
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
+    _bound_resource_lists,
+    _safe_resource_identifier,
     validate_bridge_host_fields,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
@@ -176,7 +178,9 @@ def _binding(key: str = "idem-1") -> BridgePrincipalBinding:
     )
 
 
-def _proxy(store: _FakeStore, client: _FakeClient, **kwargs) -> OmnigentBridgeSessionProxy:
+def _proxy(
+    store: _FakeStore, client: _FakeClient, **kwargs
+) -> OmnigentBridgeSessionProxy:
     return OmnigentBridgeSessionProxy(
         run_store=store,
         client=client,
@@ -198,7 +202,10 @@ async def test_create_session_forwards_persists_and_emits() -> None:
 
     # Forwarded to the stock Omnigent Server with idempotency + traceability.
     assert client.created_payloads[0]["idempotency_key"] == "idem-1"
-    assert client.created_payloads[0]["labels"]["moonmind.issue"] == "MM-1155"
+    assert (
+        client.created_payloads[0]["labels"]["moonmind.issue"]
+        == "MoonLadderStudios/MoonMind#3361"
+    )
     assert client.created_payloads[0]["workspace"] == "https://github.com/org/repo#main"
     # Session id persisted before first message, then session.created emitted.
     assert store.attached == [("idem-1", "sess-9")]
@@ -216,7 +223,7 @@ async def test_create_session_forwards_persists_and_emits() -> None:
     assert response["moonmind"]["workflowId"] == "mm:w1"
     assert response["moonmind"]["idempotencyKey"] == "idem-1"
     assert response["moonmind"]["reused"] is False
-    assert response["moonmind"]["sourceIssue"] == "MM-1155"
+    assert response["moonmind"]["sourceIssue"] == "MoonLadderStudios/MoonMind#3361"
 
 
 async def test_create_session_reuse_is_idempotent() -> None:
@@ -534,15 +541,15 @@ async def test_resolve_elicitation_proxies_compatibility_route() -> None:
     )
 
     assert response == {"ok": True, "elicitationId": "el-1"}
-    assert client.resolved_elicitations == [
-        ("sess-1", "el-1", {"answer": "yes"})
-    ]
+    assert client.resolved_elicitations == [("sess-1", "el-1", {"answer": "yes"})]
 
 
 async def test_non_proxy_mode_fails_fast() -> None:
     embedded = parse_bridge_config(
         {
-            "compatibility": {"hostProtocolMode": "embedded_omnigent_compatible_server"},
+            "compatibility": {
+                "hostProtocolMode": "embedded_omnigent_compatible_server"
+            },
             "hostConnection": {
                 "embedded": {
                     "proxyConformanceEvidenceRef": "artifact://omnigent/proxy-conformance",
@@ -580,3 +587,19 @@ async def test_validate_bridge_host_fields_external_requires_absolute_path() -> 
         validate_bridge_host_fields(
             host_type="external", host_id="h1", workspace="relative/dir"
         )
+
+
+@pytest.mark.parametrize(
+    "path", ["../secret", "src/../secret", "/etc/passwd", r"src\\secret", "%252e%252e"]
+)
+async def test_resource_identifier_rejects_traversal_and_double_encoding(
+    path: str,
+) -> None:
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        _safe_resource_identifier(path)
+    assert excinfo.value.code == "omnigent_bridge_resource_path_invalid"
+
+
+async def test_resource_lists_are_bounded() -> None:
+    result = _bound_resource_lists({"files": list(range(300))})
+    assert len(result["files"]) == 250

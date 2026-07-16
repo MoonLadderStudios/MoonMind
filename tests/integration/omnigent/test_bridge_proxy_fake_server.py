@@ -103,7 +103,10 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
     assert created["status"] == "running"
     assert created["moonmind"]["reused"] is False
     assert server.create_payloads[0]["idempotency_key"] == "idem-1"
-    assert server.create_payloads[0]["labels"]["moonmind.issue"] == "MM-1155"
+    assert (
+        server.create_payloads[0]["labels"]["moonmind.issue"]
+        == "MoonLadderStudios/MoonMind#3361"
+    )
 
     # Provider session id persisted + session.created recorded on the row.
     row = await _row(session_maker, "idem-1")

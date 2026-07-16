@@ -182,6 +182,33 @@ The bridge should expose or proxy these Omnigent-shaped HTTP/SSE routes:
 | List session files | `GET /v1/sessions/{session_id}/resources/files` |
 | Get session file content | `GET /v1/sessions/{session_id}/resources/files/{file_id}/content` |
 
+#### `omnigent.server.v1` proxy compatibility matrix
+
+This versioned profile is the facade contract implemented for
+MoonLadderStudios/MoonMind#3361. All session-scoped operations first resolve the
+durable MoonMind binding and authorize its workflow owner. Optional resource
+operations return the stable `omnigent_bridge_capability_unavailable` code when
+the stock server does not provide them.
+
+| Operation | Facade route | Stock-server operation | Policy |
+|---|---|---|---|
+| Agent discovery/selection | `GET /api/agents` | `GET /api/agents` | Authenticated catalog; session creation resolves the selected/default agent. |
+| Host readiness | `GET /api/hosts` | `GET /api/hosts` | Bounded readiness metadata only; no caller-selected host is accepted for managed profile routing. |
+| Create/reuse | `POST /v1/sessions` | `POST /v1/sessions` | Workflow-owned idempotency binding and first-message reconciliation. |
+| Snapshot | `GET /v1/sessions/{id}` | Same | Owned provider sessions only. |
+| Attach/reconcile | `POST /v1/sessions/{id}/attach` | Snapshot probe, then durable attach | Requires an existing owned idempotency binding and rejects conflicting attachment. |
+| Stop/interrupt/message | `POST /v1/sessions/{id}/events` | Same | Canonical Omnigent event vocabulary. |
+| Delete | `DELETE /v1/sessions/{id}` | Same | Capability-gated by `deleteProviderSessionAfterHarvest`. |
+| Provider stream | `GET /v1/sessions/{id}/stream` | Same | Owner-authorized SSE pass-through; execution-critical drift fails closed. |
+| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Same | Owner-authorized control. |
+| Changed/workspace file indexes | `GET .../changes`, `GET .../filesystem` | Same | Lists are bounded by the facade. |
+| Workspace content/diff | `GET .../filesystem/{path}`, `GET .../diff/{path}` | Same | One decode/encode boundary, traversal rejection, and bounded response bytes; diff is optional. |
+| Session file index/content | `GET .../resources/files`, `GET .../resources/files/{file_id}/content` | Same | Owner-authorized, bounded, and capability-gated. |
+
+Workflow-visible durable evidence continues through the Artifact Publisher;
+these facade responses are transport results and do not make raw upstream paths
+or identifiers authoritative workflow evidence.
+
 The public Omnigent-compatible API usually lives on the Omnigent server API/UI port. In MoonMind deployments this may be:
 
 ```text
@@ -282,14 +309,19 @@ publicApi:
   exposeOmnigentCompatibleRoutes: true
   routes:
     agents: /api/agents
+    hosts: /api/hosts
     createSession: /v1/sessions
     getSession: /v1/sessions/{session_id}
+    attachSession: /v1/sessions/{session_id}/attach
+    deleteSession: /v1/sessions/{session_id}
     postEvent: /v1/sessions/{session_id}/events
     streamEvents: /v1/sessions/{session_id}/stream
     changedFiles: /v1/sessions/{session_id}/resources/environments/default/changes
     workspaceFiles: /v1/sessions/{session_id}/resources/environments/default/filesystem
-    workspaceDiffs: /v1/sessions/{session_id}/resources/environments/default/diff/{path}
+    workspaceFile: /v1/sessions/{session_id}/resources/environments/default/filesystem/{path:path}
+    workspaceDiffs: /v1/sessions/{session_id}/resources/environments/default/diff/{path:path}
     sessionFiles: /v1/sessions/{session_id}/resources/files
+    sessionFile: /v1/sessions/{session_id}/resources/files/{file_id}/content
 
 hostConnection:
   mode: upstream_omnigent_server_proxy

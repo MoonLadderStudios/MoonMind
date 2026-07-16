@@ -34,6 +34,7 @@ _USER_ID = uuid4()
 
 _CREATE_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions"
 _AGENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"
+_HOSTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/hosts"
 _EVENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/events"
 _ELICITATION_RESOLVE_PATH = (
     f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/elicitations/el-1/resolve"
@@ -61,6 +62,7 @@ class _FakeProxy:
         self.created: list[dict[str, Any]] = []
         self.posted_events: list[dict[str, Any]] = []
         self.resolved_elicitations: list[dict[str, Any]] = []
+        self.resource_calls: list[tuple[str, str, str | None]] = []
         self.create_error: OmnigentBridgeError | None = None
         # By default a read resolves to the mm:w1 owner used across the tests;
         # pass ``session_owner=None`` to simulate a session the bridge does not
@@ -106,9 +108,20 @@ class _FakeProxy:
     async def list_agents(self):
         return [{"id": "agent-1", "name": "codex"}]
 
+    async def list_hosts(self):
+        return [{"id": "host-profile-bound", "status": "ready"}]
+
+    async def get_resource(self, operation, session_id, value=None):
+        self.resource_calls.append((operation, session_id, value))
+        if operation in {"workspace_file", "workspace_diff", "session_file"}:
+            return b"content"
+        return {"files": [{"path": "src/main.py"}]}
+
 
 class _FakeStore:
-    def __init__(self, *, owner: Any | None = _UNSET, rows: list[Any] | None = None) -> None:
+    def __init__(
+        self, *, owner: Any | None = _UNSET, rows: list[Any] | None = None
+    ) -> None:
         self._owner = (
             SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
             if owner is _UNSET
@@ -119,7 +132,9 @@ class _FakeStore:
                 event_id="evt-1",
                 bridge_session_id="brs-1",
                 sequence=1,
-                timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+                timestamp=SimpleNamespace(
+                    isoformat=lambda: "2026-07-09T00:00:00+00:00"
+                ),
                 direction="host_to_moonmind",
                 event_type="response.delta",
                 normalized_status="running",
@@ -281,6 +296,35 @@ def test_list_agents_returns_catalog() -> None:
     assert resp.json() == [{"id": "agent-1", "name": "codex"}]
 
 
+def test_list_hosts_returns_bounded_profile_discovery() -> None:
+    client, _, _ = _build()
+    resp = client.get(_HOSTS_PATH)
+    assert resp.status_code == 200
+    assert resp.json() == [{"id": "host-profile-bound", "status": "ready"}]
+
+
+def test_resource_route_authorizes_before_proxying() -> None:
+    client, proxy, _ = _build()
+    path = (
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/resources/"
+        "environments/default/filesystem/src/main.py"
+    )
+    resp = client.get(path)
+    assert resp.status_code == 200
+    assert resp.content == b"content"
+    assert proxy.resource_calls == [("workspace_file", "sess-77", "src/main.py")]
+
+
+def test_resource_route_rejects_unknown_session_without_proxying() -> None:
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown/resources/files"
+    )
+    assert resp.status_code == 404
+    assert proxy.resource_calls == []
+
+
 def test_post_event_authorizes_and_delegates() -> None:
     client, proxy, _ = _build()
     resp = client.post(_EVENTS_PATH, json={"type": "interrupt"})
@@ -440,9 +484,7 @@ def test_routes_registered_under_configured_mount_path() -> None:
 
 def test_superuser_owns_any_workflow() -> None:
     def _superuser():
-        return SimpleNamespace(
-            id=uuid4(), email="admin@example.com", is_superuser=True
-        )
+        return SimpleNamespace(id=uuid4(), email="admin@example.com", is_superuser=True)
 
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
