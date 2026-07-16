@@ -4177,11 +4177,11 @@ class DockerCodexManagedSessionController:
     async def _reap_orphan_sidecar_volumes(
         self,
         *,
+        volumes: Sequence[_ManagedSessionSidecarVolume],
         active_session_ids: set[str],
         grace_seconds: float,
         now: datetime,
     ) -> tuple[int, int, int, int]:
-        volumes = await self._list_managed_session_sidecar_volumes()
         if not volumes:
             return (0, 0, 0, 0)
         active_mounts = await self._list_active_docker_volume_mounts()
@@ -4252,6 +4252,11 @@ class DockerCodexManagedSessionController:
         by_session: dict[str, list[_ManagedSessionContainer]] = {}
         for container in containers:
             by_session.setdefault(container.session_id, []).append(container)
+        volumes = await self._list_managed_session_sidecar_volumes()
+        resource_session_ids = set(by_session)
+        resource_session_ids.update(
+            volume.session_id for volume in volumes if volume.session_id
+        )
         all_records = {
             record.session_id: record for record in self._session_store.iter_all()
         }
@@ -4272,7 +4277,10 @@ class DockerCodexManagedSessionController:
         # cooldowns can make the record terminal while the workflow still owns
         # and polls the container. Protect those containers unless Temporal
         # positively confirms terminal ownership; lookup failures fail closed.
-        for session_id, record in all_records.items():
+        for session_id in resource_session_ids:
+            record = all_records.get(session_id)
+            if record is None:
+                continue
             if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
                 continue
             terminal_owner_status = await self._terminal_owner_workflow_status(record)
@@ -4380,6 +4388,7 @@ class DockerCodexManagedSessionController:
             skipped_active_volumes,
             skipped_recent_volumes,
         ) = await self._reap_orphan_sidecar_volumes(
+            volumes=volumes,
             active_session_ids=active_session_ids,
             grace_seconds=grace_seconds,
             now=now,
