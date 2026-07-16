@@ -2769,11 +2769,21 @@ class DockerCodexManagedSessionController:
             ),
             env=self._docker_env(),
         )
-        image_returncode, image_stdout, _image_stderr = image_result
+        image_returncode, image_stdout, image_stderr = image_result
         if image_returncode != 0:
-            # A missing local ref must not authorize reuse. Relaunching lets
-            # Docker acquire the configured image through the normal path.
-            return False
+            error_output = f"{image_stdout}\n{image_stderr}".lower()
+            if "no such image" in error_output or "no such object" in error_output:
+                # A missing local ref must not authorize reuse. Relaunching lets
+                # Docker acquire the configured image through the normal path.
+                return False
+            details = (
+                image_stderr.strip()
+                or image_stdout.strip()
+                or f"exit code {image_returncode}"
+            )
+            raise RuntimeError(
+                "failed to inspect configured managed session image: " + details
+            )
 
         container_image_id = container_stdout.strip()
         current_image_id = image_stdout.strip()

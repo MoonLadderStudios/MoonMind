@@ -4521,6 +4521,7 @@ async def test_controller_duplicate_launch_recreates_stale_mutable_image(
             startedAt="2026-04-06T12:00:00Z",
         )
     )
+
     async def runner(
         command: tuple[str, ...],
         *,
@@ -4557,6 +4558,57 @@ async def test_controller_duplicate_launch_recreates_stale_mutable_image(
         await controller.launch_session(request)
 
     relaunch.assert_awaited_once_with(request)
+
+
+@pytest.mark.asyncio
+async def test_container_image_inspection_only_treats_not_found_as_stale(
+    tmp_path: Path,
+) -> None:
+    image_result = (1, "", "Error: No such image: runtime:latest")
+
+    async def runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        if command == ("docker", "inspect", "-f", "{{.Image}}", "ctr-1"):
+            return 0, "sha256:current\n", ""
+        if command == (
+            "docker",
+            "image",
+            "inspect",
+            "-f",
+            "{{.Id}}",
+            "runtime:latest",
+        ):
+            return image_result
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        command_runner=runner,
+    )
+
+    assert not await controller._container_uses_current_image(
+        container_id="ctr-1",
+        image_ref="runtime:latest",
+    )
+
+    image_result = (1, "", "Error response from daemon: API unavailable")
+    with pytest.raises(
+        RuntimeError,
+        match="failed to inspect configured managed session image:.*API unavailable",
+    ):
+        await controller._container_uses_current_image(
+            container_id="ctr-1",
+            image_ref="runtime:latest",
+        )
+
 
 def test_controller_launch_duplicate_match_requires_epoch_and_thread(
     tmp_path: Path,

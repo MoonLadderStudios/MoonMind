@@ -4460,6 +4460,109 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     assert "stdout" not in step["workload"]
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_propagates_agent_child_cancellation_under_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    plan_payload = _approval_policy_plan_payload()
+    plan_payload["policy"]["failure_mode"] = "CONTINUE"
+    artifact_sequence = iter(range(1, 20))
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
+        if activity_type == "provider_profile.list":
+            return {"profiles": []}
+        if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith(
+                "reports/resilience_policy"
+            ):
+                return _resilience_policy_artifact_create_result()
+            return (
+                {"artifact_id": f"art_{next(artifact_sequence)}"},
+                {"upload_url": "unused"},
+            )
+        if activity_type == "agent_runtime.capture_workspace_checkpoint":
+            return _managed_checkpoint_capture_result(payload)
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        raise run_module.CancelledError("parent cancellation")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = getattr(payload, "artifact_ref", None)
+            if artifact_ref == "art_plan_1":
+                return json.dumps(plan_payload).encode("utf-8")
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps(_registry_payload()).encode("utf-8")
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        raise AssertionError(f"unexpected typed activity: {activity_type}")
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+
+    with pytest.raises(run_module.CancelledError, match="parent cancellation"):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["status"] == "awaiting_external"
+
+
+def test_agent_child_cancellation_propagation_preserves_pre_patch_histories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cancellation = run_module.CancelledError("parent cancellation")
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: False)
+    assert not MoonMindRunWorkflow._should_propagate_agent_child_cancellation(
+        cancellation
+    )
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == run_module.RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH
+        ),
+    )
+    assert MoonMindRunWorkflow._should_propagate_agent_child_cancellation(cancellation)
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
