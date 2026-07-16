@@ -84,8 +84,8 @@ def _is_empty_assistant_failure_reason(value: str | None) -> bool:
         value
         and value.strip().lower() in _EMPTY_ASSISTANT_FAILURE_REASONS
     )
-_CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON = (
-    "Codex provider reported no remaining credits (usage limit reached); "
+_CODEX_PROVIDER_LIMIT_REACHED_REASON = (
+    "Codex provider reported a usage limit or credit limit was exhausted; "
     "retry after a profile cooldown or update the provider profile."
 )
 _DIAGNOSTIC_TEXT_MAX_CHARS = 1000
@@ -1193,13 +1193,14 @@ class CodexManagedSessionRuntime:
         rate_limits = event_payload.get("rate_limits")
         if not isinstance(rate_limits, Mapping):
             return None
-        credits = rate_limits.get("credits")
-        if not isinstance(credits, Mapping):
-            return None
-        has_credits = credits.get("has_credits")
-        unlimited = credits.get("unlimited")
-        if has_credits is False and unlimited is not True:
-            return _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+        # ``credits`` is an optional purchased-credit balance, not the
+        # subscription usage window. Codex reserves ``rate_limit_reached_type``
+        # for the backend-classified terminal limit state.
+        reached_type = str(
+            rate_limits.get("rate_limit_reached_type") or ""
+        ).strip()
+        if reached_type:
+            return _CODEX_PROVIDER_LIMIT_REACHED_REASON
         return None
 
     @staticmethod

@@ -21,7 +21,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.automation import models as automation_models
 from moonmind.workflows.automation.preflight import CodexPreflightResult
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
-    _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+    _CODEX_PROVIDER_LIMIT_REACHED_REASON,
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
     CodexSessionRuntimeState,
@@ -1202,7 +1202,7 @@ def test_runtime_send_turn_preserves_live_assistant_output_outside_scan_tail(
     assert "failureCause" not in response.metadata
 
 
-def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure(
+def test_runtime_send_turn_classifies_explicit_limit_token_count_as_provider_failure(
     tmp_path: Path,
 ) -> None:
     request = launch_request(tmp_path)
@@ -1235,6 +1235,9 @@ def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure
                     "type": "token_count",
                     "rate_limits": {
                         "limit_id": "premium",
+                        "rate_limit_reached_type": (
+                            "workspace_member_credits_depleted"
+                        ),
                         "credits": {
                             "has_credits": False,
                             "unlimited": False,
@@ -1279,7 +1282,7 @@ def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure
     assert response.status == "failed"
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata == {
-        "reason": _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON,
+        "reason": _CODEX_PROVIDER_LIMIT_REACHED_REASON,
         "failureClass": "integration_error",
     }
     handle = runtime.session_status(
@@ -1292,8 +1295,35 @@ def test_runtime_send_turn_classifies_no_credits_token_count_as_provider_failure
     )
     assert handle.status == "failed"
     assert handle.metadata["failureClass"] == "integration_error"
-    assert handle.metadata["lastTurnError"] == _CODEX_PROVIDER_CREDITS_EXHAUSTED_REASON
+    assert handle.metadata["lastTurnError"] == _CODEX_PROVIDER_LIMIT_REACHED_REASON
     assert "retryRecommendedAction" not in response.metadata
+
+
+def test_provider_failure_reason_ignores_empty_optional_credit_balance() -> None:
+    reason = CodexManagedSessionRuntime._provider_failure_reason_from_rollout_event(
+        {
+            "type": "token_count",
+            "rate_limits": {
+                "limit_id": "codex",
+                "primary": {
+                    "used_percent": 0.0,
+                    "window_minutes": 10080,
+                    "resets_at": 1784781693,
+                },
+                "secondary": None,
+                "credits": {
+                    "has_credits": False,
+                    "unlimited": False,
+                    "balance": "0",
+                },
+                "plan_type": "pro",
+                "rate_limit_reached_type": None,
+            },
+        }
+    )
+
+    assert reason is None
+
 
 def test_runtime_send_turn_recovers_usage_limit_from_recent_log_for_empty_task_complete(
     tmp_path: Path,
