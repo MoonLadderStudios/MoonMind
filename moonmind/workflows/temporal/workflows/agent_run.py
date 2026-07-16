@@ -3989,8 +3989,8 @@ class MoonMindAgentRun:
                         ):
                             try:
                                 if (
-                                    refresh_waiting_reason
-                                    and not self.slot_assigned_event.is_set()
+                                    not self.slot_assigned_event.is_set()
+                                    and refresh_waiting_reason
                                     and not self.runtime_selection_updated_event.is_set()
                                     and workflow.patched(
                                         ACCURATE_SLOT_WAIT_REASON_PATCH_ID
