@@ -18,7 +18,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -55,6 +55,7 @@ from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_default_agent_name,
     resolved_host_runner_token,
+    resolved_proxy_forward_headers,
     resolved_server_url,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
@@ -74,6 +75,7 @@ def get_bridge_config() -> OmnigentBridgeConfig:
     """Return the resolved, immutable bridge configuration."""
 
     return _BRIDGE_CONFIG
+
 
 router = APIRouter(tags=["Omnigent Bridge"])
 
@@ -147,6 +149,7 @@ def _require_embedded_mode(
 
 
 def _get_bridge_proxy(
+    request: Request,
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentBridgeSessionProxy | None:
     """Build the proxy-mode bridge over the configured stock Omnigent Server."""
@@ -168,14 +171,15 @@ def _get_bridge_proxy(
             detail={
                 "code": "omnigent_disabled",
                 "message": (
-                    f"{OMNIGENT_DISABLED_MESSAGE} (missing: "
-                    f"{', '.join(gate.missing)})"
+                    f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
                 ),
             },
         )
     client = OmnigentHttpClient(
         base_url=resolved_server_url(),
         api_token=resolved_api_token(),
+        forward_headers=request.headers,
+        upstream_header_allowlist=resolved_proxy_forward_headers(),
     )
     return OmnigentBridgeSessionProxy(
         run_store=OmnigentBridgeSessionStore(async_session_maker),
@@ -210,13 +214,18 @@ def _get_create_embedded_facade(
         config=_config,
     )
 
+
 def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     status_code = exc.status_code or _FAILURE_CLASS_STATUS.get(
         exc.failure_class, status.HTTP_500_INTERNAL_SERVER_ERROR
     )
     return HTTPException(
         status_code=status_code,
-        detail={"code": exc.failure_class, "message": str(exc)},
+        detail={
+            "code": exc.code,
+            "failureClass": exc.failure_class,
+            "message": str(exc),
+        },
     )
 
 
@@ -289,8 +298,7 @@ async def _resolve_bridge_binding(
             detail={
                 "code": "workflow_ownership_denied",
                 "message": (
-                    "The authenticated principal does not own the referenced "
-                    "workflow."
+                    "The authenticated principal does not own the referenced workflow."
                 ),
             },
         )
@@ -331,7 +339,9 @@ async def create_omnigent_session(
                     failure_class="system_error",
                     status_code=501,
                 )
-            return await embedded_facade.create_session(request=payload, binding=binding)
+            return await embedded_facade.create_session(
+                request=payload, binding=binding
+            )
         if proxy is None:
             raise OmnigentBridgeError(
                 "Omnigent proxy is unavailable for the configured bridge mode",
@@ -373,8 +383,7 @@ async def get_omnigent_session(
             detail={
                 "code": "omnigent_bridge_session_unknown",
                 "message": (
-                    "No Omnigent bridge session is bound to the requested "
-                    "session id."
+                    "No Omnigent bridge session is bound to the requested session id."
                 ),
             },
         )
@@ -402,6 +411,44 @@ async def get_omnigent_session(
         raise _http_error_from_bridge(exc) from exc
 
 
+@router.post(_ROUTES.attach_session, response_model=dict)
+async def attach_omnigent_session(
+    session_id: str,
+    payload: BridgeSessionCreateRequest,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    principal_context: dict[str, Any] = Depends(execution_principal_dependency),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> dict[str, Any]:
+    """Reconcile an already-created provider session after a create retry."""
+
+    binding = await _resolve_bridge_binding(
+        user=user, service=service, principal_context=principal_context, payload=payload
+    )
+    try:
+        return await proxy.attach_session(session_id=session_id, binding=binding)
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
+@router.delete(_ROUTES.delete_session, response_model=dict)
+async def delete_omnigent_session(
+    session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> dict[str, Any]:
+    await _authorize_session_control(
+        session_id=session_id, user=user, service=service, proxy=proxy
+    )
+    try:
+        return await proxy.delete_session(session_id)
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
 async def _authorize_session_control(
     *,
     session_id: str,
@@ -416,8 +463,7 @@ async def _authorize_session_control(
             detail={
                 "code": "omnigent_bridge_session_unknown",
                 "message": (
-                    "No Omnigent bridge session is bound to the requested "
-                    "session id."
+                    "No Omnigent bridge session is bound to the requested session id."
                 ),
             },
         )
@@ -489,7 +535,10 @@ def _bridge_event_kind(event_type: str | None) -> str:
         return "user_message_submitted"
     if raw in {"response.delta", "response.output.delta"} or raw.endswith(".delta"):
         return "assistant_message_delta"
-    if raw.startswith("response.output") or raw in {"response.message", "message.received"}:
+    if raw.startswith("response.output") or raw in {
+        "response.message",
+        "message.received",
+    }:
         return "assistant_message"
     if raw in {"response.completed", "completed", "stream.done"}:
         return "response_completed"
@@ -630,6 +679,7 @@ async def stream_omnigent_bridge_session_events(
         service=service,
         store=store,
     )
+
     async def _event_stream():
         last_sequence = since
         idle_polls = 0
@@ -643,7 +693,10 @@ async def stream_omnigent_bridge_session_events(
                 idle_polls = 0
                 payload = json.dumps(_bridge_event_payload(row), separators=(",", ":"))
                 yield f"event: bridge_event\ndata: {payload}\n\n"
-                if str(row.normalized_status or "").strip() in _BRIDGE_TERMINAL_STATUSES:
+                if (
+                    str(row.normalized_status or "").strip()
+                    in _BRIDGE_TERMINAL_STATUSES
+                ):
                     return
             idle_polls += 1
             yield ": keepalive\n\n"
@@ -718,6 +771,171 @@ async def list_omnigent_agents(
         return await proxy.list_agents()
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+@router.get(_ROUTES.hosts, response_model=list)
+async def list_omnigent_hosts(
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    _user: User = Depends(get_current_user()),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> list[dict[str, Any]]:
+    """Expose bounded host readiness metadata; callers cannot select a host."""
+
+    try:
+        return await proxy.list_hosts()
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
+@router.get(_ROUTES.stream_events)
+async def stream_upstream_omnigent_events(
+    session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> StreamingResponse:
+    await _authorize_session_control(
+        session_id=session_id, user=user, service=service, proxy=proxy
+    )
+
+    async def _stream():
+        async for event in proxy.stream_events(session_id):
+            yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+async def _owned_resource(
+    *,
+    operation: str,
+    session_id: str,
+    value: str | None,
+    user: User,
+    service: Any,
+    proxy: OmnigentBridgeSessionProxy,
+):
+    await _authorize_session_control(
+        session_id=session_id, user=user, service=service, proxy=proxy
+    )
+    try:
+        return await proxy.get_resource(operation, session_id, value)
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
+
+@router.get(_ROUTES.changed_files, response_model=dict)
+async def list_omnigent_changed_files(
+    session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+):
+    return await _owned_resource(
+        operation="changed_files",
+        session_id=session_id,
+        value=None,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+
+
+@router.get(_ROUTES.workspace_files, response_model=dict)
+async def list_omnigent_workspace_files(
+    session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+):
+    return await _owned_resource(
+        operation="workspace_files",
+        session_id=session_id,
+        value=None,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+
+
+@router.get(_ROUTES.workspace_file)
+async def get_omnigent_workspace_file(
+    session_id: str,
+    path: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> Response:
+    content = await _owned_resource(
+        operation="workspace_file",
+        session_id=session_id,
+        value=path,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+    return Response(content=content, media_type="application/octet-stream")
+
+
+@router.get(_ROUTES.workspace_diffs)
+async def get_omnigent_workspace_diff(
+    session_id: str,
+    path: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> Response:
+    content = await _owned_resource(
+        operation="workspace_diff",
+        session_id=session_id,
+        value=path,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+    return Response(content=content, media_type="text/x-diff")
+
+
+@router.get(_ROUTES.session_files, response_model=dict)
+async def list_omnigent_session_files(
+    session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+):
+    return await _owned_resource(
+        operation="session_files",
+        session_id=session_id,
+        value=None,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+
+
+@router.get(_ROUTES.session_file)
+async def get_omnigent_session_file(
+    session_id: str,
+    file_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+) -> Response:
+    content = await _owned_resource(
+        operation="session_file",
+        session_id=session_id,
+        value=file_id,
+        user=user,
+        service=service,
+        proxy=proxy,
+    )
+    return Response(content=content, media_type="application/octet-stream")
 
 
 @router.post("/v1/hosts/register", response_model=dict)
