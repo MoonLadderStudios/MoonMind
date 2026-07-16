@@ -2686,11 +2686,25 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         async def query(self, query_name):
             assert query_name == "get_state"
             return {
-                "profiles": {"p1": {}, "p2": {}},
+                "profiles": {
+                    "p1": {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 1,
+                        "current_leases": ["agent-run-active"],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                    "p2": {},
+                },
                 "pending_requests": [
-                    {"requester_workflow_id": "agent-run-1"},
+                    {
+                        "requester_workflow_id": "agent-run-1",
+                        "execution_profile_ref": "p1",
+                    },
                     {"requester_workflow_id": "agent-run-2"},
                 ],
+                "pending_requests_ordered": True,
                 "event_count": 7,
             }
 
@@ -2723,8 +2737,102 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "pending_requests_count": 2,
         "event_count": 7,
         "requester_pending": True,
+        "requester_queue_position": 1,
+        "requested_profile": {
+            "profile_id": "p1",
+            "max_parallel_runs": 1,
+            "current_leases_count": 1,
+            "cooldown_until": None,
+            "enabled": True,
+            "launch_ready": True,
+        },
     }
     assert "state" not in result
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_resolves_unique_selector_profile(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            return {
+                "profiles": {
+                    "openai": {
+                        "profile_id": "openai",
+                        "provider_id": "openai",
+                        "runtime_materialization_mode": "oauth",
+                        "tags": ["primary"],
+                        "max_parallel_runs": 1,
+                        "current_leases": ["agent-run-active"],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                    "anthropic": {
+                        "profile_id": "anthropic",
+                        "provider_id": "anthropic",
+                        "runtime_materialization_mode": "api_key",
+                        "tags": [],
+                        "max_parallel_runs": 2,
+                        "current_leases": [],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                },
+                "pending_requests": [
+                    {
+                        "requester_workflow_id": "agent-run-1",
+                        "execution_profile_ref": None,
+                        "profile_selector": {
+                            "providerId": "openai",
+                            "runtimeMaterializationMode": "oauth",
+                            "tagsAll": ["primary"],
+                        },
+                    }
+                ],
+                "pending_requests_ordered": False,
+                "event_count": 1,
+            }
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            assert workflow_id == "provider-profile-manager:codex_cli"
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        FakeAdapter,
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+    )
+
+    assert result["requester_pending"] is True
+    assert result["requester_queue_position"] is None
+    assert result["requested_profile"] == {
+        "profile_id": "openai",
+        "max_parallel_runs": 1,
+        "current_leases_count": 1,
+        "cooldown_until": None,
+        "enabled": True,
+        "launch_ready": True,
+    }
 
 @pytest.mark.asyncio
 async def test_provider_profile_manager_state_checks_status_before_query(

@@ -546,6 +546,118 @@ async def test_slot_waiting_reason_summarizes_capacity_or_cooldown() -> None:
     assert "provider=openai" in reason
     assert "missing_condition=capacity_or_cooldown" in reason
 
+
+async def test_manager_slot_waiting_reason_identifies_moonmind_capacity() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requester_queue_position": 3,
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 1,
+                "cooldown_until": None,
+                "enabled": True,
+                "launch_ready": True,
+            },
+        },
+    )
+
+    assert "missing_condition=moonmind_slot_capacity" in reason
+    assert "slots_in_use=1" in reason
+    assert "max_parallel_runs=1" in reason
+    assert "queue_position=3" in reason
+    assert "capacity_or_cooldown" not in reason
+
+
+async def test_manager_slot_waiting_reason_identifies_provider_cooldown() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requester_queue_position": 1,
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 0,
+                "cooldown_until": "2026-07-16T22:00:00+00:00",
+                "enabled": True,
+                "launch_ready": True,
+            },
+        },
+    )
+
+    assert "missing_condition=provider_cooldown" in reason
+    assert "cooldown_until=2026-07-16T22:00:00+00:00" in reason
+    assert "moonmind_slot_capacity" not in reason
+
+
+async def test_manager_slot_waiting_reason_prioritizes_profile_readiness() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    reason = run._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+        manager_state={
+            "requested_profile": {
+                "profile_id": "codex-openai",
+                "max_parallel_runs": 1,
+                "current_leases_count": 1,
+                "cooldown_until": "2026-07-16T22:00:00+00:00",
+                "enabled": False,
+                "launch_ready": False,
+            },
+        },
+    )
+
+    assert "missing_condition=profile_not_launch_ready" in reason
+    assert "provider_cooldown" not in reason
+    assert "moonmind_slot_capacity" not in reason
+
+
+async def test_manager_state_omits_optional_profile_ref_from_legacy_payload() -> None:
+    run = MoonMindAgentRun()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_activity(
+        activity_name: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append((activity_name, payload))
+        return {"running": True}
+
+    run._execute_routed_activity = fake_activity  # type: ignore[method-assign]
+
+    await run._manager_state_for_slot_wait(
+        runtime_id="codex_cli",
+        requester_workflow_id="wf-agent-run-1",
+    )
+
+    assert calls == [
+        (
+            "provider_profile.manager_state",
+            {
+                "runtime_id": "codex_cli",
+                "requester_workflow_id": "wf-agent-run-1",
+            },
+        )
+    ]
+
 async def test_provider_cooldown_backoff_doubles_and_caps_per_profile() -> None:
     run = MoonMindAgentRun()
 

@@ -3542,6 +3542,7 @@ class TemporalArtifactActivities:
         *,
         runtime_id: str,
         requester_workflow_id: str | None = None,
+        execution_profile_ref: str | None = None,
     ) -> dict[str, Any]:
         """Return a compact ProviderProfileManager health snapshot."""
 
@@ -3599,12 +3600,84 @@ class TemporalArtifactActivities:
         pending_requests = state.get("pending_requests")
         event_count = state.get("event_count")
         requester_pending = False
+        requester_queue_position = None
+        requester_request: dict[str, Any] | None = None
+        pending_requests_ordered = state.get("pending_requests_ordered") is True
         if requester_workflow_id and isinstance(pending_requests, list):
-            requester_pending = any(
-                isinstance(request, dict)
-                and request.get("requester_workflow_id") == requester_workflow_id
-                for request in pending_requests
+            for index, pending_request in enumerate(pending_requests):
+                if (
+                    isinstance(pending_request, dict)
+                    and pending_request.get("requester_workflow_id")
+                    == requester_workflow_id
+                ):
+                    requester_pending = True
+                    if pending_requests_ordered:
+                        requester_queue_position = index + 1
+                    requester_request = pending_request
+                    break
+
+        requested_profile_ref = str(execution_profile_ref or "").strip()
+        if not requested_profile_ref and requester_request is not None:
+            requested_profile_ref = str(
+                requester_request.get("execution_profile_ref") or ""
+            ).strip()
+        requested_profile: dict[str, Any] | None = None
+        if isinstance(profiles, dict):
+            raw_profile = profiles.get(requested_profile_ref)
+            profile_selector = (
+                requester_request.get("profile_selector")
+                if requester_request is not None
+                else None
             )
+            if not isinstance(raw_profile, dict) and isinstance(
+                profile_selector, dict
+            ):
+                matching_profiles = [
+                    profile
+                    for profile in profiles.values()
+                    if isinstance(profile, dict)
+                    and (
+                        not profile_selector.get("providerId")
+                        or profile.get("provider_id")
+                        == profile_selector.get("providerId")
+                    )
+                    and (
+                        not profile_selector.get("runtimeMaterializationMode")
+                        or profile.get("runtime_materialization_mode")
+                        == profile_selector.get("runtimeMaterializationMode")
+                    )
+                    and (
+                        not profile_selector.get("tagsAny")
+                        or set(profile.get("tags") or {}).intersection(
+                            profile_selector.get("tagsAny") or []
+                        )
+                    )
+                    and (
+                        not profile_selector.get("tagsAll")
+                        or set(profile_selector.get("tagsAll") or []).issubset(
+                            profile.get("tags") or []
+                        )
+                    )
+                ]
+                if len(matching_profiles) == 1:
+                    raw_profile = matching_profiles[0]
+            if not isinstance(raw_profile, dict) and len(profiles) == 1:
+                only_profile = next(iter(profiles.values()))
+                raw_profile = only_profile if isinstance(only_profile, dict) else None
+            if isinstance(raw_profile, dict):
+                current_leases = raw_profile.get("current_leases")
+                requested_profile = {
+                    "profile_id": str(
+                        raw_profile.get("profile_id") or requested_profile_ref
+                    ),
+                    "max_parallel_runs": raw_profile.get("max_parallel_runs"),
+                    "current_leases_count": (
+                        len(current_leases) if isinstance(current_leases, list) else 0
+                    ),
+                    "cooldown_until": raw_profile.get("cooldown_until"),
+                    "enabled": raw_profile.get("enabled"),
+                    "launch_ready": raw_profile.get("launch_ready"),
+                }
 
         return {
             "running": True,
@@ -3616,6 +3689,8 @@ class TemporalArtifactActivities:
             ),
             "event_count": event_count if isinstance(event_count, int) else None,
             "requester_pending": requester_pending,
+            "requester_queue_position": requester_queue_position,
+            "requested_profile": requested_profile,
         }
 
     async def provider_profile_verify_lease_holders(

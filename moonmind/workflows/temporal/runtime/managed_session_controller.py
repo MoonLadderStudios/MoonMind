@@ -794,7 +794,89 @@ class DockerCodexManagedSessionController:
         if not sidecar_id:
             raise RuntimeError("docker sidecar run returned a blank container id")
         await self._wait_docker_sidecar_ready(sidecar_id)
+        await self._prepare_docker_sidecar_workspace_volume(sidecar_id)
         return sidecar_id
+
+    async def _prepare_docker_sidecar_workspace_volume(
+        self,
+        sidecar_id: str,
+    ) -> None:
+        """Map the inner daemon's workspace volume to the mounted outer workspace."""
+
+        inner_docker_command = (
+            self._docker_binary,
+            "exec",
+            "-e",
+            f"DOCKER_HOST=unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            sidecar_id,
+            "docker",
+        )
+        inspect_command = (
+            *inner_docker_command,
+            "volume",
+            "inspect",
+            "--format",
+            "{{json .Options}}",
+            self._workspace_volume_name,
+        )
+        returncode, stdout, stderr = await self._command_runner(
+            inspect_command,
+            env=self._docker_env(),
+        )
+        existing_options: dict[str, Any] | None = None
+        if returncode == 0:
+            try:
+                decoded_options = json.loads(stdout.strip() or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "failed to inspect the Docker sidecar workspace volume"
+                ) from exc
+            existing_options = (
+                decoded_options if isinstance(decoded_options, dict) else {}
+            )
+        elif "no such volume" not in (stderr or stdout).lower():
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                inspect_command,
+                stderr.strip() or stdout.strip(),
+            )
+            raise RuntimeError(
+                f"{rendered_command} failed with exit code {returncode}: "
+                f"{rendered_detail}"
+            )
+
+        expected_options = {
+            "device": self._workspace_root,
+            "o": "bind",
+            "type": "none",
+        }
+        if existing_options == expected_options:
+            return
+        if existing_options is not None:
+            await self._run(
+                (
+                    *inner_docker_command,
+                    "volume",
+                    "rm",
+                    "-f",
+                    self._workspace_volume_name,
+                )
+            )
+        await self._run(
+            (
+                *inner_docker_command,
+                "volume",
+                "create",
+                "--driver",
+                "local",
+                "--opt",
+                "type=none",
+                "--opt",
+                "o=bind",
+                "--opt",
+                f"device={self._workspace_root}",
+                self._workspace_volume_name,
+            )
+        )
 
     async def _prepare_docker_sidecar_socket_volume(
         self,
@@ -1504,6 +1586,7 @@ class DockerCodexManagedSessionController:
         else:
             await self._run((self._docker_binary, "start", sidecar_name))
             await self._wait_docker_sidecar_ready(sidecar_name)
+            await self._prepare_docker_sidecar_workspace_volume(sidecar_name)
 
         probe_capability = ManagedSessionDockerCapabilityRequest(
             allowed=True,

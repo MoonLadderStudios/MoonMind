@@ -458,6 +458,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._runtime_id: Optional[str] = None
         self._profiles: dict[str, ProfileSlotState] = {}
         self._pending_requests: list[PendingRequest] = []
+        self._pending_requests_ordered: bool = False
         self._handoff_reservations: dict[str, HandoffReservation] = {}
         self._event_count: int = 0
         self._shutdown_requested: bool = False
@@ -516,6 +517,7 @@ class MoonMindProviderProfileManagerWorkflow:
         priority = self._normalize_request_priority(payload.get("priority"))
         queue_order = self._normalize_queue_order(payload.get("queue_order"))
         queued_at = self._normalize_optional_string(payload.get("queued_at"))
+        self._pending_requests_ordered = False
         if not workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
             self._pending_requests.append(
                 PendingRequest(
@@ -839,6 +841,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 }
                 for r in self._pending_requests
             ],
+            "pending_requests_ordered": self._pending_requests_ordered,
             "handoff_reservations": {
                 group_id: {
                     "profile_id": reservation.profile_id,
@@ -1001,6 +1004,7 @@ class MoonMindProviderProfileManagerWorkflow:
             for req in pending_data
             if req.get("requester_workflow_id")
         ]
+        self._pending_requests_ordered = False
         self._handoff_reservations = {}
         if isinstance(reservations_data, dict):
             for group_id, reservation in reservations_data.items():
@@ -1371,6 +1375,7 @@ class MoonMindProviderProfileManagerWorkflow:
             else:
                 remaining.append(req)
         self._pending_requests = remaining
+        self._pending_requests_ordered = True
 
         # Persist lease changes to DB for crash recovery
         if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):

@@ -12,6 +12,7 @@ import inspect
 import textwrap
 
 from moonmind.workflows.temporal.workflows.agent_run import (
+    ACCURATE_SLOT_WAIT_REASON_PATCH_ID,
     MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID,
     MoonMindAgentRun,
     RunStatus,
@@ -175,6 +176,23 @@ class TestSlotWaitRetryBehavior:
             "_reset_and_request_slot"
         )
         assert "re-requesting without reset" in source
+
+    def test_accurate_initial_wait_reason_is_replay_gated(self):
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert (
+            ACCURATE_SLOT_WAIT_REASON_PATCH_ID
+            == "agent-run-accurate-slot-wait-reason-v1"
+        )
+        assert "workflow.patched(ACCURATE_SLOT_WAIT_REASON_PATCH_ID)" in source
+        assert "execution_profile_ref=request.execution_profile_ref" in source
+
+    def test_runtime_selection_refreshes_wait_reason_after_inspection(self):
+        source = inspect.getsource(MoonMindAgentRun.run)
+
+        assert "refresh_waiting_reason = True" in source
+        assert "not self.runtime_selection_updated_event.is_set()" in source
+        assert "_inspected_provider_slot_waiting_reason" in source
 
     def test_reset_and_request_slot_uses_ensure_signal_fallback(self):
         """The reset path must tolerate the fresh-manager signal race."""
