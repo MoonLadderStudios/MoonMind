@@ -403,6 +403,51 @@ def test_list_bridge_session_events_projects_lifecycle_as_system_status() -> Non
     assert event["metadata"]["remediation"] == "reconnect_codex_oauth"
 
 
+def test_failed_before_stream_projection_contains_complete_operator_evidence() -> None:
+    def row(sequence, event_type, status, text, artifact=None, metadata=None):
+        return SimpleNamespace(
+            event_id=f"evt-{sequence}", bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(
+                isoformat=lambda: f"2026-07-09T00:00:0{sequence}+00:00"
+            ),
+            direction="system", event_type=event_type,
+            normalized_status=status, text_preview=text,
+            artifact_ref=artifact, metadata_=metadata or {},
+        )
+
+    rows = [
+        row(1, "lifecycle.credential_mount.completed", "completed",
+            "Credential mount completed", metadata={"attemptId": "attempt-1"}),
+        row(2, "lifecycle.credential_preflight.failed", "failed",
+            "Codex OAuth validation failed", "artifact://diagnostics/1", {
+                "code": "CODEX_OAUTH_LOGIN_STATUS_FAILED",
+                "remediation": "reconnect_codex_oauth",
+                "providerProfileId": "profile-1", "hostLeaseRef": "lease-1",
+            }),
+        row(3, "lifecycle.host_cleanup.completed", "completed",
+            "Host cleanup completed", metadata={"hostStopped": True}),
+        row(4, "lifecycle.profile_lease_release.completed", "completed",
+            "Provider lease released", metadata={"providerLeaseReleased": True}),
+        row(5, "lifecycle.terminal.failed", "failed", "Launch failed",
+            metadata={"janitorRequired": False}),
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events"
+    )
+
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert all(event["kind"] == "system_annotation" for event in events)
+    assert all(event["stream"] == "session" for event in events)
+    assert events[1]["artifactRef"] == "artifact://diagnostics/1"
+    assert events[1]["metadata"]["remediation"] == "reconnect_codex_oauth"
+    assert events[-1]["normalizedStatus"] == "failed"
+    assert not any(event["kind"] == "observability_missing" for event in events)
+
+
 def test_stream_bridge_session_events_keeps_since_and_stops_on_terminal() -> None:
     rows = [
         SimpleNamespace(

@@ -317,7 +317,11 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
             row_metadata = dict(row.metadata_ or {})
             journal = list(row_metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
-            lifecycle_key = f"{stage_key}:{status_key}"
+            # Activity retries carry the same attempt identity and must not
+            # append the same transition twice. A related later attempt may
+            # reuse the durable envelope, but must retain its own timeline.
+            attempt_id = str((metadata or {}).get("attemptId") or "").strip()
+            lifecycle_key = f"{attempt_id}:{stage_key}:{status_key}"
             if any(entry.get("lifecycleKey") == lifecycle_key for entry in journal):
                 return _detached(session, row)
             timestamp = datetime.now(tz=UTC)

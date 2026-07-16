@@ -45,6 +45,7 @@ ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
 
 _FAILURE_REMEDIATION = {
     "profile_resolution_failed": ("configuration_error", "validate_provider_profile"),
+    "profile_readiness_failed": ("configuration_error", "validate_provider_profile"),
     "profile_lease_unavailable": ("capacity_error", "wait_for_profile_lease"),
     "provider_cooldown": ("rate_limit", "retry_after_provider_cooldown"),
     "OMNIGENT_HOST_BINDING_MISMATCH": ("configuration_error", "correct_host_binding"),
@@ -64,7 +65,50 @@ _FAILURE_REMEDIATION = {
         "infrastructure_error",
         "repair_host_image_or_network",
     ),
+    "CODEX_OAUTH_VOLUME_MISSING": ("authentication_error", "reconnect_codex_oauth"),
+    "CODEX_OAUTH_VOLUME_NOT_WRITABLE": (
+        "authentication_error",
+        "reconnect_codex_oauth",
+    ),
+    "CODEX_OAUTH_LOGIN_STATUS_FAILED": ("authentication_error", "reconnect_codex_oauth"),
+    "CODEX_OAUTH_COMPETING_CREDENTIAL_PRESENT": (
+        "authentication_error",
+        "reconnect_codex_oauth",
+    ),
+    "CODEX_OAUTH_GENERATION_STALE": ("authentication_error", "reconnect_codex_oauth"),
+    "OMNIGENT_HOST_NOT_REGISTERED": ("configuration_error", "repair_host_registration"),
     "host_cleanup_failed": ("infrastructure_error", "inspect_cleanup_diagnostics"),
+    "profile_lease_release_failed": (
+        "infrastructure_error",
+        "inspect_cleanup_diagnostics",
+    ),
+    "session_creation_failed": (
+        "integration_error",
+        "retry_after_upstream_unavailability",
+    ),
+    "first_message_prepare_failed": ("integration_error", "retry_first_message"),
+    "first_message_post_failed": ("integration_error", "retry_first_message"),
+    "resource_harvest_failed": ("infrastructure_error", "inspect_harvest_diagnostics"),
+}
+
+_CODE_STAGE = {
+    "profile_readiness_failed": "profile_readiness",
+    "OMNIGENT_HOST_BINDING_MISMATCH": "host_binding_resolution",
+    "OMNIGENT_CODEX_HARNESS_UNAVAILABLE": "harness_readiness",
+    "OMNIGENT_HOST_NOT_REGISTERED": "host_registration",
+    "CODEX_OAUTH_VOLUME_MISSING": "credential_mount",
+    "CODEX_OAUTH_VOLUME_NOT_WRITABLE": "credential_mount",
+    "CODEX_OAUTH_LOGIN_STATUS_FAILED": "credential_preflight",
+    "CODEX_OAUTH_COMPETING_CREDENTIAL_PRESENT": "credential_preflight",
+    "CODEX_OAUTH_GENERATION_STALE": "credential_preflight",
+    "bridge_authentication_failed": "bridge_authentication",
+    "container_start_failed": "container_start",
+    "session_creation_failed": "session_creation",
+    "omnigent_first_message_digest_mismatch": "first_message_prepare",
+    "omnigent_first_message_reconcile_failed": "first_message_post",
+    "resource_harvest_failed": "resource_harvest",
+    "host_cleanup_failed": "host_cleanup",
+    "profile_lease_release_failed": "profile_lease_release",
 }
 
 
@@ -170,6 +214,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         terminal_failed = False
         provider_released = False
         release_error: Exception | None = None
+        active_stage = "request_validated"
         await self._event(request, "request_validated", "started")
         try:
             if not profile_id:
@@ -178,6 +223,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     code="profile_resolution_failed",
                 )
             await self._event(request, "request_validated", "completed")
+            active_stage = "profile_resolution"
             await self._event(request, "profile_resolution", "started")
             profile = await self._resolve_profile(profile_id)
             await self._event(
@@ -200,6 +246,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "waiting",
                 metadata={"providerProfileId": profile_id},
             )
+            active_stage = "profile_lease_wait"
             provider_lease = await self._lease_client.acquire_execution_lease(
                 runtime_id="codex_cli",
                 profile_id=profile_id,
@@ -225,6 +272,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             await self._event(request, "host_binding_resolution", "started")
+            active_stage = "host_binding_resolution"
             binding = await self._hosts.get_binding_for_profile(profile_id)
             if binding is None:
                 binding = await self._hosts.create_or_update_static_binding(
@@ -241,6 +289,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "completed",
                 metadata={"hostBindingRef": binding.binding_ref},
             )
+            active_stage = "host_lease_created"
             host_lease = await self._hosts.create_or_get_host_lease(
                 binding=binding,
                 provider_lease_id=provider_lease.lease_id,
@@ -275,6 +324,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             await self._event(request, "container_start", "started")
             await self._event(request, "credential_mount", "started")
             await self._event(request, "credential_preflight", "started")
+            active_stage = "container_start"
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
@@ -332,6 +382,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             await self._event(request, "bridge_authentication", "ready")
             await self._event(request, "session_creation", "started")
+            active_stage = "session_creation"
             result = await self._execute(
                 _bind_exact_host(
                     request,
@@ -383,15 +434,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                 await self._event(request, "first_message_prepare", "completed")
             if message_posted:
                 await self._event(request, "first_message_post", "completed")
+            result_code = str(result.provider_error_code or "")
+            result_stage = _CODE_STAGE.get(result_code, "session_running")
             await self._event(
                 request,
-                "session_running",
+                result_stage,
                 "failed" if terminal_failed else "completed",
-                code=str(result.provider_error_code or "") or None,
+                code=result_code or None,
                 summary=result.summary if terminal_failed else None,
                 diagnostics_ref=result.diagnostics_ref,
                 remediation=(
-                    "retry_or_contact_administrator" if terminal_failed else None
+                    _FAILURE_REMEDIATION.get(
+                        result_code,
+                        ("integration_error", "retry_or_contact_administrator"),
+                    )[1]
+                    if terminal_failed
+                    else None
                 ),
             )
             await self._event(
@@ -426,6 +484,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     provider_lease,
                     binding,
                     host_lease,
+                    active_stage=active_stage,
                 )
                 code, failure_class, remediation = _failure_evidence(exc)
                 if failure_stage == "profile_lease_wait" and code not in {
@@ -443,6 +502,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "failed",
                     code=code,
                     summary=str(exc),
+                    diagnostics_ref=(
+                        str(getattr(exc, "diagnostics_ref", "") or "") or None
+                    ),
                     remediation=remediation,
                     metadata={"failureClass": failure_class},
                 )
@@ -514,7 +576,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         request,
                         "profile_lease_release",
                         "failed",
-                        code=type(release_exc).__name__,
+                        code="profile_lease_release_failed",
                         summary=str(release_exc),
                         remediation="inspect_cleanup_diagnostics",
                         metadata={
@@ -558,8 +620,15 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @staticmethod
     def _failure_stage(
-        code: str, provider_lease: Any, binding: Any, host_lease: Any
+        code: str,
+        provider_lease: Any,
+        binding: Any,
+        host_lease: Any,
+        *,
+        active_stage: str | None = None,
     ) -> str:
+        if code in _CODE_STAGE:
+            return _CODE_STAGE[code]
         if code == "profile_resolution_failed":
             return "profile_resolution"
         if provider_lease is None:
@@ -572,7 +641,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             return "bridge_authentication"
         if "HARNESS" in code.upper():
             return "harness_readiness"
-        return "credential_preflight"
+        return active_stage or "credential_preflight"
 
     async def recover_from_checkpoint(
         self,
@@ -703,7 +772,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             if not provider_profile_launch_ready(profile):
                 raise OmnigentOAuthHostError(
                     "Provider Profile is not launch ready",
-                    code="profile_resolution_failed",
+                    code="profile_readiness_failed",
                 )
             if not is_codex_oauth_profile(
                 runtime_id=profile.runtime_id,

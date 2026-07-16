@@ -104,6 +104,38 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
     )
 
 
+@pytest.mark.parametrize(
+    ("code", "stage"),
+    [
+        ("profile_readiness_failed", "profile_readiness"),
+        ("OMNIGENT_HOST_BINDING_MISMATCH", "host_binding_resolution"),
+        ("container_start_failed", "container_start"),
+        ("CODEX_OAUTH_VOLUME_MISSING", "credential_mount"),
+        ("CODEX_OAUTH_LOGIN_STATUS_FAILED", "credential_preflight"),
+        ("OMNIGENT_HOST_NOT_REGISTERED", "host_registration"),
+        ("OMNIGENT_CODEX_HARNESS_UNAVAILABLE", "harness_readiness"),
+        ("bridge_authentication_failed", "bridge_authentication"),
+        ("session_creation_failed", "session_creation"),
+        ("omnigent_first_message_digest_mismatch", "first_message_prepare"),
+        ("omnigent_first_message_reconcile_failed", "first_message_post"),
+        ("resource_harvest_failed", "resource_harvest"),
+        ("host_cleanup_failed", "host_cleanup"),
+        ("profile_lease_release_failed", "profile_lease_release"),
+    ],
+)
+def test_failure_stage_uses_stable_side_effect_ownership(code, stage) -> None:
+    assert OmnigentProfileBoundExecutionCoordinator._failure_stage(
+        code, object(), object(), object(), active_stage="session_running"
+    ) == stage
+
+
+def test_failure_stage_uses_explicit_active_stage_for_unknown_code() -> None:
+    assert OmnigentProfileBoundExecutionCoordinator._failure_stage(
+        "NETWORK_UNAVAILABLE", object(), object(), object(),
+        active_stage="container_start",
+    ) == "container_start"
+
+
 def test_oauth_host_runtime_defaults_to_published_image(monkeypatch) -> None:
     monkeypatch.delenv("OMNIGENT_HOST_IMAGE", raising=False)
     monkeypatch.delenv("OMNIGENT_HOST_IMAGE_TAG", raising=False)

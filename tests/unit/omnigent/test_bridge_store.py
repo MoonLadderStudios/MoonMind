@@ -641,3 +641,31 @@ async def test_lifecycle_event_is_secret_safe_idempotent_and_projected(store):
         "lifecycle.credential_preflight.failed",
         "response.failed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_event_deduplicates_per_attempt_but_retains_later_attempt(store):
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    for attempt_id in ("attempt-1", "attempt-1", "attempt-2"):
+        await store.record_lifecycle_event(
+            "idem-1",
+            stage="container_start",
+            status="failed",
+            code="container_start_failed",
+            metadata={"attemptId": attempt_id},
+        )
+
+    journal = (await store.get_existing("idem-1")).metadata_[
+        BRIDGE_EVENT_JOURNAL_KEY
+    ]
+    assert [entry["metadata"]["attemptId"] for entry in journal] == [
+        "attempt-1",
+        "attempt-2",
+    ]
