@@ -48,10 +48,16 @@ _REPOSITORY_KEYS = {
     "giturl",
 }
 _ISSUE_KEYS = {
+    "github_issue",
+    "github_issue_ref",
+    "githubissue",
+    "githubissueref",
     "issue",
     "issue_key",
+    "issue_ref",
     "issue_url",
     "issuekey",
+    "issueref",
     "issueurl",
     "jira_issue",
     "jira_issue_key",
@@ -85,6 +91,7 @@ _BRANCH_KEYS = {
 _CHECK_KEYS = {"check", "checkname", "check_name", "job", "jobname", "job_name"}
 _IGNORED_VALUE_KEYS = {
     "effort",
+    "id",
     "mode",
     "model",
     "profileid",
@@ -93,13 +100,29 @@ _IGNORED_VALUE_KEYS = {
     "requested_model",
     "targetruntime",
     "target_runtime",
+    "stepid",
+    "step_id",
+    "templatestepid",
+    "template_step_id",
 }
 
 _ISSUE_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+_GITHUB_ISSUE_REF_RE = re.compile(
+    r"(?<![\w/])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b"
+)
+_GITHUB_ISSUE_URL_RE = re.compile(
+    r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)"
+    r"(?=$|[/?#]|\b)",
+    re.IGNORECASE,
+)
 _PR_URL_RE = re.compile(r"/pull/(\d+)(?=$|[/?#]|\b)", re.IGNORECASE)
 _PR_TEXT_RE = re.compile(r"\b(?:PR|pull request)\s*#?(\d+)\b", re.IGNORECASE)
 _GITHUB_SHORTHAND_RE = re.compile(r"(?<![\w/])#(\d+)\b")
 _MAX_PR_NUMBER_DIGITS = 10
+_MAX_GITHUB_REPOSITORY_LENGTH = 200
+_GITHUB_REPOSITORY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+)
 
 
 @dataclass(frozen=True)
@@ -166,13 +189,14 @@ def synthesize_execution_title(
 ) -> SynthesizedWorkflowTitle:
     task_payload = parameters or {}
     explicit = str(requested_title or "").strip()
-    generated_explicit = _is_generated_step_title(
+    label = _capability_label(task_payload, normalized_tool, normalized_steps)
+    generated_explicit = _is_generated_title(
         explicit,
+        label=label,
         task_payload=task_payload,
         normalized_steps=normalized_steps,
     )
 
-    label = _capability_label(task_payload, normalized_tool, normalized_steps)
     targets = _collect_structured_targets(task_payload)
     fallback_targets = _collect_text_fallback_targets(requested_title, task_payload)
     if not targets:
@@ -248,27 +272,13 @@ def _capability_label(
             if payload is not None
         )
 
-    template_payloads = [
-        payload
-        for payload in (
-            _mapping(task_payload.get("taskTemplate")),
-            _mapping(task_payload.get("task_template")),
-            (
-                _mapping(workflow_payload.get("taskTemplate"))
-                if workflow_payload
-                else None
-            ),
-            (
-                _mapping(workflow_payload.get("task_template"))
-                if workflow_payload
-                else None
-            ),
-        )
-        if payload is not None
-    ]
+    template_payloads = _preset_payloads(task_payload)
+    # A selected preset is the workflow-level capability. Its label must win over
+    # the normalized first-step tool, which is only one implementation detail of
+    # the expanded preset.
     tool_payloads = [
         payload
-        for payload in (normalized_tool, *raw_tool_payloads, *template_payloads)
+        for payload in (*template_payloads, normalized_tool, *raw_tool_payloads)
         if payload is not None
     ]
 
@@ -362,10 +372,11 @@ def _append_targets_for_value(
     path: str,
 ) -> None:
     if key in _ISSUE_KEYS and isinstance(value, Mapping):
+        provider = _issue_provider_for_key(key)
         issue = _extract_issue_from_mapping(
             value,
             path=path,
-            provider="jira" if "jira" in key else None,
+            provider=provider,
         )
         if issue is not None:
             targets.append(issue)
@@ -376,6 +387,20 @@ def _append_targets_for_value(
         return
 
     if key in _ISSUE_KEYS:
+        provider = _issue_provider_for_key(key)
+        github_issue = _extract_github_issue(text)
+        if github_issue and provider != "jira":
+            targets.append(
+                TitleTarget(
+                    "issue",
+                    github_issue,
+                    0,
+                    path,
+                    provider="github",
+                    key=github_issue,
+                )
+            )
+            return
         issue = _extract_issue(text)
         if issue:
             targets.append(
@@ -384,7 +409,7 @@ def _append_targets_for_value(
                     issue,
                     0,
                     path,
-                    provider="jira" if "jira" in key else None,
+                    provider="jira" if provider == "jira" else None,
                     key=issue,
                 )
             )
@@ -417,6 +442,19 @@ def _append_targets_for_value(
     if issue:
         targets.append(TitleTarget("issue", issue, 0, path, key=issue))
         return
+    github_issue = _extract_github_issue(text)
+    if github_issue:
+        targets.append(
+            TitleTarget(
+                "issue",
+                github_issue,
+                0,
+                path,
+                provider="github",
+                key=github_issue,
+            )
+        )
+        return
     pr = _extract_pr(text)
     if pr:
         targets.append(TitleTarget("pull_request", pr, 1, path, key=pr))
@@ -440,6 +478,18 @@ def _collect_text_fallback_targets(
         issue = _extract_issue(text)
         if issue:
             targets.append(TitleTarget("issue", issue, 0, f"text[{index}]", key=issue))
+        github_issue = _extract_github_issue(text)
+        if github_issue:
+            targets.append(
+                TitleTarget(
+                    "issue",
+                    github_issue,
+                    0,
+                    f"text[{index}]",
+                    provider="github",
+                    key=github_issue,
+                )
+            )
         pr = _extract_pr(text, allow_shorthand=True)
         if pr:
             targets.append(TitleTarget("pull_request", pr, 1, f"text[{index}]", key=pr))
@@ -505,9 +555,10 @@ def _workflow_type_fallback(workflow_type: str | None) -> str | None:
     return _identifier_to_label(value.rsplit(".", 1)[-1])
 
 
-def _is_generated_step_title(
+def _is_generated_title(
     title: str,
     *,
+    label: str,
     task_payload: Mapping[str, Any],
     normalized_steps: Sequence[Mapping[str, Any]],
 ) -> bool:
@@ -516,8 +567,15 @@ def _is_generated_step_title(
     normalized = " ".join(re.sub(r"[\W_]+", " ", title.casefold()).split())
     if normalized in _GENERATED_STEP_TITLES:
         return True
-    if not _preset_slug(task_payload):
+    preset_slug = _preset_slug(task_payload)
+    if not preset_slug:
         return False
+    preset_label = _identifier_to_label(preset_slug)
+    if title.strip().casefold() in {
+        label.strip().casefold(),
+        preset_label.strip().casefold(),
+    }:
+        return True
     first_step_title = _first_step_title(task_payload, normalized_steps)
     return bool(
         first_step_title
@@ -551,7 +609,16 @@ def _first_step_title(
 
 
 def _preset_slug(task_payload: Mapping[str, Any]) -> str | None:
-    candidates: list[Any] = []
+    for template in _preset_payloads(task_payload):
+        for key in ("slug", "name", "id"):
+            value = _clean_text(template.get(key))
+            if value:
+                return value
+    return None
+
+
+def _preset_payloads(task_payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    presets: list[Mapping[str, Any]] = []
     for payload in (task_payload, _mapping(task_payload.get("workflow"))):
         if payload is None:
             continue
@@ -559,14 +626,15 @@ def _preset_slug(task_payload: Mapping[str, Any]) -> str | None:
             payload.get("task_template")
         )
         if template is not None:
-            candidates.extend(
-                template.get(key) for key in ("slug", "name", "id") if template.get(key)
+            presets.append(template)
+        applied_templates = payload.get("appliedStepTemplates") or payload.get(
+            "applied_step_templates"
+        )
+        if isinstance(applied_templates, list):
+            presets.extend(
+                item for item in applied_templates if isinstance(item, Mapping)
             )
-    for candidate in candidates:
-        value = _clean_text(candidate)
-        if value:
-            return value
-    return None
+    return presets
 
 
 def _extract_issue_from_mapping(
@@ -575,6 +643,33 @@ def _extract_issue_from_mapping(
     path: str,
     provider: str | None,
 ) -> TitleTarget | None:
+    repository = _first_clean_mapping_value(value, "repository", "repo")
+    number = _first_clean_mapping_value(
+        value,
+        "number",
+        "issueNumber",
+        "issue_number",
+    )
+    if provider == "github" or (repository and number):
+        github_issue = _render_github_issue(repository or "", number or "")
+        if not github_issue:
+            return None
+        issue_summary = _first_clean_mapping_value(value, "summary", "title")
+        issue_url = _first_clean_mapping_value(value, "url", "self")
+        display_value = github_issue
+        if issue_summary:
+            display_value = f"{github_issue} — {issue_summary}"
+        return TitleTarget(
+            "issue",
+            display_value,
+            0,
+            path,
+            provider="github",
+            key=github_issue,
+            summary=issue_summary,
+            url=issue_url,
+        )
+
     key = _first_clean_mapping_value(value, "key", "issueKey", "issue_key")
     if key:
         issue_key = _extract_issue(key)
@@ -610,6 +705,41 @@ def _first_clean_mapping_value(value: Mapping[str, Any], *keys: str) -> str | No
 def _extract_issue(text: str) -> str | None:
     match = _ISSUE_RE.search(text.upper())
     return match.group(1) if match else None
+
+
+def _issue_provider_for_key(key: str) -> str | None:
+    if "github" in key:
+        return "github"
+    if "jira" in key:
+        return "jira"
+    return None
+
+
+def _extract_github_issue(text: str) -> str | None:
+    for pattern in (_GITHUB_ISSUE_URL_RE, _GITHUB_ISSUE_REF_RE):
+        match = pattern.search(text)
+        if match:
+            return _render_github_issue(match.group(1), match.group(2))
+    return None
+
+
+def _render_github_issue(repository: str, digits: str) -> str | None:
+    normalized_repository = repository.strip()
+    if len(normalized_repository) > _MAX_GITHUB_REPOSITORY_LENGTH:
+        return None
+    repository_parts = normalized_repository.split("/")
+    if len(repository_parts) != 2 or any(not part for part in repository_parts):
+        return None
+    if any(
+        character not in _GITHUB_REPOSITORY_CHARS
+        for part in repository_parts
+        for character in part
+    ):
+        return None
+    issue_num = digits.lstrip("0")
+    if not issue_num or not issue_num.isdigit() or len(issue_num) > _MAX_PR_NUMBER_DIGITS:
+        return None
+    return f"{normalized_repository}#{issue_num}"
 
 
 def _extract_pr(

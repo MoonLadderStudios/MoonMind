@@ -289,6 +289,38 @@ def test_mm_1129_derive_task_title_bounds_instruction_fallback() -> None:
     assert "token-999" not in title
 
 
+def test_derive_task_title_enriches_generated_preset_label() -> None:
+    title = _derive_task_title(
+        {
+            "title": "GitHub Issue Implement",
+            "taskTemplate": {"slug": "github-issue-implement"},
+            "inputs": {
+                "github_issue": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "number": 3143,
+                    "title": "Improve generated workflow titles",
+                }
+            },
+        }
+    )
+
+    assert title == (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+        "Improve generated workflow titles"
+    )
+
+
+def test_derive_task_title_preserves_explicit_instruction_only_title() -> None:
+    title = _derive_task_title(
+        {
+            "title": "My custom title",
+            "instructions": "Do the work",
+        }
+    )
+
+    assert title == "My custom title"
+
+
 def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summary() -> None:
     payload = _step_execution_detail_payload(
         _phase_11_manifest(),
@@ -7069,6 +7101,65 @@ def test_create_task_shaped_execution_synthesizes_generic_title(
     assert called_kwargs["title"] == "Jira Verify: KANDY-123"
     initial_parameters = called_kwargs["initial_parameters"]
     assert initial_parameters["workflow"]["title"] == "Jira Verify: KANDY-123"
+
+
+def test_create_task_shaped_execution_enriches_github_issue_preset_title(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "title": "GitHub Issue Implement",
+                    "instructions": "Implement the selected GitHub issue.",
+                    "runtime": {"mode": "claude_code"},
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "github-issue-implement",
+                            "stepIds": ["step-1"],
+                        }
+                    ],
+                    "tool": {
+                        "type": "skill",
+                        "name": "github.load_issue_preset_brief",
+                    },
+                    "steps": [
+                        {
+                            "id": "step-1",
+                            "title": "Load GitHub issue brief",
+                            "instructions": "Load the selected GitHub issue.",
+                            "tool": {
+                                "type": "skill",
+                                "name": "github.load_issue_preset_brief",
+                            },
+                        }
+                    ],
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "number": 3143,
+                            "title": "Improve generated workflow titles",
+                        },
+                        "github_issue_ref": "MoonLadderStudios/MoonMind#3143",
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    expected = (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+        "Improve generated workflow titles"
+    )
+    assert called_kwargs["title"] == expected
+    assert called_kwargs["initial_parameters"]["workflow"]["title"] == expected
 
 
 def test_create_task_shaped_execution_synthesizes_issue_pr_title_without_repo(
