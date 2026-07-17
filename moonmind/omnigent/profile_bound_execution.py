@@ -148,6 +148,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         run_store: OmnigentBridgeSessionStore,
         execution_runner: ExecutionRunner,
         artifact_gateway: Any,
+        artifact_service: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -156,6 +157,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._run_store = run_store
         self._execute = execution_runner
         self._artifact_gateway = artifact_gateway
+        self._artifact_service = artifact_service or artifact_gateway
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         profile_id = str(request.execution_profile_ref or "").strip()
@@ -334,6 +336,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),
                 repository_url=self._repository_url(request),
+                resolved_skillset_ref=request.resolved_skillset_ref,
+                artifact_gateway=self._artifact_service,
                 target_repository=str(
                     (request.parameters or {}).get("repository") or ""
                 ).strip(),
