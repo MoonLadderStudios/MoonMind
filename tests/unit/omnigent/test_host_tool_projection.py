@@ -18,20 +18,22 @@ def test_static_hosts_project_versioned_tools_without_covering_usr_local_bin() -
         else:
             assert environment["PATH"] == expected_path
         assert "omnigent-tools:/opt/moonmind-tools:ro" in service["volumes"]
-        assert "omnigent-tools-init" not in service["depends_on"]
+        assert service["depends_on"]["omnigent-tools-init"] == {
+            "condition": "service_completed_successfully"
+        }
         assert (
-            "./services/omnigent/profile/moonmind-tools.sh:"
+            "./services/omnigent/scripts/moonmind-tools.sh:"
             "/etc/profile.d/moonmind-tools.sh:ro"
         ) in service["volumes"]
         assert all("/usr/local/bin" not in volume for volume in service["volumes"])
 
     assert compose["volumes"]["omnigent-tools"]["name"] == (
-        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}"
+        "moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}"
     )
 
 
 def test_login_profile_prepends_tools_path_idempotently() -> None:
-    profile = Path("services/omnigent/profile/moonmind-tools.sh").read_text()
+    profile = Path("services/omnigent/scripts/moonmind-tools.sh").read_text()
 
     assert "*:/opt/moonmind-tools/bin:*)" in profile
     assert 'export PATH="/opt/moonmind-tools/bin:${PATH}"' in profile
