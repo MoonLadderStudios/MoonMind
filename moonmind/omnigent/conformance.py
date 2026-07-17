@@ -82,13 +82,27 @@ def build_report(
     images: Sequence[Mapping[str, str]],
     results: Sequence[Mapping[str, Any]],
     evidence_refs: Sequence[str] = (),
+    runtime: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a bounded machine-readable report suitable for CI artifacts."""
     expected = {str(case["id"]) for case in profile["cases"]}
     observed = {str(result.get("caseId", "")) for result in results}
+    if len(observed) != len(results):
+        raise ConformanceContractError("report contains duplicate or missing case IDs")
     unknown = observed - expected
     if unknown:
         raise ConformanceContractError(f"report contains unknown cases: {sorted(unknown)}")
+    missing = expected - observed
+    if missing:
+        raise ConformanceContractError(f"report is missing cases: {sorted(missing)}")
+    allowed_statuses = {"passed", "failed", "skipped"}
+    for result in results:
+        if result.get("status") not in allowed_statuses:
+            raise ConformanceContractError("report contains an invalid case status")
+        if not result.get("evidence"):
+            raise ConformanceContractError(
+                f"case {result.get('caseId')} has no case-specific evidence"
+            )
     report = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "profile": profile["profile"],
@@ -98,6 +112,7 @@ def build_report(
         "images": list(images),
         "cases": list(results),
         "evidenceRefs": list(evidence_refs),
+        "runtime": dict(runtime or {}),
         "summary": {
             status: sum(result.get("status") == status for result in results)
             for status in ("passed", "failed", "skipped")

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0",
+  "provenance": {
+    "issue": "MoonLadderStudios/MoonMind#3368",
+    "contract": "docs/Omnigent/OmnigentBridgeConformance.md"
+  },
+  "futureVersionPolicy": {"critical": "fail", "optional": "degrade"},
+  "families": {
+    "bridgeConfiguration": {"enabled": true, "serverUrl": "http://omnigent.test", "agentName": "codex"},
+    "sessionCreate": {"title": "conformance", "hostType": "managed"},
+    "sessionSnapshot": {"id": "session-1", "status": "completed"},
+    "sessionEvent": {"sequence": 1, "type": "message", "data": {"role": "assistant", "content": []}},
+    "control": {"type": "interrupt", "reason": "operator"},
+    "normalizedEvent": {"family": "assistant", "status": "streaming", "sequence": 2},
+    "lifecycle": {"family": "lifecycle", "status": "failed_before_stream", "failureCode": "host_unavailable"},
+    "eventPage": {"events": [], "nextCursor": "cursor-2", "retentionGap": false},
+    "sseFrame": {"id": "2", "event": "message", "data": "{}"},
+    "terminalFallback": {"status": "failed", "source": "snapshot", "diagnosticsRef": "artifact://diagnostics/1"},
+    "captureManifest": {"status": "partial", "resources": [], "omissions": ["diff"]},
+    "resourceProjection": {"kind": "workspace_file", "name": "README.md", "artifactRef": "artifact://resource/1"},
+    "workflowDetailBlock": {"kind": "tool", "sequence": 3, "content": []},
+    "failure": {"code": "transport_timeout", "class": "retryable", "remediation": "retry"},
+    "directCodexEvent": {"type": "response.output_text.delta", "delta": "ok", "sequence": 4}
+  }
+}

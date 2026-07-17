@@ -22,18 +22,18 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "tests/fixtures/omnigent/conformance-profile-v1.json"
 IMAGES = ROOT / "tests/fixtures/omnigent/stock-images-v1.json"
 
-_PYTEST_TARGETS = {
-    "deterministic": [
-        "tests/unit/omnigent",
-        "tests/unit/api/routers/test_omnigent_bridge.py",
-        "tests/integration/omnigent/test_bridge_conformance.py",
-    ],
-    "stock-proxy": ["tests/provider/omnigent/test_omnigent_smoke.py"],
-    "static-compose": ["tests/provider/omnigent/test_omnigent_smoke.py"],
-    "on-demand": [
-        "tests/provider/omnigent/test_omnigent_smoke.py",
-        "tests/unit/omnigent/test_oauth_profile_lifecycle.py",
-    ],
+_MODES = {"deterministic", "stock-proxy", "static-compose", "on-demand"}
+
+_DETERMINISTIC_CASES = {
+    "configuration": ["tests/unit/omnigent/test_settings.py"],
+    "proxy-routes": ["tests/unit/api/routers/test_omnigent_bridge.py"],
+    "first-message-exactly-once": ["tests/integration/omnigent/test_bridge_conformance.py", "-k", "scenario_04 or scenario_05"],
+    "event-replay-sse": ["tests/integration/omnigent/test_bridge_conformance.py", "-k", "scenario_01 or scenario_03"],
+    "terminal-fallback": ["tests/integration/omnigent/test_bridge_conformance.py", "-k", "scenario_02 or scenario_03"],
+    "resources": ["tests/integration/omnigent/test_bridge_conformance.py", "-k", "scenario_07"],
+    "failure-lifecycle": ["tests/integration/omnigent/test_bridge_conformance.py", "-k", "scenario_02 or scenario_09"],
+    "cleanup-and-lease-release": ["tests/unit/omnigent/test_oauth_profile_lifecycle.py"],
+    "credential-redaction": ["tests/unit/omnigent/test_conformance_contract.py", "-k", "secret"],
 }
 
 _FRONTEND_TARGETS = (
@@ -60,7 +60,7 @@ def _preflight(mode: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=sorted(_PYTEST_TARGETS), required=True)
+    parser.add_argument("--mode", choices=sorted(_MODES), required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     _preflight(args.mode)
@@ -69,41 +69,33 @@ def main() -> int:
     images: list[dict[str, str]] = []
     if args.mode != "deterministic":
         images = json.loads(IMAGES.read_text(encoding="utf-8"))["images"]
-    commands = [[
-        sys.executable,
-        "-m",
-        "pytest",
-        *_PYTEST_TARGETS[args.mode],
-        "-q",
-        "--tb=short",
-    ]]
-    if args.mode != "deterministic":
-        commands[0].extend(["-m", "provider_verification"])
-    else:
-        commands.append(
-            ["npm", "run", "ui:test", "--", *_FRONTEND_TARGETS]
-        )
+    results: list[dict[str, Any]] = []
     returncode = 0
-    for command in commands:
+    for case in profile["cases"]:
+        case_id = case["id"]
+        if args.mode == "deterministic":
+            if case_id in {"workflow-detail-chat", "direct-codex-parity"}:
+                command = ["npm", "run", "ui:test", "--", *_FRONTEND_TARGETS]
+            else:
+                command = [sys.executable, "-m", "pytest", *_DETERMINISTIC_CASES[case_id], "-q", "--tb=short"]
+        else:
+            command = [sys.executable, "-m", "pytest", "tests/provider/omnigent/test_omnigent_smoke.py", "-m", "provider_verification", "-k", f"{args.mode.replace('-', '_')} and {case_id.replace('-', '_')}", "-q", "--tb=short"]
         completed = subprocess.run(command, cwd=ROOT, check=False)
-        if completed.returncode:
-            returncode = completed.returncode
-            break
-    status = "passed" if returncode == 0 else "failed"
-    results: list[dict[str, Any]] = [
-        {
-            "caseId": case["id"],
-            "status": status,
-            "evidence": f"pytest:{args.mode}",
-        }
-        for case in profile["cases"]
-    ]
+        status = "passed" if completed.returncode == 0 else "failed"
+        returncode = returncode or completed.returncode
+        results.append({"caseId": case_id, "status": status, "evidence": "command:" + " ".join(command)})
     report = build_report(
         profile=profile,
         mode=args.mode,
         images=images,
         results=results,
         evidence_refs=[f"artifact://omnigent-conformance/{args.mode}.json"],
+        runtime={
+            "protocolProfile": profile["profile"] + "/" + profile["schemaVersion"],
+            "architecture": os.environ.get("OMNIGENT_HOST_ARCHITECTURE", "local" if args.mode == "deterministic" else "unreported"),
+            "authMode": "none" if args.mode == "deterministic" else os.environ.get("OMNIGENT_AUTH_MODE", "token"),
+            "capabilitiesRef": os.environ.get("OMNIGENT_CAPABILITIES_REF", ""),
+        },
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

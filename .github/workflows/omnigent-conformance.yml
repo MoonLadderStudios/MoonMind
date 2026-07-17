@@ -5,6 +5,9 @@ on:
     paths:
       - "moonmind/omnigent/**"
       - "api_service/routers/omnigent_bridge.py"
+      - "api_service/db/models.py"
+      - "moonmind/workflows/adapters/omnigent_client.py"
+      - "docker-compose.yaml"
       - "frontend/src/**"
       - "tests/**omnigent**"
       - "tests/fixtures/omnigent/**"
