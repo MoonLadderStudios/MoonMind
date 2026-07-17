@@ -3981,7 +3981,7 @@ function StepObservabilityGroup({
       resolveBridgeSessionProjection({
         apiBase,
         workflowId: bridgeWorkflowId,
-        agentRunId,
+        agentRunId: agentRunId ?? null,
         idempotencyKey: agentRunId ? null : bridgeIdempotencyKey,
       }),
     enabled: Boolean(
