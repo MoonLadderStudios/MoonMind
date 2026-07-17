@@ -201,7 +201,9 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
         host = services[service_name]
         environment = _env_map(host["environment"])
         assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
-        assert "omnigent-tools-init" not in host["depends_on"]
+        assert host["depends_on"]["omnigent-tools-init"]["condition"] == (
+            "service_completed_successfully"
+        )
         assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
         assert (
             "./services/omnigent/profile/moonmind-tools.sh:"

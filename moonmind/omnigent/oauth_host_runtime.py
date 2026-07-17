@@ -85,7 +85,12 @@ class OmnigentOAuthHostRuntime:
         )
         self._tools_profile_path = (
             tools_profile_path
-            or Path(__file__).resolve().parents[2]
+            or Path(
+                os.getenv(
+                    "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR",
+                    "/workspace/host_project",
+                )
+            )
             / "services"
             / "omnigent"
             / "profile"
@@ -116,6 +121,7 @@ class OmnigentOAuthHostRuntime:
                 workspace_source=workspace_source,
             )
             await self._exec_check(container_name)
+            await self._exec_tools_check(container_name)
         else:
             await self._compose_static_check()
 
@@ -330,10 +336,12 @@ class OmnigentOAuthHostRuntime:
             "--format",
             "{{range .Config.Env}}{{println .}}{{end}}",
             self._image,
+            check=False,
         )
-        for line in result[1].splitlines():
-            if line.startswith("PATH="):
-                return line.removeprefix("PATH=") or _DEFAULT_HOST_PATH
+        if result[0] == 0:
+            for line in result[1].splitlines():
+                if line.startswith("PATH="):
+                    return line.removeprefix("PATH=") or _DEFAULT_HOST_PATH
         return _DEFAULT_HOST_PATH
 
     async def _validate_tools_profile_bind_source(self) -> None:
@@ -359,6 +367,19 @@ class OmnigentOAuthHostRuntime:
     def _prepend_tools_path(upstream_path: str) -> str:
         entries = [entry for entry in upstream_path.split(":") if entry]
         return ":".join([_TOOLS_PATH, *(e for e in entries if e != _TOOLS_PATH)])
+
+    async def _exec_tools_check(self, container_name: str) -> None:
+        """Verify the mounted bundle through the host's login-shell boundary."""
+
+        await self._run(
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-lc",
+            "test -f /opt/moonmind-tools/manifest.json "
+            "&& command -v gh >/dev/null && gh --version >/dev/null",
+        )
 
     async def _prepare_workspace(
         self, *, workspace_key: str, repository_url: str | None

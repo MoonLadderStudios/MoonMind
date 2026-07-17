@@ -18,6 +18,9 @@ def test_static_hosts_project_versioned_tools_without_covering_usr_local_bin() -
         else:
             assert environment["PATH"] == expected_path
         assert "omnigent-tools:/opt/moonmind-tools:ro" in service["volumes"]
+        assert service["depends_on"]["omnigent-tools-init"]["condition"] == (
+            "service_completed_successfully"
+        )
         assert (
             "./services/omnigent/profile/moonmind-tools.sh:"
             "/etc/profile.d/moonmind-tools.sh:ro"

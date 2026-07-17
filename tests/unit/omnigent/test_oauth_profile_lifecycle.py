@@ -318,6 +318,55 @@ def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tools_path_discovery_falls_back_when_image_is_not_local(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(1, "", "No such image"))
+
+    assert await runtime._discover_upstream_path() == (
+        "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+    )
+    assert runtime._run.await_args.kwargs["check"] is False
+
+
+def test_default_tools_profile_uses_daemon_visible_project_root(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(tmp_path))
+
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    assert runtime._tools_profile_path == (
+        tmp_path / "services/omnigent/profile/moonmind-tools.sh"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tools_check_uses_host_login_shell_and_manifest(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    await runtime._exec_tools_check("mm-host-lease-1")
+
+    command = runtime._run.await_args.args
+    assert command[:5] == ("docker", "exec", "mm-host-lease-1", "bash", "-lc")
+    assert "test -f /opt/moonmind-tools/manifest.json" in command[-1]
+    assert "command -v gh" in command[-1]
+    assert "gh --version" in command[-1]
+
+
+@pytest.mark.asyncio
 async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) -> None:
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
