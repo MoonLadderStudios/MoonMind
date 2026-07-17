@@ -632,6 +632,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert set(host_service["volumes"]) == {
         "omnigent-host-codex-state:/home/app/.omnigent",
         "codex_auth_volume:/home/app/.codex",
+        "omnigent-tools:/opt/moonmind-tools:ro",
+        "./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
         "./omnigent_workspaces:/workspaces",
         (
             "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
