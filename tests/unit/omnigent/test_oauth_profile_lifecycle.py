@@ -235,6 +235,9 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         workspace_root=tmp_path / "workspaces",
     )
     runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(
+        return_value="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
+    )
     runtime._run = AsyncMock(return_value=(0, "", ""))
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
@@ -254,6 +257,29 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[2][:3] == ("docker", "run", "-d")
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    launch = commands[2]
+    assert (
+        "type=volume,src=moonmind-omnigent-tools-v1,dst=/opt/moonmind-tools,readonly"
+        in launch
+    )
+    assert any(
+        value.endswith(
+            ",dst=/etc/profile.d/moonmind-tools.sh,readonly"
+        )
+        for value in launch
+    )
+    assert (
+        "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
+        in launch
+    )
+
+
+def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
+    upstream = "/custom/bin:/usr/local/bin:/usr/bin:/bin"
+    expected = "/opt/moonmind-tools/bin:/custom/bin:/usr/local/bin:/usr/bin:/bin"
+
+    assert OmnigentOAuthHostRuntime._prepend_tools_path(upstream) == expected
+    assert OmnigentOAuthHostRuntime._prepend_tools_path(expected) == expected
 
 
 @pytest.mark.asyncio
