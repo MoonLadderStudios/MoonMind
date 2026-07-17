@@ -629,6 +629,9 @@ RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
 RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH = (
     "run-bounded-story-loop-feedback-progress-v1"
 )
+RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH = (
+    "run-bounded-story-loop-remediation-budget-v1"
+)
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
     "run-moonspec-gate-contract-repair-fresh-source-v1"
 )
@@ -6502,12 +6505,40 @@ class MoonMindRunWorkflow:
             prior_no_progress_attempts + 1 if repeated_progress else 0
         )
         max_no_progress_attempts = 1
+        explicit_no_progress_budget = False
         if progress_budget_enabled and isinstance(loop_context, Mapping):
             loop_budgets = loop_context.get("budgets")
             if isinstance(loop_budgets, Mapping):
-                max_no_progress_attempts = int(
-                    loop_budgets.get("maxConsecutiveNoProgressAttempts") or 1
+                configured_no_progress_attempts = self._coerce_positive_int(
+                    loop_budgets.get("maxConsecutiveNoProgressAttempts")
                 )
+                if configured_no_progress_attempts is not None:
+                    max_no_progress_attempts = configured_no_progress_attempts
+                    explicit_no_progress_budget = True
+        if (
+            progress_budget_enabled
+            and not explicit_no_progress_budget
+            and self._patched_or_false_outside_workflow(
+                RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH
+            )
+        ):
+            # A compiled remediation chain already has a finite, operator-visible
+            # attempt budget. When no independent no-progress policy was authored,
+            # let that declared budget govern repeated verifier results as well.
+            # Defaulting this guard to one makes the first unchanged/sparse
+            # post-remediation report shadow an explicit "attempt 1 of 6" plan.
+            declared_remediation_maxima = {
+                maximum
+                for candidate in ordered_nodes
+                if self._moonspec_step_role(candidate)
+                in {"moonspec-remediation", "moonspec-verification-gate"}
+                for _, maximum in [
+                    self._moonspec_remediation_attempt_metadata(candidate)
+                ]
+                if maximum is not None
+            }
+            if len(declared_remediation_maxima) == 1:
+                max_no_progress_attempts = next(iter(declared_remediation_maxima))
         budget = LoopBudget.model_validate(
             {
                 "maxAttempts": 1,
