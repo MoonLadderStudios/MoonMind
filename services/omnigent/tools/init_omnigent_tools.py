@@ -9,7 +9,6 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import shutil
-import stat
 import subprocess
 import tarfile
 import tempfile
@@ -19,6 +18,13 @@ import urllib.request
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 PROBE_TIMEOUT_SECONDS = 10
 PLATFORM_MACHINES = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+
+
+def _remove_tree(path: Path) -> None:
+    for child in path.rglob("*"):
+        child.chmod(0o700 if child.is_dir() else 0o600)
+    path.chmod(0o700)
+    shutil.rmtree(path)
 
 
 def _read_json(path: Path) -> dict:
@@ -76,7 +82,9 @@ def _extract_executable(archive: Path, archive_path: str, destination: Path) -> 
 def _runtime_manifest(lock: dict, platform_key: str) -> dict:
     tools = []
     for tool in lock.get("tools", []):
-        selected = tool["platforms"][platform_key]
+        selected = tool["platforms"].get(platform_key)
+        if selected is None:
+            raise RuntimeError(f"{tool['name']} has no pinned artifact for {platform_key}")
         tools.append(
             {
                 "name": tool["name"],
@@ -104,9 +112,8 @@ def _validate_completed(bundle: Path, manifest: dict) -> None:
         raise RuntimeError("completed tool bundle manifest does not match pinned manifest")
     for tool in manifest["tools"]:
         executable = bundle / _safe_relative_path(tool["path"])
-        mode = stat.S_IMODE(executable.stat().st_mode)
-        if not executable.is_file() or mode != 0o555:
-            raise RuntimeError(f"invalid executable permissions for {tool['path']}: {mode:o}")
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError(f"invalid executable permissions for {tool['path']}")
         subprocess.run(
             [str(executable), *tool["versionProbe"]],
             check=True,
@@ -126,18 +133,25 @@ def initialize(lock_path: Path, output_root: Path) -> None:
         )
     platform_key = _platform_key()
     manifest = _runtime_manifest(lock, platform_key)
+    output_root.mkdir(parents=True, exist_ok=True)
+    bin_link = output_root / "bin"
+    if not bin_link.is_symlink() and not bin_link.exists():
+        bin_link.symlink_to("bundle/bin", target_is_directory=True)
     completed = output_root / "bundle"
     if completed.exists():
-        _validate_completed(completed, manifest)
-        return
+        try:
+            _validate_completed(completed, manifest)
+            return
+        except Exception:
+            if completed.is_dir():
+                _remove_tree(completed)
+            else:
+                completed.unlink()
 
-    output_root.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".attempt-", dir=output_root))
     try:
         for index, tool in enumerate(lock["tools"]):
-            selected = tool["platforms"].get(platform_key)
-            if selected is None:
-                raise RuntimeError(f"{tool['name']} has no pinned artifact for {platform_key}")
+            selected = tool["platforms"][platform_key]
             archive = staging / f"artifact-{index}.tar.gz"
             _download(selected["url"], archive, selected["sha256"])
             executable = staging / _safe_relative_path(tool["path"])
@@ -157,10 +171,20 @@ def initialize(lock_path: Path, output_root: Path) -> None:
         for directory in sorted(directories, reverse=True):
             directory.chmod(0o555)
         staging.chmod(0o555)
-        os.replace(staging, completed)
+        try:
+            os.replace(staging, completed)
+        except OSError as publication_error:
+            # Another project can publish the same globally named bundle between
+            # our initial existence check and this atomic publication attempt.
+            # Accept only a fully validated winner; otherwise preserve the
+            # original publication error.
+            try:
+                _validate_completed(completed, manifest)
+            except Exception:
+                raise publication_error
     finally:
         if staging.exists():
-            shutil.rmtree(staging)
+            _remove_tree(staging)
 
 
 if __name__ == "__main__":

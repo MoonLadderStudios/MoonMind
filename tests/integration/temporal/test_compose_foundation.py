@@ -196,21 +196,8 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
         host = services[service_name]
         environment = _env_map(host["environment"])
         assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
-        assert host["depends_on"]["omnigent-tools-init"] == {
-            "condition": "service_completed_successfully"
-        }
-        tool_mount = next(
-            mount
-            for mount in host["volumes"]
-            if isinstance(mount, dict) and mount.get("target") == "/opt/moonmind-tools"
-        )
-        assert tool_mount == {
-            "type": "volume",
-            "source": "omnigent-tools",
-            "target": "/opt/moonmind-tools",
-            "read_only": True,
-            "volume": {"subpath": "bundle"},
-        }
+        assert "omnigent-tools-init" not in host["depends_on"]
+        assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
         assert (
             "./services/omnigent/profile/moonmind-tools.sh:"
             "/etc/profile.d/moonmind-tools.sh:ro"

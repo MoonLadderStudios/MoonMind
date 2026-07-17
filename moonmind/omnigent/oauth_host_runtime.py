@@ -47,6 +47,7 @@ class OmnigentOAuthHostRuntime:
         server_url: str | None = None,
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
+        tools_volume: str | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -73,6 +74,9 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
         ).resolve()
+        self._tools_volume = tools_volume or os.getenv(
+            "OMNIGENT_TOOLS_VOLUME", "moonmind-omnigent-tools-gh-2.74.2-1"
+        )
 
     async def prepare_host(
         self,
@@ -228,6 +232,8 @@ class OmnigentOAuthHostRuntime:
             f"type=volume,src={state_volume},dst=/home/app/.omnigent",
             "--mount",
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
+            "--mount",
+            f"type=volume,src={self._tools_volume},dst=/opt/moonmind-tools,readonly",
             "--entrypoint",
             "/opt/moonmind/init-codex-oauth-host.sh",
             self._image,
@@ -278,6 +284,8 @@ class OmnigentOAuthHostRuntime:
             f"CODEX_CREDENTIAL_GENERATION={host_lease.credential_generation}",
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
+            "--env",
+            "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)

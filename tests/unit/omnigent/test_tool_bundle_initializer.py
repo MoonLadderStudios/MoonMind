@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
 import stat
 import tarfile
 
@@ -56,12 +57,13 @@ def test_initializer_publishes_verified_read_only_bundle_atomically(
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["bundleVersion"] == "test-1"
     assert manifest["tools"][0]["path"] == "bin/fixture-tool"
+    assert (output / "bin").readlink() == Path("bundle/bin")
     assert stat.S_IMODE((bundle / "bin/fixture-tool").stat().st_mode) == 0o555
     assert stat.S_IMODE((bundle / "manifest.json").stat().st_mode) == 0o444
     assert not list(output.glob(".attempt-*"))
 
 
-def test_initializer_is_idempotent_and_rejects_manifest_mismatch(
+def test_initializer_is_idempotent_and_repairs_manifest_mismatch(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(initializer, "_platform_key", lambda: "linux/amd64")
@@ -73,8 +75,32 @@ def test_initializer_is_idempotent_and_rejects_manifest_mismatch(
     manifest_path = output / "bundle/manifest.json"
     manifest_path.chmod(0o644)
     manifest_path.write_text("{}\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="does not match"):
-        initializer.initialize(lock_path, output)
+    initializer.initialize(lock_path, output)
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["bundleVersion"] == "test-1"
+
+
+def test_runtime_manifest_reports_missing_platform(tmp_path, monkeypatch):
+    monkeypatch.setattr(initializer, "_platform_key", lambda: "linux/arm64")
+
+    with pytest.raises(RuntimeError, match="no pinned artifact for linux/arm64"):
+        initializer.initialize(_fixture_lock(tmp_path), tmp_path / "output")
+
+
+def test_initializer_accepts_matching_concurrent_publication(tmp_path, monkeypatch):
+    monkeypatch.setattr(initializer, "_platform_key", lambda: "linux/amd64")
+    output = tmp_path / "output"
+    lock_path = _fixture_lock(tmp_path)
+    winner = tmp_path / "winner-output"
+    initializer.initialize(lock_path, winner)
+
+    def publish_winner_then_fail(source, destination):
+        shutil.copytree(winner / "bundle", destination)
+        raise OSError("destination was published concurrently")
+
+    monkeypatch.setattr(initializer.os, "replace", publish_winner_then_fail)
+    initializer.initialize(lock_path, output)
+
+    assert json.loads((output / "bundle/manifest.json").read_text())["bundleVersion"] == "test-1"
 
 
 def test_initializer_rejects_bad_artifact_hash_without_publishing(

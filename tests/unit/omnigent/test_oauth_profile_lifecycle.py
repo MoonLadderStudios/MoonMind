@@ -254,6 +254,14 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[2][:3] == ("docker", "run", "-d")
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    assert (
+        "type=volume,src=moonmind-omnigent-tools-gh-2.74.2-1,"
+        "dst=/opt/moonmind-tools,readonly"
+    ) in commands[2]
+    assert (
+        "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
+        "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+    ) in commands[2]
 
 
 @pytest.mark.asyncio
