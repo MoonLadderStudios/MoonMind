@@ -9,6 +9,7 @@ on-demand runners so all hosts publish one comparable terminal contract.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 PROFILE_VERSION = "moonmind.omnigent.conformance/v1"
+PROFILE_SHA256 = "35ff2246182f33edfbfa3de84bac1cf9a1eb8a2e47468b7ca30649f99ed7370f"
 REPORT_VERSION = "moonmind.omnigent.conformance-report/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 
@@ -66,7 +68,10 @@ class CaseResult:
 
 
 def load_profile(path: Path) -> dict[str, Any]:
-    profile = json.loads(path.read_text(encoding="utf-8"))
+    raw_profile = path.read_bytes()
+    profile = json.loads(raw_profile)
+    if not isinstance(profile, dict):
+        raise ConformanceContractError("conformance profile must be an object")
     if profile.get("profileVersion") != PROFILE_VERSION:
         raise ConformanceContractError(
             f"unsupported conformance profile: {profile.get('profileVersion')!r}"
@@ -74,9 +79,24 @@ def load_profile(path: Path) -> dict[str, Any]:
     cases = profile.get("cases")
     if not isinstance(cases, list) or not cases:
         raise ConformanceContractError("conformance profile must declare cases")
-    ids = [case.get("id") for case in cases if isinstance(case, dict)]
-    if len(ids) != len(cases) or len(set(ids)) != len(ids):
-        raise ConformanceContractError("conformance case ids must be present and unique")
+    if not all(
+        isinstance(case, dict)
+        and isinstance(case.get("id"), str)
+        and case["id"].strip()
+        for case in cases
+    ):
+        raise ConformanceContractError(
+            "conformance case ids must be present, non-empty strings"
+        )
+    ids = [case["id"] for case in cases]
+    if len(set(ids)) != len(ids):
+        raise ConformanceContractError("conformance case ids must be unique")
+    digest = hashlib.sha256(raw_profile).hexdigest()
+    if digest != PROFILE_SHA256:
+        raise ConformanceContractError(
+            "conformance profile does not match the canonical inventory"
+        )
+    profile["profileSha256"] = digest
     return profile
 
 
@@ -106,6 +126,16 @@ def require_pinned_images(images: Mapping[str, str]) -> None:
 
 
 def assert_secret_free(evidence: Any) -> None:
+    if isinstance(evidence, Mapping):
+        for key, value in evidence.items():
+            if str(key).strip().lower() in {"token", "password", "authorization"}:
+                raise ConformanceContractError("secret-like material detected in evidence")
+            assert_secret_free(value)
+        return
+    if isinstance(evidence, (list, tuple)):
+        for value in evidence:
+            assert_secret_free(value)
+        return
     serialized = json.dumps(evidence, sort_keys=True, default=str)
     if _SECRET.search(serialized):
         raise ConformanceContractError("secret-like material detected in evidence")
@@ -122,12 +152,18 @@ def build_report(
     protocol_version: str,
     evidence_scans: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    if profile.get("profileVersion") != PROFILE_VERSION:
-        raise ConformanceContractError("report profile version is unsupported")
+    if (
+        profile.get("profileVersion") != PROFILE_VERSION
+        or profile.get("profileSha256") != PROFILE_SHA256
+    ):
+        raise ConformanceContractError("report profile is not the canonical inventory")
     require_pinned_images(images)
     if (
-        not host_architecture.strip()
+        not isinstance(host_architecture, str)
+        or not host_architecture.strip()
+        or not isinstance(auth_mode, str)
         or not auth_mode.strip()
+        or not isinstance(protocol_version, str)
         or not protocol_version.strip()
     ):
         raise ConformanceContractError(
@@ -140,13 +176,19 @@ def build_report(
         )
     for channel in REQUIRED_EVIDENCE_CHANNELS:
         scan = evidence_scans[channel]
-        if scan.get("status") != "passed" or not str(
-            scan.get("evidenceRef", "")
-        ).strip():
+        evidence_ref = scan.get("evidenceRef")
+        if (
+            scan.get("status") != "passed"
+            or not isinstance(evidence_ref, str)
+            or not evidence_ref.strip()
+        ):
             raise ConformanceContractError(
                 f"evidence-channel secret scan did not pass: {channel}"
             )
     results = [case.as_dict() for case in cases]
+    observed_ids = [case["caseId"] for case in results]
+    if len(set(observed_ids)) != len(observed_ids):
+        raise ConformanceContractError("report contains duplicate case results")
     declared = {case["id"] for case in profile["cases"]}
     observed = {case["caseId"] for case in results}
     if declared != observed:
@@ -158,6 +200,7 @@ def build_report(
     report = {
         "schemaVersion": REPORT_VERSION,
         "profileVersion": PROFILE_VERSION,
+        "profileSha256": PROFILE_SHA256,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "images": dict(images),
         "hostArchitecture": host_architecture,

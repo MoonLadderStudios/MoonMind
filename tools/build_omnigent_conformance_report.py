@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from moonmind.omnigent.conformance import CaseResult, build_report, load_profile
 
@@ -23,6 +28,11 @@ def main() -> int:
         "--profile",
         type=Path,
         default=Path("tests/fixtures/omnigent/conformance-v1.json"),
+    )
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="allow skipped critical cases for explicitly partial CI reports",
     )
     args = parser.parse_args()
     evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
@@ -51,7 +61,15 @@ def main() -> int:
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    return 1 if report["summary"]["failed"] else 0
+    critical_ids = {case["id"] for case in profile["cases"] if case["critical"]}
+    skipped_critical = {
+        case["caseId"]
+        for case in report["cases"]
+        if case["status"] == "skipped" and case["caseId"] in critical_ids
+    }
+    return 1 if report["summary"]["failed"] or (
+        skipped_critical and not args.allow_partial
+    ) else 0
 
 
 if __name__ == "__main__":

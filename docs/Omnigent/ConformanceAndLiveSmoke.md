@@ -31,6 +31,21 @@ status is invalid, or secret-like content occurs anywhere in report evidence.
 Unknown fixture versions must explicitly declare whether consumers fail or
 degrade; the profile itself fails closed on unknown versions.
 
+The deterministic runner executes the unit/fake/API and Workflow Detail suites
+and emits both `runner-evidence.json` and `report.json`:
+
+```bash
+python tools/run_omnigent_conformance.py \
+  --server-image fake-server@sha256:<64-hex-digest> \
+  --host-image fake-host@sha256:<64-hex-digest> \
+  --host-architecture linux/amd64
+```
+
+The aggregate report command defaults to the complete live gate: a failed case
+or a skipped critical case returns nonzero. `--allow-partial` is reserved for
+the deterministic runner, where all skipped provider cases remain explicit in
+the report.
+
 ## Live-run boundaries
 
 The static runner uses canonical `docker-compose.yaml` and the
