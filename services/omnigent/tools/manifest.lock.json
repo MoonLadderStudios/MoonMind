@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "bundleVersion": "gh-2.74.2-1",
+  "tools": [
+    {
+      "name": "gh",
+      "version": "2.74.2",
+      "platforms": {
+        "linux/amd64": {
+          "url": "https://github.com/cli/cli/releases/download/v2.74.2/gh_2.74.2_linux_amd64.tar.gz",
+          "sha256": "c421091ae5800390e6aef1f50bfda59cc1d4f2ef2200bcd4e1a662c05c28c444",
+          "archivePath": "gh_2.74.2_linux_amd64/bin/gh"
+        },
+        "linux/arm64": {
+          "url": "https://github.com/cli/cli/releases/download/v2.74.2/gh_2.74.2_linux_arm64.tar.gz",
+          "sha256": "f0b07f0aeaf00f137df1bd33a76e717b1945f4b83bd6a3296b365414d3eb413f",
+          "archivePath": "gh_2.74.2_linux_arm64/bin/gh"
+        }
+      },
+      "path": "bin/gh",
+      "versionProbe": ["--version"]
+    }
+  ]
+}

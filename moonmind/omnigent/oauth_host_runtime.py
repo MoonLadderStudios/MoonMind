@@ -80,12 +80,8 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
         ).resolve()
-        bundle_version = (
-            os.getenv("OMNIGENT_TOOL_BUNDLE_VERSION", "v1").strip() or "v1"
-        )
         self._tools_volume = tools_volume or os.getenv(
-            "OMNIGENT_TOOLS_VOLUME_NAME",
-            f"moonmind-omnigent-tools-{bundle_version}",
+            "OMNIGENT_TOOLS_VOLUME", "moonmind-omnigent-tools-gh-2.74.2-1"
         )
         self._tools_profile_path = (
             tools_profile_path

@@ -25,7 +25,7 @@ def test_static_hosts_project_versioned_tools_without_covering_usr_local_bin() -
         assert all("/usr/local/bin" not in volume for volume in service["volumes"])
 
     assert compose["volumes"]["omnigent-tools"]["name"] == (
-        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-v1}"
+        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}"
     )
 
 

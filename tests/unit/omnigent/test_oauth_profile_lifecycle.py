@@ -263,7 +263,8 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[3][commands[3].index("--workdir") + 1] == "/home/app"
     launch = commands[3]
     assert (
-        "type=volume,src=moonmind-omnigent-tools-v1,dst=/opt/moonmind-tools,readonly"
+        "type=volume,src=moonmind-omnigent-tools-gh-2.74.2-1,"
+        "dst=/opt/moonmind-tools,readonly"
         in launch
     )
     assert any(
