@@ -365,8 +365,8 @@ class OmnigentOAuthHostRuntime:
                     "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
                     "--env",
                     "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,"
-                    "GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,"
-                    "GH_NO_EXTENSION_UPDATE_NOTIFIER",
+                    + "GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,"
+                    + "GH_NO_EXTENSION_UPDATE_NOTIFIER",
                 ]
             )
         for key, value in labels.items():
