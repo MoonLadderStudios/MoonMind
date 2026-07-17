@@ -63,27 +63,65 @@ def _request():
     )
 
 
-def test_embedded_host_auth_accepts_bearer_token() -> None:
+def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
     context = verify_embedded_host_auth(
-        headers={"Authorization": "Bearer runner-token"},
+        headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
         config=_embedded_config(),
         configured_token="runner-token",
     )
 
-    assert context.auth_mode == "header_or_token"
-    assert context.protocol_profile == "omnigent.host_runner.v1"
+    assert context.auth_mode == "upstream_runner_tunnel"
+    assert context.protocol_profile == "omnigent.runner_tunnel.b95e41ec"
+    assert context.runner_id.startswith("runner_token_")
 
 
 def test_embedded_host_auth_rejects_missing_or_wrong_token() -> None:
     with pytest.raises(OmnigentBridgeError) as excinfo:
         verify_embedded_host_auth(
-            headers={"X-Omnigent-Host-Token": "wrong"},
+            headers={"X-Omnigent-Runner-Tunnel-Token": "wrong"},
             config=_embedded_config(),
             configured_token="runner-token",
         )
 
     assert excinfo.value.status_code == 401
     assert excinfo.value.failure_class == "user_error"
+
+
+def test_embedded_host_auth_rejects_user_bearer_and_cookie_domains() -> None:
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        verify_embedded_host_auth(
+            headers={
+                "Authorization": "Bearer runner-token",
+                "Cookie": "moonmind_session=runner-token",
+                "X-Execution-Principal": "runner-token",
+            },
+            config=_embedded_config(),
+            configured_token="runner-token",
+        )
+
+    assert excinfo.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_registration_rejects_runner_identity_substitution(store) -> None:
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="runner-authenticated",
+        credential_generation=1,
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(runnerId="runner-attacker"),
+            auth=auth,
+        )
+
+    assert excinfo.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -93,8 +131,10 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
         config=_embedded_config(),
     )
     auth = EmbeddedHostAuthContext(
-        auth_mode="header_or_token",
-        protocol_profile="omnigent.host_runner.v1",
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="runner-1",
+        credential_generation=1,
     )
 
     registered = await facade.register_host(
@@ -136,8 +176,10 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
             data={"text": "hello"},
         ),
         auth=EmbeddedHostAuthContext(
-            auth_mode="header_or_token",
-            protocol_profile="omnigent.host_runner.v1",
+            auth_mode="upstream_runner_tunnel",
+            protocol_profile="omnigent.runner_tunnel.b95e41ec",
+            runner_id="host-1",
+            credential_generation=1,
         ),
     )
     events = await store.list_events(row.bridge_session_id)
@@ -203,8 +245,10 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         config=_embedded_config(),
     )
     auth = EmbeddedHostAuthContext(
-        auth_mode="header_or_token",
-        protocol_profile="omnigent.host_runner.v1",
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="host-1",
+        credential_generation=1,
     )
 
     await facade.ingest_session_event(

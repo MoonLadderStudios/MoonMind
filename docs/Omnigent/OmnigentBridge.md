@@ -297,8 +297,8 @@ hostConnection:
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
-    authMode: header_or_token
-    protocolProfile: omnigent.host_runner.v1
+    authMode: upstream_runner_tunnel
+    protocolProfile: omnigent.runner_tunnel.b95e41ec
 
 sessionDefaults:
   hostType: managed
