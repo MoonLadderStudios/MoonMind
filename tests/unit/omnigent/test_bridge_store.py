@@ -184,6 +184,30 @@ async def test_lifecycle_event_uses_canonical_index_and_deduplicates_retry(store
 
 
 @pytest.mark.asyncio
+async def test_terminal_lifecycle_event_projects_session_terminal_state(store):
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="pending",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="terminal",
+        status="failed",
+        event_identity="idem-1:attempt:1:terminal:failed",
+    )
+
+    projected = await store.get_bridge_session(row.bridge_session_id)
+    assert projected is not None
+    assert projected.status == "failed"
+    assert projected.first_message_state == FIRST_MESSAGE_TERMINAL
+
+
+@pytest.mark.asyncio
 async def test_get_or_create_persists_binding_identity_override(store):
     # The Session API Facade holds a verified workflow id out-of-band and
     # synthesizes a request with no step_execution (correlation id != workflow
@@ -259,7 +283,9 @@ async def test_get_session_owner_resolves_by_session_id(store):
 
 
 @pytest.mark.asyncio
-async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(store):
+async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(
+    store,
+):
     first = await store.get_or_create(
         request=_request("idem-first"),
         endpoint_ref="default",
@@ -379,6 +405,12 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
         agent_name=None,
         target_metadata={},
     )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="profile_resolution",
+        status="completed",
+        event_identity="idem-1:attempt:1:profile_resolution:completed",
+    )
 
     # Full non-lossy normalized status stream, including a terminal timeout.
     stream = [
@@ -390,7 +422,11 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
             "sequence": 3,
         },
         {"eventType": "response.delta", "normalizedStatus": "running", "sequence": 4},
-        {"eventType": "response.failed", "normalizedStatus": "timed_out", "sequence": 5},
+        {
+            "eventType": "response.failed",
+            "normalizedStatus": "timed_out",
+            "sequence": 5,
+        },
     ]
 
     terminal = await store.mark_terminal(
@@ -407,16 +443,17 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
     events = await store.list_events(created.bridge_session_id)
     # The event index preserves the full, non-lossy per-event normalized stream,
     # including the non-terminal statuses coalesced away at the session level.
-    assert [e.sequence for e in events] == [1, 2, 3, 4, 5]
-    assert [e.normalized_status for e in events] == [
+    assert [e.sequence for e in events] == [1, 2, 3, 4, 5, 6]
+    assert events[0].event_type == "lifecycle.profile_resolution"
+    assert [e.normalized_status for e in events[1:]] == [
         "created",
         "running",
         "awaiting_approval",
         "running",
         "timed_out",
     ]
-    assert all(e.direction == "host_to_moonmind" for e in events)
-    assert events[0].event_type == "session.created"
+    assert all(e.direction == "host_to_moonmind" for e in events[1:])
+    assert events[1].event_type == "session.created"
 
 
 @pytest.mark.asyncio
@@ -434,15 +471,25 @@ async def test_mark_terminal_event_indexing_is_idempotent_on_retry(store):
     )
     stream = [
         {"eventType": "session.created", "normalizedStatus": "created", "sequence": 1},
-        {"eventType": "response.completed", "normalizedStatus": "completed", "sequence": 2},
+        {
+            "eventType": "response.completed",
+            "normalizedStatus": "completed",
+            "sequence": 2,
+        },
     ]
 
     await store.mark_terminal(
-        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+        "idem-1",
+        status="completed",
+        terminal_refs={"outputRefs": ["art"]},
+        events=stream,
     )
     # Retry: same key, same events.
     await store.mark_terminal(
-        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+        "idem-1",
+        status="completed",
+        terminal_refs={"outputRefs": ["art"]},
+        events=stream,
     )
 
     events = await store.list_events(created.bridge_session_id)
@@ -524,7 +571,9 @@ async def test_unique_idempotency_key_enforced(store):
 
 
 @pytest.mark.asyncio
-async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(store):
+async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(
+    store,
+):
     row = await store.get_or_create(
         request=_request(),
         endpoint_ref="default",

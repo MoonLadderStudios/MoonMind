@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from sqlalchemy import select
+from temporalio import activity
 
 from api_service.db.models import ManagedAgentProviderProfile
 from api_service.services.provider_profile_readiness import (
@@ -38,11 +40,26 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import build_omnigent_se
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
 
 
+def _activity_attempt() -> int:
+    """Return the durable Temporal attempt, or one outside an Activity."""
+
+    try:
+        return max(1, int(activity.info().attempt))
+    except RuntimeError:
+        return 1
+
+
 def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
     """Return stable launch classification and operator remediation."""
 
-    code = str(getattr(exc, "code", type(exc).__name__))[:96]
+    code = str(getattr(exc, "code", None) or type(exc).__name__)[:96]
     lowered = code.lower()
+    if "policy" in lowered or "authorization" in lowered:
+        return code, "authorization_error", "contact_administrator"
+    if "profile_resolution" in lowered:
+        return code, "configuration_error", "select_execution_profile"
+    if "profile_readiness" in lowered:
+        return code, "configuration_error", "validate_codex_oauth"
     if "credential" in lowered or "oauth" in lowered:
         return code, "configuration_error", "validate_codex_oauth"
     if "lease" in lowered:
@@ -55,8 +72,6 @@ def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
         return code, "configuration_error", "repair_host_image"
     if "network" in lowered or "endpoint" in lowered:
         return code, "integration_error", "repair_server_endpoint"
-    if "policy" in lowered or "authorization" in lowered:
-        return code, "authorization_error", "contact_administrator"
     return code, "integration_error", "retry_transient_upstream"
 
 
@@ -158,6 +173,8 @@ class OmnigentProfileBoundExecutionCoordinator:
         )
         bridge_ready = True
         current_stage = "request_validated"
+        active_stages: set[str] = set()
+        attempt_identity = f"{request.idempotency_key}:attempt:{_activity_attempt()}"
 
         async def emit(
             stage: str,
@@ -169,23 +186,32 @@ class OmnigentProfileBoundExecutionCoordinator:
             remediation_action: str | None = None,
             diagnostics_ref: str | None = None,
             metadata: dict[str, Any] | None = None,
+            ignore_errors: bool = False,
         ) -> None:
-            await self._run_store.record_lifecycle_event(
-                request.idempotency_key,
-                event_type=stage,
-                status=status,
-                event_identity=f"{request.idempotency_key}:{stage}:{status}",
-                code=code,
-                summary=summary,
-                failure_class=failure_class,
-                diagnostics_ref=diagnostics_ref,
-                remediation_action=remediation_action,
-                metadata={
-                    "workflowId": workflow_id,
-                    "stepExecutionId": step_execution_id,
-                    **dict(metadata or {}),
-                },
-            )
+            try:
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type=stage,
+                    status=status,
+                    event_identity=f"{attempt_identity}:{stage}:{status}",
+                    code=code,
+                    summary=summary,
+                    failure_class=failure_class,
+                    diagnostics_ref=diagnostics_ref,
+                    remediation_action=remediation_action,
+                    metadata={
+                        "workflowId": workflow_id,
+                        "stepExecutionId": step_execution_id,
+                        **dict(metadata or {}),
+                    },
+                )
+            except Exception:
+                if not ignore_errors:
+                    raise
+            if status in {"started", "waiting"}:
+                active_stages.add(stage)
+            elif status in {"completed", "ready", "failed"}:
+                active_stages.discard(stage)
 
         provider_lease: CredentialLease | None = None
         host_lease = None
@@ -349,7 +375,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 omnigent_host_id=host_id,
             )
             await emit(
-                "credential_preflight", "ready", metadata={
+                "credential_preflight",
+                "ready",
+                metadata={
                     "providerProfileId": profile_id,
                     "credentialGeneration": host_lease.credential_generation,
                     "omnigentHostId": host_id,
@@ -384,13 +412,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
-            await emit("first_message_prepare", "completed")
-            await emit("first_message_post", "completed")
-            await emit(current_stage, "completed", metadata={"omnigentHostId": host_id})
-            await emit("session_running", "completed")
+            result_failed = bool(result.failure_class or result.provider_error_code)
+            result_status = "failed" if result_failed else "completed"
+            terminal_status = result_status
+            await emit("first_message_prepare", result_status)
+            await emit("first_message_post", result_status)
+            await emit(
+                current_stage, result_status, metadata={"omnigentHostId": host_id}
+            )
+            await emit("session_running", result_status)
             await emit(
                 "resource_harvest",
-                "completed",
+                result_status,
+                code=result.provider_error_code,
+                failure_class=(
+                    str(result.failure_class) if result.failure_class else None
+                ),
                 diagnostics_ref=_diagnostics_ref(result),
             )
             if str(result.provider_error_code or "") == "429":
@@ -413,15 +450,17 @@ class OmnigentProfileBoundExecutionCoordinator:
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
-                await emit(
-                    current_stage,
-                    "failed",
-                    code=code,
-                    summary=str(exc),
-                    failure_class=failure_class,
-                    remediation_action=remediation,
-                    diagnostics_ref=_diagnostics_ref(exc),
-                )
+                for stage in list(active_stages) or [current_stage]:
+                    await emit(
+                        stage,
+                        "failed",
+                        code=code,
+                        summary=str(exc),
+                        failure_class=failure_class,
+                        remediation_action=remediation,
+                        diagnostics_ref=_diagnostics_ref(exc),
+                        ignore_errors=True,
+                    )
             raise
         finally:
             safe_to_release_provider = host_lease is None
@@ -439,6 +478,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                             "sessionInterrupted": host_lease.status == "assigned",
                             "hostCleanupMode": cleanup_mode,
                         },
+                        ignore_errors=True,
                     )
                     if host_lease.status == "assigned":
                         host_lease = await self._hosts.transition_host_lease(
@@ -461,6 +501,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                             "stateResourcesCleaned": True,
                             "hostLeaseReleased": True,
                         },
+                        ignore_errors=True,
                     )
                 except Exception as cleanup_exc:
                     try:
@@ -474,8 +515,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                         # persistence of that failure also becomes unavailable.
                         pass
                     await emit(
-                        "host_cleanup", "failed",
-                        code=type(cleanup_exc).__name__, summary=str(cleanup_exc),
+                        "host_cleanup",
+                        "failed",
+                        code=type(cleanup_exc).__name__,
+                        summary=str(cleanup_exc),
                         failure_class="system_error",
                         remediation_action="inspect_cleanup_diagnostics",
                         metadata={"cleanupCompleted": False, "janitorRequired": True},
@@ -483,15 +526,24 @@ class OmnigentProfileBoundExecutionCoordinator:
             lease_released = provider_lease is None
             if provider_lease is not None:
                 if safe_to_release_provider:
-                    try:
-                        await self._lease_client.release_lease(provider_lease)
-                        lease_released = True
+                    release_exc: Exception | None = None
+                    for release_attempt in range(3):
+                        try:
+                            await self._lease_client.release_lease(provider_lease)
+                            lease_released = True
+                            release_exc = None
+                            break
+                        except Exception as exc:
+                            release_exc = exc
+                            if release_attempt < 2:
+                                await asyncio.sleep(2**release_attempt)
+                    if lease_released:
                         await emit(
                             "profile_lease_release",
                             "completed",
                             metadata={"leaseReleased": True},
                         )
-                    except Exception as release_exc:
+                    elif release_exc is not None:
                         await emit(
                             "profile_lease_release",
                             "failed",
@@ -501,6 +553,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                             remediation_action="inspect_cleanup_diagnostics",
                             diagnostics_ref=_diagnostics_ref(release_exc),
                             metadata={"leaseReleased": False, "janitorRequired": True},
+                            ignore_errors=True,
                         )
                 else:
                     await emit(
@@ -509,6 +562,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         code="credential_cleanup_incomplete",
                         remediation_action="inspect_cleanup_diagnostics",
                         metadata={"leaseReleased": False, "janitorRequired": True},
+                        ignore_errors=True,
                     )
             await emit(
                 "terminal",
@@ -520,6 +574,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         provider_lease is not None and not lease_released
                     ),
                 },
+                ignore_errors=True,
             )
 
     async def recover_from_checkpoint(

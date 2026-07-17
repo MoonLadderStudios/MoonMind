@@ -233,6 +233,10 @@ class OmnigentBridgeSessionStore:
             }
             if stored.omnigent_endpoint_ref == "pending":
                 stored.omnigent_endpoint_ref = endpoint_ref
+            elif stored.omnigent_endpoint_ref != endpoint_ref:
+                raise OmnigentIdempotencyError(
+                    "bridge authorization is already bound to another endpoint"
+                )
             for field, value in expected.items():
                 current = getattr(stored, field)
                 if current is not None and current != value:
@@ -279,9 +283,10 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
-            stable_event_id = "bse_" + uuid5(
-                NAMESPACE_URL, f"{row.bridge_session_id}:{event_identity}"
-            ).hex
+            stable_event_id = (
+                "bse_"
+                + uuid5(NAMESPACE_URL, f"{row.bridge_session_id}:{event_identity}").hex
+            )
             existing = await session.get(OmnigentBridgeSessionEvent, stable_event_id)
             if existing is not None:
                 return _detached(session, row)
@@ -348,9 +353,7 @@ class OmnigentBridgeSessionStore:
                     timestamp=datetime.now(tz=UTC),
                     direction="moonmind_system",
                     event_type=f"lifecycle.{str(event_type)[:96]}",
-                    normalized_status=(
-                        "waiting" if status == "waiting" else None
-                    ),
+                    normalized_status=("waiting" if status == "waiting" else None),
                     text_preview=safe_summary,
                     artifact_ref=(
                         str(diagnostics_ref)[:1024] if diagnostics_ref else None
@@ -358,6 +361,9 @@ class OmnigentBridgeSessionStore:
                     metadata_=event_metadata,
                 )
             )
+            if event_type == "terminal" and status in _TERMINAL_STATUSES:
+                row.status = coalesce_bridge_status(status)
+                row.first_message_state = FIRST_MESSAGE_TERMINAL
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -659,18 +665,30 @@ class OmnigentBridgeSessionStore:
                 for column, value in _canonical_ref_columns(terminal_refs).items():
                     setattr(row, column, value)
             if events:
-                # Terminal event indexing must be idempotent: a Temporal activity
-                # retry that reattaches to the durable session can call
-                # ``mark_terminal`` again for the same idempotency key. Replace the
-                # session's event rows rather than appending, so ``list_events``
-                # never returns duplicate sequences (§7.2).
+                # Replace only provider events. Lifecycle rows are independent
+                # terminal evidence and must survive provider stream indexing.
                 await session.execute(
                     delete(OmnigentBridgeSessionEvent).where(
+                        OmnigentBridgeSessionEvent.bridge_session_id
+                        == row.bridge_session_id,
+                        ~OmnigentBridgeSessionEvent.event_type.startswith("lifecycle."),
+                    )
+                )
+                max_sequence_result = await session.execute(
+                    select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
                         OmnigentBridgeSessionEvent.bridge_session_id
                         == row.bridge_session_id
                     )
                 )
-                for event_row in _build_event_rows(row.bridge_session_id, events):
+                offset = int(max_sequence_result.scalar() or 0)
+                provider_events = []
+                for index, event in enumerate(events, start=1):
+                    prepared = dict(event)
+                    prepared["sequence"] = offset + index
+                    provider_events.append(prepared)
+                for event_row in _build_event_rows(
+                    row.bridge_session_id, provider_events
+                ):
                     session.add(event_row)
             await session.commit()
             await session.refresh(row)

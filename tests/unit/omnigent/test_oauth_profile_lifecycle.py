@@ -32,6 +32,7 @@ from moonmind.omnigent.oauth_hosts import (
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _failure_evidence,
 )
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -47,6 +48,32 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
+
+
+@pytest.mark.parametrize(
+    ("code", "failure_class", "remediation"),
+    [
+        ("authorization_denied", "authorization_error", "contact_administrator"),
+        (
+            "profile_resolution_failed",
+            "configuration_error",
+            "select_execution_profile",
+        ),
+        ("profile_readiness_failed", "configuration_error", "validate_codex_oauth"),
+    ],
+)
+def test_failure_evidence_classifies_operator_action(
+    code: str, failure_class: str, remediation: str
+) -> None:
+    exc = RuntimeError("failed")
+    exc.code = code  # type: ignore[attr-defined]
+    assert _failure_evidence(exc) == (code, failure_class, remediation)
+
+
+def test_failure_evidence_falls_back_when_code_is_none() -> None:
+    exc = RuntimeError("failed")
+    exc.code = None  # type: ignore[attr-defined]
+    assert _failure_evidence(exc)[0] == "RuntimeError"
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -304,9 +331,7 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
             "omnigent-host-codex",
         ),
     ]
-    assert all(
-        "docker-compose.codex-host.yaml" not in command for command in commands
-    )
+    assert all("docker-compose.codex-host.yaml" not in command for command in commands)
 
 
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:
@@ -640,8 +665,12 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
 
-        async def transition_host_lease(self, _lease_id, *, expected_status, new_status, fields=None):
-            self.lease = self.lease.model_copy(update={"status": new_status, **dict(fields or {})})
+        async def transition_host_lease(
+            self, _lease_id, *, expected_status, new_status, fields=None
+        ):
+            self.lease = self.lease.model_copy(
+                update={"status": new_status, **dict(fields or {})}
+            )
             return self.lease
 
         async def mark_host_lease_stopped(self, _lease_id):
@@ -679,19 +708,32 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(return_value=SimpleNamespace(
-        enabled=True, auth_state=ProviderProfileAuthState.CONNECTED,
-        disabled_reason=None, max_parallel_runs=1, cooldown_after_429_seconds=900,
-        runtime_id="codex_cli", credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-        volume_ref="codex_auth_volume", volume_mount_path="/home/app/.codex",
-        secret_refs={}, command_behavior={},
-    ))
-    await coordinator.execute(AgentExecutionRequest(
-        agentKind="external", agentId="omnigent", executionProfileRef="codex",
-        correlationId="workflow-1", idempotencyKey="idem-release-failure",
-        parameters={"omnigent": {"session": {}}},
-    ))
+    coordinator._resolve_profile = AsyncMock(
+        return_value=SimpleNamespace(
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            secret_refs={},
+            command_behavior={},
+        )
+    )
+    await coordinator.execute(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            executionProfileRef="codex",
+            correlationId="workflow-1",
+            idempotencyKey="idem-release-failure",
+            parameters={"omnigent": {"session": {"allowEmptyWorkspace": True}}},
+        )
+    )
 
     assert events[-2][0:2] == ("profile_lease_release", "failed")
     assert events[-1][0:2] == ("terminal", "completed")
