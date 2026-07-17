@@ -235,3 +235,79 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         )
     assert excinfo.value.status_code == 502
     assert excinfo.value.failure_class == "integration_error"
+
+
+@pytest.mark.asyncio
+async def test_embedded_session_event_rejects_host_outside_durable_binding(
+    store,
+) -> None:
+    request = _request()
+    row = await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-assigned",
+    )
+    await store.attach_session(request.idempotency_key, "sess-bound")
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="header_or_token",
+        protocol_profile="omnigent.host_runner.v1",
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.ingest_session_event(
+            host_id="host-other",
+            session_id="sess-bound",
+            request=EmbeddedHostSessionEventRequest(
+                type="response.delta",
+                data={"text": "must not be accepted"},
+            ),
+            auth=auth,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert await store.list_events(row.bridge_session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_embedded_session_event_accepts_exact_durable_host_binding(store) -> None:
+    request = _request()
+    row = await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-assigned",
+    )
+    await store.attach_session(request.idempotency_key, "sess-bound")
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+    )
+
+    response = await facade.ingest_session_event(
+        host_id="host-assigned",
+        session_id="sess-bound",
+        request=EmbeddedHostSessionEventRequest(
+            type="response.delta",
+            data={"text": "accepted"},
+        ),
+        auth=EmbeddedHostAuthContext(
+            auth_mode="header_or_token",
+            protocol_profile="omnigent.host_runner.v1",
+        ),
+    )
+
+    assert response["accepted"] == 1
+    assert len(await store.list_events(row.bridge_session_id)) == 1

@@ -238,6 +238,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=404,
             )
+        _assert_embedded_host_owns_session(row=row, host_id=host_id)
         payload = request.model_dump(by_alias=True)
         payload.setdefault("direction", "host_to_moonmind")
         payload.setdefault("data", {})
@@ -328,6 +329,33 @@ def _assert_row_owner(row: Any, binding: BridgePrincipalBinding) -> None:
             failure_class="user_error",
             status_code=409,
         )
+
+
+def _assert_embedded_host_owns_session(*, row: Any, host_id: str) -> None:
+    """Enforce the durable exact-host assignment on host-originated traffic.
+
+    Profile-bound execution persists ``omnigent_host_id`` before launching a
+    session.  The socket/HTTP transport is not an authority boundary: every
+    host-originated operation must still agree with that durable assignment.
+    Sessions created without a profile-bound host retain the legacy unbound
+    behavior while embedded mode remains experimental.
+    """
+
+    provided_host_id = _clean(host_id)
+    if not provided_host_id:
+        raise OmnigentBridgeError(
+            "Embedded Omnigent session traffic requires a host id.",
+            failure_class="user_error",
+            status_code=400,
+        )
+    assigned_host_id = _clean(getattr(row, "omnigent_host_id", None))
+    if assigned_host_id and provided_host_id != assigned_host_id:
+        raise OmnigentBridgeError(
+            "Embedded Omnigent host is not assigned to the requested session.",
+            failure_class="user_error",
+            status_code=403,
+        )
+
 
 def _extract_host_token(headers: Mapping[str, Any]) -> str:
     normalized = {str(key).lower(): str(value) for key, value in headers.items()}
