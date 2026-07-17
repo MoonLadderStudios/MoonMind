@@ -154,6 +154,45 @@ jobs:
           path: /tmp/status-token-audit.csv
           if-no-files-found: ignore
 
+  omnigent-deterministic-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci --no-fund --no-audit
+      - name: Run deterministic Omnigent conformance
+        run: |
+          python tools/run_omnigent_conformance.py \
+            --server-image fake-server@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --host-image fake-host@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            --host-architecture linux/amd64
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-deterministic-conformance
+          path: artifacts/omnigent-conformance
+          if-no-files-found: error
+
   unit-fast:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.unit_fast == 'true'
