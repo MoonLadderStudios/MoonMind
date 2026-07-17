@@ -1491,6 +1491,17 @@ def _build_runtime_planner():
                         + json.dumps(merged_inputs, indent=2, sort_keys=True)
                     )
 
+        if (
+            has_explicit_instructions
+            and selected_skill_inputs
+            and "Selected skill inputs:\n" not in str(instructions)
+        ):
+            instructions = (
+                f"{str(instructions).strip()}\n\n"
+                "Selected skill inputs:\n"
+                + json.dumps(selected_skill_inputs, indent=2, sort_keys=True)
+            )
+
         # --- Resolve runtime mode ---
         runtime_payload = _coerce_mapping(task_payload.get("runtime"))
         runtime_mode = _normalize_runtime_mode(
@@ -1599,8 +1610,10 @@ def _build_runtime_planner():
                 )
                 if key in selected_skill_payload
             }
-            if compact_skill_payload:
-                node_inputs["skill"] = compact_skill_payload
+            compact_skill_payload.setdefault("name", selected_skill_name)
+            if selected_skill_inputs:
+                compact_skill_payload["inputs"] = deepcopy(selected_skill_inputs)
+            node_inputs["skill"] = compact_skill_payload
 
         raw_steps = task_payload.get("steps")
         if (

@@ -2641,6 +2641,43 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
     assert "targetBranch" not in node["inputs"]
     assert "commit your work" not in node["inputs"]["instructions"]
 
+def test_runtime_planner_exposes_jira_verify_inputs_with_explicit_instructions():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Verify Jira issue THOR-709.",
+                "tool": {"type": "skill", "name": "jira-verify"},
+                "skill": {"name": "jira-verify"},
+                "inputs": {
+                    "jira_issue_key": "THOR-709",
+                    "update_status": True,
+                },
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["instructions"].startswith("Use $jira-verify.")
+    assert "Selected skill inputs:" in node_inputs["instructions"]
+    assert '"update_status": true' in node_inputs["instructions"]
+    assert node_inputs["skill"] == {
+        "name": "jira-verify",
+        "inputs": {
+            "jira_issue_key": "THOR-709",
+            "update_status": True,
+        },
+    }
+
 def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
