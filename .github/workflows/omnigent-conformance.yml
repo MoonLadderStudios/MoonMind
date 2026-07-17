@@ -1,0 +1,82 @@
+name: Omnigent Bridge Conformance
+
+on:
+  pull_request:
+    paths:
+      - "moonmind/omnigent/**"
+      - "api_service/routers/omnigent_bridge.py"
+      - "frontend/src/**"
+      - "tests/**omnigent**"
+      - "tests/fixtures/omnigent/**"
+      - "tools/run_omnigent_conformance.py"
+      - ".github/workflows/omnigent-conformance.yml"
+  schedule:
+    - cron: "41 6 * * 2"
+  workflow_dispatch:
+    inputs:
+      live_mode:
+        description: Credentialed layer to run
+        required: true
+        default: stock-proxy
+        type: choice
+        options: [stock-proxy, static-compose, on-demand]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: omnigent-conformance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deterministic:
+    name: Deterministic fake-server/API conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: python -m pip install -e .[tests]
+      - run: npm ci --no-fund --no-audit
+      - run: python tools/run_omnigent_conformance.py --mode deterministic --output artifacts/omnigent-conformance/deterministic.json
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-conformance-deterministic-${{ github.run_id }}
+          path: artifacts/omnigent-conformance/deterministic.json
+          if-no-files-found: error
+
+  live:
+    name: Provisioned stock/OAuth conformance
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: omnigent-provider-verification
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .[tests]
+      - name: Run provisioned layer
+        env:
+          OMNIGENT_ENABLED: "true"
+          OMNIGENT_SERVER_URL: ${{ secrets.OMNIGENT_CONFORMANCE_SERVER_URL }}
+          OMNIGENT_API_TOKEN: ${{ secrets.OMNIGENT_CONFORMANCE_API_TOKEN }}
+          OMNIGENT_DEFAULT_AGENT_NAME: codex
+          OMNIGENT_CODEX_OAUTH_PROFILE_REF: ${{ secrets.OMNIGENT_CODEX_OAUTH_PROFILE_REF }}
+          REQUESTED_MODE: ${{ inputs.live_mode || 'stock-proxy' }}
+        run: python tools/run_omnigent_conformance.py --mode "$REQUESTED_MODE" --output "artifacts/omnigent-conformance/$REQUESTED_MODE.json"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-conformance-live-${{ github.run_id }}
+          path: artifacts/omnigent-conformance/*.json
+          if-no-files-found: error
+          retention-days: 30

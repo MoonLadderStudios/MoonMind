@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0",
+  "profile": "moonmind.omnigent-bridge.codex",
+  "provenance": {
+    "issue": "MoonLadderStudios/MoonMind#3368",
+    "contract": "docs/Omnigent/OmnigentBridgeConformance.md"
+  },
+  "futureVersionPolicy": {
+    "critical": "fail",
+    "optional": "degrade"
+  },
+  "cases": [
+    {"id": "configuration", "layer": "backend", "critical": true},
+    {"id": "proxy-routes", "layer": "proxy", "critical": true},
+    {"id": "first-message-exactly-once", "layer": "persistence", "critical": true},
+    {"id": "event-replay-sse", "layer": "events", "critical": true},
+    {"id": "terminal-fallback", "layer": "events", "critical": true},
+    {"id": "workflow-detail-chat", "layer": "ui", "critical": true},
+    {"id": "resources", "layer": "resources", "critical": true},
+    {"id": "failure-lifecycle", "layer": "failures", "critical": true},
+    {"id": "direct-codex-parity", "layer": "events", "critical": true},
+    {"id": "cleanup-and-lease-release", "layer": "lifecycle", "critical": true},
+    {"id": "credential-redaction", "layer": "security", "critical": true}
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "provenance": {
+    "issue": "MoonLadderStudios/MoonMind#3368",
+    "registry": "ghcr.io",
+    "resolvedAt": "2026-07-17"
+  },
+  "protocolProfile": "moonmind.omnigent-bridge.codex/1.0",
+  "images": [
+    {
+      "role": "server",
+      "ref": "ghcr.io/omnigent-ai/omnigent-server:v0.1.0",
+      "digest": "sha256:a3626af20e6ebbb5f9f8792528d9f6c68cf6807e5fe219bb93bbb5831d2e5ac9"
+    },
+    {
+      "role": "codex-host",
+      "ref": "ghcr.io/omnigent-ai/omnigent-host:v0.1.0",
+      "digest": "sha256:e0a9ad8f49ede22486c1a37fcd9f525eeacafbd78a9cc05c05405ff57aaaefaf"
+    }
+  ]
+}
