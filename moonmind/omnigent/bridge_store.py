@@ -273,8 +273,8 @@ class OmnigentBridgeSessionStore:
         idempotency_key: str,
         *,
         event_type: str,
-        status: str,
-        event_identity: str,
+        status: str = "running",
+        event_identity: str | None = None,
         code: str | None = None,
         summary: str | None = None,
         failure_class: str | None = None,
@@ -296,6 +296,9 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            event_identity = event_identity or (
+                f"{event_type}:{code or ''}:{summary or ''}"
+            )
             stable_event_id = (
                 "bse_"
                 + uuid5(NAMESPACE_URL, f"{row.bridge_session_id}:{event_identity}").hex
@@ -842,6 +845,21 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            dedup_keys = [_event_deduplication_key(event) for event in events]
+            existing_result = await session.execute(
+                select(OmnigentBridgeSessionEvent.deduplication_key).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == key,
+                    OmnigentBridgeSessionEvent.deduplication_key.in_(dedup_keys),
+                )
+            )
+            existing = set(existing_result.scalars().all())
+            pending = [
+                (event, dedup_key)
+                for event, dedup_key in zip(events, dedup_keys, strict=True)
+                if dedup_key not in existing
+            ]
+            if not pending:
+                return []
             max_sequence_result = await session.execute(
                 select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
                     OmnigentBridgeSessionEvent.bridge_session_id == key
@@ -849,9 +867,10 @@ class OmnigentBridgeSessionStore:
             )
             next_sequence = int(max_sequence_result.scalar() or 0) + 1
             prepared_events: list[dict[str, Any]] = []
-            for offset, event in enumerate(events):
-                prepared = dict(event)
+            for offset, (event, dedup_key) in enumerate(pending):
+                prepared = redact_raw_events([dict(event)])[0]
                 prepared["sequence"] = next_sequence + offset
+                prepared["deduplicationKey"] = dedup_key
                 prepared_events.append(prepared)
             rows = _build_event_rows(key, prepared_events)
             for event_row in rows:
@@ -878,6 +897,21 @@ class OmnigentBridgeSessionStore:
                 await session.refresh(event_row)
                 session.expunge(event_row)
             return rows
+
+    async def attach_active_journal_refs(
+        self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
+    ) -> None:
+        """Atomically switch both active journal refs after artifacts exist."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            row.raw_events_ref = raw_ref
+            row.normalized_events_ref = normalized_ref
+            await session.commit()
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str
