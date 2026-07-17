@@ -140,6 +140,8 @@ class OmnigentBridgeSessionStore:
         target_metadata: dict[str, Any],
         workflow_id: str | None = None,
         agent_run_id: str | None = None,
+        provider: str = BRIDGE_PROVIDER,
+        compatibility_profile: str = BRIDGE_COMPATIBILITY_PROFILE,
     ) -> OmnigentBridgeSession:
         """Create or reuse a durable bridge row keyed by idempotency key.
 
@@ -159,8 +161,8 @@ class OmnigentBridgeSessionStore:
             if row is None:
                 row = OmnigentBridgeSession(
                     bridge_session_id=f"brs_{uuid4().hex}",
-                    provider=BRIDGE_PROVIDER,
-                    compatibility_profile=BRIDGE_COMPATIBILITY_PROFILE,
+                    provider=provider,
+                    compatibility_profile=compatibility_profile,
                     moonmind_workflow_id=resolved_workflow_id,
                     moonmind_run_id=_run_id(request),
                     moonmind_agent_run_id=resolved_agent_run_id,

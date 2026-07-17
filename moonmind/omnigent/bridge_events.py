@@ -42,14 +42,28 @@ _RECOGNIZED_EXACT_EVENT_TYPES = {
     "resource.changed_file",
     "resource.session_file",
     "response.completed",
+    "response.canceled",
     "response.delta",
     "response.elicitation_request",
     "response.failed",
+    "response.timed_out",
     "response.output",
     "session.created",
     "session.final_snapshot",
     "session.started",
+    "session.ready",
+    "session.reset",
+    "session.status",
+    "session.cleanup",
     "stream.done",
+    "turn.started",
+    "turn.interrupted",
+    "control.requested",
+    "control.completed",
+    "control.failed",
+    "approval.requested",
+    "approval.resolved",
+    "resource.published",
 }
 _RECOGNIZED_EVENT_PREFIXES = (
     "response.output",
@@ -83,8 +97,10 @@ def build_omnigent_bridge_event(
     payload: dict[str, Any],
     sequence: int,
     request: AgentExecutionRequest,
-    omnigent_session_id: str,
+    omnigent_session_id: str | None,
     bridge_session_id: str | None = None,
+    source: str = "omnigent_stream",
+    source_metadata: dict[str, Any] | None = None,
 ) -> BridgeEventNormalization:
     """Build the canonical v1 bridge event and index projection fields."""
 
@@ -110,7 +126,6 @@ def build_omnigent_bridge_event(
         "sequence": sequence,
         "timestamp": _timestamp(payload),
         "bridgeSessionId": str(bridge_session_id or ""),
-        "omnigentSessionId": omnigent_session_id,
         "moonmindWorkflowId": _workflow_id(request),
         "moonmindAgentRunId": _agent_run_id(request),
         "direction": _direction(payload),
@@ -122,10 +137,14 @@ def build_omnigent_bridge_event(
         "metadata": {
             "moonmind": {
                 "workflowChatVisible": _workflow_chat_visible(event_type),
-                "source": "omnigent_stream",
+                "source": source,
             }
         },
     }
+    if omnigent_session_id:
+        event["omnigentSessionId"] = omnigent_session_id
+    if source_metadata:
+        event["metadata"]["moonmind"]["sourceMetadata"] = dict(source_metadata)
     if diagnostic is not None:
         event["metadata"]["moonmind"]["contractDrift"] = diagnostic
     text_preview = _text_preview(payload)
@@ -153,6 +172,10 @@ def _normalize_status(
         return "completed"
     if event_type in {"response.failed", "failed"}:
         return "failed"
+    if event_type == "response.canceled":
+        return "canceled"
+    if event_type == "response.timed_out":
+        return "timed_out"
     if event_type in {"response.elicitation_request", "elicitation_request"}:
         return "awaiting_approval"
     if event_type == "session.created":

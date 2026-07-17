@@ -10669,25 +10669,22 @@ class TemporalAgentRuntimeActivities:
         row = await store.get_or_create(
             request=request,
             endpoint_ref="direct-codex-compat",
-            agent_id=request.agent_id,
-            agent_name="Codex CLI",
+            agent_id=None,
+            agent_name=None,
             target_metadata={
                 "hostType": "managed",
                 "workspace": workspace,
                 "compatibilityProfile": compatibility_profile,
                 "producer": "direct_codex_managed_session",
                 "temporaryMigrationPath": True,
+                "source": "codex_direct_compat",
+                "directManagedSessionId": locator.session_id,
+                "directSessionEpoch": locator.session_epoch,
+                "directTurnId": turn_response.turn_id,
+                "directContainerId": locator.container_id,
             },
-        )
-        row = await store.attach_session(
-            request.idempotency_key,
-            locator.session_id,
-        )
-        row = await store.record_session_created(
-            request.idempotency_key,
-            session_id=locator.session_id,
-            agent_id=request.agent_id,
-            endpoint_ref="direct-codex-compat",
+            provider="codex_direct_compat",
+            compatibility_profile=compatibility_profile,
         )
 
         assistant_text = str(
@@ -10695,6 +10692,13 @@ class TemporalAgentRuntimeActivities:
             or summary.metadata.get("lastAssistantText")
             or ""
         ).strip()
+        source_metadata = {
+            "compatibilityProfile": compatibility_profile,
+            "directManagedSessionId": locator.session_id,
+            "sessionEpoch": locator.session_epoch,
+            "turnId": turn_response.turn_id,
+            "containerId": locator.container_id,
+        }
         event_payloads: list[dict[str, Any]] = [
             {
                 "type": "session.started",
@@ -10709,7 +10713,26 @@ class TemporalAgentRuntimeActivities:
                     "compatibilityProfile": compatibility_profile,
                     "producer": "direct_codex_managed_session",
                 },
-            }
+            },
+            {
+                "type": "session.ready",
+                "status": "running",
+                "data": {"sessionEpoch": locator.session_epoch},
+            },
+            {
+                "type": "session.input.user_message",
+                "status": "running",
+                "text": str(parameters.get("instructions") or "").strip(),
+                "data": {"turnId": turn_response.turn_id},
+            },
+            {
+                "type": "turn.started",
+                "status": "running",
+                "data": {
+                    "turnId": turn_response.turn_id,
+                    "sessionEpoch": locator.session_epoch,
+                },
+            },
         ]
         if assistant_text:
             event_payloads.append(
@@ -10723,17 +10746,89 @@ class TemporalAgentRuntimeActivities:
                     },
                 }
             )
+        interventions = turn_response.metadata.get("sessionInterventions")
+        if isinstance(interventions, list):
+            for intervention in interventions:
+                if not isinstance(intervention, Mapping):
+                    continue
+                event_payloads.extend(
+                    [
+                        {
+                            "type": "control.completed",
+                            "status": "running",
+                            "data": dict(intervention),
+                        },
+                        {
+                            "type": "session.reset",
+                            "status": "running",
+                            "data": {
+                                "reason": intervention.get("reason"),
+                                "fromSessionEpoch": intervention.get(
+                                    "fromSessionEpoch"
+                                ),
+                                "toSessionEpoch": intervention.get("toSessionEpoch"),
+                                "resetMode": "clear_session",
+                            },
+                        },
+                    ]
+                )
+        artifact_roles = {
+            "summary": publication.latest_summary_ref,
+            "checkpoint": publication.latest_checkpoint_ref,
+            "control": publication.latest_control_event_ref,
+            "reset_boundary": publication.latest_reset_boundary_ref,
+        }
+        for role, artifact_ref in artifact_roles.items():
+            if artifact_ref:
+                event_payloads.append(
+                    {
+                        "type": "resource.published",
+                        "status": "running",
+                        "artifactRefs": [artifact_ref],
+                        "data": {
+                            "resourceRole": role,
+                            "artifactRef": artifact_ref,
+                            "isWorkspaceCapture": False,
+                        },
+                    }
+                )
+        role_refs = {ref for ref in artifact_roles.values() if ref}
+        compatible_output_refs = list(
+            dict.fromkeys(
+                [
+                    *turn_response.output_refs,
+                    *publication.published_artifact_refs,
+                ]
+            )
+        )
+        for artifact_ref in compatible_output_refs:
+            if artifact_ref in role_refs:
+                continue
+            event_payloads.append(
+                {
+                    "type": "resource.published",
+                    "status": "running",
+                    "artifactRefs": [artifact_ref],
+                    "data": {
+                        "resourceRole": "output",
+                        "artifactRef": artifact_ref,
+                    },
+                }
+            )
         terminal_status = str(
             payload.get("terminalStatus")
             or ("completed" if turn_response.status == "completed" else "failed")
         ).strip()
-        if terminal_status not in {"completed", "failed"}:
+        if terminal_status not in {"completed", "failed", "canceled", "timed_out"}:
             raise TemporalActivityRuntimeError(
-                "payload.terminalStatus must be 'completed' or 'failed'"
+                "payload.terminalStatus must be completed, failed, canceled, or timed_out"
             )
-        terminal_type = (
-            "response.completed" if terminal_status == "completed" else "response.failed"
-        )
+        terminal_type = {
+            "completed": "response.completed",
+            "failed": "response.failed",
+            "canceled": "response.canceled",
+            "timed_out": "response.timed_out",
+        }[terminal_status]
         event_payloads.append(
             {
                 "type": terminal_type,
@@ -10750,8 +10845,10 @@ class TemporalAgentRuntimeActivities:
                 payload=event_payload,
                 sequence=index,
                 request=request,
-                omnigent_session_id=locator.session_id,
+                omnigent_session_id=None,
                 bridge_session_id=row.bridge_session_id,
+                source="codex_direct_compat",
+                source_metadata=source_metadata,
             ).event
             for index, event_payload in enumerate(event_payloads, start=1)
         ]
@@ -10771,7 +10868,7 @@ class TemporalAgentRuntimeActivities:
         )
         return {
             "bridgeSessionId": row.bridge_session_id,
-            "omnigentSessionId": locator.session_id,
+            "directManagedSessionId": locator.session_id,
             "eventCount": len(events),
             "compatibilityProfile": compatibility_profile,
         }

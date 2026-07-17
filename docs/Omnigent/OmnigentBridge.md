@@ -922,10 +922,24 @@ mapping is migrated into `omnigent_bridge_sessions` and the superseded store is
 removed in the same cohesive change — no alias, wrapper, or parallel table.
 
 The direct Codex managed-session producer is a temporary compatibility path
-(§3.3): it emits bridge-shaped events during migration and is retired once Codex
-execution runs behind the bridge. Embedded compatibility mode (§3.2) is a valid
-target module surface, but it is only enabled after proxy mode has conformance
-and live-smoke evidence, as stated in its own design principles (§2.4).
+(§3.3): it emits bridge-shaped events during migration. It is disabled unless
+`parameters.communication.mode` explicitly selects `omnigent_bridge`; reads of
+historical direct-session evidence remain available for the configured retention
+window. Workflow Detail selects one authoritative bridge timeline and never
+renders a comparison stream alongside it. A dual-write comparison deployment may
+compare normalized event classes and report dropped or mismatched classes as
+diagnostics and metrics, but comparison output is not a second user-visible event
+source.
+
+Removal requires all of the following evidence: production Codex-through-Omnigent
+coverage for the supported profiles, passing direct/Omnigent conformance fixtures
+for their shared event classes, expiry of the historical-read retention window,
+and proof that no active Temporal history can still schedule the direct producer
+activity. The activity and its workflow patch marker must remain registered until
+that in-flight-history gate is satisfied. Embedded compatibility mode (§3.2) is a
+valid target module surface, but it is only enabled after proxy mode has
+conformance and live-smoke evidence, as stated in its own design principles
+(§2.4).
 
 ---
 

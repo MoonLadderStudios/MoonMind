@@ -61,6 +61,43 @@ def test_build_omnigent_bridge_event_emits_v1_shape() -> None:
     assert event["artifactRef"] == "artifact://omnigent/corr-1/output.txt"
 
 
+def test_build_direct_compat_event_preserves_truthful_source_identity() -> None:
+    result = build_omnigent_bridge_event(
+        payload={
+            "type": "turn.started",
+            "status": "running",
+            "data": {"turnId": "turn-7", "sessionEpoch": 2},
+        },
+        sequence=4,
+        request=_request(),
+        omnigent_session_id=None,
+        bridge_session_id="brs-direct",
+        source="codex_direct_compat",
+        source_metadata={
+            "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+            "directManagedSessionId": "managed-1",
+            "sessionEpoch": 2,
+            "turnId": "turn-7",
+            "containerId": "container-1",
+        },
+    )
+
+    event = result.event
+    assert "omnigentSessionId" not in event
+    assert event["metadata"]["moonmind"] == {
+        "workflowChatVisible": True,
+        "source": "codex_direct_compat",
+        "sourceMetadata": {
+            "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+            "directManagedSessionId": "managed-1",
+            "sessionEpoch": 2,
+            "turnId": "turn-7",
+            "containerId": "container-1",
+        },
+    }
+    assert event["data"] == {"turnId": "turn-7", "sessionEpoch": 2}
+
+
 def test_execution_critical_drift_fails_closed() -> None:
     with pytest.raises(OmnigentContractError, match="Unsupported Omnigent event type"):
         normalize_omnigent_observation({"type": "response.unexpected"})
