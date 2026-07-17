@@ -45,6 +45,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+
       - name: Set up Python
         if: matrix.platform == 'linux/amd64'
         uses: actions/setup-python@v6

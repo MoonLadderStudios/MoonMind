@@ -41,15 +41,17 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
     assert build_job["needs"] == "metadata"
 
 
-def test_docker_publish_does_not_require_submodules() -> None:
-    # MoonSpec skills are vendored real files under .agents/skills, so the
-    # image build must not depend on submodule checkout state.
+def test_docker_publish_initializes_only_required_omnigent_submodule() -> None:
+    # MoonSpec skills are vendored real files under .agents/skills, while the
+    # runtime image embeds verifier sources from the pinned Omnigent revision.
+    # Initialize that one required source without cloning unrelated submodules.
     workflow = _load_workflow()
 
+    build_steps = workflow["jobs"]["build"]["steps"]
     checkout = next(
         (
             step
-            for step in workflow["jobs"]["build"]["steps"]
+            for step in build_steps
             if step.get("uses", "").startswith("actions/checkout@")
         ),
         None,
@@ -57,6 +59,17 @@ def test_docker_publish_does_not_require_submodules() -> None:
 
     assert checkout is not None, "Checkout step not found"
     assert "submodules" not in checkout.get("with", {})
+
+    initialize = next(
+        (
+            step
+            for step in build_steps
+            if step.get("name") == "Initialize pinned Omnigent verifier source"
+        ),
+        None,
+    )
+    assert initialize is not None, "Pinned Omnigent initialization step not found"
+    assert initialize["run"] == "git submodule update --init --depth 1 -- omnigent"
 
 
 def test_app_image_ships_vendored_skills_without_moonspec_submodule() -> None:
