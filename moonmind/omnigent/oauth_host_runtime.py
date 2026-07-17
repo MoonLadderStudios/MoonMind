@@ -23,6 +23,9 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
     OmnigentHostLease,
 )
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
+)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _FORBIDDEN_ENV = (
@@ -116,8 +119,11 @@ class OmnigentOAuthHostRuntime:
         workspace_source = await self._prepare_workspace(
             workspace_key=workspace_key,
             repository_url=repository_url,
+            github_token=github_token,
         )
         if binding.host_launch_profile_ref:
+            if "gh" in {item.strip().lower() for item in required_capabilities}:
+                await self._initialize_required_tools()
             container_name = (
                 host_lease.container_name
                 or deterministic_host_container_name(host_lease.lease_id)
@@ -358,9 +364,9 @@ class OmnigentOAuthHostRuntime:
                     "--env",
                     "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
                     "--env",
-                    "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
-                    "GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,"
-                    "GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER",
+                    "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,"
+                    "GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,"
+                    "GH_NO_EXTENSION_UPDATE_NOTIFIER",
                 ]
             )
         for key, value in labels.items():
@@ -486,7 +492,11 @@ class OmnigentOAuthHostRuntime:
         )
 
     async def _prepare_workspace(
-        self, *, workspace_key: str, repository_url: str | None
+        self,
+        *,
+        workspace_key: str,
+        repository_url: str | None,
+        github_token: str | None = None,
     ) -> Path:
         self._workspace_root.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
@@ -495,8 +505,28 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError("workspace escaped configured root")
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if repository_url and not any(workspace.iterdir()):
-            await self._run("git", "clone", "--", repository_url, str(workspace))
+            await self._run(
+                "git",
+                "clone",
+                "--",
+                repository_url,
+                str(workspace),
+                env=build_github_token_git_environment(github_token, base_env=os.environ),
+            )
         return workspace
+
+    async def _initialize_required_tools(self) -> None:
+        await self._run(
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "run",
+            "--rm",
+            "omnigent-tools-init",
+        )
 
     async def _compose_static_check(self) -> None:
         await self._run(

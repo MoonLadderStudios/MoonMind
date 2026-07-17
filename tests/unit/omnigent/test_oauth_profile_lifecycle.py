@@ -48,6 +48,7 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
+from moonmind.workflows.temporal.runtime.git_auth import build_github_token_git_environment
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -307,6 +308,28 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
 
 
 @pytest.mark.asyncio
+async def test_private_workspace_clone_uses_in_memory_github_credentials(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    await runtime._prepare_workspace(
+        workspace_key="private",
+        repository_url="https://github.com/owner/private.git",
+        github_token="test-token-value",
+    )
+
+    call = runtime._run.await_args
+    assert call.args[:3] == ("git", "clone", "--")
+    expected = build_github_token_git_environment(
+        "test-token-value", base_env=call.kwargs["env"]
+    )
+    assert call.kwargs["env"]["GITHUB_TOKEN"] == "test-token-value"
+    assert call.kwargs["env"]["GIT_CONFIG_VALUE_1"] == expected["GIT_CONFIG_VALUE_1"]
+
+
+@pytest.mark.asyncio
 async def test_on_demand_host_fails_before_launch_when_profile_is_not_daemon_visible(
     tmp_path,
 ) -> None:
@@ -344,6 +367,31 @@ def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
 
     assert OmnigentOAuthHostRuntime._prepend_tools_path(upstream) == expected
     assert OmnigentOAuthHostRuntime._prepend_tools_path(expected) == expected
+
+
+def test_github_write_probe_uses_publish_or_skill_side_effect() -> None:
+    base = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        idempotencyKey="idem",
+        correlationId="corr",
+        parameters={"requiredCapabilities": ["gh"], "publishMode": "none"},
+    )
+
+    assert not OmnigentProfileBoundExecutionCoordinator._github_mutation_required(base)
+    assert OmnigentProfileBoundExecutionCoordinator._github_mutation_required(
+        base.model_copy(update={"parameters": {**base.parameters, "publishMode": "pr"}})
+    )
+    assert OmnigentProfileBoundExecutionCoordinator._github_mutation_required(
+        base.model_copy(
+            update={
+                "parameters": {
+                    **base.parameters,
+                    "skill": {"sideEffect": {"kind": "merge_pull_request"}},
+                }
+            }
+        )
+    )
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,33 @@ async def test_gh_probes_host_and_exact_runner_with_mutation_permission() -> Non
     assert any("command -v gh" in command for _, command in calls)
     assert any("gh auth status" in command for _, command in calls)
     assert any("viewerPermission" in command for _, command in calls)
+    permission_commands = [command for _, command in calls if "--jq .viewerPermission" in command]
+    assert len(permission_commands) == 2
+    assert all(command.count("gh repo view") == 1 for command in permission_commands)
+
+
+@pytest.mark.parametrize(
+    "repository",
+    (
+        "https://evil.example/github.com/owner/repo",
+        "https://github.com.evil.example/owner/repo",
+    ),
+)
+@pytest.mark.asyncio
+async def test_repository_parser_rejects_embedded_github_hostname(repository: str) -> None:
+    async def runner(_command: str) -> tuple[int, str, str]:
+        return 0, "", ""
+
+    with pytest.raises(MountedToolPreflightError) as raised:
+        await preflight_mounted_tools(
+            required_capabilities=("gh",),
+            repository=repository,
+            mutation_required=False,
+            host_runner=runner,
+            runner_runner=runner,
+        )
+
+    assert raised.value.code == "github_repository_unauthorized"
 
 
 @pytest.mark.asyncio

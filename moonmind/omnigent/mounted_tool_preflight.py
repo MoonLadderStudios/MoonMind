@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from urllib.parse import urlparse
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,8 +41,12 @@ def _repository_name(repository: str) -> str:
     value = repository.strip().removesuffix(".git")
     if value.startswith("git@github.com:"):
         value = value.split(":", 1)[1]
-    elif "github.com/" in value:
-        value = value.split("github.com/", 1)[1]
+    elif "://" in value:
+        parsed = urlparse(value)
+        if parsed.hostname != "github.com":
+            value = ""
+        else:
+            value = parsed.path
     value = value.strip("/")
     parts = value.split("/")
     if len(parts) != 2 or not all(parts):
@@ -57,7 +62,7 @@ def _trusted_gh_digest_checks() -> str:
     path = Path(__file__).resolve().parents[2] / "services/omnigent/tools/manifest.lock.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     tool = next(item for item in manifest["tools"] if item["name"] == "gh")
-    digests = {item["sha256"] for item in tool["platforms"].values()}
+    digests = {item["executableSha256"] for item in tool["platforms"].values()}
     executable = f'/opt/moonmind-tools/{tool["path"]}'
     return " || ".join(
         f'''test "$(sha256sum {executable} | awk '{{print $1}}')" = "{digest}"'''
@@ -83,9 +88,8 @@ def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]
         probes.append(
             Probe(
                 "mutation_permission",
-                f"test \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" = ADMIN || "
-                f"test \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" = MAINTAIN || "
-                f"test \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" = WRITE",
+                f"case \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" in "
+                "ADMIN|MAINTAIN|WRITE) true;; *) false;; esac",
                 "github_repository_unauthorized",
             )
         )

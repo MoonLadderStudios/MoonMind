@@ -204,7 +204,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ).strip(),
                 required_capabilities=self._required_capabilities(request),
                 github_token=await self._github_token(request),
-                github_mutation_required="gh" in self._required_capabilities(request),
+                github_mutation_required=self._github_mutation_required(request),
             )
             host_id = str(preflight["hostId"])
             if binding.static_host_id is None and not binding.host_launch_profile_ref:
@@ -508,13 +508,31 @@ class OmnigentProfileBoundExecutionCoordinator:
 
         repository = str((request.parameters or {}).get("repository") or "").strip()
         resolved = await resolve_github_credential(repo=repository or None)
-        token = str(resolved.token or "").strip()
+        token = str(resolved.token or "").strip() if resolved else ""
         if not token:
             raise OmnigentOAuthHostError(
                 "GitHub credential is required for mounted gh readiness",
                 code="github_auth_unavailable",
             )
         return token
+
+    @staticmethod
+    def _github_mutation_required(request: AgentExecutionRequest) -> bool:
+        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
+            request
+        ):
+            return False
+        parameters = request.parameters or {}
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"", "none"}:
+            return True
+        skill = parameters.get("skill")
+        if not isinstance(skill, Mapping):
+            return False
+        side_effect = skill.get("sideEffect")
+        return isinstance(side_effect, Mapping) and bool(
+            str(side_effect.get("kind") or "").strip()
+        )
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]

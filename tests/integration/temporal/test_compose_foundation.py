@@ -201,9 +201,7 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
         host = services[service_name]
         environment = _env_map(host["environment"])
         assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
-        assert host["depends_on"]["omnigent-tools-init"]["condition"] == (
-            "service_completed_successfully"
-        )
+        assert "omnigent-tools-init" not in host["depends_on"]
         assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
         assert (
             "./services/omnigent/profile/moonmind-tools.sh:"
@@ -579,9 +577,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
 
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
-        "omnigent-tools-init": {"condition": "service_completed_successfully"},
         "claude-auth-init": {"condition": "service_completed_successfully"},
-        "omnigent-tools-init": {"condition": "service_completed_successfully"},
     }
     assert _network_names(host_service) == {"local-network"}
     assert host_service["restart"] == "unless-stopped"
@@ -655,11 +651,9 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert "omnigent-host-codex-state" in compose["volumes"]
     assert host_service["depends_on"] == {
         "omnigent": {"condition": "service_started"},
-        "omnigent-tools-init": {"condition": "service_completed_successfully"},
         "omnigent-host-codex-init": {
             "condition": "service_completed_successfully"
         },
-        "omnigent-tools-init": {"condition": "service_completed_successfully"},
     }
     init_service = compose["services"]["omnigent-host-codex-init"]
     assert init_service["user"] == "0:0"
