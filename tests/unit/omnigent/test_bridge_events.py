@@ -70,6 +70,23 @@ def test_session_created_normalizes_without_explicit_status() -> None:
     assert normalize_omnigent_observation({"type": "session.created"}) == "created"
 
 
+def test_resume_gap_is_a_durable_non_terminal_diagnostic() -> None:
+    result = build_omnigent_bridge_event(
+        payload={
+            "type": "stream.resume_gap",
+            "status": "running",
+            "metadata": {"reason": "upstream_replay_unavailable"},
+        },
+        sequence=8,
+        request=_request(),
+        omnigent_session_id="sess-1",
+    )
+
+    assert result.event["eventType"] == "stream.resume_gap"
+    assert result.event["normalizedStatus"] == "running"
+    assert result.diagnostic is None
+
+
 def test_optional_resource_drift_degrades_with_diagnostic() -> None:
     result = build_omnigent_bridge_event(
         payload={"type": "resource.future_file", "status": "not-a-status"},

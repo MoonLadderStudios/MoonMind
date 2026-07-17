@@ -52,6 +52,7 @@ _RECOGNIZED_EXACT_EVENT_TYPES = {
     "session.final_snapshot",
     "session.started",
     "stream.done",
+    "stream.resume_gap",
 }
 _RECOGNIZED_EVENT_PREFIXES = (
     "response.output",

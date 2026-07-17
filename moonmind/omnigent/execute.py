@@ -474,6 +474,41 @@ async def _publish_active_journals(
     return raw_ref, normalized_ref
 
 
+def _parse_jsonl(payload: str) -> list[dict[str, Any]]:
+    """Parse a previously published journal without accepting non-object rows."""
+
+    items: list[dict[str, Any]] = []
+    for line in payload.splitlines():
+        if not line.strip():
+            continue
+        value = json.loads(line)
+        if isinstance(value, dict):
+            items.append(value)
+    return items
+
+
+async def _restore_active_journals(
+    *,
+    artifact_gateway: OmnigentArtifactGateway,
+    durable_row: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Restore the last committed journal prefix for an Activity retry.
+
+    Journal refs are attached before the matching index commit, so a prefix may
+    contain one harmless unindexed tail event. Reusing that prefix is safe: the
+    event store deduplicates it when the retry reaches the same observation.
+    """
+
+    restored: list[list[dict[str, Any]]] = []
+    for attribute in ("raw_events_ref", "normalized_events_ref"):
+        ref = str(getattr(durable_row, attribute, None) or "").strip()
+        if not ref:
+            restored.append([])
+            continue
+        restored.append(_parse_jsonl(await artifact_gateway.read_text(ref)))
+    return restored[0], restored[1]
+
+
 async def run_omnigent_execution(
     request: AgentExecutionRequest,
     *,
@@ -861,7 +896,54 @@ async def run_omnigent_execution(
                 external_state["retry"]["firstMessageOutcome"] = "already_posted"
                 external_state["firstMessage"]["state"] = "posted"
 
-            event_count = {"value": 0}
+            durable_cursor = 0
+            if durable_row is not None and bridge_session_id:
+                previous_rows = await run_store.list_events(bridge_session_id)
+                durable_cursor = max(
+                    (
+                        int((row.metadata_ or {}).get("reconciliation", {}).get("streamCursor") or 0)
+                        for row in previous_rows
+                    ),
+                    default=0,
+                )
+                if durable_cursor:
+                    raw_events, normalized_events = await _restore_active_journals(
+                        artifact_gateway=artifact_gateway,
+                        durable_row=durable_row,
+                    )
+                    # The current Omnigent stream endpoint has no cursor/resume
+                    # parameter. Preserve that discontinuity explicitly and once
+                    # instead of implying that the new connection is contiguous.
+                    gap_event = build_omnigent_bridge_event(
+                        payload={
+                            "type": "stream.resume_gap",
+                            "status": "running",
+                            "metadata": {
+                                "reason": "upstream_replay_unavailable",
+                                "lastDurableCursor": durable_cursor,
+                            },
+                        },
+                        sequence=durable_cursor + 1,
+                        request=request,
+                        omnigent_session_id=session_id,
+                        bridge_session_id=bridge_session_id,
+                    ).event
+                    gap_event["deduplicationKey"] = f"resume-gap:{durable_cursor}"
+                    normalized_events.append(gap_event)
+                    raw_ref, normalized_ref = await _publish_active_journals(
+                        artifact_gateway=artifact_gateway,
+                        request=request,
+                        raw_events=raw_events,
+                        normalized_events=normalized_events,
+                    )
+                    gap_event["artifactRef"] = normalized_ref
+                    await run_store.attach_active_journal_refs(
+                        bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref
+                    )
+                    await run_store.append_events(bridge_session_id, [gap_event])
+                    durable_cursor += 1
+
+            event_count = {"value": durable_cursor}
             heartbeat_status = {"value": "running"}
             heartbeat_task = asyncio.create_task(
                 _periodic_stream_heartbeat(
@@ -972,12 +1054,13 @@ async def run_omnigent_execution(
                             "type": "session.final_snapshot",
                             "session": final_snapshot,
                         },
-                        sequence=len(normalized_events) + 1,
+                        sequence=event_count["value"] + 1,
                         request=request,
                         omnigent_session_id=session_id,
                         bridge_session_id=bridge_session_id,
                     )
                     normalized_events.append(normalized_bridge_event.event)
+                    event_count["value"] += 1
                     if run_store is not None and bridge_session_id:
                         raw_ref, normalized_ref = await _publish_active_journals(
                             artifact_gateway=artifact_gateway,
