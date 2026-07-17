@@ -620,6 +620,75 @@ async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_st
     assert final.status == "completed"
 
 
+@pytest.mark.asyncio
+async def test_append_events_deduplicates_replay_but_preserves_identical_distinct_deltas(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    first = {
+        "eventType": "response.delta", "normalizedStatus": "running",
+        "textPreview": "same", "deduplicationKey": "cursor:7:abc",
+    }
+    second = {**first, "deduplicationKey": "cursor:8:abc"}
+
+    assert len(await store.append_events(row.bridge_session_id, [first])) == 1
+    assert await store.append_events(row.bridge_session_id, [first]) == []
+    assert len(await store.append_events(row.bridge_session_id, [second])) == 1
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.text_preview for event in events] == ["same", "same"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_reconciliation_never_deletes_live_rows(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    live = {
+        "eventType": "response.delta", "normalizedStatus": "running",
+        "deduplicationKey": "provider:event-1",
+    }
+    terminal = {
+        "eventType": "response.completed", "normalizedStatus": "completed",
+        "deduplicationKey": "provider:event-2",
+    }
+    await store.append_events(row.bridge_session_id, [live])
+    await store.mark_terminal("idem-1", status="completed", events=[live, terminal])
+    await store.mark_terminal("idem-1", status="completed", events=[live, terminal])
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.event_type for event in events] == [
+        "response.delta", "response.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_events_share_the_ordered_projection(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        "idem-1", event_type="profile.resolved", code="ready",
+        summary="Profile authorized",
+    )
+    await store.append_events(
+        row.bridge_session_id,
+        [{"eventType": "response.delta", "normalizedStatus": "running",
+          "deduplicationKey": "provider:event-1"}],
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.event_type for event in events] == [
+        "profile.resolved", "response.delta",
+    ]
+
+
 # --- session.created journal (MM-1155, §8.2 step 6) -------------------------
 
 

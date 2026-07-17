@@ -26,7 +26,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
-from moonmind.omnigent.bridge_security import BridgeSessionBinding
+from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
@@ -273,8 +273,8 @@ class OmnigentBridgeSessionStore:
         idempotency_key: str,
         *,
         event_type: str,
-        status: str,
-        event_identity: str,
+        status: str = "running",
+        event_identity: str | None = None,
         code: str | None = None,
         summary: str | None = None,
         failure_class: str | None = None,
@@ -296,6 +296,10 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            has_explicit_identity = event_identity is not None
+            event_identity = event_identity or (
+                f"{event_type}:{code or ''}:{summary or ''}"
+            )
             stable_event_id = (
                 "bse_"
                 + uuid5(NAMESPACE_URL, f"{row.bridge_session_id}:{event_identity}").hex
@@ -368,9 +372,14 @@ class OmnigentBridgeSessionStore:
                     event_id=stable_event_id,
                     bridge_session_id=row.bridge_session_id,
                     sequence=sequence,
+                    deduplication_key=f"lifecycle:{event_identity}"[:128],
                     timestamp=datetime.now(tz=UTC),
                     direction="moonmind_system",
-                    event_type=f"lifecycle.{str(event_type)[:96]}",
+                    event_type=(
+                        f"lifecycle.{str(event_type)[:86]}"
+                        if has_explicit_identity
+                        else str(event_type)[:96]
+                    ),
                     normalized_status=("waiting" if status == "waiting" else None),
                     text_preview=safe_summary,
                     artifact_ref=(
@@ -708,7 +717,15 @@ class OmnigentBridgeSessionStore:
         events: Sequence[dict[str, Any]] | None = None,
     ) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .with_for_update()
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                raise OmnigentIdempotencyError("missing Omnigent bridge session row")
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if terminal_refs:
@@ -725,7 +742,7 @@ class OmnigentBridgeSessionStore:
                     delete(OmnigentBridgeSessionEvent).where(
                         OmnigentBridgeSessionEvent.bridge_session_id
                         == row.bridge_session_id,
-                        ~OmnigentBridgeSessionEvent.event_type.startswith("lifecycle."),
+                        OmnigentBridgeSessionEvent.direction != "moonmind_system",
                     )
                 )
                 max_sequence_result = await session.execute(
@@ -821,6 +838,8 @@ class OmnigentBridgeSessionStore:
         key = (bridge_session_id or "").strip()
         if not key:
             raise OmnigentIdempotencyError("missing Omnigent bridge session id")
+        if not events:
+            return []
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
@@ -831,6 +850,21 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            dedup_keys = [_event_deduplication_key(event) for event in events]
+            existing_result = await session.execute(
+                select(OmnigentBridgeSessionEvent.deduplication_key).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == key,
+                    OmnigentBridgeSessionEvent.deduplication_key.in_(dedup_keys),
+                )
+            )
+            existing = set(existing_result.scalars().all())
+            pending = [
+                (event, dedup_key)
+                for event, dedup_key in zip(events, dedup_keys, strict=True)
+                if dedup_key not in existing
+            ]
+            if not pending:
+                return []
             max_sequence_result = await session.execute(
                 select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
                     OmnigentBridgeSessionEvent.bridge_session_id == key
@@ -838,9 +872,10 @@ class OmnigentBridgeSessionStore:
             )
             next_sequence = int(max_sequence_result.scalar() or 0) + 1
             prepared_events: list[dict[str, Any]] = []
-            for offset, event in enumerate(events):
-                prepared = dict(event)
+            for offset, (event, dedup_key) in enumerate(pending):
+                prepared = redact_raw_events([dict(event)])[0]
                 prepared["sequence"] = next_sequence + offset
+                prepared["deduplicationKey"] = dedup_key
                 prepared_events.append(prepared)
             rows = _build_event_rows(key, prepared_events)
             for event_row in rows:
@@ -867,6 +902,21 @@ class OmnigentBridgeSessionStore:
                 await session.refresh(event_row)
                 session.expunge(event_row)
             return rows
+
+    async def attach_active_journal_refs(
+        self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
+    ) -> None:
+        """Atomically switch both active journal refs after artifacts exist."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            row.raw_events_ref = raw_ref
+            row.normalized_events_ref = normalized_ref
+            await session.commit()
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str
@@ -935,6 +985,7 @@ def _build_event_rows(
                 event_id=f"bse_{uuid4().hex}",
                 bridge_session_id=bridge_session_id,
                 sequence=int(sequence) if sequence is not None else index,
+                deduplication_key=_event_deduplication_key(event),
                 timestamp=now,
                 direction=str(event.get("direction") or "host_to_moonmind"),
                 event_type=str(event.get("eventType") or event.get("event_type") or ""),
@@ -947,6 +998,25 @@ def _build_event_rows(
             )
         )
     return rows
+
+
+def _event_deduplication_key(event: dict[str, Any]) -> str:
+    """Prefer explicit/provider identity, otherwise bind content to its cursor."""
+    import hashlib
+    import json
+
+    explicit = _string_or_none(event.get("deduplicationKey"))
+    if explicit:
+        return explicit[:128]
+    metadata = event.get("metadata") or {}
+    reconciliation = metadata.get("reconciliation") or {}
+    provider_id = _string_or_none(reconciliation.get("providerEventId"))
+    if provider_id:
+        return f"provider:{provider_id}"[:128]
+    cursor = reconciliation.get("streamCursor") or event.get("sequence") or 0
+    canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(canonical.encode()).hexdigest()
+    return f"cursor:{cursor}:{digest}"[:128]
 
 
 def _workflow_id(request: AgentExecutionRequest) -> str:

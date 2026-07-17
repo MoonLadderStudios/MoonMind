@@ -7,6 +7,8 @@ contract-drift split from ``docs/Omnigent/OmnigentBridge.md`` section 10.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -50,6 +52,7 @@ _RECOGNIZED_EXACT_EVENT_TYPES = {
     "session.final_snapshot",
     "session.started",
     "stream.done",
+    "stream.resume_gap",
 }
 _RECOGNIZED_EVENT_PREFIXES = (
     "response.output",
@@ -126,6 +129,30 @@ def build_omnigent_bridge_event(
             }
         },
     }
+    provider_event_id, provider_identity_is_event = _provider_event_id(payload)
+    reconciliation = {"streamCursor": sequence}
+    if provider_event_id:
+        reconciliation["providerEventId"] = provider_event_id
+        deduplication_key = (
+            f"provider:{provider_event_id}"
+            if provider_identity_is_event
+            else f"provider-item:{provider_event_id}:cursor:{sequence}"
+        )
+    else:
+        # Cursor is intentionally part of the fallback: replaying the same
+        # position deduplicates, while identical deltas at different positions
+        # remain distinct.
+        digest = hashlib.sha256(
+            json.dumps(
+                redact_raw_events([payload])[0],
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+        deduplication_key = f"cursor:{sequence}:{digest}"
+    event["metadata"]["reconciliation"] = reconciliation
+    event["deduplicationKey"] = deduplication_key[:128]
     if diagnostic is not None:
         event["metadata"]["moonmind"]["contractDrift"] = diagnostic
     text_preview = _text_preview(payload)
@@ -135,6 +162,18 @@ def build_omnigent_bridge_event(
     if artifact_ref:
         event["artifactRef"] = artifact_ref
     return BridgeEventNormalization(event=event, diagnostic=diagnostic)
+
+
+def _provider_event_id(payload: dict[str, Any]) -> tuple[str | None, bool]:
+    for key in ("event_id", "eventId"):
+        value = payload.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()[:255], True
+    for key in ("item_id", "itemId", "id"):
+        value = payload.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()[:255], False
+    return None, False
 
 
 class _OptionalResourceDrift(RuntimeError):
