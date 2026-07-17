@@ -746,6 +746,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     workspace_path=workspace_path,
                 )
             )
+            await self._publish_direct_codex_bridge_start(
+                request=request,
+                binding=binding,
+                locator=current_locator,
+                instructions=instructions,
+            )
             session_interventions: list[dict[str, Any]] = []
 
             async def _send_current_turn() -> CodexManagedSessionTurnResponse:
@@ -1645,6 +1651,39 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "summary": summary.model_dump(mode="json", by_alias=True),
                 "publication": publication.model_dump(mode="json", by_alias=True),
                 "terminalStatus": terminal_status,
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                "producer": "direct_codex_managed_session",
+                "phase": "terminal",
+            }
+        )
+
+    async def _publish_direct_codex_bridge_start(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: CodexManagedSessionBinding,
+        locator: CodexManagedSessionLocator,
+        instructions: str,
+    ) -> None:
+        """Publish active-session evidence before the direct turn is sent.
+
+        This call intentionally carries only compact managed-session identity and
+        the submitted user text. Raw live logs remain on their existing artifact
+        path and are not duplicated into the bridge index.
+        """
+        if self._publish_bridge_events is None:
+            return
+        if not _uses_omnigent_bridge_communication(request.parameters):
+            return
+        await self._publish_bridge_events(
+            {
+                "request": request.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "locator": locator.model_dump(mode="json", by_alias=True),
+                "phase": "started",
+                "userMessage": instructions,
                 "compatibilityProfile": "moonmind.codex_direct_compat.v1",
                 "producer": "direct_codex_managed_session",
             }

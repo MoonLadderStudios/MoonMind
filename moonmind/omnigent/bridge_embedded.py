@@ -262,10 +262,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         payload.setdefault("data", {})
         if isinstance(payload["data"], dict):
             payload["data"].setdefault("hostId", _clean(host_id))
+        existing_events = await self._run_store.list_events(row.bridge_session_id)
+        next_sequence = max((event.sequence for event in existing_events), default=0) + 1
         try:
             normalized = build_omnigent_bridge_event(
                 payload=payload,
-                sequence=1,
+                sequence=next_sequence,
                 request=_request_for_row(row),
                 omnigent_session_id=session_id,
                 bridge_session_id=row.bridge_session_id,

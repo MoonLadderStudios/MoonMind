@@ -5351,21 +5351,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .chat-session-blocks {
   display: grid;
-  max-height: min(62vh, 44rem);
   gap: 0.65rem;
-  overflow-y: auto;
   padding-right: 0.2rem;
-  scrollbar-color: rgb(var(--mm-border) / 0.55) transparent;
-  scrollbar-width: thin;
-}
-
-.chat-session-blocks::-webkit-scrollbar {
-  width: 0.5rem;
-}
-
-.chat-session-blocks::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgb(var(--mm-border) / 0.55);
 }
 
 .chat-session-block {
