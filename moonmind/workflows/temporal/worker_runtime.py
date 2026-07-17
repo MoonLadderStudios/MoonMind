@@ -1160,6 +1160,40 @@ def _validated_skill_payload_inputs(
     return _coerce_mapping(result.get("values")), evidence
 
 
+def _append_selected_skill_inputs(
+    instructions: str,
+    skill_inputs: Mapping[str, Any],
+) -> str:
+    if not skill_inputs:
+        return instructions
+    return (
+        f"{instructions.rstrip()}\n\n"
+        "Selected skill inputs:\n"
+        + json.dumps(skill_inputs, indent=2, sort_keys=True)
+    )
+
+
+def _normalized_agent_skill_payload(
+    skill_payload: Mapping[str, Any],
+    *,
+    selected_skill_name: str,
+    selected_skill_inputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    compact_payload = {
+        key: deepcopy(skill_payload[key])
+        for key in (
+            "contentRef",
+            "contentDigest",
+            "inputContractDigest",
+        )
+        if key in skill_payload
+    }
+    compact_payload["name"] = selected_skill_name
+    if selected_skill_inputs:
+        compact_payload["inputs"] = deepcopy(dict(selected_skill_inputs))
+    return compact_payload
+
+
 def _merge_story_output_inputs(
     existing: Mapping[str, Any] | None,
     override: Any,
@@ -1404,9 +1438,10 @@ def _build_runtime_planner():
             task_payload=task_payload,
         )
         git_payload = _coerce_mapping(task_payload.get("git"))
-        selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
-            task_payload.get("skill")
-        )
+        task_skill_payload = _coerce_mapping(task_payload.get("skill"))
+        selected_skill_payload = _coerce_mapping(
+            task_payload.get("tool")
+        ) or task_skill_payload
         selected_skill_name = str(
             selected_skill_payload.get("name")
             or selected_skill_payload.get("id")
@@ -1418,11 +1453,16 @@ def _build_runtime_planner():
                 selected_skill_payload.get("inputs")
                 or selected_skill_payload.get("args")
             )
+        if not selected_skill_inputs and task_skill_payload:
+            selected_skill_inputs = _coerce_mapping(
+                task_skill_payload.get("inputs") or task_skill_payload.get("args")
+            )
         selected_skill_evidence: dict[str, Any] = {}
-        if selected_skill_payload:
+        skill_contract_payload = task_skill_payload or selected_skill_payload
+        if skill_contract_payload:
             selected_skill_inputs, selected_skill_evidence = (
                 _validated_skill_payload_inputs(
-                    skill_payload=selected_skill_payload,
+                    skill_payload=skill_contract_payload,
                     raw_inputs=selected_skill_inputs,
                     workflow_context={
                         **parameter_payload,
@@ -1479,27 +1519,16 @@ def _build_runtime_planner():
                 )
                 merged_inputs["pr"] = effective_selector
                 selected_skill_inputs = merged_inputs
-                if has_explicit_instructions:
-                    instructions = (
-                        f"{str(instructions).strip()}\n\n"
-                        f"Selected skill inputs:\n"
-                        + json.dumps(merged_inputs, indent=2, sort_keys=True)
-                    )
-                else:
+                if not has_explicit_instructions:
                     instructions = (
                         f"Execute skill '{selected_skill_name}' with inputs:\n"
                         + json.dumps(merged_inputs, indent=2, sort_keys=True)
                     )
 
-        if (
-            has_explicit_instructions
-            and selected_skill_inputs
-            and "Selected skill inputs:\n" not in str(instructions)
-        ):
-            instructions = (
-                f"{str(instructions).strip()}\n\n"
-                "Selected skill inputs:\n"
-                + json.dumps(selected_skill_inputs, indent=2, sort_keys=True)
+        if has_explicit_instructions and selected_skill_inputs:
+            instructions = _append_selected_skill_inputs(
+                str(instructions),
+                selected_skill_inputs,
             )
 
         # --- Resolve runtime mode ---
@@ -1598,22 +1627,11 @@ def _build_runtime_planner():
             node_inputs["repo"] = repository.strip()
         if selected_skill_name:
             node_inputs["selectedSkill"] = selected_skill_name
-            selected_skill_payload = _coerce_mapping(task_payload.get("skill"))
-            compact_skill_payload = {
-                key: deepcopy(selected_skill_payload[key])
-                for key in (
-                    "name",
-                    "contentRef",
-                    "contentDigest",
-                    "inputContractDigest",
-                    "inputs",
-                )
-                if key in selected_skill_payload
-            }
-            compact_skill_payload.setdefault("name", selected_skill_name)
-            if selected_skill_inputs:
-                compact_skill_payload["inputs"] = deepcopy(selected_skill_inputs)
-            node_inputs["skill"] = compact_skill_payload
+            node_inputs["skill"] = _normalized_agent_skill_payload(
+                skill_contract_payload,
+                selected_skill_name=selected_skill_name,
+                selected_skill_inputs=selected_skill_inputs,
+            )
 
         raw_steps = task_payload.get("steps")
         if (
@@ -2025,6 +2043,13 @@ def _build_runtime_planner():
                 )
                 if is_agent_runtime_step and has_explicit_step_skill:
                     step_node_inputs["selectedSkill"] = step_tool_name
+                    step_skill_payload = _coerce_mapping(step_entry.get("skill"))
+                    if step_skill_payload:
+                        step_node_inputs["skill"] = _normalized_agent_skill_payload(
+                            step_skill_payload,
+                            selected_skill_name=step_tool_name,
+                            selected_skill_inputs=step_tool_inputs,
+                        )
                     if (
                         _jira_agent_skill_selected(step_tool_name)
                         and step_tool_name.lower() not in _MOONSPEC_BREAKDOWN_TOOLS
@@ -2034,6 +2059,10 @@ def _build_runtime_planner():
                     step_node_inputs["instructions"] = _append_agent_skill_instructions(
                         step_node_inputs["instructions"],
                         selected_skill=effective_step_skill_name,
+                    )
+                    step_node_inputs["instructions"] = _append_selected_skill_inputs(
+                        step_node_inputs["instructions"],
+                        step_tool_inputs,
                     )
                 if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
                     if (
