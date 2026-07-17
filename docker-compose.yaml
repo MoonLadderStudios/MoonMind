@@ -804,10 +804,11 @@ services:
 
   omnigent-tools-init:
     profiles: ["omnigent-host", "omnigent-host-claude", "omnigent-host-codex"]
-    image: ${OMNIGENT_GH_IMAGE:-cli/cli:2.76.2}
+    image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}
     user: "0:0"
     entrypoint: ["/opt/moonmind/init-mounted-tools.sh"]
     environment:
+      MOONMIND_GH_SOURCE: /usr/local/bin/gh
       MOONMIND_GH_VERSION: ${OMNIGENT_GH_VERSION:-2.76.2}
     volumes:
       - omnigent-tools:/output

@@ -187,8 +187,15 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
     services = compose["services"]
     initializer = services["omnigent-tools-init"]
 
+    assert initializer["image"] == (
+        "${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}"
+    )
     assert initializer["user"] == "0:0"
     assert initializer["restart"] == "no"
+    assert initializer["environment"] == {
+        "MOONMIND_GH_SOURCE": "/usr/local/bin/gh",
+        "MOONMIND_GH_VERSION": "${OMNIGENT_GH_VERSION:-2.76.2}",
+    }
     assert initializer["volumes"] == [
         "omnigent-tools:/output",
         "./services/omnigent/scripts:/opt/moonmind:ro",
