@@ -185,6 +185,49 @@ async def test_create_execution_synthesizes_jira_implement_title_metadata(
         ]
 
 
+@pytest.mark.asyncio
+async def test_create_execution_synthesizes_github_issue_preset_title_metadata(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="GitHub Issue Implement",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "title": "GitHub Issue Implement",
+                    "instructions": "Implement the selected GitHub issue.",
+                    "taskTemplate": {"slug": "github-issue-implement"},
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "number": 3143,
+                            "title": "Improve generated workflow titles",
+                        },
+                        "github_issue_ref": "MoonLadderStudios/MoonMind#3143",
+                    },
+                }
+            },
+            idempotency_key=None,
+            integration="github",
+        )
+
+        assert created.memo["title"] == (
+            "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+            "Improve generated workflow titles"
+        )
+        assert created.memo["titleSource"] == "integration_target"
+        assert created.memo["titleConfidence"] == "high"
+        assert "3143" in created.search_attributes["mm_title"]
+
+
 def _write_mm730_cutover_files(tmp_path):
     release_notes = tmp_path / "MM-730-release-notes.md"
     release_notes.write_text(
