@@ -598,3 +598,102 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
     assert actions.index("provider_released") < actions.index("profile_lease_release")
+    for stage in (
+        "credential_mount",
+        "host_registration",
+        "harness_readiness",
+        "bridge_authentication",
+        "first_message_prepare",
+        "first_message_post",
+        "resource_harvest",
+    ):
+        assert stage in actions
+
+
+@pytest.mark.asyncio
+async def test_coordinator_records_terminal_when_provider_lease_release_fails() -> None:
+    """Cleanup release failures remain visible and cannot hide terminal evidence."""
+
+    events: list[tuple[str, str, dict]] = []
+    provider_lease = SimpleNamespace(
+        profile_id="codex",
+        runtime_id="codex_cli",
+        lease_id="provider-lease-1",
+        owner_id="owner-1",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+    )
+
+    class LeaseClient:
+        async def acquire_execution_lease(self, **_kwargs):
+            return provider_lease
+
+        async def release_lease(self, _lease):
+            raise RuntimeError("release unavailable")
+
+    class Hosts:
+        def __init__(self):
+            self.lease = _host_lease().model_copy(update={"status": "allocating"})
+
+        async def get_binding_for_profile(self, _profile_id):
+            return _binding()
+
+        async def create_or_get_host_lease(self, **_kwargs):
+            return self.lease
+
+        async def transition_host_lease(self, _lease_id, *, expected_status, new_status, fields=None):
+            self.lease = self.lease.model_copy(update={"status": new_status, **dict(fields or {})})
+            return self.lease
+
+        async def mark_host_lease_stopped(self, _lease_id):
+            self.lease = self.lease.model_copy(update={"status": "stopped"})
+
+        async def mark_host_lease_failed(self, *_args, **_kwargs):
+            pass
+
+    class Runtime:
+        async def prepare_host(self, **_kwargs):
+            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+
+        async def stop_host(self, **_kwargs):
+            pass
+
+    class Store:
+        async def get_or_create(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_profile_authorization(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def record_lifecycle_event(self, _key, *, event_type, status, **kwargs):
+            events.append((event_type, status, kwargs))
+
+    async def execute(_request, **_kwargs):
+        return AgentRunResult(summary="done")
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=LeaseClient(),
+        host_repository=Hosts(),
+        host_runtime=Runtime(),
+        run_store=Store(),
+        execution_runner=execute,
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(return_value=SimpleNamespace(
+        enabled=True, auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None, max_parallel_runs=1, cooldown_after_429_seconds=900,
+        runtime_id="codex_cli", credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume", volume_mount_path="/home/app/.codex",
+        secret_refs={}, command_behavior={},
+    ))
+    await coordinator.execute(AgentExecutionRequest(
+        agentKind="external", agentId="omnigent", executionProfileRef="codex",
+        correlationId="workflow-1", idempotencyKey="idem-release-failure",
+        parameters={"omnigent": {"session": {}}},
+    ))
+
+    assert events[-2][0:2] == ("profile_lease_release", "failed")
+    assert events[-1][0:2] == ("terminal", "completed")
+    assert events[-1][2]["metadata"]["leaseReleased"] is False
+    assert events[-1][2]["metadata"]["janitorRequired"] is True

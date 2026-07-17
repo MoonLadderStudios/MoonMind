@@ -60,6 +60,16 @@ def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
     return code, "integration_error", "retry_transient_upstream"
 
 
+def _diagnostics_ref(value: object) -> str | None:
+    """Extract only an already-persisted diagnostics reference from failures/results."""
+
+    for name in ("diagnostics_ref", "diagnosticsRef", "artifact_ref"):
+        ref = str(getattr(value, name, "") or "").strip()
+        if ref:
+            return ref[:1024]
+    return None
+
+
 def _request_identity(request: AgentExecutionRequest) -> tuple[str, str | None]:
     parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
     step = parameters.get("stepExecution")
@@ -157,6 +167,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             summary: str | None = None,
             failure_class: str | None = None,
             remediation_action: str | None = None,
+            diagnostics_ref: str | None = None,
             metadata: dict[str, Any] | None = None,
         ) -> None:
             await self._run_store.record_lifecycle_event(
@@ -167,6 +178,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 code=code,
                 summary=summary,
                 failure_class=failure_class,
+                diagnostics_ref=diagnostics_ref,
                 remediation_action=remediation_action,
                 metadata={
                     "workflowId": workflow_id,
@@ -287,6 +299,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             current_stage = "container_start"
             await emit(current_stage, "started")
+            await emit("credential_mount", "started")
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
@@ -296,7 +309,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                 repository_url=self._repository_url(request),
             )
             await emit(current_stage, "completed")
+            await emit(
+                "credential_mount",
+                "completed",
+                metadata={
+                    "credentialGeneration": host_lease.credential_generation,
+                    "credentialMountPath": "/home/app/.codex",
+                },
+            )
             host_id = str(preflight["hostId"])
+            await emit(
+                "host_registration", "completed", metadata={"omnigentHostId": host_id}
+            )
+            await emit(
+                "harness_readiness", "ready", metadata={"omnigentHostId": host_id}
+            )
+            await emit("bridge_authentication", "completed")
             if binding.static_host_id is None and not binding.host_launch_profile_ref:
                 binding = await self._hosts.create_or_update_static_binding(
                     profile_id=profile_id,
@@ -336,6 +364,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             current_stage = "session_creation"
             await emit(current_stage, "started", metadata={"omnigentHostId": host_id})
+            await emit("first_message_prepare", "started")
             result = await self._execute(
                 _bind_exact_host(
                     request,
@@ -355,8 +384,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            await emit("first_message_prepare", "completed")
+            await emit("first_message_post", "completed")
             await emit(current_stage, "completed", metadata={"omnigentHostId": host_id})
             await emit("session_running", "completed")
+            await emit(
+                "resource_harvest",
+                "completed",
+                diagnostics_ref=_diagnostics_ref(result),
+            )
             if str(result.provider_error_code or "") == "429":
                 await self._lease_client.record_cooldown(
                     runtime_id="codex_cli",
@@ -364,6 +400,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     owner_id=provider_lease.owner_id,
                     cooldown_seconds=profile.cooldown_after_429_seconds,
                     reason="provider_429",
+                )
+                await emit(
+                    "profile_cooldown",
+                    "waiting",
+                    code="provider_429",
+                    remediation_action="retry_after_provider_cooldown",
+                    metadata={"providerProfileId": profile_id},
                 )
             return result
         except Exception as exc:
@@ -377,13 +420,26 @@ class OmnigentProfileBoundExecutionCoordinator:
                     summary=str(exc),
                     failure_class=failure_class,
                     remediation_action=remediation,
+                    diagnostics_ref=_diagnostics_ref(exc),
                 )
             raise
         finally:
             safe_to_release_provider = host_lease is None
             if host_lease is not None and binding is not None:
                 try:
-                    await emit("host_cleanup", "started")
+                    cleanup_mode = (
+                        "on_demand_remove"
+                        if binding.host_launch_profile_ref
+                        else "static_drain"
+                    )
+                    await emit(
+                        "host_cleanup",
+                        "started",
+                        metadata={
+                            "sessionInterrupted": host_lease.status == "assigned",
+                            "hostCleanupMode": cleanup_mode,
+                        },
+                    )
                     if host_lease.status == "assigned":
                         host_lease = await self._hosts.transition_host_lease(
                             host_lease.lease_id,
@@ -398,7 +454,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     await emit(
                         "host_cleanup",
                         "completed",
-                        metadata={"cleanupCompleted": True},
+                        metadata={
+                            "cleanupCompleted": True,
+                            "sessionInterrupted": True,
+                            "hostCleanupMode": cleanup_mode,
+                            "stateResourcesCleaned": True,
+                            "hostLeaseReleased": True,
+                        },
                     )
                 except Exception as cleanup_exc:
                     try:
@@ -418,21 +480,44 @@ class OmnigentProfileBoundExecutionCoordinator:
                         remediation_action="inspect_cleanup_diagnostics",
                         metadata={"cleanupCompleted": False, "janitorRequired": True},
                     )
-            if provider_lease is not None and safe_to_release_provider:
-                await self._lease_client.release_lease(provider_lease)
-                await emit(
-                    "profile_lease_release",
-                    "completed",
-                    metadata={"leaseReleased": True},
-                )
+            lease_released = provider_lease is None
+            if provider_lease is not None:
+                if safe_to_release_provider:
+                    try:
+                        await self._lease_client.release_lease(provider_lease)
+                        lease_released = True
+                        await emit(
+                            "profile_lease_release",
+                            "completed",
+                            metadata={"leaseReleased": True},
+                        )
+                    except Exception as release_exc:
+                        await emit(
+                            "profile_lease_release",
+                            "failed",
+                            code=type(release_exc).__name__,
+                            summary=str(release_exc),
+                            failure_class="system_error",
+                            remediation_action="inspect_cleanup_diagnostics",
+                            diagnostics_ref=_diagnostics_ref(release_exc),
+                            metadata={"leaseReleased": False, "janitorRequired": True},
+                        )
+                else:
+                    await emit(
+                        "profile_lease_release",
+                        "waiting",
+                        code="credential_cleanup_incomplete",
+                        remediation_action="inspect_cleanup_diagnostics",
+                        metadata={"leaseReleased": False, "janitorRequired": True},
+                    )
             await emit(
                 "terminal",
                 terminal_status,
                 metadata={
                     "cleanupCompleted": safe_to_release_provider,
-                    "leaseReleased": provider_lease is None or safe_to_release_provider,
+                    "leaseReleased": lease_released,
                     "janitorRequired": (
-                        provider_lease is not None and not safe_to_release_provider
+                        provider_lease is not None and not lease_released
                     ),
                 },
             )

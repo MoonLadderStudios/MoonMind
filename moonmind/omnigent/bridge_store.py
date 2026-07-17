@@ -327,6 +327,11 @@ class OmnigentBridgeSessionStore:
                         "cleanupCompleted",
                         "leaseReleased",
                         "janitorRequired",
+                        "credentialMountPath",
+                        "sessionInterrupted",
+                        "hostCleanupMode",
+                        "stateResourcesCleaned",
+                        "hostLeaseReleased",
                     }
                 }
             journal.append(entry)
