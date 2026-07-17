@@ -33,6 +33,7 @@ from moonmind.omnigent.bridge_security import (
     OmnigentAuthorizationError,
     assert_bridge_session_binding,
     authorize_bridge_access,
+    redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
@@ -348,6 +349,64 @@ async def _queued_stream_events(
         stream_task.result()
 
 
+def _journal_jsonl(events: list[dict[str, Any]]) -> str:
+    return "".join(
+        json.dumps(event, sort_keys=True, separators=(",", ":"), default=str) + "\n"
+        for event in events
+    )
+
+
+async def _persist_active_journals(
+    *,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Durably replace both redacted live journals before indexing an event.
+
+    The artifact writes intentionally precede the database append: a failed
+    artifact write cannot leave a committed index row pointing at nonexistent
+    evidence. Terminal capture uses the same canonical names and full lists.
+    """
+
+    raw_ref = await artifact_gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.raw.jsonl",
+        payload=_journal_jsonl(redact_raw_events(raw_events)),
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await artifact_gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.normalized.jsonl",
+        payload=_journal_jsonl(normalized_events),
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+    return {
+        "rawSseStreamRef": raw_ref,
+        "normalizedEventStreamRef": normalized_ref,
+    }
+
+
+async def _restore_active_journal(
+    gateway: OmnigentArtifactGateway, artifact_ref: object
+) -> list[dict[str, Any]]:
+    ref = str(artifact_ref or "").strip()
+    if not ref:
+        return []
+    payload = await gateway.read_text(ref)
+    restored: list[dict[str, Any]] = []
+    for line in payload.splitlines():
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if isinstance(item, dict):
+            restored.append(item)
+    return restored
+
+
 async def _cancel_omnigent_session(
     client: OmnigentHttpClient,
     session_id: str,
@@ -545,6 +604,26 @@ async def run_omnigent_execution(
                     getattr(durable_row, "bridge_session_id", "") or ""
                 )
                 external_state["bridgeSessionId"] = bridge_session_id
+                # Rehydrate already-published active journals before retry
+                # appends, so replacing the canonical JSONL artifacts cannot
+                # discard observations committed by an earlier process.
+                try:
+                    raw_events.extend(
+                        await _restore_active_journal(
+                            artifact_gateway,
+                            getattr(durable_row, "raw_events_ref", None),
+                        )
+                    )
+                    normalized_events.extend(
+                        await _restore_active_journal(
+                            artifact_gateway,
+                            getattr(durable_row, "normalized_events_ref", None),
+                        )
+                    )
+                except OmnigentArtifactError:
+                    # A durable index without its referenced journal is an
+                    # evidence-authority failure, not permission to continue.
+                    raise
                 assert_bridge_session_binding(
                     authorization,
                     BridgeSessionBinding(
@@ -840,6 +919,42 @@ async def run_omnigent_execution(
             )
             terminal_status: str | None = None
             try:
+                # Omnigent's current stream boundary cannot request replay from
+                # a cursor. On Activity retry, make that limitation explicit in
+                # the durable timeline instead of implying an unbroken stream.
+                if run_store is not None and bridge_session_id:
+                    persisted_cursor = await run_store.latest_stream_cursor(
+                        bridge_session_id
+                    )
+                    if persisted_cursor is not None:
+                        if persisted_cursor.isdigit():
+                            event_count["value"] = int(persisted_cursor)
+                        gap_event = {
+                            "eventType": "stream.replay_unavailable",
+                            "normalizedStatus": "running",
+                            "direction": "moonmind_to_host",
+                            "sourceCursor": f"gap-after:{persisted_cursor}",
+                            "deduplicationKey": hashlib.sha256(
+                                f"gap-after:{persisted_cursor}".encode()
+                            ).hexdigest(),
+                            "textPreview": "Provider replay is unavailable; stream continuity is unknown.",
+                            "metadata": {
+                                "lastCommittedCursor": persisted_cursor,
+                                "continuity": "unknown",
+                            },
+                        }
+                        normalized_events.append(gap_event)
+                        journal_refs = await _persist_active_journals(
+                            artifact_gateway=artifact_gateway,
+                            request=request,
+                            raw_events=raw_events,
+                            normalized_events=normalized_events,
+                        )
+                        await run_store.append_events(
+                            bridge_session_id,
+                            [gap_event],
+                            journal_refs=journal_refs,
+                        )
                 stream_events = (
                     _queued_stream_events(
                         queue=stream_queue,
@@ -877,7 +992,23 @@ async def run_omnigent_execution(
                     durable_event["sourceCursor"] = str(event_count["value"])
                     normalized_events.append(durable_event)
                     if run_store is not None and bridge_session_id:
-                        await run_store.append_events(bridge_session_id, [durable_event])
+                        journal_refs = await _persist_active_journals(
+                            artifact_gateway=artifact_gateway,
+                            request=request,
+                            raw_events=raw_events,
+                            normalized_events=normalized_events,
+                        )
+                        durable_event["artifactRef"] = journal_refs[
+                            "normalizedEventStreamRef"
+                        ]
+                        durable_event.setdefault("metadata", {})[
+                            "rawJournalRef"
+                        ] = journal_refs["rawSseStreamRef"]
+                        await run_store.append_events(
+                            bridge_session_id,
+                            [durable_event],
+                            journal_refs=journal_refs,
+                        )
                     normalized = normalized_bridge_event.event["normalizedStatus"]
                     _safe_heartbeat(
                         {

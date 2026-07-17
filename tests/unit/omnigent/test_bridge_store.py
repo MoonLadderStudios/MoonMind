@@ -547,6 +547,48 @@ async def test_append_events_deduplicates_replay_but_preserves_equal_distinct_de
 
 
 @pytest.mark.asyncio
+async def test_append_events_deduplicates_replay_inside_one_batch(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    replay = {
+        "eventType": "response.delta",
+        "normalizedStatus": "running",
+        "sourceEventId": "provider-event-1",
+        "textPreview": "same",
+    }
+
+    await store.append_events(row.bridge_session_id, [replay, replay])
+
+    events = await store.list_events(row.bridge_session_id)
+    assert len(events) == 1
+    assert events[0].sequence == 1
+
+
+@pytest.mark.asyncio
+async def test_append_events_persists_active_journal_refs_and_cursor(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    await store.append_events(
+        row.bridge_session_id,
+        [{"eventType": "response.delta", "sourceCursor": "7"}],
+        journal_refs={
+            "rawSseStreamRef": "artifact://raw",
+            "normalizedEventStreamRef": "artifact://normalized",
+        },
+    )
+
+    persisted = await store.get_bridge_session(row.bridge_session_id)
+    assert persisted is not None
+    assert persisted.raw_events_ref == "artifact://raw"
+    assert persisted.normalized_events_ref == "artifact://normalized"
+    assert await store.latest_stream_cursor(row.bridge_session_id) == "7"
+
+
+@pytest.mark.asyncio
 async def test_mark_terminal_never_deletes_live_event_history(store):
     row = await store.get_or_create(
         request=_request(), endpoint_ref="default", agent_id=None,

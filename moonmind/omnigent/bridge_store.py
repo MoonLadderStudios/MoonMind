@@ -297,19 +297,23 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             await session.refresh(row)
             detached = _detached(session, row)
+        # Re-project the complete bounded lifecycle journal on every write.
+        # append_events is idempotent, so an Activity retry repairs a crash
+        # between the metadata commit and projection commit without duplicates.
         await self.append_events(
             detached.bridge_session_id,
             [
                 {
-                    "eventType": entry["type"],
+                    "eventType": item["type"],
                     "normalizedStatus": "running",
                     "direction": "moonmind_to_host",
-                    "sourceCursor": f"lifecycle:{entry['sequence']}",
+                    "sourceCursor": f"lifecycle:{item['sequence']}",
                     "deduplicationKey": _stable_key(
-                        f"lifecycle:{entry['sequence']}:{entry['type']}"
+                        f"lifecycle:{item['sequence']}:{item['type']}"
                     ),
-                    "metadata": entry,
+                    "metadata": item,
                 }
+                for item in journal[-100:]
             ],
         )
         return detached
@@ -524,9 +528,8 @@ class OmnigentBridgeSessionStore:
             already_recorded = any(
                 entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
             )
-            appended_entry: dict[str, Any] | None = None
             if not already_recorded:
-                appended_entry = {
+                created_entry = {
                     "type": SESSION_CREATED_EVENT_TYPE,
                     "sequence": len(journal) + 1,
                     "timestamp": datetime.now(tz=UTC).isoformat(),
@@ -534,13 +537,13 @@ class OmnigentBridgeSessionStore:
                     "omnigentAgentId": agent_id,
                     "endpointRef": endpoint_ref,
                 }
-                journal.append(appended_entry)
+                journal.append(created_entry)
                 metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal
                 row.metadata_ = metadata
                 await session.commit()
                 await session.refresh(row)
             detached = _detached(session, row)
-        if appended_entry is not None:
+        if journal:
             await self.append_events(
                 detached.bridge_session_id,
                 [
@@ -550,7 +553,11 @@ class OmnigentBridgeSessionStore:
                         "direction": "moonmind_to_host",
                         "sourceCursor": "lifecycle:session.created",
                         "deduplicationKey": _stable_key("lifecycle:session.created"),
-                        "metadata": appended_entry,
+                        "metadata": next(
+                            item
+                            for item in journal
+                            if item.get("type") == SESSION_CREATED_EVENT_TYPE
+                        ),
                     }
                 ],
             )
@@ -657,6 +664,8 @@ class OmnigentBridgeSessionStore:
         self,
         bridge_session_id: str,
         events: Sequence[dict[str, Any]],
+        *,
+        journal_refs: dict[str, str] | None = None,
     ) -> list[OmnigentBridgeSessionEvent]:
         """Append normalized events to one bridge session's event index.
 
@@ -698,9 +707,15 @@ class OmnigentBridgeSessionStore:
                 for item in (existing_result.scalars().all() if existing_result else [])
             }
             prepared_events: list[dict[str, Any]] = []
+            seen_keys = set(existing)
             for event, deduplication_key in zip(requested, keys, strict=True):
-                if deduplication_key in existing:
+                # A reconnect can replay a frame more than once in one read.
+                # Filter within the incoming batch as well as against durable
+                # rows so the uniqueness constraint remains an idempotency
+                # boundary instead of surfacing an IntegrityError.
+                if deduplication_key in seen_keys:
                     continue
+                seen_keys.add(deduplication_key)
                 prepared = dict(event)
                 prepared["sequence"] = next_sequence + len(prepared_events)
                 prepared["deduplicationKey"] = deduplication_key
@@ -725,11 +740,36 @@ class OmnigentBridgeSessionStore:
                 and next_status not in _TERMINAL_STATUSES
             ):
                 row.status = next_status
+            if journal_refs:
+                raw_ref = _string_or_none(journal_refs.get("rawSseStreamRef"))
+                normalized_ref = _string_or_none(
+                    journal_refs.get("normalizedEventStreamRef")
+                )
+                if raw_ref:
+                    row.raw_events_ref = raw_ref
+                if normalized_ref:
+                    row.normalized_events_ref = normalized_ref
             await session.commit()
             for event_row in rows:
                 await session.refresh(event_row)
                 session.expunge(event_row)
             return [*existing.values(), *rows]
+
+    async def latest_stream_cursor(self, bridge_session_id: str) -> str | None:
+        """Return the last committed provider-stream cursor, excluding lifecycle."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSessionEvent.source_cursor)
+                .where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id,
+                    OmnigentBridgeSessionEvent.direction == "host_to_moonmind",
+                    OmnigentBridgeSessionEvent.source_cursor.is_not(None),
+                )
+                .order_by(OmnigentBridgeSessionEvent.sequence.desc())
+                .limit(1)
+            )
+            return _string_or_none(result.scalar_one_or_none())
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str
