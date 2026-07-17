@@ -22,6 +22,7 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
@@ -333,6 +334,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),
                 repository_url=self._repository_url(request),
+                target_repository=str(
+                    (request.parameters or {}).get("repository") or ""
+                ).strip(),
+                required_capabilities=self._required_capabilities(request),
+                github_token=await self._github_token(request),
+                github_mutation_required=self._github_mutation_required(request),
             )
             await emit(current_stage, "completed")
             await emit(
@@ -383,6 +390,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "omnigentHostId": host_id,
                 },
             )
+            if preflight.get("mountedTools", {}).get("status") == "ready":
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type="mounted_tool_preflight_ready",
+                    metadata=dict(preflight["mountedTools"]),
+                )
             if host_lease.status == "ready":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
@@ -450,6 +463,18 @@ class OmnigentProfileBoundExecutionCoordinator:
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
+                if isinstance(exc, MountedToolPreflightError):
+                    await self._run_store.record_lifecycle_event(
+                        request.idempotency_key,
+                        event_type="mounted_tool_preflight_blocked",
+                        status="failed",
+                        event_identity=(
+                            f"{attempt_identity}:mounted_tool_preflight_blocked:failed"
+                        ),
+                        code=exc.code,
+                        summary=str(exc),
+                        metadata=exc.evidence,
+                    )
                 for stage in list(active_stages) or [current_stage]:
                     await emit(
                         stage,
@@ -720,6 +745,53 @@ class OmnigentProfileBoundExecutionCoordinator:
             build_omnigent_selection(request).session.workspace or ""
         ).strip()
         return workspace if "://" in workspace or workspace.startswith("git@") else None
+
+    @staticmethod
+    def _required_capabilities(request: AgentExecutionRequest) -> tuple[str, ...]:
+        raw = (request.parameters or {}).get("requiredCapabilities")
+        if not isinstance(raw, list):
+            return ()
+        return tuple(
+            dict.fromkeys(
+                str(value).strip().lower() for value in raw if str(value).strip()
+            )
+        )
+
+    @staticmethod
+    async def _github_token(request: AgentExecutionRequest) -> str | None:
+        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
+            request
+        ):
+            return None
+        from moonmind.auth.github_credentials import resolve_github_credential
+
+        repository = str((request.parameters or {}).get("repository") or "").strip()
+        resolved = await resolve_github_credential(repo=repository or None)
+        token = str(resolved.token or "").strip() if resolved else ""
+        if not token:
+            raise OmnigentOAuthHostError(
+                "GitHub credential is required for mounted gh readiness",
+                code="github_auth_unavailable",
+            )
+        return token
+
+    @staticmethod
+    def _github_mutation_required(request: AgentExecutionRequest) -> bool:
+        if "gh" not in OmnigentProfileBoundExecutionCoordinator._required_capabilities(
+            request
+        ):
+            return False
+        parameters = request.parameters or {}
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"", "none"}:
+            return True
+        skill = parameters.get("skill")
+        if not isinstance(skill, Mapping):
+            return False
+        side_effect = skill.get("sideEffect")
+        return isinstance(side_effect, Mapping) and bool(
+            str(side_effect.get("kind") or "").strip()
+        )
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]

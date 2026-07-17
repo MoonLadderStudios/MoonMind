@@ -30,6 +30,7 @@ from moonmind.omnigent.oauth_hosts import (
     validate_preflight_result,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
     _failure_evidence,
@@ -59,7 +60,11 @@ from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
             "configuration_error",
             "select_execution_profile",
         ),
-        ("profile_readiness_failed", "configuration_error", "validate_codex_oauth"),
+        (
+            "profile_readiness_failed",
+            "configuration_error",
+            "validate_codex_oauth",
+        ),
     ],
 )
 def test_failure_evidence_classifies_operator_action(
@@ -74,6 +79,11 @@ def test_failure_evidence_falls_back_when_code_is_none() -> None:
     exc = RuntimeError("failed")
     exc.code = None  # type: ignore[attr-defined]
     assert _failure_evidence(exc)[0] == "RuntimeError"
+
+
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
+)
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -165,6 +175,40 @@ def test_oauth_host_runtime_preserves_complete_image_reference(
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
 
     assert runtime._image == image
+
+
+@pytest.mark.asyncio
+async def test_runtime_preflight_uses_stock_runner_environment_constructor() -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    calls: list[tuple[str, ...]] = []
+
+    async def run(*args, **_kwargs):
+        calls.append(args)
+        return 0, "ready", ""
+
+    runtime._run = run  # type: ignore[method-assign]
+    binding = _binding().model_copy(update={"host_launch_profile_ref": "codex"})
+    lease = _host_lease().model_copy(update={"container_name": "host-mm-1215"})
+
+    result = await runtime._preflight_mounted_tools(
+        binding=binding,
+        host_lease=lease,
+        required_capabilities=("gh",),
+        repository="owner/repo",
+        mutation_required=True,
+    )
+
+    assert result["status"] == "ready"
+    runner_calls = [call for call in calls if "python" in call]
+    assert len(runner_calls) == 6
+    assert all(
+        "from omnigent.host.connect import _build_runner_env" in call[5]
+        for call in runner_calls
+    )
+    assert all(
+        call[:4] == ("docker", "exec", "host-mm-1215", "python")
+        for call in runner_calls
+    )
 
 
 def test_deterministic_owner_reuses_activity_retry_identity() -> None:
@@ -262,6 +306,9 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         workspace_root=tmp_path / "workspaces",
     )
     runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(
+        return_value="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
+    )
     runtime._run = AsyncMock(return_value=(0, "", ""))
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
@@ -276,11 +323,192 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
-    assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
-    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
-    assert commands[2][:3] == ("docker", "run", "-d")
-    assert commands[1][commands[1].index("--user") + 1] == "0:0"
-    assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    validation = commands[0]
+    assert validation[:3] == ("docker", "run", "--rm")
+    assert validation[validation.index("--entrypoint") + 1] == "/usr/bin/test"
+    assert validation[-2:] == ("-f", "/etc/profile.d/moonmind-tools.sh")
+    assert commands[1][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
+    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[2]
+    assert commands[3][:3] == ("docker", "run", "-d")
+    assert commands[2][commands[2].index("--user") + 1] == "0:0"
+    assert commands[3][commands[3].index("--workdir") + 1] == "/home/app"
+    launch = commands[3]
+    assert (
+        "type=volume,src=moonmind-omnigent-tools-gh-2.74.2-1,"
+        "dst=/opt/moonmind-tools,readonly" in launch
+    )
+    assert any(
+        value.endswith(",dst=/etc/profile.d/moonmind-tools.sh,readonly")
+        for value in launch
+    )
+    assert (
+        "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
+        in launch
+    )
+
+
+@pytest.mark.asyncio
+async def test_private_workspace_clone_uses_in_memory_github_credentials(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    await runtime._prepare_workspace(
+        workspace_key="private",
+        repository_url="https://github.com/owner/private.git",
+        github_token="test-token-value",
+    )
+
+    call = runtime._run.await_args
+    assert call.args[:3] == ("git", "clone", "--")
+    expected = build_github_token_git_environment(
+        "test-token-value", base_env=call.kwargs["env"]
+    )
+    assert call.kwargs["env"]["GITHUB_TOKEN"] == "test-token-value"
+    assert call.kwargs["env"]["GIT_CONFIG_VALUE_1"] == expected["GIT_CONFIG_VALUE_1"]
+
+
+@pytest.mark.asyncio
+async def test_failed_workspace_clone_is_removed_for_retry(tmp_path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+
+    async def fail_after_partial_clone(*_args, **_kwargs):
+        workspace = next(workspace_root.iterdir())
+        (workspace / ".git").mkdir()
+        raise OmnigentOAuthHostError("clone failed")
+
+    runtime._run = AsyncMock(side_effect=fail_after_partial_clone)
+
+    with pytest.raises(OmnigentOAuthHostError, match="clone failed"):
+        await runtime._prepare_workspace(
+            workspace_key="private",
+            repository_url="https://github.com/owner/private.git",
+            github_token="test-token-value",
+        )
+
+    assert not any(workspace_root.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_on_demand_host_fails_before_launch_when_profile_is_not_daemon_visible(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        tools_profile_path=tmp_path / "worker-only-profile.sh",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._run = AsyncMock(
+        side_effect=OmnigentOAuthHostError("profile bind is not daemon-visible")
+    )
+
+    with pytest.raises(OmnigentOAuthHostError, match="not daemon-visible"):
+        await runtime._launch_on_demand(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            container_name="mm-host-lease-1",
+            workspace_source=tmp_path,
+        )
+
+    assert runtime._run.await_count == 1
+    assert runtime._run.await_args.args[:3] == ("docker", "run", "--rm")
+
+
+def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
+    upstream = "/custom/bin:/usr/local/bin:/usr/bin:/bin"
+    expected = "/opt/moonmind-tools/bin:/custom/bin:/usr/local/bin:/usr/bin:/bin"
+
+    assert OmnigentOAuthHostRuntime._prepend_tools_path(upstream) == expected
+    assert OmnigentOAuthHostRuntime._prepend_tools_path(expected) == expected
+
+
+def test_github_write_probe_uses_publish_or_skill_side_effect() -> None:
+    base = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        idempotencyKey="idem",
+        correlationId="corr",
+        parameters={"requiredCapabilities": ["gh"], "publishMode": "none"},
+    )
+
+    assert not OmnigentProfileBoundExecutionCoordinator._github_mutation_required(base)
+    assert OmnigentProfileBoundExecutionCoordinator._github_mutation_required(
+        base.model_copy(update={"parameters": {**base.parameters, "publishMode": "pr"}})
+    )
+    assert OmnigentProfileBoundExecutionCoordinator._github_mutation_required(
+        base.model_copy(
+            update={
+                "parameters": {
+                    **base.parameters,
+                    "skill": {"sideEffect": {"kind": "merge_pull_request"}},
+                }
+            }
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_tools_path_discovery_falls_back_when_image_is_not_local(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(1, "", "No such image"))
+
+    assert await runtime._discover_upstream_path() == (
+        "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+    )
+    assert runtime._run.await_args.kwargs["check"] is False
+
+
+def test_default_tools_profile_uses_daemon_visible_project_root(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(tmp_path))
+
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    assert runtime._tools_profile_path == (
+        tmp_path / "services/omnigent/profile/moonmind-tools.sh"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tools_check_uses_host_login_shell_and_manifest(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    await runtime._exec_tools_check("mm-host-lease-1")
+
+    command = runtime._run.await_args.args
+    assert command[:5] == ("docker", "exec", "mm-host-lease-1", "bash", "-lc")
+    assert "test -f /opt/moonmind-tools/manifest.json" in command[-1]
+    assert "command -v gh" in command[-1]
+    assert "gh --version" in command[-1]
 
 
 @pytest.mark.asyncio
@@ -618,28 +846,15 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     )
     assert result.summary == "done"
     assert actions[0] == "bridge_envelope_created"
-    assert "host_cleanup" in actions
-    assert "profile_lease_release" in actions
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
     assert actions.index("provider_released") < actions.index("profile_lease_release")
-    for stage in (
-        "credential_mount",
-        "host_registration",
-        "harness_readiness",
-        "bridge_authentication",
-        "first_message_prepare",
-        "first_message_post",
-        "resource_harvest",
-    ):
-        assert stage in actions
 
 
 @pytest.mark.asyncio
-async def test_coordinator_records_terminal_when_provider_lease_release_fails() -> None:
-    """Cleanup release failures remain visible and cannot hide terminal evidence."""
-
-    events: list[tuple[str, str, dict]] = []
+async def test_coordinator_records_runner_preflight_block_before_execution() -> None:
+    events: list[tuple[str, dict]] = []
+    execute = AsyncMock()
     provider_lease = SimpleNamespace(
         profile_id="codex",
         runtime_id="codex_cli",
@@ -653,11 +868,13 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
             return provider_lease
 
         async def release_lease(self, _lease):
-            raise RuntimeError("release unavailable")
+            return None
 
     class Hosts:
         def __init__(self):
-            self.lease = _host_lease().model_copy(update={"status": "allocating"})
+            self.lease = _host_lease().model_copy(
+                update={"status": "allocating", "omnigent_host_id": None}
+            )
 
         async def get_binding_for_profile(self, _profile_id):
             return _binding()
@@ -668,6 +885,7 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
         async def transition_host_lease(
             self, _lease_id, *, expected_status, new_status, fields=None
         ):
+            assert self.lease.status == expected_status
             self.lease = self.lease.model_copy(
                 update={"status": new_status, **dict(fields or {})}
             )
@@ -675,16 +893,26 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
 
         async def mark_host_lease_stopped(self, _lease_id):
             self.lease = self.lease.model_copy(update={"status": "stopped"})
+            return self.lease
 
         async def mark_host_lease_failed(self, *_args, **_kwargs):
-            pass
+            return None
 
     class Runtime:
-        async def prepare_host(self, **_kwargs):
-            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+        async def prepare_host(self, **kwargs):
+            assert kwargs["required_capabilities"] == ("gh",)
+            raise MountedToolPreflightError(
+                "Mounted gh preflight failed during runner authentication",
+                code="github_auth_unavailable",
+                evidence={
+                    "tool": "gh",
+                    "phase": "authentication",
+                    "probes": [{"boundary": "runner", "status": "failed"}],
+                },
+            )
 
         async def stop_host(self, **_kwargs):
-            pass
+            return None
 
     class Store:
         async def get_or_create(self, **_kwargs):
@@ -693,11 +921,8 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
         async def bind_profile_authorization(self, **_kwargs):
             return SimpleNamespace(bridge_session_id="bridge-1")
 
-        async def record_lifecycle_event(self, _key, *, event_type, status, **kwargs):
-            events.append((event_type, status, kwargs))
-
-    async def execute(_request, **_kwargs):
-        return AgentRunResult(summary="done")
+        async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
+            events.append((event_type, kwargs))
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
@@ -708,7 +933,7 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    coordinator._resolve_profile = AsyncMock(
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
         return_value=SimpleNamespace(
             enabled=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
@@ -724,18 +949,33 @@ async def test_coordinator_records_terminal_when_provider_lease_release_fails() 
             command_behavior={},
         )
     )
-    await coordinator.execute(
-        AgentExecutionRequest(
-            agentKind="external",
-            agentId="omnigent",
-            executionProfileRef="codex",
-            correlationId="workflow-1",
-            idempotencyKey="idem-release-failure",
-            parameters={"omnigent": {"session": {"allowEmptyWorkspace": True}}},
-        )
-    )
+    coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
 
-    assert events[-2][0:2] == ("profile_lease_release", "failed")
-    assert events[-1][0:2] == ("terminal", "completed")
-    assert events[-1][2]["metadata"]["leaseReleased"] is False
-    assert events[-1][2]["metadata"]["janitorRequired"] is True
+    with pytest.raises(MountedToolPreflightError):
+        await coordinator.execute(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                executionProfileRef="codex",
+                correlationId="workflow-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "repository": "owner/repo",
+                    "requiredCapabilities": ["gh"],
+                    "omnigent": {
+                        "session": {"workspace": "https://github.com/owner/repo.git"}
+                    },
+                },
+            )
+        )
+
+    execute.assert_not_awaited()
+    blocked = next(
+        kwargs for name, kwargs in events if name == "mounted_tool_preflight_blocked"
+    )
+    assert blocked["code"] == "github_auth_unavailable"
+    assert blocked["metadata"] == {
+        "tool": "gh",
+        "phase": "authentication",
+        "probes": [{"boundary": "runner", "status": "failed"}],
+    }

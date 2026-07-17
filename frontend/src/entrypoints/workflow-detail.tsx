@@ -1387,11 +1387,52 @@ const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =
   normalizeObservabilityEvent(event),
 );
 
-const ObservabilityEventsResponseSchema = z.object({
+const LegacyObservabilityEventsResponseSchema = z.object({
+  schemaVersion: z.never().optional(),
   events: z.array(ObservabilityEventSchema).default([]),
   truncated: z.boolean().default(false),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
 });
+
+const BridgeSessionEventsPageSchema = z
+  .object({
+    schemaVersion: z.literal('moonmind.bridge-session-events-page.v1'),
+    bridgeSessionId: z.string(),
+    items: z.array(ObservabilityEventSchema).default([]),
+    after: z.number().int().nonnegative(),
+    nextCursor: z.string().nullable(),
+    hasMore: z.boolean(),
+    terminal: z.boolean(),
+    latestSequence: z.number().int().nonnegative(),
+    retentionGap: z
+      .object({ requestedAfter: z.number().int(), earliestAvailable: z.number().int() })
+      .nullable()
+      .optional(),
+    terminalEnvelope: z
+      .object({
+        schemaVersion: z.literal('moonmind.bridge-session-terminal.v1'),
+        status: z.enum(['completed', 'failed', 'canceled', 'timed_out']),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .transform((page) => ({
+    events: page.items,
+    truncated: page.retentionGap != null,
+    sessionSnapshot: undefined,
+    nextCursor: page.nextCursor,
+    hasMore: page.hasMore,
+  }));
+
+const ObservabilityEventsResponseSchema = z.union([
+  BridgeSessionEventsPageSchema,
+  LegacyObservabilityEventsResponseSchema,
+]);
+
+export function parseObservabilityEventsResponse(value: unknown) {
+  return ObservabilityEventsResponseSchema.parse(value);
+}
 
 const ArtifactListSchema = z.object({
   artifacts: z
@@ -2480,14 +2521,26 @@ async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
 ): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
-  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'events'), {
-    credentials: 'include',
-  });
-  if (!resp.ok) {
-    if (resp.status === 404) return null;
-    throw buildObservabilityRequestError(resp.status);
-  }
-  return ObservabilityEventsResponseSchema.parse(await resp.json());
+  const events: z.infer<typeof ObservabilityEventSchema>[] = [];
+  let cursor: string | null = null;
+  let truncated = false;
+  do {
+    const route = bridgeSessionRoute(apiBase, bridgeSessionId, 'events');
+    const url = cursor ? `${route}?cursor=${encodeURIComponent(cursor)}` : route;
+    const resp = await fetch(url, { credentials: 'include' });
+    if (!resp.ok) {
+      if (resp.status === 404) return null;
+      throw buildObservabilityRequestError(resp.status);
+    }
+    const page = BridgeSessionEventsPageSchema.parse(await resp.json());
+    events.push(...page.events);
+    truncated ||= page.truncated;
+    cursor = page.hasMore ? page.nextCursor : null;
+    if (page.hasMore && cursor == null) {
+      throw new Error('Bridge event page hasMore without nextCursor');
+    }
+  } while (cursor != null);
+  return { events, truncated, sessionSnapshot: undefined };
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
@@ -3561,48 +3614,6 @@ function ChatSessionView({
   wrapLines: boolean;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
-  const blockListRef = useRef<HTMLDivElement | null>(null);
-  const shouldStickToBottomRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  const lastBlockSignature = chatBlocks.length > 0
-    ? `${chatBlocks.at(-1)?.id}:${chatBlocks.at(-1)?.text}`
-    : 'empty';
-
-  const updateStickToBottom = () => {
-    const currentElement = blockListRef.current;
-    if (currentElement) {
-      const distanceFromBottom = currentElement.scrollHeight - currentElement.scrollTop - currentElement.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom <= 48;
-    }
-    if (scrollFrameRef.current !== null) return;
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      const element = blockListRef.current;
-      if (!element) return;
-      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom <= 48;
-    });
-  };
-
-  useEffect(() => () => {
-    if (scrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(scrollFrameRef.current);
-    }
-  }, []);
-
-  const scrollToBottom = () => {
-    const element = blockListRef.current;
-    if (!element) return;
-    window.requestAnimationFrame(() => {
-      element.scrollTop = element.scrollHeight;
-    });
-  };
-
-  useEffect(() => {
-    if (!shouldStickToBottomRef.current) return;
-    scrollToBottom();
-  }, [lastBlockSignature]);
-
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
       <div className="chat-session-header">
@@ -3620,12 +3631,16 @@ function ChatSessionView({
         </div>
       ) : (
         <div
-          ref={blockListRef}
           className="chat-session-blocks"
           data-testid="chat-session-blocks"
-          onScroll={updateStickToBottom}
         >
-          {chatBlocks.map((block, index) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase))}
+          <Virtuoso
+            style={{ height: 'min(480px, 62vh)' }}
+            data={chatBlocks}
+            followOutput={(atBottom) => atBottom ? 'smooth' : false}
+            computeItemKey={(index, block) => `${block.id}:${index}`}
+            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase)}
+          />
         </div>
       )}
     </div>
@@ -3933,6 +3948,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled,
   structuredHistoryEnabled,
   row,
+  workflowId,
   routes,
 }: {
   apiBase: string;
@@ -3940,6 +3956,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
+  workflowId: string;
   routes: AgentRunRouteTemplates;
 }) {
   const agentRunId = row.refs.agentRunId;
@@ -3950,27 +3967,28 @@ function StepObservabilityGroup({
     row.refs.omnigent_bridge_session_id ||
     '';
   const bridgeIdempotencyKey = row.refs.idempotencyKey || row.refs.idempotency_key || '';
-  const bridgeWorkflowId = typeof row.workflowId === 'string' ? row.workflowId : '';
+  const bridgeWorkflowId = workflowId;
   const bridgeResolutionQuery = useQuery({
     queryKey: [
       'omnigent-bridge-step-projection',
       bridgeWorkflowId,
       row.logicalStepId,
       row.executionOrdinal,
+      agentRunId,
       bridgeIdempotencyKey,
     ],
     queryFn: () =>
       resolveBridgeSessionProjection({
         apiBase,
         workflowId: bridgeWorkflowId,
-        idempotencyKey: bridgeIdempotencyKey,
+        agentRunId: agentRunId ?? null,
+        idempotencyKey: agentRunId ? null : bridgeIdempotencyKey,
       }),
     enabled: Boolean(
         logStreamingEnabled &&
-        !agentRunId &&
         !explicitBridgeSessionId &&
         bridgeWorkflowId &&
-        bridgeIdempotencyKey,
+        (agentRunId || bridgeIdempotencyKey),
     ),
     staleTime: stepTerminal(row.status) ? Infinity : 2000,
     retry: false,
@@ -5123,6 +5141,7 @@ function StepLedgerRowCard({
                 sessionTimelineEnabled={sessionTimelineEnabled}
                 structuredHistoryEnabled={structuredHistoryEnabled}
                 row={row}
+                workflowId={workflowId}
                 routes={routes}
               />
             </section>
@@ -5568,7 +5587,26 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
-  const historyRows = useMemo(() => mapEventsToTimelineRows(eventsQuery.data), [eventsQuery.data]);
+  const historyRows = useMemo(() => {
+    const rows = mapEventsToTimelineRows(eventsQuery.data);
+    if (!eventsQuery.data?.truncated) return rows;
+    return [{
+      id: `${bridgeSessionId}-retention-gap`,
+      text: 'Earlier bridge events are outside the retained replay window. Use diagnostic artifacts for missing evidence.',
+      stream: 'system' as TimelineStream,
+      kind: 'retention_gap',
+      sequence: 0,
+      timestamp: null,
+      sessionId: bridgeSessionId,
+      sessionEpoch: null,
+      containerId: null,
+      threadId: null,
+      turnId: null,
+      activeTurnId: null,
+      metadata: { degradedEvidence: true },
+      rowType: 'system' as const,
+    }, ...rows];
+  }, [bridgeSessionId, eventsQuery.data]);
 
   useEffect(() => {
     setLogContent([]);

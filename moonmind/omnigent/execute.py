@@ -960,7 +960,11 @@ async def run_omnigent_execution(
                 await run_store.mark_terminal(
                     request.idempotency_key,
                     status=terminal_status,
-                    terminal_refs=build_omnigent_terminal_refs(bundle),
+                    terminal_refs=build_omnigent_terminal_refs(
+                        bundle,
+                        terminal_status=terminal_status,
+                        final_snapshot=final_snapshot,
+                    ),
                     # Persist the full, non-lossy normalized status stream into
                     # the durable event index (OmnigentBridge §7.2).
                     events=normalized_events,

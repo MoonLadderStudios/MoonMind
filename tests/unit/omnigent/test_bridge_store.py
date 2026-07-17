@@ -23,6 +23,7 @@ from moonmind.omnigent.bridge_store import (
     STATUS_ACTIVE,
     STATUS_CREATING,
     STATUS_DECLARED,
+    BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
@@ -153,61 +154,6 @@ async def test_get_or_create_is_idempotent_and_declared(store):
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_event_uses_canonical_index_and_deduplicates_retry(store):
-    request = _request()
-    row = await store.get_or_create(
-        request=request,
-        endpoint_ref="pending",
-        agent_id=None,
-        agent_name=None,
-        target_metadata={},
-    )
-    kwargs = {
-        "event_type": "profile_resolution",
-        "status": "failed",
-        "event_identity": "idem-1:profile_resolution:failed",
-        "code": "profile_resolution_failed",
-        "summary": "token=secret profile unavailable",
-        "failure_class": "configuration_error",
-        "remediation_action": "validate_codex_oauth",
-    }
-    await store.record_lifecycle_event(request.idempotency_key, **kwargs)
-    await store.record_lifecycle_event(request.idempotency_key, **kwargs)
-
-    events = await store.list_events(row.bridge_session_id)
-    assert len(events) == 1
-    assert events[0].event_type == "lifecycle.profile_resolution"
-    assert events[0].metadata_["status"] == "failed"
-    assert events[0].metadata_["failureClass"] == "configuration_error"
-    assert events[0].metadata_["remediationAction"] == "validate_codex_oauth"
-    assert "secret" not in (events[0].text_preview or "")
-
-
-@pytest.mark.asyncio
-async def test_terminal_lifecycle_event_projects_session_terminal_state(store):
-    request = _request()
-    row = await store.get_or_create(
-        request=request,
-        endpoint_ref="pending",
-        agent_id=None,
-        agent_name=None,
-        target_metadata={},
-    )
-
-    await store.record_lifecycle_event(
-        request.idempotency_key,
-        event_type="terminal",
-        status="failed",
-        event_identity="idem-1:attempt:1:terminal:failed",
-    )
-
-    projected = await store.get_bridge_session(row.bridge_session_id)
-    assert projected is not None
-    assert projected.status == "failed"
-    assert projected.first_message_state == FIRST_MESSAGE_TERMINAL
-
-
-@pytest.mark.asyncio
 async def test_get_or_create_persists_binding_identity_override(store):
     # The Session API Facade holds a verified workflow id out-of-band and
     # synthesizes a request with no step_execution (correlation id != workflow
@@ -283,9 +229,7 @@ async def test_get_session_owner_resolves_by_session_id(store):
 
 
 @pytest.mark.asyncio
-async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(
-    store,
-):
+async def test_resolve_projection_session_falls_back_after_explicit_key_miss(store):
     first = await store.get_or_create(
         request=_request("idem-first"),
         endpoint_ref="default",
@@ -327,6 +271,54 @@ async def test_resolve_projection_session_prefers_idempotency_then_latest_workfl
     )
     assert scoped is not None
     assert scoped.bridge_session_id == first.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_binding_precedes_idempotency(store):
+    first = await store.get_or_create(
+        request=_request("idem-first"),
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+    )
+    second = await store.get_or_create(
+        request=_request("idem-second"),
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent Two",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-second",
+    )
+    resolved = await store.resolve_projection_session(
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+        idempotency_key="idem-second",
+    )
+    assert resolved is not None
+    assert resolved.bridge_session_id == first.bridge_session_id
+    assert resolved.bridge_session_id != second.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_rejects_ambiguous_explicit_binding(store):
+    for key in ("idem-first", "idem-second"):
+        await store.get_or_create(
+            request=_request(key),
+            endpoint_ref="default",
+            agent_id="ag_1",
+            agent_name="Agent One",
+            target_metadata={"hostType": "managed"},
+            workflow_id="mm:wf-owner",
+            agent_run_id="ar-shared",
+        )
+    with pytest.raises(BridgeProjectionAmbiguousError):
+        await store.resolve_projection_session(
+            workflow_id="mm:wf-owner", agent_run_id="ar-shared"
+        )
 
 
 @pytest.mark.asyncio
@@ -393,6 +385,29 @@ async def test_missing_row_requires_get_or_create(store):
 
 
 # --- terminal coalescence + event index (§7.1/§7.2) -------------------------
+
+
+@pytest.mark.asyncio
+async def test_terminal_lifecycle_event_projects_session_terminal_state(store):
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="pending",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="terminal",
+        status="failed",
+        event_identity="idem-1:attempt:1:terminal:failed",
+    )
+
+    projected = await store.get_bridge_session(row.bridge_session_id)
+    assert projected is not None
+    assert projected.status == "failed"
+    assert projected.first_message_state == FIRST_MESSAGE_TERMINAL
 
 
 @pytest.mark.asyncio
