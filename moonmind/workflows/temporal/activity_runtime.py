@@ -10625,30 +10625,18 @@ class TemporalAgentRuntimeActivities:
 
         binding_raw = payload.get("binding")
         locator_raw = payload.get("locator")
-        turn_raw = payload.get("turnResponse")
-        summary_raw = payload.get("summary")
-        publication_raw = payload.get("publication")
-        if not all(
-            isinstance(value, Mapping)
-            for value in (
-                binding_raw,
-                locator_raw,
-                turn_raw,
-                summary_raw,
-                publication_raw,
-            )
-        ):
+        phase = str(payload.get("phase") or "terminal").strip()
+        if phase not in {"started", "terminal"}:
             raise TemporalActivityRuntimeError(
-                "payload.binding, locator, turnResponse, summary, and publication are required"
+                "payload.phase must be 'started' or 'terminal'"
+            )
+        if not all(isinstance(value, Mapping) for value in (binding_raw, locator_raw)):
+            raise TemporalActivityRuntimeError(
+                "payload.binding and locator are required"
             )
 
         binding = CodexManagedSessionBinding.model_validate(dict(binding_raw))
         locator = CodexManagedSessionLocator.model_validate(dict(locator_raw))
-        turn_response = CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
-        summary = CodexManagedSessionSummary.model_validate(dict(summary_raw))
-        publication = CodexManagedSessionArtifactsPublication.model_validate(
-            dict(publication_raw)
-        )
         compatibility_profile = (
             str(
                 payload.get("compatibilityProfile")
@@ -10659,7 +10647,6 @@ class TemporalAgentRuntimeActivities:
         )
 
         from api_service.db.base import get_async_session_context
-        from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
         from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 
         store = OmnigentBridgeSessionStore(get_async_session_context)
@@ -10690,6 +10677,64 @@ class TemporalAgentRuntimeActivities:
             endpoint_ref="direct-codex-compat",
         )
 
+        source_metadata = {
+            "source": "codex_direct_compat",
+            "compatibilityProfile": compatibility_profile,
+            "directManagedSessionId": locator.session_id,
+            "sessionEpoch": locator.session_epoch,
+            "containerId": locator.container_id,
+        }
+        if phase == "started":
+            event_payloads = [
+                {
+                    "type": "session.started",
+                    "status": "running",
+                    "data": {
+                        **source_metadata,
+                        "managedSessionWorkflowId": binding.workflow_id,
+                    },
+                },
+                {
+                    "type": "session.input.user_message",
+                    "status": "running",
+                    "direction": "moonmind_to_host",
+                    "text": str(payload.get("userMessage") or ""),
+                    "data": {
+                        **source_metadata,
+                        "requestId": f"{request.idempotency_key}:initial",
+                    },
+                },
+                {
+                    "type": "session.item.turn_started",
+                    "status": "running",
+                    "data": source_metadata,
+                },
+            ]
+            return await self._append_direct_codex_bridge_events(
+                store=store,
+                row=row,
+                request=request,
+                locator=locator,
+                event_payloads=event_payloads,
+                compatibility_profile=compatibility_profile,
+            )
+
+        turn_raw = payload.get("turnResponse")
+        summary_raw = payload.get("summary")
+        publication_raw = payload.get("publication")
+        if not all(
+            isinstance(value, Mapping)
+            for value in (turn_raw, summary_raw, publication_raw)
+        ):
+            raise TemporalActivityRuntimeError(
+                "terminal payload requires turnResponse, summary, and publication"
+            )
+        turn_response = CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
+        summary = CodexManagedSessionSummary.model_validate(dict(summary_raw))
+        publication = CodexManagedSessionArtifactsPublication.model_validate(
+            dict(publication_raw)
+        )
+        source_metadata["turnId"] = turn_response.turn_id
         assistant_text = str(
             turn_response.metadata.get("assistantText")
             or summary.metadata.get("lastAssistantText")
@@ -10700,17 +10745,48 @@ class TemporalAgentRuntimeActivities:
                 "type": "session.started",
                 "status": "running",
                 "data": {
-                    "sessionId": locator.session_id,
-                    "sessionEpoch": locator.session_epoch,
-                    "containerId": locator.container_id,
+                    **source_metadata,
                     "threadId": locator.thread_id,
-                    "managedSessionWorkflowId": binding.workflow_id,
                     "managedAgentRunId": binding.agent_run_id,
-                    "compatibilityProfile": compatibility_profile,
-                    "producer": "direct_codex_managed_session",
                 },
             }
         ]
+        for intervention in turn_response.metadata.get("sessionInterventions") or []:
+            if isinstance(intervention, Mapping):
+                event_payloads.append(
+                    {
+                        "type": "session.item.reset_boundary",
+                        "status": "running",
+                        "data": {**source_metadata, **dict(intervention)},
+                        "latestResetBoundaryRef": publication.latest_reset_boundary_ref,
+                    }
+                )
+        mapped_observations = (
+            ("toolEvents", "session.item.tool"),
+            ("controlEvents", "session.item.control"),
+            ("approvalEvents", "session.item.approval"),
+        )
+        for metadata_key, event_prefix in mapped_observations:
+            for observation in turn_response.metadata.get(metadata_key) or []:
+                if not isinstance(observation, Mapping):
+                    continue
+                outcome = str(
+                    observation.get("outcome")
+                    or observation.get("status")
+                    or "completed"
+                ).strip()
+                event_payloads.append(
+                    {
+                        "type": f"{event_prefix}.{outcome}",
+                        "status": (
+                            "waiting"
+                            if outcome in {"requested", "accepted"}
+                            else "running"
+                        ),
+                        "data": {**source_metadata, **dict(observation)},
+                        "artifactRef": observation.get("auditRef"),
+                    }
+                )
         if assistant_text:
             event_payloads.append(
                 {
@@ -10718,7 +10794,7 @@ class TemporalAgentRuntimeActivities:
                     "status": "running",
                     "text": assistant_text,
                     "data": {
-                        "turnId": turn_response.turn_id,
+                        **source_metadata,
                         "text": assistant_text,
                     },
                 }
@@ -10727,34 +10803,99 @@ class TemporalAgentRuntimeActivities:
             payload.get("terminalStatus")
             or ("completed" if turn_response.status == "completed" else "failed")
         ).strip()
-        if terminal_status not in {"completed", "failed"}:
+        if terminal_status not in {"completed", "failed", "canceled", "timed_out"}:
             raise TemporalActivityRuntimeError(
-                "payload.terminalStatus must be 'completed' or 'failed'"
+                "payload.terminalStatus must be completed, failed, canceled, or timed_out"
             )
-        terminal_type = (
-            "response.completed" if terminal_status == "completed" else "response.failed"
-        )
+        terminal_type = {
+            "completed": "response.completed",
+            "failed": "response.failed",
+            "canceled": "session.item.terminal.canceled",
+            "timed_out": "session.item.terminal.timed_out",
+        }[terminal_status]
         event_payloads.append(
             {
                 "type": terminal_type,
                 "status": terminal_status,
                 "data": {
-                    "turnId": turn_response.turn_id,
+                    **source_metadata,
                     "outputRefs": list(turn_response.output_refs),
                     "publishedArtifactRefs": list(publication.published_artifact_refs),
                 },
             }
         )
-        events = [
-            build_omnigent_bridge_event(
-                payload=event_payload,
-                sequence=index,
-                request=request,
-                omnigent_session_id=locator.session_id,
-                bridge_session_id=row.bridge_session_id,
-            ).event
-            for index, event_payload in enumerate(event_payloads, start=1)
-        ]
+        resource_refs = {
+            "summaryRef": publication.latest_summary_ref,
+            "checkpointRef": publication.latest_checkpoint_ref,
+            "controlEventRef": publication.latest_control_event_ref,
+            "resetBoundaryRef": publication.latest_reset_boundary_ref,
+        }
+        resource_refs.update(
+            {
+                key: value
+                for key, value in publication.metadata.items()
+                if key
+                in {
+                    "stdoutArtifactRef",
+                    "stderrArtifactRef",
+                    "diagnosticsRef",
+                    "observabilityEventsRef",
+                }
+            }
+        )
+        for resource_kind, artifact_ref in resource_refs.items():
+            if artifact_ref:
+                event_payloads.insert(
+                    -1,
+                    {
+                        "type": "session.item.resource_published",
+                        "status": "running",
+                        "artifactRef": artifact_ref,
+                        "data": {
+                            **source_metadata,
+                            "resourceKind": resource_kind,
+                            "artifactRef": artifact_ref,
+                        },
+                    },
+                )
+        append_result = await self._append_direct_codex_bridge_events(
+            store=store,
+            row=row,
+            request=request,
+            locator=locator,
+            event_payloads=event_payloads,
+            compatibility_profile=compatibility_profile,
+        )
+        if str(communication.get("comparisonMode") or "").strip() == "dual_write":
+            expected = {
+                str(value).strip()
+                for value in communication.get("comparisonEventClasses") or []
+                if str(value).strip()
+            }
+            actual = {
+                str(event.get("type") or "").split(".")[0] for event in event_payloads
+            }
+            missing = sorted(expected - actual)
+            await store.record_lifecycle_event(
+                request.idempotency_key,
+                event_type="codex_direct_compat.comparison",
+                code="projection_mismatch" if missing else "projection_parity",
+                summary=(
+                    f"Missing compatibility event classes: {', '.join(missing)}"
+                    if missing
+                    else "Direct compatibility projection classes matched."
+                ),
+                metadata={
+                    "expectedEventClasses": sorted(expected),
+                    "actualEventClasses": sorted(actual),
+                    "missingEventClasses": missing,
+                    "droppedEventCount": 0,
+                },
+            )
+            append_result["comparison"] = {
+                "missingEventClasses": missing,
+                "matched": not missing,
+            }
         await store.mark_terminal(
             request.idempotency_key,
             status=terminal_status,
@@ -10767,12 +10908,61 @@ class TemporalAgentRuntimeActivities:
                 },
                 "publishedArtifactRefs": list(publication.published_artifact_refs),
             },
-            events=events,
         )
+        return append_result
+
+    async def _append_direct_codex_bridge_events(
+        self,
+        *,
+        store: Any,
+        row: Any,
+        request: AgentExecutionRequest,
+        locator: CodexManagedSessionLocator,
+        event_payloads: list[dict[str, Any]],
+        compatibility_profile: str,
+    ) -> dict[str, Any]:
+        """Append compatibility events idempotently across activity retries."""
+        from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
+
+        existing = await store.list_events(row.bridge_session_id)
+        seen = {
+            (event.event_type, event.text_preview or "", event.artifact_ref or "")
+            for event in existing
+        }
+        normalized = []
+        for event_payload in event_payloads:
+            event = build_omnigent_bridge_event(
+                payload=event_payload,
+                sequence=1,
+                request=request,
+                omnigent_session_id=locator.session_id,
+                bridge_session_id=row.bridge_session_id,
+            ).event
+            event["metadata"]["moonmind"].update(
+                {
+                    "source": "codex_direct_compat",
+                    "compatibilityProfile": compatibility_profile,
+                    "directManagedSessionId": locator.session_id,
+                    "sessionEpoch": locator.session_epoch,
+                    "turnId": (
+                        str((event.get("data") or {}).get("turnId") or "") or None
+                    ),
+                }
+            )
+            key = (
+                event.get("eventType"),
+                event.get("textPreview") or "",
+                event.get("artifactRef") or "",
+            )
+            if key not in seen:
+                seen.add(key)
+                normalized.append(event)
+        if normalized:
+            await store.append_events(row.bridge_session_id, normalized)
         return {
             "bridgeSessionId": row.bridge_session_id,
             "omnigentSessionId": locator.session_id,
-            "eventCount": len(events),
+            "eventCount": len(normalized),
             "compatibilityProfile": compatibility_profile,
         }
 

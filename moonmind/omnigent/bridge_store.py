@@ -287,6 +287,10 @@ class OmnigentBridgeSessionStore:
                         "hostBindingRef",
                         "hostLeaseRef",
                         "omnigentHostId",
+                        "expectedEventClasses",
+                        "actualEventClasses",
+                        "missingEventClasses",
+                        "droppedEventCount",
                     }
                 }
             journal.append(entry)
