@@ -330,6 +330,30 @@ async def test_private_workspace_clone_uses_in_memory_github_credentials(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_failed_workspace_clone_is_removed_for_retry(tmp_path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+
+    async def fail_after_partial_clone(*_args, **_kwargs):
+        workspace = next(workspace_root.iterdir())
+        (workspace / ".git").mkdir()
+        raise OmnigentOAuthHostError("clone failed")
+
+    runtime._run = AsyncMock(side_effect=fail_after_partial_clone)
+
+    with pytest.raises(OmnigentOAuthHostError, match="clone failed"):
+        await runtime._prepare_workspace(
+            workspace_key="private",
+            repository_url="https://github.com/owner/private.git",
+            github_token="test-token-value",
+        )
+
+    assert not any(workspace_root.iterdir())
+
+
+@pytest.mark.asyncio
 async def test_on_demand_host_fails_before_launch_when_profile_is_not_daemon_visible(
     tmp_path,
 ) -> None:

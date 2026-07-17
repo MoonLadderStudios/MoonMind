@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -505,14 +506,20 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError("workspace escaped configured root")
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if repository_url and not any(workspace.iterdir()):
-            await self._run(
-                "git",
-                "clone",
-                "--",
-                repository_url,
-                str(workspace),
-                env=build_github_token_git_environment(github_token, base_env=os.environ),
-            )
+            try:
+                await self._run(
+                    "git",
+                    "clone",
+                    "--",
+                    repository_url,
+                    str(workspace),
+                    env=build_github_token_git_environment(
+                        github_token, base_env=os.environ
+                    ),
+                )
+            except Exception:
+                shutil.rmtree(workspace, ignore_errors=True)
+                raise
         return workspace
 
     async def _initialize_required_tools(self) -> None:
