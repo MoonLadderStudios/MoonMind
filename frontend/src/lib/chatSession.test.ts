@@ -68,6 +68,38 @@ describe('chat session observability projection for MM-1013', () => {
     ]);
   });
 
+  it('maps runtime-neutral resource, diagnostics, control, and terminal vocabulary', () => {
+    const cases: Array<[string, string]> = [
+      ['resource_available', 'resource'],
+      ['changed_file', 'resource'],
+      ['diagnostics_available', 'diagnostic'],
+      ['retention_gap', 'diagnostic'],
+      ['elicitation_requested', 'control'],
+      ['session_cancelled', 'failure'],
+      ['session_timed_out', 'failure'],
+      ['run_completed', 'completion'],
+    ];
+
+    expect(cases.map(([kind]) => mapObservabilityEventToChatSessionEvent(row(1, kind, kind)).type))
+      .toEqual(cases.map(([, type]) => type));
+  });
+
+  it('renders execution-critical future schema events as incompatibilities', () => {
+    const event = mapObservabilityEventToChatSessionEvent(
+      row(1, 'future_required_event', 'Upgrade Workflow Chat to inspect this event.', {
+        schemaVersion: 2,
+        executionCritical: true,
+      }),
+    );
+    const state = reduceChatSessionEvents(createChatSessionState(), [event]);
+
+    expect(event.type).toBe('incompatible_schema');
+    expect(state.blocks[0]).toMatchObject({
+      kind: 'error',
+      text: 'Upgrade Workflow Chat to inspect this event.',
+    });
+  });
+
   it('accumulates assistant deltas and dedupes a final assistant message', () => {
     const state = projectChatSessionBlocks([
       row(1, 'assistant_message_delta', 'hel', { responseId: 'resp-1', turnIndex: 0 }),

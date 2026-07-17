@@ -15,6 +15,7 @@ from moonmind.omnigent.bridge_artifacts import (
     OmnigentArtifactError,
     OmnigentCaptureBundle,
     build_omnigent_result,
+    build_omnigent_terminal_refs,
 )
 from moonmind.omnigent.execute import (
     OmnigentContractError,
@@ -83,6 +84,18 @@ def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
     }
     payload.update(overrides)
     return OmnigentCaptureBundle(**payload)
+
+
+def test_build_terminal_refs_persists_router_terminal_metadata() -> None:
+    refs = build_omnigent_terminal_refs(
+        _bundle(),
+        terminal_status="failed",
+        final_snapshot={"summary": "provider failed", "failureCode": "provider_error"},
+    )
+
+    assert refs["failureClass"] == "execution_error"
+    assert refs["failureCode"] == "provider_error"
+    assert refs["summary"] == "provider failed"
 
 
 def test_normalize_waiting_with_elicitation_is_internal_awaiting_approval() -> None:
