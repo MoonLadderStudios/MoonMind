@@ -290,6 +290,7 @@ class OmnigentBridgeSessionStore:
                         "expectedEventClasses",
                         "actualEventClasses",
                         "missingEventClasses",
+                        "unexpectedEventClasses",
                         "droppedEventCount",
                     }
                 }

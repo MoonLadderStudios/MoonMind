@@ -10766,6 +10766,10 @@ class TemporalAgentRuntimeActivities:
             ("controlEvents", "session.item.control"),
             ("approvalEvents", "session.item.approval"),
         )
+        allowed_intervention_outcomes = {
+            "requested", "accepted", "rejected", "completed", "failed",
+            "delivery_unknown",
+        }
         for metadata_key, event_prefix in mapped_observations:
             for observation in turn_response.metadata.get(metadata_key) or []:
                 if not isinstance(observation, Mapping):
@@ -10775,6 +10779,28 @@ class TemporalAgentRuntimeActivities:
                     or observation.get("status")
                     or "completed"
                 ).strip()
+                if outcome not in allowed_intervention_outcomes:
+                    raise TemporalActivityRuntimeError(
+                        f"{metadata_key} outcome must be one of: "
+                        + ", ".join(sorted(allowed_intervention_outcomes))
+                    )
+                if metadata_key in {"controlEvents", "approvalEvents"}:
+                    required = (
+                        "actorId", "idempotencyKey", "expectedSessionId",
+                        "expectedSessionEpoch", "expectedTurnId", "auditRef",
+                    )
+                    missing_fields = [name for name in required if not observation.get(name)]
+                    if missing_fields:
+                        raise TemporalActivityRuntimeError(
+                            f"{metadata_key} requires authoritative intervention evidence: "
+                            + ", ".join(missing_fields)
+                        )
+                    if str(observation["expectedSessionId"]) != locator.session_id or int(
+                        observation["expectedSessionEpoch"]
+                    ) != locator.session_epoch or str(observation["expectedTurnId"]) != turn_response.turn_id:
+                        raise TemporalActivityRuntimeError(
+                            f"{metadata_key} expected session/epoch/turn does not match the active turn"
+                        )
                 event_payloads.append(
                     {
                         "type": f"{event_prefix}.{outcome}",
@@ -10843,6 +10869,14 @@ class TemporalAgentRuntimeActivities:
                 }
             }
         )
+        typed_output_refs: dict[str, str] = {}
+        for index, artifact_ref in enumerate(turn_response.output_refs):
+            typed_output_refs[f"outputRef:{index}"] = artifact_ref
+        for key in ("workspaceArtifactRef", "diffArtifactRef", "continuityMetadataRef", "capabilityGapsRef"):
+            value = turn_response.metadata.get(key) or publication.metadata.get(key)
+            if value:
+                typed_output_refs[key] = str(value)
+        resource_refs.update(typed_output_refs)
         for resource_kind, artifact_ref in resource_refs.items():
             if artifact_ref:
                 event_payloads.insert(
@@ -10867,15 +10901,16 @@ class TemporalAgentRuntimeActivities:
             compatibility_profile=compatibility_profile,
         )
         if str(communication.get("comparisonMode") or "").strip() == "dual_write":
-            expected = {
-                str(value).strip()
-                for value in communication.get("comparisonEventClasses") or []
-                if str(value).strip()
-            }
-            actual = {
-                str(event.get("type") or "").split(".")[0] for event in event_payloads
-            }
-            missing = sorted(expected - actual)
+            comparison_events = communication.get("comparisonEvents")
+            if not isinstance(comparison_events, list) or not comparison_events:
+                raise TemporalActivityRuntimeError(
+                    "dual_write requires non-empty communication.comparisonEvents from the comparison producer"
+                )
+            expected = [str(event.get("type") or "").strip() for event in comparison_events if isinstance(event, Mapping)]
+            actual = [str(event.get("type") or "").strip() for event in event_payloads]
+            missing = sorted(set(expected) - set(actual))
+            extra = sorted(set(actual) - set(expected))
+            dropped_count = sum(max(expected.count(value) - actual.count(value), 0) for value in set(expected))
             await store.record_lifecycle_event(
                 request.idempotency_key,
                 event_type="codex_direct_compat.comparison",
@@ -10889,12 +10924,15 @@ class TemporalAgentRuntimeActivities:
                     "expectedEventClasses": sorted(expected),
                     "actualEventClasses": sorted(actual),
                     "missingEventClasses": missing,
-                    "droppedEventCount": 0,
+                    "unexpectedEventClasses": extra,
+                    "droppedEventCount": dropped_count,
                 },
             )
             append_result["comparison"] = {
                 "missingEventClasses": missing,
-                "matched": not missing,
+                "unexpectedEventClasses": extra,
+                "droppedEventCount": dropped_count,
+                "matched": not missing and not extra and dropped_count == 0,
             }
         await store.mark_terminal(
             request.idempotency_key,
@@ -10925,8 +10963,28 @@ class TemporalAgentRuntimeActivities:
         from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 
         existing = await store.list_events(row.bridge_session_id)
+        def identity(event: Mapping[str, Any]) -> tuple[Any, ...]:
+            data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+            mm = ((event.get("metadata") or {}).get("moonmind") or {}) if isinstance(event.get("metadata"), Mapping) else {}
+            return (
+                event.get("eventType") or event.get("type"),
+                mm.get("directManagedSessionId") or data.get("directManagedSessionId"),
+                mm.get("sessionEpoch") or data.get("sessionEpoch"),
+                mm.get("turnId") or data.get("turnId"),
+                mm.get("sourceEventId") or data.get("requestId") or data.get("idempotencyKey") or data.get("controlId") or data.get("approvalId"),
+                mm.get("sourceOutcome") or data.get("outcome") or data.get("status"),
+                event.get("textPreview") or "",
+                event.get("artifactRef") or "",
+            )
         seen = {
-            (event.event_type, event.text_preview or "", event.artifact_ref or "")
+            identity(
+                {
+                    "eventType": event.event_type,
+                    "textPreview": event.text_preview,
+                    "artifactRef": event.artifact_ref,
+                    "metadata": event.metadata_,
+                }
+            )
             for event in existing
         }
         normalized = []
@@ -10947,13 +11005,19 @@ class TemporalAgentRuntimeActivities:
                     "turnId": (
                         str((event.get("data") or {}).get("turnId") or "") or None
                     ),
+                    "sourceEventId": next(
+                        (
+                            str((event.get("data") or {}).get(name))
+                            for name in ("requestId", "idempotencyKey", "controlId", "approvalId")
+                            if (event.get("data") or {}).get(name)
+                        ),
+                        None,
+                    ),
+                    "sourceOutcome": (event.get("data") or {}).get("outcome")
+                    or (event.get("data") or {}).get("status"),
                 }
             )
-            key = (
-                event.get("eventType"),
-                event.get("textPreview") or "",
-                event.get("artifactRef") or "",
-            )
+            key = identity(event)
             if key not in seen:
                 seen.add(key)
                 normalized.append(event)
