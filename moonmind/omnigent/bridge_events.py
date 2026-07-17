@@ -152,7 +152,7 @@ def build_omnigent_bridge_event(
         ).hexdigest()
         deduplication_key = f"cursor:{sequence}:{digest}"
     event["metadata"]["reconciliation"] = reconciliation
-    event["deduplicationKey"] = deduplication_key
+    event["deduplicationKey"] = deduplication_key[:128]
     if diagnostic is not None:
         event["metadata"]["moonmind"]["contractDrift"] = diagnostic
     text_preview = _text_preview(payload)

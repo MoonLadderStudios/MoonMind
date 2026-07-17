@@ -1,6 +1,6 @@
 """Make Omnigent active events retry-safe for MoonLadderStudios/MoonMind#3362.
 
-Revision ID: 342_omnigent_active_event_journal
+Revision ID: 342_omnigent_event_journal
 Revises: 341_container_job_observations
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "342_omnigent_active_event_journal"
+revision: str = "342_omnigent_event_journal"
 down_revision: Union[str, None] = "341_container_job_observations"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -23,7 +23,7 @@ def upgrade() -> None:
     )
     op.execute(
         "UPDATE omnigent_bridge_session_events "
-        "SET deduplication_key = 'legacy:' || event_id"
+        "SET deduplication_key = SUBSTR('legacy:' || event_id, 1, 128)"
     )
     op.alter_column(
         "omnigent_bridge_session_events", "deduplication_key", nullable=False

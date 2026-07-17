@@ -2223,11 +2223,13 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     )
 
     assert result.failure_class is None
-    raw_path = tmp_path / "corr-1" / "runtime.omnigent.sse.raw.jsonl"
+    raw_path = next((tmp_path / "corr-1").glob("runtime.omnigent.sse.raw.*.jsonl"))
     raw_text = raw_path.read_text(encoding="utf-8")
     assert "sk-should-not-persist" not in raw_text
     assert "[REDACTED]" in raw_text
-    normalized_path = tmp_path / "corr-1" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_path = next(
+        (tmp_path / "corr-1").glob("runtime.omnigent.sse.normalized.*.jsonl")
+    )
     normalized_events = [
         json.loads(line)
         for line in normalized_path.read_text(encoding="utf-8").splitlines()

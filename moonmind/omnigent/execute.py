@@ -457,16 +457,17 @@ async def _publish_active_journals(
             f"{json.dumps(item, sort_keys=True, default=str)}\n" for item in items
         )
 
+    prefix = f"{len(normalized_events):08d}"
     raw_ref = await artifact_gateway.write_text(
         request=request,
-        name="runtime.omnigent.sse.raw.jsonl",
+        name=f"runtime.omnigent.sse.raw.{prefix}.jsonl",
         payload=jsonl(redact_raw_events(raw_events)),
         link_type="runtime.omnigent.sse.raw",
         content_type="application/x-ndjson",
     )
     normalized_ref = await artifact_gateway.write_text(
         request=request,
-        name="runtime.omnigent.sse.normalized.jsonl",
+        name=f"runtime.omnigent.sse.normalized.{prefix}.jsonl",
         payload=jsonl(normalized_events),
         link_type="runtime.omnigent.sse.normalized",
         content_type="application/x-ndjson",
@@ -481,7 +482,11 @@ def _parse_jsonl(payload: str) -> list[dict[str, Any]]:
     for line in payload.splitlines():
         if not line.strip():
             continue
-        value = json.loads(line)
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            _logger.warning("Skipping corrupted JSONL line in Omnigent journal")
+            continue
         if isinstance(value, dict):
             items.append(value)
     return items
@@ -898,19 +903,28 @@ async def run_omnigent_execution(
 
             durable_cursor = 0
             if durable_row is not None and bridge_session_id:
+                raw_events, normalized_events = await _restore_active_journals(
+                    artifact_gateway=artifact_gateway,
+                    durable_row=durable_row,
+                )
+                if normalized_events:
+                    # Refs are switched before the matching index commit. Reconcile
+                    # any durable artifact tail first so a retry cannot lose it.
+                    await run_store.append_events(bridge_session_id, normalized_events)
                 previous_rows = await run_store.list_events(bridge_session_id)
                 durable_cursor = max(
                     (
-                        int((row.metadata_ or {}).get("reconciliation", {}).get("streamCursor") or 0)
+                        int(
+                            (
+                                (row.metadata_ or {}).get("reconciliation") or {}
+                            ).get("streamCursor")
+                            or 0
+                        )
                         for row in previous_rows
                     ),
                     default=0,
                 )
                 if durable_cursor:
-                    raw_events, normalized_events = await _restore_active_journals(
-                        artifact_gateway=artifact_gateway,
-                        durable_row=durable_row,
-                    )
                     # The current Omnigent stream endpoint has no cursor/resume
                     # parameter. Preserve that discontinuity explicitly and once
                     # instead of implying that the new connection is contiguous.
@@ -1187,6 +1201,16 @@ async def run_omnigent_execution(
         # (MoonMind artifact authority failed).
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
+        if client is not None and session_id:
+            with suppress(Exception):
+                await _cancel_omnigent_session(client, session_id)
+        if run_store is not None:
+            with suppress(Exception):
+                await run_store.mark_terminal(
+                    request.idempotency_key,
+                    status="failed",
+                    events=normalized_events,
+                )
         failure_class = classify_omnigent_failure(
             OmnigentFailureReason.REQUIRED_ARTIFACT_PERSISTENCE_FAILED
         )

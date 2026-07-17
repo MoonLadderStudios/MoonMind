@@ -263,7 +263,7 @@ class OmnigentBridgeSessionStore:
         from moonmind.utils.logging import redact_sensitive_text
 
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
+            row = await self._require_locked(session, idempotency_key)
             row_metadata = dict(row.metadata_ or {})
             journal = list(row_metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
             entry = {
@@ -614,7 +614,7 @@ class OmnigentBridgeSessionStore:
         events: Sequence[dict[str, Any]] | None = None,
     ) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
+            row = await self._require_locked(session, idempotency_key)
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if terminal_refs:
@@ -702,6 +702,8 @@ class OmnigentBridgeSessionStore:
         row: OmnigentBridgeSession,
         events: Sequence[dict[str, Any]],
     ) -> list[OmnigentBridgeSessionEvent]:
+        if not events:
+            return []
         key = row.bridge_session_id
         dedup_keys = [_event_deduplication_key(event) for event in events]
         existing_result = await session.execute(
@@ -765,6 +767,19 @@ class OmnigentBridgeSessionStore:
         self, session: AsyncSession, idempotency_key: str
     ) -> OmnigentBridgeSession:
         row = await self._get(session, idempotency_key)
+        if row is None:
+            raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+        return row
+
+    async def _require_locked(
+        self, session: AsyncSession, idempotency_key: str
+    ) -> OmnigentBridgeSession:
+        result = await session.execute(
+            select(OmnigentBridgeSession)
+            .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+            .with_for_update()
+        )
+        row = result.scalar_one_or_none()
         if row is None:
             raise OmnigentIdempotencyError("missing Omnigent bridge session row")
         return row
@@ -850,7 +865,7 @@ def _event_deduplication_key(event: dict[str, Any]) -> str:
     provider_id = _string_or_none(reconciliation.get("providerEventId"))
     if provider_id:
         return f"provider:{provider_id}"[:128]
-    cursor = reconciliation.get("streamCursor", event.get("sequence"))
+    cursor = reconciliation.get("streamCursor") or event.get("sequence") or 0
     canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     return f"cursor:{cursor}:{digest}"[:128]
