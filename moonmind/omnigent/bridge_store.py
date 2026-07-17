@@ -737,7 +737,7 @@ class OmnigentBridgeSessionStore:
                     delete(OmnigentBridgeSessionEvent).where(
                         OmnigentBridgeSessionEvent.bridge_session_id
                         == row.bridge_session_id,
-                        ~OmnigentBridgeSessionEvent.event_type.startswith("lifecycle."),
+                        OmnigentBridgeSessionEvent.direction != "moonmind_system",
                     )
                 )
                 max_sequence_result = await session.execute(
