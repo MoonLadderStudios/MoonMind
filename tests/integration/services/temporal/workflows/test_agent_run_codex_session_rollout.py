@@ -478,8 +478,10 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                     assert result.metadata["sessionSummary"]["metadata"][
                         "lastAssistantText"
                     ] == "Recovered final answer without vendor turn id"
-                    assert len(bridge_event_payloads) == 1
-                    bridge_payload = bridge_event_payloads[0]
+                    assert [item["phase"] for item in bridge_event_payloads] == [
+                        "started", "terminal"
+                    ]
+                    bridge_payload = bridge_event_payloads[1]
                     assert bridge_payload["compatibilityProfile"] == (
                         "moonmind.codex_direct_compat.v1"
                     )

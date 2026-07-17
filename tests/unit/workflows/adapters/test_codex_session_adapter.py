@@ -1619,9 +1619,9 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     assert persisted_record is not None
     assert persisted_record.status == "failed"
     assert persisted_record.failure_class == "execution_error"
-    assert len(bridge_payloads) == 1
-    assert bridge_payloads[0]["terminalStatus"] == "failed"
-    assert bridge_payloads[0]["turnResponse"]["status"] == "completed"
+    assert [item["phase"] for item in bridge_payloads] == ["started", "terminal"]
+    assert bridge_payloads[1]["terminalStatus"] == "failed"
+    assert bridge_payloads[1]["turnResponse"]["status"] == "completed"
 
 async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> None:
     summary = _jira_skill_blocker_summary(
@@ -1842,10 +1842,10 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     assert str(excinfo.value) == expected_reason
     assert summary_calls == []
     assert len(publication_calls) == 1
-    assert len(bridge_payloads) == 1
-    assert bridge_payloads[0]["terminalStatus"] == "failed"
-    assert bridge_payloads[0]["summary"]["latestSummaryRef"] == "artifact:session-summary"
-    assert bridge_payloads[0]["turnResponse"]["status"] == "failed"
+    assert [item["phase"] for item in bridge_payloads] == ["started", "terminal"]
+    assert bridge_payloads[1]["terminalStatus"] == "failed"
+    assert bridge_payloads[1]["summary"]["latestSummaryRef"] == "artifact:session-summary"
+    assert bridge_payloads[1]["turnResponse"]["status"] == "failed"
     persisted_record = run_store.load(binding.agent_run_id)
     assert persisted_record is not None
     assert persisted_record.status == "failed"
