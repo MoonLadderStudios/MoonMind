@@ -218,6 +218,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
+# The embedded host-auth adapter executes verifier sources from the exact
+# pinned submodule revision. Keep that immutable source available in every API
+# and worker runtime derived from this stage.
+COPY omnigent/omnigent /app/omnigent/omnigent/
 COPY pr_resolver_core /app/pr_resolver_core/
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .

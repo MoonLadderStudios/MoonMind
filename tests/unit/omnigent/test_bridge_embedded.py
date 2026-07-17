@@ -6,6 +6,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from starlette.datastructures import Headers
 
 from api_service.db.models import Base
 from moonmind.omnigent.bridge_config import (
@@ -19,6 +20,10 @@ from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostSessionEventRequest,
     OmnigentEmbeddedHostProtocolFacade,
     verify_embedded_host_auth,
+)
+from moonmind.omnigent.host_auth_adapter import (
+    OmnigentHostAuthAdapter,
+    UpstreamHostAuthError,
 )
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
@@ -102,6 +107,30 @@ def test_embedded_host_auth_rejects_user_bearer_and_cookie_domains() -> None:
     assert excinfo.value.status_code == 401
 
 
+def test_pinned_source_verifier_executes_without_importable_package() -> None:
+    adapter = OmnigentHostAuthAdapter(allowed_tokens=frozenset({"runner-token"}))
+
+    identity = adapter.verify(
+        Headers(raw=[(b"x-omnigent-runner-tunnel-token", b"runner-token")])
+    )
+
+    assert identity.runner_id.startswith("runner_token_")
+
+
+def test_embedded_host_auth_rejects_duplicate_tunnel_token_headers() -> None:
+    headers = Headers(
+        raw=[
+            (b"x-omnigent-runner-tunnel-token", b"wrong"),
+            (b"x-omnigent-runner-tunnel-token", b"runner-token"),
+        ]
+    )
+
+    with pytest.raises(UpstreamHostAuthError, match="exactly once"):
+        OmnigentHostAuthAdapter(
+            allowed_tokens=frozenset({"runner-token"})
+        ).verify(headers)
+
+
 @pytest.mark.asyncio
 async def test_registration_rejects_runner_identity_substitution(store) -> None:
     facade = OmnigentEmbeddedHostProtocolFacade(
@@ -123,6 +152,14 @@ async def test_registration_rejects_runner_identity_substitution(store) -> None:
 
     assert excinfo.value.status_code == 403
 
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(hostId="host-attacker"),
+            auth=auth,
+        )
+
+    assert excinfo.value.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> None:
@@ -138,11 +175,11 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
     )
 
     registered = await facade.register_host(
-        request=EmbeddedHostRegisterRequest(hostId="host-1", runnerId="runner-1"),
+        request=EmbeddedHostRegisterRequest(hostId="runner-1", runnerId="runner-1"),
         auth=auth,
     )
     heartbeat = await facade.heartbeat(
-        host_id="host-1",
+        host_id="runner-1",
         request=EmbeddedHostHeartbeatRequest(status="running"),
         auth=auth,
     )

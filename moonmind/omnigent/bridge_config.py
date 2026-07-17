@@ -388,6 +388,19 @@ class BridgeEmbeddedHostConnection(BaseModel):
         None, alias="hostAuthConformanceEvidenceRef"
     )
 
+    @model_validator(mode="after")
+    def _auth_contract_is_supported(self) -> "BridgeEmbeddedHostConnection":
+        if self.auth_mode != "upstream_runner_tunnel":
+            raise BridgeConfigError(
+                "hostConnection.embedded.authMode must be 'upstream_runner_tunnel'."
+            )
+        if self.protocol_profile != "omnigent.runner_tunnel.b95e41ec":
+            raise BridgeConfigError(
+                "hostConnection.embedded.protocolProfile must be "
+                "'omnigent.runner_tunnel.b95e41ec'."
+            )
+        return self
+
     @field_validator("protocol_profile")
     @classmethod
     def _protocol_profile_must_be_omnigent(cls, value: Any) -> str:

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ast
-from importlib import import_module
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any, Mapping
@@ -35,12 +34,10 @@ class OmnigentHostAuthAdapter:
         if not allowed_tokens:
             raise UpstreamHostAuthError("embedded host credential is not configured")
         self._allowed_tokens = allowed_tokens
-        try:
-            route = import_module("omnigent.server.routes.runner_tunnel")
-            identity = import_module("omnigent.runner.identity")
-            verify = getattr(route, "_expected_runner_id_from_headers")
-        except (AttributeError, ImportError, ModuleNotFoundError):
-            verify, identity = _load_pinned_source_entrypoints()
+        # Load only from the repository-pinned bundle. An arbitrary installed
+        # ``omnigent`` distribution must never supply authorization semantics
+        # while this adapter advertises PINNED_PROTOCOL_PROFILE.
+        verify, identity = _load_pinned_source_entrypoints()
         self._verify = verify
         self._token_bound_runner_id = getattr(identity, "token_bound_runner_id")
         self.token_header = str(getattr(identity, "RUNNER_TUNNEL_TOKEN_HEADER"))
@@ -48,10 +45,14 @@ class OmnigentHostAuthAdapter:
     def verify(self, headers: Mapping[str, Any]) -> UpstreamHostIdentity:
         """Return the upstream token-bound identity without retaining secrets."""
 
-        normalized = {str(k): str(v) for k, v in headers.items()}
-        values = [v for k, v in normalized.items() if k.lower() == self.token_header.lower()]
+        entries = [(str(k), str(v)) for k, v in headers.items()]
+        values = [v for k, v in entries if k.lower() == self.token_header.lower()]
         if len(values) != 1:
             raise UpstreamHostAuthError("runner tunnel credential is required exactly once")
+        normalized = {
+            (self.token_header if k.lower() == self.token_header.lower() else k): v
+            for k, v in entries
+        }
         try:
             # The upstream allow-list verifier returns None after authorization;
             # its identity helper is then the authoritative identity conversion.

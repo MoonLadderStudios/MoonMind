@@ -59,8 +59,8 @@ hostConnection:
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
-    authMode: header_or_token
-    protocolProfile: omnigent.host_runner.v1
+    authMode: upstream_runner_tunnel
+    protocolProfile: omnigent.runner_tunnel.b95e41ec
 
 sessionDefaults:
   hostType: managed
@@ -235,6 +235,20 @@ def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:
         parse_bridge_config(
             {"compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}}
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("authMode", "header_or_token", "authMode"),
+        ("protocolProfile", "omnigent.host_runner.v1", "protocolProfile"),
+    ],
+)
+def test_embedded_auth_contract_rejects_unsupported_profiles(
+    field: str, value: str, match: str
+) -> None:
+    with pytest.raises(BridgeConfigError, match=match):
+        parse_bridge_config({"hostConnection": {"embedded": {field: value}}})
 
 
 def test_disabled_embedded_mode_can_be_declared_without_evidence() -> None:

@@ -192,9 +192,9 @@ class OmnigentEmbeddedHostProtocolFacade:
         self._require_embedded_mode()
         host_id = _clean(request.host_id) or auth.runner_id
         runner_id = _clean(request.runner_id) or auth.runner_id
-        if runner_id != auth.runner_id:
+        if runner_id != auth.runner_id or host_id != auth.runner_id:
             raise OmnigentBridgeError(
-                "Authenticated runner identity does not match registration",
+                "Authenticated runner or host identity does not match registration",
                 failure_class="user_error",
                 status_code=403,
             )
