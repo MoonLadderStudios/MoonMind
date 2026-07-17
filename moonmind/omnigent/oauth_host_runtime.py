@@ -15,14 +15,18 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_mounted_tools,
+)
 from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
     OmnigentHostLease,
 )
-from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.runtime.git_auth import (
     build_github_token_git_environment,
 )
+from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _FORBIDDEN_ENV = (
     "OPENAI_API_KEY",
@@ -35,6 +39,11 @@ _FORBIDDEN_ENV = (
     "CLAUDE_CODE_OAUTH_TOKEN",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+)
+
+_TOOLS_PATH = "/opt/moonmind-tools/bin"
+_DEFAULT_HOST_PATH = (
+    "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
 )
 
 
@@ -50,10 +59,8 @@ class OmnigentOAuthHostRuntime:
         server_url: str | None = None,
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
-        tool_bundle_volume: str | None = None,
-        tool_bundle_image: str | None = None,
-        tool_bundle_version: str | None = None,
-        gh_sha256: str | None = None,
+        tools_volume: str | None = None,
+        tools_profile_path: Path | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -80,17 +87,22 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
         ).resolve()
-        self._tool_bundle_version = tool_bundle_version or os.getenv(
-            "OMNIGENT_TOOL_BUNDLE_VERSION", "v1"
+        self._tools_volume = tools_volume or os.getenv(
+            "OMNIGENT_TOOLS_VOLUME", "moonmind-omnigent-tools-gh-2.74.2-1"
         )
-        self._tool_bundle_volume = tool_bundle_volume or os.getenv(
-            "OMNIGENT_TOOL_BUNDLE_VOLUME",
-            f"moonmind-omnigent-tools-{self._tool_bundle_version}",
-        )
-        self._tool_bundle_image = tool_bundle_image or os.getenv(
-            "OMNIGENT_GH_IMAGE", "ghcr.io/cli/cli:2.74.2"
-        )
-        self._gh_sha256 = gh_sha256 or os.getenv("OMNIGENT_GH_SHA256", "")
+        self._tools_profile_path = (
+            tools_profile_path
+            or Path(
+                os.getenv(
+                    "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR",
+                    "/workspace/host_project",
+                )
+            )
+            / "services"
+            / "omnigent"
+            / "profile"
+            / "moonmind-tools.sh"
+        ).resolve()
 
     async def prepare_host(
         self,
@@ -99,7 +111,10 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         workspace_key: str,
         repository_url: str | None = None,
+        target_repository: str = "",
+        required_capabilities: tuple[str, ...] = (),
         github_token: str | None = None,
+        github_mutation_required: bool = False,
     ) -> dict[str, Any]:
         workspace_source = await self._prepare_workspace(
             workspace_key=workspace_key,
@@ -107,6 +122,8 @@ class OmnigentOAuthHostRuntime:
             github_token=github_token,
         )
         if binding.host_launch_profile_ref:
+            if "gh" in {item.strip().lower() for item in required_capabilities}:
+                await self._initialize_required_tools()
             container_name = (
                 host_lease.container_name
                 or deterministic_host_container_name(host_lease.lease_id)
@@ -119,6 +136,7 @@ class OmnigentOAuthHostRuntime:
                 github_token=github_token,
             )
             await self._exec_check(container_name)
+            await self._exec_tools_check(container_name)
         else:
             await self._compose_static_check()
 
@@ -132,6 +150,13 @@ class OmnigentOAuthHostRuntime:
                 "registered host does not advertise codex-native",
                 code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
             )
+        mounted_tool_evidence = await self._preflight_mounted_tools(
+            binding=binding,
+            host_lease=host_lease,
+            required_capabilities=required_capabilities,
+            repository=target_repository,
+            mutation_required=github_mutation_required,
+        )
         result = {
             "status": "ready",
             "providerProfileId": binding.provider_profile_id,
@@ -145,6 +170,7 @@ class OmnigentOAuthHostRuntime:
             "hostId": host_id,
             "harness": "codex-native",
             "competingCredentialsPresent": False,
+            "mountedTools": mounted_tool_evidence,
             "workspacePath": (
                 "/workspaces/run"
                 if binding.host_launch_profile_ref
@@ -157,6 +183,7 @@ class OmnigentOAuthHostRuntime:
             host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
         )
         validated["workspacePath"] = result["workspacePath"]
+        validated["mountedTools"] = mounted_tool_evidence
         return validated
 
     async def stop_host(
@@ -234,11 +261,12 @@ class OmnigentOAuthHostRuntime:
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
+        await self._validate_tools_profile_bind_source()
+        host_path = await self._discover_upstream_path()
         # A retry may find a stopped container with this deterministic name.
         # Remove only that lease-owned container, then initialize the dedicated
         # state volume as root before the actual host drops to UID/GID 1000.
         await self._run("docker", "rm", "-f", container_name, check=False)
-        await self._prepare_tool_bundle()
         await self._run(
             "docker",
             "run",
@@ -288,9 +316,14 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
             "--mount",
-            f"type=volume,src={self._tool_bundle_volume},dst=/opt/moonmind-tools,readonly",
+            f"type=volume,src={self._tools_volume},dst=/opt/moonmind-tools,readonly",
             "--mount",
-            f"type=bind,src={self._scripts_dir.parent / 'profile' / 'moonmind-tools.sh'},dst=/etc/profile.d/moonmind-tools.sh,readonly",
+            (
+                f"type=bind,src={self._tools_profile_path},"
+                "dst=/etc/profile.d/moonmind-tools.sh,readonly"
+            ),
+            "--env",
+            f"PATH={self._prepend_tools_path(host_path)}",
             "--env",
             "HOME=/home/app",
             "--env",
@@ -305,8 +338,6 @@ class OmnigentOAuthHostRuntime:
             f"CODEX_CREDENTIAL_GENERATION={host_lease.credential_generation}",
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
-            "--env",
-            "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)
@@ -314,25 +345,28 @@ class OmnigentOAuthHostRuntime:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
         if github_token:
-            gh_config_dir = workspace_source / ".config" / "gh"
-            gh_config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            gh_config_dir.chmod(0o700)
-            child_env["MM_OMNIGENT_GITHUB_TOKEN"] = github_token
-            for env_arg in (
-                "GIT_TOKEN=MM_OMNIGENT_GITHUB_TOKEN",
-                "GH_TOKEN=MM_OMNIGENT_GITHUB_TOKEN",
-            ):
-                target, source = env_arg.split("=", 1)
-                child_env[target] = child_env[source]
-                args.extend(["--env", target])
+            child_env["GH_TOKEN"] = github_token
+            child_env["GIT_TOKEN"] = github_token
             args.extend(
                 [
-                    "--env", "GIT_USERNAME=x-access-token",
-                    "--env", "GH_CONFIG_DIR=/workspaces/run/.config/gh",
-                    "--env", "GH_PROMPT_DISABLED=1",
-                    "--env", "GH_NO_UPDATE_NOTIFIER=1",
-                    "--env", "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
-                    "--env", "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER",
+                    "--env",
+                    "GH_TOKEN",
+                    "--env",
+                    "GIT_TOKEN",
+                    "--env",
+                    "GIT_USERNAME=x-access-token",
+                    "--env",
+                    "GH_CONFIG_DIR=/workspaces/run/.config/gh",
+                    "--env",
+                    "GH_PROMPT_DISABLED=1",
+                    "--env",
+                    "GH_NO_UPDATE_NOTIFIER=1",
+                    "--env",
+                    "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
+                    "--env",
+                    "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,"
+                    + "GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,"
+                    + "GH_NO_EXTENSION_UPDATE_NOTIFIER",
                 ]
             )
         for key, value in labels.items():
@@ -343,33 +377,118 @@ class OmnigentOAuthHostRuntime:
         args.extend([self._image, "/opt/moonmind/start-codex-oauth-host.sh"])
         await self._run(*args, env=child_env)
 
-    async def _prepare_tool_bundle(self) -> None:
-        """Initialize and validate the versioned real-gh bundle for this launch."""
+    async def _discover_upstream_path(self) -> str:
+        """Read the selected image's PATH without replacing image-specific entries."""
+        result = await self._run(
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            self._image,
+            check=False,
+        )
+        if result[0] == 0:
+            for line in result[1].splitlines():
+                if line.startswith("PATH="):
+                    return line.removeprefix("PATH=") or _DEFAULT_HOST_PATH
+        return _DEFAULT_HOST_PATH
 
-        if not self._gh_sha256:
-            raise OmnigentOAuthHostError(
-                "OMNIGENT_GH_SHA256 is required to initialize the on-demand gh tool bundle",
-                code="omnigent_tool_bundle_checksum_required",
-            )
+    async def _validate_tools_profile_bind_source(self) -> None:
+        """Prove the profile bind source is a file in the Docker daemon namespace."""
+
         await self._run(
             "docker",
             "run",
             "--rm",
-            "--user",
-            "0:0",
             "--mount",
-            f"type=volume,src={self._tool_bundle_volume},dst=/output",
-            "--mount",
-            f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
-            "--env",
-            "OMNIGENT_TOOL_BUNDLE_OUTPUT=/output",
-            "--env",
-            f"OMNIGENT_TOOL_BUNDLE_VERSION={self._tool_bundle_version}",
-            "--env",
-            f"OMNIGENT_GH_SHA256={self._gh_sha256}",
+            (
+                f"type=bind,src={self._tools_profile_path},"
+                "dst=/etc/profile.d/moonmind-tools.sh,readonly"
+            ),
             "--entrypoint",
-            "/opt/moonmind/init-omnigent-tools.sh",
-            self._tool_bundle_image,
+            "/usr/bin/test",
+            self._image,
+            "-f",
+            "/etc/profile.d/moonmind-tools.sh",
+        )
+
+    @staticmethod
+    def _prepend_tools_path(upstream_path: str) -> str:
+        entries = [entry for entry in upstream_path.split(":") if entry]
+        return ":".join([_TOOLS_PATH, *(e for e in entries if e != _TOOLS_PATH)])
+
+    async def _exec_tools_check(self, container_name: str) -> None:
+        """Verify the mounted bundle through the host's login-shell boundary."""
+
+        await self._run(
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-lc",
+            "test -f /opt/moonmind-tools/manifest.json "
+            "&& command -v gh >/dev/null && gh --version >/dev/null",
+        )
+
+    async def _preflight_mounted_tools(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        required_capabilities: tuple[str, ...],
+        repository: str,
+        mutation_required: bool,
+    ) -> dict[str, Any]:
+        if "gh" not in {item.strip().lower() for item in required_capabilities}:
+            return {"status": "not_required", "boundaries": []}
+        if not binding.host_launch_profile_ref:
+            raise MountedToolPreflightError(
+                "Required gh credentials cannot be isolated on a reusable static host",
+                code="github_auth_unavailable",
+                evidence={"tool": "gh", "phase": "host_launch", "hostMode": "static"},
+            )
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+
+        async def host_runner(command: str) -> tuple[int, str, str]:
+            return await self._run(
+                "docker", "exec", container_name, "bash", "-lc", command, check=False
+            )
+
+        async def runner_runner(command: str) -> tuple[int, str, str]:
+            # Execute with the stock host's authoritative runner environment
+            # constructor.  Importing this function from the installed Omnigent
+            # build keeps the pre-session proof on the exact path that
+            # HostConnect._handle_launch uses immediately before Popen.
+            runner_probe = (
+                "import os, subprocess, sys; "
+                "from omnigent.host.connect import _build_runner_env; "
+                "env = _build_runner_env(os.environ, server_url=os.environ.get("
+                "'OMNIGENT_SERVER_URL', ''), runner_id='preflight', "
+                "binding_token='preflight', workspace='/workspaces/run', "
+                "parent_pid=os.getpid()); "
+                "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
+                "text=True); raise SystemExit(result.returncode)"
+            )
+            return await self._run(
+                "docker",
+                "exec",
+                container_name,
+                "python",
+                "-c",
+                runner_probe,
+                command,
+                check=False,
+            )
+
+        return await preflight_mounted_tools(
+            required_capabilities=required_capabilities,
+            repository=repository,
+            mutation_required=mutation_required,
+            host_runner=host_runner,
+            runner_runner=runner_runner,
         )
 
     async def _prepare_workspace(
@@ -386,15 +505,28 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError("workspace escaped configured root")
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if repository_url and not any(workspace.iterdir()):
-            git_env = (
-                build_github_token_git_environment(github_token)
-                if github_token
-                else None
-            )
             await self._run(
-                "git", "clone", "--", repository_url, str(workspace), env=git_env
+                "git",
+                "clone",
+                "--",
+                repository_url,
+                str(workspace),
+                env=build_github_token_git_environment(github_token, base_env=os.environ),
             )
         return workspace
+
+    async def _initialize_required_tools(self) -> None:
+        await self._run(
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "run",
+            "--rm",
+            "omnigent-tools-init",
+        )
 
     async def _compose_static_check(self) -> None:
         await self._run(

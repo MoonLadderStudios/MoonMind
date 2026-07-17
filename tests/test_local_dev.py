@@ -498,31 +498,6 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     assert "OMNIGENT_OIDC_ISSUER_URL" not in omnigent_env
 
 
-def test_omnigent_codex_host_uses_initialized_versioned_gh_bundle():
-    compose_data = _load_compose()
-    services = compose_data["services"]
-    initializer = services["omnigent-tools-init"]
-    host = services["omnigent-host-codex"]
-
-    assert host["depends_on"]["omnigent-tools-init"]["condition"] == (
-        "service_completed_successfully"
-    )
-    assert _has_volume_mount(initializer, "omnigent-tools", "/output")
-    assert _has_volume_mount(host, "omnigent-tools", "/opt/moonmind-tools")
-    host_mount = next(
-        value
-        for value in host["volumes"]
-        if isinstance(value, str) and value.startswith("omnigent-tools:")
-    )
-    assert host_mount.endswith(":ro")
-    assert _env_map(host["environment"])["PATH"].startswith(
-        "/opt/moonmind-tools/bin:"
-    )
-    assert compose_data["volumes"]["omnigent-tools"]["name"] == (
-        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-v1}"
-    )
-
-
 def test_omnigent_env_template_and_optional_config_for_mm_970():
     env_template = Path(".env-template").read_text(encoding="utf-8")
     for expected_name in (
@@ -556,11 +531,6 @@ def test_omnigent_env_template_and_optional_config_for_mm_970():
         "OMNIGENT_CONFIG",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
-        "OMNIGENT_GH_IMAGE",
-        "OMNIGENT_GH_SHA256",
-        "OMNIGENT_TOOL_BUNDLE_VERSION",
-        "OMNIGENT_TOOL_BUNDLE_VOLUME",
-        "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE",
     ):
         assert f"{expected_name}=" in env_template
     for removed_name in (
