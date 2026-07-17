@@ -3642,7 +3642,13 @@ function ChatSessionView({
           data-testid="chat-session-blocks"
           onScroll={updateStickToBottom}
         >
-          {chatBlocks.map((block, index) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase))}
+          <Virtuoso
+            style={{ height: 480 }}
+            data={chatBlocks}
+            followOutput={(atBottom) => atBottom ? 'smooth' : false}
+            computeItemKey={(index, block) => `${block.id}:${index}`}
+            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase)}
+          />
         </div>
       )}
     </div>
@@ -3980,14 +3986,13 @@ function StepObservabilityGroup({
       resolveBridgeSessionProjection({
         apiBase,
         workflowId: bridgeWorkflowId,
+        agentRunId,
         idempotencyKey: bridgeIdempotencyKey,
       }),
     enabled: Boolean(
         logStreamingEnabled &&
-        !agentRunId &&
         !explicitBridgeSessionId &&
-        bridgeWorkflowId &&
-        bridgeIdempotencyKey,
+        (agentRunId || bridgeWorkflowId || bridgeIdempotencyKey),
     ),
     staleTime: stepTerminal(row.status) ? Infinity : 2000,
     retry: false,
@@ -4022,6 +4027,33 @@ function StepObservabilityGroup({
         )}
       </p>
     );
+  }
+
+  if (bridgeSessionId) {
+    return (
+      <div className="stack">
+        <BridgeSessionLogsPanel
+          apiBase={apiBase}
+          bridgeSessionId={bridgeSessionId}
+          isTerminal={stepTerminal(row.status)}
+        />
+        <details>
+          <summary>Legacy managed-run diagnostics</summary>
+          <LiveLogsPanel
+            apiBase={apiBase}
+            agentRunId={agentRunId}
+            isTerminal={stepTerminal(row.status)}
+            autoExpand={false}
+            disclosure={false}
+            routes={routes}
+          />
+        </details>
+      </div>
+    );
+  }
+
+  if (bridgeResolutionQuery.isLoading) {
+    return <p className="small">Checking bridge session evidence before legacy observability.</p>;
   }
 
   return (
@@ -5569,6 +5601,8 @@ function BridgeSessionLogsPanel({
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [pollingFallback, setPollingFallback] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -5610,6 +5644,8 @@ function BridgeSessionLogsPanel({
     setLogContent([]);
     lastSeqRef.current = null;
     setViewerState('starting');
+    setReconnectAttempt(0);
+    setPollingFallback(false);
   }, [bridgeSessionId]);
 
   useEffect(() => {
@@ -5659,14 +5695,28 @@ function BridgeSessionLogsPanel({
     };
 
     es.onopen = () => {
-      if (!cancelled) setViewerState('live');
+      if (!cancelled) {
+        setReconnectAttempt(0);
+        setPollingFallback(false);
+        setViewerState('live');
+      }
     };
     es.onmessage = handleBridgeEvent;
     es.addEventListener('bridge_event', handleBridgeEvent);
     es.onerror = () => {
       es.close();
       esRef.current = null;
-      if (!cancelled) setViewerState(isTerminal ? 'ended' : 'error');
+      if (!cancelled) {
+        if (reconnectAttempt < 5) {
+          setViewerState('starting');
+          window.setTimeout(() => {
+            if (!cancelled) setReconnectAttempt((attempt) => attempt + 1);
+          }, Math.min(1000 * (2 ** reconnectAttempt), 8000));
+        } else {
+          setPollingFallback(true);
+          setViewerState('error');
+        }
+      }
     };
     return () => {
       cancelled = true;
@@ -5675,7 +5725,13 @@ function BridgeSessionLogsPanel({
         esRef.current = null;
       }
     };
-  }, [apiBase, bridgeSessionId, eventsQuery.isSuccess, isTerminal, isVisible]);
+  }, [apiBase, bridgeSessionId, eventsQuery.isSuccess, isTerminal, isVisible, reconnectAttempt]);
+
+  useEffect(() => {
+    if (!pollingFallback || isTerminal || !isVisible) return;
+    const timer = window.setInterval(() => void eventsQuery.refetch(), 5000);
+    return () => window.clearInterval(timer);
+  }, [eventsQuery, isTerminal, isVisible, pollingFallback]);
 
   const statusLabel =
     viewerState === 'live'
@@ -5684,7 +5740,9 @@ function BridgeSessionLogsPanel({
         ? 'Stream ended'
         : viewerState === 'error'
           ? 'Disconnected - showing bridge event index'
-          : 'Loading...';
+          : reconnectAttempt > 0
+            ? `Reconnecting (attempt ${reconnectAttempt} of 5)...`
+            : 'Loading...';
 
   const handleCopy = () => {
     if (logContent.length === 0) return;
