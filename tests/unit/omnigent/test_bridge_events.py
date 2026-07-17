@@ -70,6 +70,23 @@ def test_session_created_normalizes_without_explicit_status() -> None:
     assert normalize_omnigent_observation({"type": "session.created"}) == "created"
 
 
+def test_resume_gap_is_a_durable_non_terminal_diagnostic() -> None:
+    result = build_omnigent_bridge_event(
+        payload={
+            "type": "stream.resume_gap",
+            "status": "running",
+            "metadata": {"reason": "upstream_replay_unavailable"},
+        },
+        sequence=8,
+        request=_request(),
+        omnigent_session_id="sess-1",
+    )
+
+    assert result.event["eventType"] == "stream.resume_gap"
+    assert result.event["normalizedStatus"] == "running"
+    assert result.diagnostic is None
+
+
 def test_optional_resource_drift_degrades_with_diagnostic() -> None:
     result = build_omnigent_bridge_event(
         payload={"type": "resource.future_file", "status": "not-a-status"},
@@ -90,3 +107,37 @@ def test_optional_resource_drift_degrades_with_diagnostic() -> None:
         result.event["metadata"]["moonmind"]["contractDrift"]
         == result.diagnostic
     )
+
+
+def test_direct_codex_and_omnigent_shared_fixtures_emit_same_event_classes() -> None:
+    shared_behaviors = (
+        ("session startup", "session.started"),
+        ("user input", "session.input.user_message"),
+        ("assistant output", "response.output"),
+        ("tool completion", "session.item.tool.completed"),
+        ("approval request", "session.item.approval.requested"),
+        ("terminal completion", "response.completed"),
+    )
+
+    direct_classes = {
+        build_omnigent_bridge_event(
+            payload={"type": event_type, "status": "running"},
+            sequence=index,
+            request=_request(),
+            omnigent_session_id="direct-session",
+        ).event["eventType"]
+        for index, (_behavior, event_type) in enumerate(shared_behaviors, start=1)
+    }
+    omnigent_classes = {
+        build_omnigent_bridge_event(
+            payload={"type": event_type, "status": "running"},
+            sequence=index,
+            request=_request(),
+            omnigent_session_id="omnigent-session",
+        ).event["eventType"]
+        for index, (_behavior, event_type) in enumerate(shared_behaviors, start=1)
+    }
+
+    assert direct_classes == omnigent_classes == {
+        event_type for _behavior, event_type in shared_behaviors
+    }

@@ -8,6 +8,7 @@ import {
   getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
   normalizeObservabilityEvent,
+  parseObservabilityEventsResponse,
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
   WorkflowDetailEntrypoint,
@@ -15,6 +16,38 @@ import {
   workflowDetailQueryOptions,
   workflowEvidenceStaleTime,
 } from './workflow-detail';
+
+describe('bridge projection response contract', () => {
+  it('fails visibly for an unknown page schema version', () => {
+    expect(() =>
+      parseObservabilityEventsResponse({
+        schemaVersion: 'moonmind.bridge-session-events-page.v2',
+        bridgeSessionId: 'brs-1',
+        items: [],
+        after: 0,
+        nextCursor: null,
+        hasMore: false,
+        terminal: false,
+        latestSequence: 0,
+      }),
+    ).toThrow();
+  });
+
+  it('preserves bridge pagination metadata for page draining', () => {
+    expect(
+      parseObservabilityEventsResponse({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1',
+        bridgeSessionId: 'brs-1',
+        items: [],
+        after: 0,
+        nextCursor: '100',
+        hasMore: true,
+        terminal: false,
+        latestSequence: 101,
+      }),
+    ).toMatchObject({ nextCursor: '100', hasMore: true });
+  });
+});
 import {
   taskCompareHref,
   taskEditForRerunHref,
@@ -38,6 +71,7 @@ type MockVirtuosoProps<Row = MockVirtuosoRow> = {
   computeItemKey?: (index: number, row: Row) => string;
   itemContent: (index: number, row: Row) => ReactNode;
   initialItemCount?: number;
+  followOutput?: (atBottom: boolean) => 'smooth' | false;
 };
 
 const { virtuosoPropsSpy } = vi.hoisted(() => ({
@@ -7853,8 +7887,9 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
+            schemaVersion: 'moonmind.bridge-session-events-page.v1',
             bridgeSessionId: 'brs-1',
-            events: [
+            items: [
               {
                 sequence: 1,
                 timestamp: '2026-07-09T00:00:10Z',
@@ -7865,7 +7900,16 @@ describe('Workflow Detail Entrypoint', () => {
                 metadata: { responseId: 'resp-1', source: 'omnigent_bridge' },
               },
             ],
-            truncated: false,
+            after: 0,
+            nextCursor: '1',
+            hasMore: false,
+            terminal: true,
+            latestSequence: 1,
+            retentionGap: null,
+            terminalEnvelope: {
+              schemaVersion: 'moonmind.bridge-session-terminal.v1',
+              status: 'completed',
+            },
           }),
         } as Response);
       }
@@ -9859,7 +9903,7 @@ describe('LiveLogsPanel', () => {
     }
   });
 
-  it('sticks the chat transcript to the bottom while allowing scroll escape', async () => {
+  it('uses Virtuoso follow-output to stick at the bottom while allowing scroll escape', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
@@ -9894,10 +9938,7 @@ describe('LiveLogsPanel', () => {
     renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    const blockList = await screen.findByTestId('chat-session-blocks');
-    Object.defineProperty(blockList, 'clientHeight', { configurable: true, value: 100 });
-    Object.defineProperty(blockList, 'scrollHeight', { configurable: true, value: 300 });
-    blockList.scrollTop = 200;
+    await screen.findByTestId('chat-session-blocks');
 
     await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
@@ -9912,10 +9953,9 @@ describe('LiveLogsPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Live assistant update.')).toBeTruthy());
-    await waitFor(() => expect(blockList.scrollTop).toBe(300));
-
-    blockList.scrollTop = 0;
-    fireEvent.scroll(blockList);
+    const followOutput = virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput;
+    expect(followOutput?.(true)).toBe('smooth');
+    expect(followOutput?.(false)).toBe(false);
     act(() =>
       es.triggerLogChunk({
         sequence: 3,
@@ -9926,7 +9966,7 @@ describe('LiveLogsPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Second live update.')).toBeTruthy());
-    expect(blockList.scrollTop).toBe(0);
+    expect(virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput?.(false)).toBe(false);
   });
 
   it('does not create EventSource for ended runs', async () => {

@@ -4769,6 +4769,66 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** BridgeEventPageResponse */
+        BridgeEventPageResponse: {
+            /**
+             * Schemaversion
+             * @default moonmind.bridge-session-events-page.v1
+             */
+            schemaVersion: string;
+            /** Bridgesessionid */
+            bridgeSessionId: string;
+            /** Items */
+            items: components["schemas"]["BridgeEventPayload"][];
+            /** After */
+            after: number;
+            /** Nextcursor */
+            nextCursor: string | null;
+            /** Hasmore */
+            hasMore: boolean;
+            /** Terminal */
+            terminal: boolean;
+            /** Latestsequence */
+            latestSequence: number;
+            retentionGap?: components["schemas"]["BridgeRetentionGap"] | null;
+            terminalEnvelope?: components["schemas"]["BridgeTerminalEnvelope"] | null;
+        };
+        /** BridgeEventPayload */
+        BridgeEventPayload: {
+            /** Id */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /** Timestamp */
+            timestamp: string;
+            /** Stream */
+            stream: string;
+            /** Text */
+            text: string;
+            /** Kind */
+            kind: string;
+            /** Bridgesessionid */
+            bridgeSessionId: string;
+            /** Sessionid */
+            sessionId: string;
+            /** Normalizedstatus */
+            normalizedStatus?: string | null;
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /** BridgeRetentionGap */
+        BridgeRetentionGap: {
+            /** Requestedafter */
+            requestedAfter: number;
+            /** Earliestavailable */
+            earliestAvailable: number;
+        };
         /**
          * BridgeSessionCreateRequest
          * @description Omnigent-shaped ``POST /v1/sessions`` request body (OB-§8.1).
@@ -4809,6 +4869,78 @@ export interface components {
             type: string;
         } & {
             [key: string]: unknown;
+        };
+        /** BridgeSessionResolution */
+        BridgeSessionResolution: {
+            /**
+             * Schemaversion
+             * @default moonmind.bridge-session-resolution.v1
+             */
+            schemaVersion: string;
+            /** Bridgesessionid */
+            bridgeSessionId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId?: string | null;
+            /** Stepexecutionid */
+            stepExecutionId?: string | null;
+            /** Agentrunid */
+            agentRunId: string;
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Status */
+            status: string;
+            /** Latestsequence */
+            latestSequence: number;
+            /** Livetailingavailable */
+            liveTailingAvailable: boolean;
+            /** Terminalevidenceavailable */
+            terminalEvidenceAvailable: boolean;
+            /** Compatibilityprofile */
+            compatibilityProfile: string;
+            /** Providerprofileid */
+            providerProfileId?: string | null;
+            /** Hostbindingref */
+            hostBindingRef?: string | null;
+            /** Providersessionref */
+            providerSessionRef?: string | null;
+        };
+        /** BridgeTerminalEnvelope */
+        BridgeTerminalEnvelope: {
+            /**
+             * Schemaversion
+             * @default moonmind.bridge-session-terminal.v1
+             */
+            schemaVersion: string;
+            /** Status */
+            status: string;
+            /** Failureclass */
+            failureClass?: string | null;
+            /** Failurecode */
+            failureCode?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Diagnosticsref */
+            diagnosticsRef?: string | null;
+            /** Capturemanifestref */
+            captureManifestRef?: string | null;
+            /** Initialsnapshotref */
+            initialSnapshotRef?: string | null;
+            /** Finalsnapshotref */
+            finalSnapshotRef?: string | null;
+            /** Raweventsref */
+            rawEventsRef?: string | null;
+            /** Normalizedeventsref */
+            normalizedEventsRef?: string | null;
+            /** Externalstateref */
+            externalStateRef?: string | null;
+            /** Cleanupstate */
+            cleanupState?: string | null;
+            /** Leasereleasestate */
+            leaseReleaseState?: string | null;
+            /** Evidenceincompletereason */
+            evidenceIncompleteReason?: string | null;
         };
         /** CacheMount */
         CacheMount: {
@@ -17789,6 +17921,8 @@ export interface operations {
         parameters: {
             query?: {
                 workflowId?: string | null;
+                runId?: string | null;
+                stepExecutionId?: string | null;
                 agentRunId?: string | null;
                 idempotencyKey?: string | null;
             };
@@ -17804,9 +17938,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BridgeSessionResolution"];
                 };
             };
             /** @description Validation Error */
@@ -17822,7 +17954,11 @@ export interface operations {
     };
     list_omnigent_bridge_session_events_api_omnigent_bridge_sessions__bridge_session_id__events_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: number;
+                cursor?: number | null;
+                limit?: number;
+            };
             header?: never;
             path: {
                 bridge_session_id: string;
@@ -17837,9 +17973,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["BridgeEventPageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -17857,8 +17991,11 @@ export interface operations {
         parameters: {
             query?: {
                 since?: number | null;
+                cursor?: number | null;
             };
-            header?: never;
+            header?: {
+                "Last-Event-ID"?: string | null;
+            };
             path: {
                 bridge_session_id: string;
             };

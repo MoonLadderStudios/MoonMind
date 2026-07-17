@@ -27,7 +27,12 @@ from moonmind.integrations.pentest.models import (
     PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
 )
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
-from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    ManagedRunRecord,
+)
+from moonmind.schemas.managed_session_models import CodexManagedSessionLocator
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.schemas.workload_models import (
     ValidatedWorkloadRequest,
@@ -94,6 +99,111 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+
+
+@pytest.mark.asyncio
+async def test_direct_codex_bridge_append_is_idempotent_and_preserves_provenance() -> None:
+    appended: list[dict[str, Any]] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return [
+                SimpleNamespace(
+                    event_type="session.started",
+                    text_preview=None,
+                    artifact_ref=None,
+                    metadata_={
+                        "moonmind": {
+                            "directManagedSessionId": "direct-session-1",
+                            "sessionEpoch": 2,
+                            "turnId": None,
+                        }
+                    },
+                )
+            ]
+
+        async def append_events(
+            self, _bridge_session_id: str, events: list[dict[str, Any]]
+        ) -> None:
+            appended.extend(events)
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        correlationId="workflow-3367",
+        idempotencyKey="issue-3367-idempotency",
+        parameters={"instructions": "test"},
+    )
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-1",
+        sessionEpoch=2,
+        containerId="container-1",
+        threadId="thread-2",
+    )
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+
+    result = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(),
+        row=SimpleNamespace(bridge_session_id="bridge-1"),
+        request=request,
+        locator=locator,
+        event_payloads=[
+            {"type": "session.started", "status": "running"},
+            {
+                "type": "session.item.resource_published",
+                "status": "running",
+                "artifactRef": "artifact:summary",
+            },
+        ],
+        compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert result["eventCount"] == 1
+    assert [event["eventType"] for event in appended] == [
+        "session.item.resource_published"
+    ]
+    assert appended[0]["metadata"]["moonmind"] == {
+        "workflowChatVisible": True,
+        "source": "codex_direct_compat",
+        "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+        "directManagedSessionId": "direct-session-1",
+        "sessionEpoch": 2,
+        "turnId": None,
+        "sourceEventId": None,
+        "sourceOutcome": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_codex_bridge_dedup_keeps_same_text_in_distinct_turns() -> None:
+    appended: list[dict[str, Any]] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return [
+                SimpleNamespace(
+                    event_type="response.output",
+                    text_preview="same",
+                    artifact_ref=None,
+                    metadata_={"moonmind": {"directManagedSessionId": "session", "sessionEpoch": 1, "turnId": "turn-1"}},
+                )
+            ]
+
+        async def append_events(self, _bridge_session_id: str, events: list[dict[str, Any]]) -> None:
+            appended.extend(events)
+
+    request = AgentExecutionRequest(agentKind="managed", agentId="codex", correlationId="wf", idempotencyKey="idem")
+    locator = CodexManagedSessionLocator(sessionId="session", sessionEpoch=1, containerId="container", threadId="thread")
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+    result = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator,
+        event_payloads=[{"type": "response.output", "status": "running", "text": "same", "data": {"turnId": "turn-2"}}],
+        compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert result["eventCount"] == 1
+    assert appended[0]["metadata"]["moonmind"]["turnId"] == "turn-2"
 
 
 @pytest.mark.asyncio

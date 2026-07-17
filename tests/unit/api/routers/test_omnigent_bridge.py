@@ -136,14 +136,18 @@ class _FakeProxy:
 
 class _FakeStore:
     def __init__(
-        self, *, owner: Any | None = _UNSET, rows: list[Any] | None = None
+        self,
+        *,
+        owner: Any | None = _UNSET,
+        rows: list[Any] | None = None,
+        session_overrides: dict[str, Any] | None = None,
     ) -> None:
         self._owner = (
             SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
             if owner is _UNSET
             else owner
         )
-        self._rows = rows or [
+        self._rows = rows if rows is not None else [
             SimpleNamespace(
                 event_id="evt-1",
                 bridge_session_id="brs-1",
@@ -159,6 +163,7 @@ class _FakeStore:
                 metadata_={"responseId": "resp-1"},
             )
         ]
+        self._session_overrides = session_overrides or {}
 
     async def get_bridge_session_owner(self, bridge_session_id: str):
         return self._owner
@@ -166,16 +171,57 @@ class _FakeStore:
     async def list_events(self, bridge_session_id: str):
         return self._rows
 
+    async def list_event_page(self, bridge_session_id: str, *, after: int, limit: int):
+        rows = [row for row in self._rows if row.sequence > after]
+        return SimpleNamespace(
+            rows=rows[:limit],
+            has_more=len(rows) > limit,
+            latest_sequence=max((row.sequence for row in self._rows), default=0),
+            earliest_sequence=min((row.sequence for row in self._rows), default=None),
+        )
+
+    async def get_bridge_session(self, bridge_session_id: str):
+        return self._session()
+
+    def _session(self):
+        terminal_status = next(
+            (
+                row.normalized_status
+                for row in reversed(self._rows)
+                if row.normalized_status
+                in {"completed", "failed", "canceled", "timed_out"}
+            ),
+            None,
+        )
+        values = dict(
+            bridge_session_id="brs-1",
+            moonmind_workflow_id=self._owner.workflow_id,
+            moonmind_run_id="run-1",
+            moonmind_agent_run_id=self._owner.agent_run_id,
+            step_execution_id="step-1",
+            idempotency_key="idem-1",
+            status=terminal_status or "active",
+            compatibility_profile="omnigent.server.v1",
+            provider_profile_id="profile-1",
+            host_binding_ref="host-ref",
+            omnigent_session_id="session-ref",
+            terminal_refs={},
+            metadata_={},
+            diagnostics_ref=None,
+            capture_manifest_ref=None,
+            initial_snapshot_ref=None,
+            final_snapshot_ref=None,
+            raw_events_ref=None,
+            normalized_events_ref=None,
+            external_state_ref=None,
+        )
+        values.update(self._session_overrides)
+        return SimpleNamespace(**values)
+
     async def resolve_projection_session(self, **kwargs):
         if self._owner is None:
             return None
-        return SimpleNamespace(
-            bridge_session_id="brs-1",
-            moonmind_workflow_id=self._owner.workflow_id,
-            moonmind_agent_run_id=self._owner.agent_run_id,
-            idempotency_key="idem-1",
-            status="active",
-        )
+        return self._session()
 
 
 class _FakeEmbeddedFacade:
@@ -469,8 +515,9 @@ def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["bridgeSessionId"] == "brs-1"
-    assert body["truncated"] is False
-    event = body["events"][0]
+    assert body["schemaVersion"] == "moonmind.bridge-session-events-page.v1"
+    assert body["hasMore"] is False
+    event = body["items"][0]
     assert event["sequence"] == 1
     assert event["stream"] == "stdout"
     assert event["text"] == "hello from bridge"
@@ -485,7 +532,9 @@ def test_list_bridge_session_events_handles_nullable_event_type() -> None:
             event_id="evt-null",
             bridge_session_id="brs-1",
             sequence=1,
-            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            timestamp=SimpleNamespace(
+                isoformat=lambda: "2026-07-09T00:00:00+00:00"
+            ),
             direction="host_to_moonmind",
             event_type=None,
             normalized_status="running",
@@ -511,7 +560,7 @@ def test_list_bridge_session_events_handles_nullable_event_type() -> None:
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
 
     assert resp.status_code == 200
-    events = resp.json()["events"]
+    events = resp.json()["items"]
     assert events[0]["stream"] == "stdout"
     assert events[0]["text"] == "Bridge session event."
     assert events[0]["kind"] == "system_annotation"
@@ -556,13 +605,115 @@ def test_stream_bridge_session_events_keeps_since_and_stops_on_terminal() -> Non
     assert "evt-1" not in body
     assert "evt-2" in body
     assert "event: bridge_event" in body
+    assert "id: 2" in body
+
+
+def test_event_page_is_bounded_and_cursor_based() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id=f"evt-{sequence}",
+            bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.delta",
+            normalized_status="running",
+            text_preview=str(sequence),
+            artifact_ref=None,
+            metadata_={},
+        )
+        for sequence in range(1, 5)
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?after=1&limit=2"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["sequence"] for item in body["items"]] == [2, 3]
+    assert body["nextCursor"] == "3"
+    assert body["hasMore"] is True
+    assert body["latestSequence"] == 4
 
 
 def test_list_bridge_session_events_denies_non_owner() -> None:
     client, _, _ = _build(owner_id=uuid4())
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == {"code": "omnigent_bridge_session_unknown"}
+
+
+def test_unknown_and_foreign_sessions_have_identical_projection_failure() -> None:
+    foreign, _, _ = _build(owner_id=uuid4())
+    unknown, _, _ = _build(store=_FakeStore(owner=None))
+    for suffix in ("events", "stream"):
+        foreign_response = foreign.get(
+            f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/{suffix}"
+        )
+        unknown_response = unknown.get(
+            f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/{suffix}"
+        )
+        assert foreign_response.status_code == unknown_response.status_code == 404
+        assert foreign_response.json() == unknown_response.json()
+
+
+def test_stream_resumes_from_greatest_cursor_source() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id=f"evt-{sequence}",
+            bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.delta",
+            normalized_status="completed" if sequence == 3 else "running",
+            text_preview=str(sequence),
+            artifact_ref=None,
+            metadata_={},
+        )
+        for sequence in range(1, 4)
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?cursor=1",
+        headers={"Last-Event-ID": "2"},
+    )
+    assert resp.status_code == 200
+    assert "evt-1" not in resp.text
+    assert "evt-2" not in resp.text
+    assert "evt-3" in resp.text
+
+
+def test_terminal_page_falls_back_to_durable_session_evidence_without_events() -> None:
+    store = _FakeStore(
+        rows=[],
+        session_overrides={
+            "status": "failed",
+            "terminal_refs": {
+                "failureClass": "execution_error",
+                "failureCode": "provider_failed",
+                "summary": "failed before stream",
+                "cleanupState": "completed",
+                "leaseReleaseState": "released",
+            },
+            "diagnostics_ref": "artifact://diagnostics",
+            "capture_manifest_ref": "artifact://capture",
+            "final_snapshot_ref": "artifact://final",
+            "external_state_ref": "artifact://external",
+        },
+    )
+    client, _, _ = _build(store=store)
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
+    assert resp.status_code == 200
+    envelope = resp.json()["terminalEnvelope"]
+    assert resp.json()["terminal"] is True
+    assert envelope["failureClass"] == "execution_error"
+    assert envelope["diagnosticsRef"] == "artifact://diagnostics"
+    assert envelope["captureManifestRef"] == "artifact://capture"
+    assert envelope["finalSnapshotRef"] == "artifact://final"
+    assert envelope["externalStateRef"] == "artifact://external"
+    assert envelope["cleanupState"] == "completed"
+    assert envelope["leaseReleaseState"] == "released"
 
 
 def test_routes_registered_under_configured_mount_path() -> None:

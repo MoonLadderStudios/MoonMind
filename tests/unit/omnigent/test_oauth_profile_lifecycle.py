@@ -33,6 +33,7 @@ from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _failure_evidence,
 )
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
@@ -48,7 +49,41 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
-from moonmind.workflows.temporal.runtime.git_auth import build_github_token_git_environment
+
+
+@pytest.mark.parametrize(
+    ("code", "failure_class", "remediation"),
+    [
+        ("authorization_denied", "authorization_error", "contact_administrator"),
+        (
+            "profile_resolution_failed",
+            "configuration_error",
+            "select_execution_profile",
+        ),
+        (
+            "profile_readiness_failed",
+            "configuration_error",
+            "validate_codex_oauth",
+        ),
+    ],
+)
+def test_failure_evidence_classifies_operator_action(
+    code: str, failure_class: str, remediation: str
+) -> None:
+    exc = RuntimeError("failed")
+    exc.code = code  # type: ignore[attr-defined]
+    assert _failure_evidence(exc) == (code, failure_class, remediation)
+
+
+def test_failure_evidence_falls_back_when_code_is_none() -> None:
+    exc = RuntimeError("failed")
+    exc.code = None  # type: ignore[attr-defined]
+    assert _failure_evidence(exc)[0] == "RuntimeError"
+
+
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
+)
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -166,8 +201,14 @@ async def test_runtime_preflight_uses_stock_runner_environment_constructor() -> 
     assert result["status"] == "ready"
     runner_calls = [call for call in calls if "python" in call]
     assert len(runner_calls) == 6
-    assert all("from omnigent.host.connect import _build_runner_env" in call[5] for call in runner_calls)
-    assert all(call[:4] == ("docker", "exec", "host-mm-1215", "python") for call in runner_calls)
+    assert all(
+        "from omnigent.host.connect import _build_runner_env" in call[5]
+        for call in runner_calls
+    )
+    assert all(
+        call[:4] == ("docker", "exec", "host-mm-1215", "python")
+        for call in runner_calls
+    )
 
 
 def test_deterministic_owner_reuses_activity_retry_identity() -> None:
@@ -294,8 +335,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     launch = commands[3]
     assert (
         "type=volume,src=moonmind-omnigent-tools-gh-2.74.2-1,"
-        "dst=/opt/moonmind-tools,readonly"
-        in launch
+        "dst=/opt/moonmind-tools,readonly" in launch
     )
     assert any(
         value.endswith(",dst=/etc/profile.d/moonmind-tools.sh,readonly")
@@ -308,7 +348,9 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
 
 
 @pytest.mark.asyncio
-async def test_private_workspace_clone_uses_in_memory_github_credentials(tmp_path) -> None:
+async def test_private_workspace_clone_uses_in_memory_github_credentials(
+    tmp_path,
+) -> None:
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
     )
@@ -419,7 +461,9 @@ def test_github_write_probe_uses_publish_or_skill_side_effect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tools_path_discovery_falls_back_when_image_is_not_local(tmp_path) -> None:
+async def test_tools_path_discovery_falls_back_when_image_is_not_local(
+    tmp_path,
+) -> None:
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -515,9 +559,7 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
             "omnigent-host-codex",
         ),
     ]
-    assert all(
-        "docker-compose.codex-host.yaml" not in command for command in commands
-    )
+    assert all("docker-compose.codex-host.yaml" not in command for command in commands)
 
 
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:
@@ -745,6 +787,10 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("host_cleanup")
 
     class Store:
+        async def get_or_create(self, **_kwargs):
+            actions.append("bridge_envelope_created")
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
         async def bind_profile_authorization(self, **_kwargs):
             actions.append("bridge_bound")
             return SimpleNamespace(bridge_session_id="bridge-1")
@@ -771,7 +817,20 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         artifact_gateway=object(),
     )
     coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(cooldown_after_429_seconds=900)
+        return_value=SimpleNamespace(
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            secret_refs={},
+            command_behavior={},
+        )
     )
     result = await coordinator.execute(
         AgentExecutionRequest(
@@ -786,7 +845,10 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
-    assert actions[-3:] == ["host_stopped", "cleanup_completed", "provider_released"]
+    assert actions[0] == "bridge_envelope_created"
+    assert actions[-1] == "terminal"
+    assert actions.index("host_stopped") < actions.index("profile_lease_release")
+    assert actions.index("provider_released") < actions.index("profile_lease_release")
 
 
 @pytest.mark.asyncio
@@ -853,6 +915,9 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
             return None
 
     class Store:
+        async def get_or_create(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
         async def bind_profile_authorization(self, **_kwargs):
             return SimpleNamespace(bridge_session_id="bridge-1")
 
@@ -869,7 +934,20 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         artifact_gateway=object(),
     )
     coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(cooldown_after_429_seconds=900)
+        return_value=SimpleNamespace(
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            secret_refs={},
+            command_behavior={},
+        )
     )
     coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
 
@@ -892,7 +970,9 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         )
 
     execute.assert_not_awaited()
-    blocked = next(kwargs for name, kwargs in events if name == "mounted_tool_preflight_blocked")
+    blocked = next(
+        kwargs for name, kwargs in events if name == "mounted_tool_preflight_blocked"
+    )
     assert blocked["code"] == "github_auth_unavailable"
     assert blocked["metadata"] == {
         "tool": "gh",
