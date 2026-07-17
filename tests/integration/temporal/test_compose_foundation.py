@@ -8,6 +8,11 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+MOUNTED_TOOL_PATH = (
+    "/opt/moonmind-tools/bin:"
+    "${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
+    "/usr/bin:/usr/sbin:/bin:/sbin}"
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -175,6 +180,33 @@ def test_temporal_compose_topology_and_private_exposure():
         assert "local-network" in temporal_networks
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
+
+
+def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
+    compose = _load_compose()
+    services = compose["services"]
+    initializer = services["omnigent-tools-init"]
+
+    assert initializer["user"] == "0:0"
+    assert initializer["restart"] == "no"
+    assert initializer["volumes"] == [
+        "omnigent-tools:/output",
+        "./services/omnigent/tools:/opt/moonmind-tools-init:ro",
+    ]
+    assert compose["volumes"]["omnigent-tools"]["name"] == (
+        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}"
+    )
+
+    for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
+        host = services[service_name]
+        environment = _env_map(host["environment"])
+        assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
+        assert "omnigent-tools-init" not in host["depends_on"]
+        assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
+        assert (
+            "./services/omnigent/profile/moonmind-tools.sh:"
+            "/etc/profile.d/moonmind-tools.sh:ro"
+        ) in host["volumes"]
 
 def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     compose = _load_compose()
@@ -478,7 +510,9 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
     assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
 
-    host_volumes = set(host_service["volumes"])
+    host_volumes = {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    }
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert "codex_auth_volume:/root/.codex" not in host_volumes
@@ -516,6 +550,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     host_env = _env_map(host_service["environment"])
     assert host_env == {
         "HOME": "/home/app",
+        "PATH": MOUNTED_TOOL_PATH,
         "CLAUDE_HOME": "/home/app/.claude",
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
         "CLAUDE_CONFIG_DIR": "/home/app/.claude",
@@ -528,7 +563,9 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "GOOGLE_API_KEY": "",
     }
 
-    host_volumes = set(host_service["volumes"])
+    host_volumes = {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    }
     assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
     assert "claude_auth_volume:/home/app/.claude" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
@@ -573,6 +610,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {
         "HOME": "/home/app",
+        "PATH": MOUNTED_TOOL_PATH,
         "CODEX_HOME": "/home/app/.codex",
         "CODEX_CONFIG_HOME": "/home/app/.codex",
         "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
@@ -595,15 +633,20 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "GOOGLE_API_KEY",
     }
     assert set(entrypoint[1::2]) == {"-u"}
-    assert set(host_service["volumes"]) == {
+    assert {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    } == {
         "omnigent-host-codex-state:/home/app/.omnigent",
         "codex_auth_volume:/home/app/.codex",
+        "omnigent-tools:/opt/moonmind-tools:ro",
+        "./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
         "./omnigent_workspaces:/workspaces",
         (
             "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
             "/workspaces/MoonMind:ro"
         ),
         "./services/omnigent/scripts:/opt/moonmind:ro",
+        "./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
     }
     assert "omnigent-host-codex-state" in compose["volumes"]
     assert host_service["depends_on"] == {
