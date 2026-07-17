@@ -5075,6 +5075,213 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recovery_handoff_enabled", "expect_create_pr"),
+    [(False, False), (True, True)],
+)
+async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_draft(
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_handoff_enabled: bool,
+    expect_create_pr: bool,
+) -> None:
+    """A skipped normal handoff must not suppress the recovery draft."""
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_status = "not_required"
+    workflow._publish_reason = "Earlier issue update required no PR output."
+    create_pr_payload: dict[str, object] | None = None
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_payload
+        if activity_type == "repo.create_pr":
+            create_pr_payload = dict(payload or {})
+            return {
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/999",
+                "created": True,
+                "adopted": False,
+                "headSha": "abc123",
+            }
+        if activity_type == "agent_skill.resolve":
+            return {
+                "manifestRef": "art_skill_snapshot_1",
+                "skills": [{"name": "moonspec-verify"}],
+            }
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) if payload is not None else None
+            if artifact_ref == "artifact://registry/1":
+                return json.dumps({"skills": []}).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "MoonSpec exhausted remediation draft",
+                        "created_at": "2026-07-17T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {
+                        "failure_mode": "FAIL_FAST",
+                        "max_concurrency": 1,
+                    },
+                    "nodes": [
+                        {
+                            "id": "verify-remediation-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "auto",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex"},
+                                "selectedSkill": "moonspec-verify",
+                                "targetBranch": "partial-work",
+                                "title": "Verify remediation attempt 1 of 1",
+                                "annotations": {
+                                    "issueImplementRole": (
+                                        "moonspec-verification-gate"
+                                    ),
+                                    "moonSpecRemediationAttempt": 1,
+                                    "moonSpecRemediationMaxAttempts": 1,
+                                    "moonSpecFinalRemediationGate": True,
+                                },
+                                "instructions": "Verify the final remediation.",
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _request: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
+            "metadata": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "recommendedNextAction": "reattempt_current_step",
+                "operator_summary": "One retry-stability gap remains.",
+                "diagnostics_ref": "art_verify_remaining_work",
+                "push_status": "pushed",
+                "push_branch": "partial-work",
+                "push_base_ref": "origin/main",
+                "push_commit_count": 2,
+                "push_head_sha": "abc123",
+            },
+            "output_refs": [],
+        }
+
+    async def fake_bind_workflow_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    enabled_patches = {
+        run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        run_workflow_module.NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        run_workflow_module.RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH,
+        run_workflow_module.RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
+        run_workflow_module.RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH,
+    }
+    if recovery_handoff_enabled:
+        enabled_patches.add(
+            run_workflow_module.RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH
+        )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+        },
+        plan_ref="art_plan_1",
+    )
+
+    if not expect_create_pr:
+        assert create_pr_payload is None
+        assert workflow._pull_request_url is None
+        assert workflow._publish_status == "not_required"
+        assert workflow._publish_context["moonSpecDraftPublication"]["policy"] == (
+            "draft_pr_on_additional_work_needed"
+        )
+        return
+
+    assert create_pr_payload is not None
+    assert create_pr_payload["head"] == "partial-work"
+    assert create_pr_payload["base"] == "main"
+    assert create_pr_payload["draft"] is True
+    assert "MoonSpec verification incomplete" in str(create_pr_payload["body"])
+    assert workflow._pull_request_url == (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/999"
+    )
+    assert workflow._publish_status == "published"
+    assert workflow._publish_context["moonSpecDraftPublication"]["policy"] == (
+        "draft_pr_on_additional_work_needed"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
