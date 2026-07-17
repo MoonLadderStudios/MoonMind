@@ -32,6 +32,7 @@ def _fixture_lock(tmp_path: Path, *, sha256: str | None = None) -> Path:
                     "linux/amd64": {
                         "url": archive.as_uri(),
                         "sha256": digest,
+                        "executableSha256": hashlib.sha256(executable).hexdigest(),
                         "archivePath": "fixture/bin/fixture-tool",
                     }
                 },
