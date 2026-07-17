@@ -164,6 +164,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -226,7 +228,7 @@ jobs:
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
       - name: Initialize MoonSpec test fixtures
-        run: git submodule update --init --depth 1 -- moonspec
+        run: git submodule update --init --depth 1 -- moonspec omnigent
       - name: Run selected unit suite
         run: |
           set -euo pipefail
@@ -368,6 +370,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
       - name: Run hermetic integration CI suite
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
