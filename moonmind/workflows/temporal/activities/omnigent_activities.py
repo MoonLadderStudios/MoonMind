@@ -53,20 +53,25 @@ async def omnigent_execute_activity(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        async with async_session_maker() as artifact_session:
-            coordinator = OmnigentProfileBoundExecutionCoordinator(
-                session_factory=async_session_maker,
-                lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-                host_repository=OmnigentOAuthHostRepository(async_session_maker),
-                host_runtime=OmnigentOAuthHostRuntime(client=omnigent_client),
-                run_store=run_store,
-                execution_runner=run_omnigent_execution,
-                artifact_gateway=artifact_gateway,
-                artifact_service=TemporalArtifactService(
-                    TemporalArtifactRepository(artifact_session)
-                ),
-            )
-            return await coordinator.execute(request)
+        class OnDemandTemporalArtifactService:
+            async def read(self, *, artifact_id: str, **kwargs):
+                async with async_session_maker() as artifact_session:
+                    service = TemporalArtifactService(
+                        TemporalArtifactRepository(artifact_session)
+                    )
+                    return await service.read(artifact_id=artifact_id, **kwargs)
+
+        coordinator = OmnigentProfileBoundExecutionCoordinator(
+            session_factory=async_session_maker,
+            lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
+            host_repository=OmnigentOAuthHostRepository(async_session_maker),
+            host_runtime=OmnigentOAuthHostRuntime(client=omnigent_client),
+            run_store=run_store,
+            execution_runner=run_omnigent_execution,
+            artifact_gateway=artifact_gateway,
+            artifact_service=OnDemandTemporalArtifactService(),
+        )
+        return await coordinator.execute(request)
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")

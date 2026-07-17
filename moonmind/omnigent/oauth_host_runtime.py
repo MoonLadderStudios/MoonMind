@@ -208,7 +208,7 @@ class OmnigentOAuthHostRuntime:
             class _GatewayArtifactService:
                 async def read(self, *, artifact_id: str, **_kwargs: Any):
                     payload = await artifact_gateway.read_bytes(artifact_id)
-                    return None, payload
+                    return {}, payload
 
             artifact_service = _GatewayArtifactService()
         resolved_skillset = await load_resolved_skillset(

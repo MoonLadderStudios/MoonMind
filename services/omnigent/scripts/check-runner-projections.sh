@@ -10,4 +10,4 @@ test -r /opt/moonmind-tools/manifest.json
 test -x /opt/moonmind-tools/bin/gh
 command -v gh >/dev/null
 gh --version >/dev/null
-bash -lc 'command -v gh >/dev/null && gh --version >/dev/null'
+sh -lc 'command -v gh >/dev/null && gh --version >/dev/null'

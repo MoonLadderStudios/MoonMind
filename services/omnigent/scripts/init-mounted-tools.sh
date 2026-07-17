@@ -10,7 +10,12 @@ if [ -x "$output/bin/gh" ] && [ -r "$output/manifest.json" ]; then
   reported=$($output/bin/gh --version | sed -n '1p')
   case "$reported" in
     *" $version "*) exit 0 ;;
-    *) echo "existing tool bundle does not match requested gh $version" >&2; exit 65 ;;
+    *)
+      echo "existing tool bundle does not match requested gh $version, recreating" >&2
+      chmod u+w "$output" "$output/bin" 2>/dev/null || true
+      chmod -R u+w "$output" 2>/dev/null || true
+      rm -rf "$output/bin" "$output/manifest.json"
+      ;;
   esac
 fi
 mkdir -p "$output/bin"

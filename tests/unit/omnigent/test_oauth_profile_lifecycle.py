@@ -579,6 +579,17 @@ def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) ->
     assert installed.returncode == 0, installed.stderr
     assert json.loads((output / "manifest.json").read_text())["tools"][0]["name"] == "gh"
     assert (output / "bin" / "gh").stat().st_mode & 0o222 == 0
+    fake_gh.write_text("#!/bin/sh\necho 'gh version 2.77.0 (fixture)'\n", encoding="utf-8")
+    env["MOONMIND_GH_VERSION"] = "2.77.0"
+    upgraded = subprocess.run(
+        ["sh", str(scripts / "init-mounted-tools.sh")],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    assert json.loads((output / "manifest.json").read_text())["tools"][0]["version"] == "2.77.0"
     login_home = tmp_path / "home"
     login_home.mkdir()
     (login_home / ".bash_profile").write_text(
@@ -596,7 +607,7 @@ def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) ->
         text=True,
     )
     assert login.returncode == 0, login.stderr
-    assert "2.76.2" in login.stdout
+    assert "2.77.0" in login.stdout
 
 
 def test_omnigent_projects_portable_pr_resolver_semantics_without_copying_them() -> None:
