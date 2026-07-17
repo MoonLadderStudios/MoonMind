@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +67,7 @@ def _trusted_gh_digest_checks() -> str:
 
 def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]:
     repo = _repository_name(repository)
+    quoted_repo = shlex.quote(repo)
     probes = [
         Probe("manifest", _trusted_gh_digest_checks(), "tool_manifest_mismatch"),
         Probe("lookup", "command -v gh", "tool_not_visible_in_login_shell"),
@@ -73,7 +75,7 @@ def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]
         Probe("authentication", "gh auth status", "github_auth_unavailable"),
         Probe(
             "repository_access",
-            f"gh repo view {repo} --json nameWithOwner,viewerPermission",
+            f"gh repo view {quoted_repo} --json nameWithOwner,viewerPermission",
             "github_repository_unauthorized",
         ),
     ]
@@ -81,9 +83,9 @@ def _gh_probes(repository: str, *, mutation_required: bool) -> tuple[Probe, ...]
         probes.append(
             Probe(
                 "mutation_permission",
-                f"test \"$(gh repo view {repo} --json viewerPermission --jq .viewerPermission)\" = ADMIN || "
-                f"test \"$(gh repo view {repo} --json viewerPermission --jq .viewerPermission)\" = MAINTAIN || "
-                f"test \"$(gh repo view {repo} --json viewerPermission --jq .viewerPermission)\" = WRITE",
+                f"test \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" = ADMIN || "
+                f"test \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" = MAINTAIN || "
+                f"test \"$(gh repo view {quoted_repo} --json viewerPermission --jq .viewerPermission)\" = WRITE",
                 "github_repository_unauthorized",
             )
         )

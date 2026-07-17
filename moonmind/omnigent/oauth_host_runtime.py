@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -453,17 +452,29 @@ class OmnigentOAuthHostRuntime:
             )
 
         async def runner_runner(command: str) -> tuple[int, str, str]:
-            # Mirror the stock host's explicit runner passthrough allowlist.  This
-            # proves the shell/environment that the harness constructs, not the
-            # worker container that launched the host.
-            runner_command = (
-                'env -i HOME="$HOME" PATH="$PATH" GH_TOKEN="$GH_TOKEN" '
-                'GH_CONFIG_DIR="$GH_CONFIG_DIR" GH_PROMPT_DISABLED=1 '
-                'GH_NO_UPDATE_NOTIFIER=1 GH_NO_EXTENSION_UPDATE_NOTIFIER=1 '
-                f"bash -lc {shlex.quote(command)}"
+            # Execute with the stock host's authoritative runner environment
+            # constructor.  Importing this function from the installed Omnigent
+            # build keeps the pre-session proof on the exact path that
+            # HostConnect._handle_launch uses immediately before Popen.
+            runner_probe = (
+                "import os, subprocess, sys; "
+                "from omnigent.host.connect import _build_runner_env; "
+                "env = _build_runner_env(os.environ, server_url=os.environ.get("
+                "'OMNIGENT_SERVER_URL', ''), runner_id='preflight', "
+                "binding_token='preflight', workspace='/workspaces/run', "
+                "parent_pid=os.getpid()); "
+                "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
+                "text=True); raise SystemExit(result.returncode)"
             )
             return await self._run(
-                "docker", "exec", container_name, "bash", "-lc", runner_command, check=False
+                "docker",
+                "exec",
+                container_name,
+                "python",
+                "-c",
+                runner_probe,
+                command,
+                check=False,
             )
 
         return await preflight_mounted_tools(
