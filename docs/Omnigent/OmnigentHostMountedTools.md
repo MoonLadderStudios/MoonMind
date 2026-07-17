@@ -126,7 +126,8 @@ A minimal manifest has this shape:
       "version": "<pinned-gh-version>",
       "platform": "linux/amd64",
       "sha256": "<expected-sha256>",
-      "path": "bin/gh"
+      "path": "bin/gh",
+      "versionProbe": ["--version"]
     }
   ]
 }
@@ -153,11 +154,11 @@ For each declared tool, the initializer must:
 1. select the correct operating-system and CPU-architecture artifact;
 2. obtain one pinned release artifact from an approved source or copy it from a trusted build image;
 3. verify the expected SHA-256;
-4. install the executable under `/output/bin/<tool>` with executable permissions;
-5. execute a bounded version check such as `<tool> --version`;
-6. write the completed `manifest.json` only after every tool passes validation.
+4. install the executable into an isolated staging directory with executable permissions;
+5. execute the tool's bounded, non-interactive `versionProbe` arguments from the trusted manifest;
+6. atomically publish the completed staging directory, including `manifest.json`, only after every tool passes validation.
 
-The initializer is idempotent. If a populated bundle does not match its expected manifest, initialization fails rather than silently accepting or modifying unknown contents.
+The initializer is idempotent. A completed bundle whose manifest does not match the expected manifest fails rather than being modified in place. Incomplete staging state without a completed manifest is not a bundle: the initializer may safely remove that private staging state and retry. Staging paths are unique to an initializer attempt, so a failed attempt cannot poison the versioned published volume or expose partial files to hosts.
 
 Tool downloads do not occur inside an ordinary Omnigent workflow session. An agent cannot add arbitrary executables to the shared bundle.
 
@@ -179,14 +180,20 @@ The profile file is a small deployment-owned script:
 ```sh
 case ":${PATH}:" in
   *:/opt/moonmind-tools/bin:*) ;;
-  *) export PATH="/opt/moonmind-tools/bin:${PATH}" ;;
+  *)
+    if [ -n "${PATH:-}" ]; then
+      export PATH="/opt/moonmind-tools/bin:${PATH}"
+    else
+      export PATH="/opt/moonmind-tools/bin"
+    fi
+    ;;
 esac
 ```
 
 The host launch also sets `PATH` directly so non-login processes see the tools without relying on shell startup files:
 
 ```text
-PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+PATH=/opt/moonmind-tools/bin:<upstream-image-PATH>
 ```
 
 Both mechanisms are required. Omnigent native harnesses may execute through login shells, and login-shell initialization may rebuild `PATH` after container environment values are applied.
@@ -208,7 +215,7 @@ services:
   omnigent-host-codex:
     image: ${OMNIGENT_HOST_IMAGE}:${OMNIGENT_HOST_IMAGE_TAG}
     environment:
-      PATH: /opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
     volumes:
       - omnigent-tools:/opt/moonmind-tools:ro
       - ./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
@@ -218,9 +225,10 @@ services:
 
 volumes:
   omnigent-tools:
+    name: moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION}
 ```
 
-The on-demand Docker launch uses the same target paths and readiness rules.
+The deployment sets `OMNIGENT_HOST_BASE_PATH` from the selected upstream image's default `PATH`; the fallback shown above preserves the conventional executable and system-administration directories. It must not replace a discovered upstream path with a smaller static list. The volume identity includes the pinned bundle version, so an upgrade publishes a distinct volume and existing hosts remain bound to their original completed bundle. The on-demand Docker launch uses the same target paths and readiness rules.
 
 ### 6.3 Docker-daemon visibility
 
@@ -242,25 +250,25 @@ The current `pr-resolver` Skill declares both `git` and `gh` because it must mod
 
 ### 7.2 Baseline credential mapping
 
-The simple baseline uses the stock host's Git credential convention and GitHub CLI's standard environment authentication:
+The simple baseline uses the stock host's Git credential convention and GitHub CLI's standard environment authentication on an on-demand host or a host dedicated to exactly one run:
 
 ```text
 GIT_TOKEN=<MoonMind-resolved GitHub credential>
 GIT_USERNAME=x-access-token
 GH_TOKEN=<MoonMind-resolved GitHub credential>
-GH_CONFIG_DIR=/tmp/moonmind-gh
+GH_CONFIG_DIR=<run-private-workspace>/.config/gh
 GH_PROMPT_DISABLED=1
 GH_NO_UPDATE_NOTIFIER=1
 GH_NO_EXTENSION_UPDATE_NOTIFIER=1
 ```
 
-The same narrowly scoped credential may back `GIT_TOKEN` and `GH_TOKEN` in the initial local and on-demand host paths. A later design may separate or broker them, but that is not required for the mounted-tools baseline.
+The same narrowly scoped credential may back `GIT_TOKEN` and `GH_TOKEN` for that run. `GH_CONFIG_DIR` is created with owner-only permissions inside the run-private workspace and is never shared between sessions. A reusable static host is not eligible for credential-bearing GitHub runs because its host-wide runner environment would expose `GIT_TOKEN` and passthrough values to unrelated runners. Such a deployment must route the run to an on-demand or run-dedicated host; per-run environment injection may make reusable hosts eligible only when that isolation boundary is implemented and verified.
 
 The tool bundle never contains token values. MoonMind resolves the credential at the trusted launch boundary and must keep it out of workflow payloads, Temporal history, logs, artifacts, and durable host metadata.
 
 ### 7.3 Runner environment
 
-The stock Omnigent host intentionally forwards `GIT_TOKEN` and `GIT_USERNAME` for Git transport. GitHub CLI settings that are not part of the stock credential allowlist must be explicitly forwarded to spawned runners:
+On an on-demand or run-dedicated host, the stock Omnigent host intentionally forwards `GIT_TOKEN` and `GIT_USERNAME` for Git transport. GitHub CLI settings that are not part of the stock credential allowlist must be explicitly forwarded to that run's spawned runner:
 
 ```text
 OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER
@@ -297,14 +305,14 @@ The mounted `gh` binary lets the resolved Skill execute its existing helper scri
 
 A run that declares a tool-backed required capability must not start until MoonMind proves that the tool is visible through the same shell path the agent will use.
 
-For a CLI named `<tool>`, minimum readiness is:
+For a CLI named `<tool>`, minimum readiness uses its trusted manifest probe:
 
 ```sh
 bash -lc 'command -v <tool>'
-bash -lc '<tool> --version'
+bash -lc '<tool> <validated-versionProbe-arguments>'
 ```
 
-The check must run in the actual stock host environment with the mounted bundle and profile file applied. When practical, a runner-bound verification should also prove that Omnigent's spawned process sees the same command.
+The check must run in the actual stock host environment with the mounted bundle and profile file applied. When the harness creates a distinct runner environment, the same probe must also execute through the exact runner construction path before session creation. Runner-bound verification is mandatory in that case; host-shell success alone is insufficient evidence.
 
 ### 8.2 `gh` readiness
 
