@@ -537,7 +537,6 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
 
     host_env = _env_map(host_service["environment"])
     assert host_env == {
-        "PATH": "/opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}",
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
         "HOME": "/home/app",
@@ -606,7 +605,6 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {
-        "PATH": "/opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}",
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "HOME": "/home/app",
         "PATH": MOUNTED_TOOL_PATH,
