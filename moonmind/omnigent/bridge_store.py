@@ -374,7 +374,7 @@ class OmnigentBridgeSessionStore:
                     deduplication_key=f"lifecycle:{event_identity}"[:128],
                     timestamp=datetime.now(tz=UTC),
                     direction="moonmind_system",
-                    event_type=f"lifecycle.{str(event_type)[:96]}",
+                    event_type=str(event_type)[:96],
                     normalized_status=("waiting" if status == "waiting" else None),
                     text_preview=safe_summary,
                     artifact_ref=(
