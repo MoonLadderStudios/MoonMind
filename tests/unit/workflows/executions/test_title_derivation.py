@@ -393,6 +393,131 @@ def test_preserves_meaningful_explicit_title() -> None:
     )
 
 
+def test_enriches_preset_label_from_structured_github_issue() -> None:
+    result = synthesize_execution_title(
+        requested_title="GitHub Issue Implement",
+        parameters={
+            "workflow": {
+                "title": "GitHub Issue Implement",
+                "taskTemplate": {"slug": "github-issue-implement"},
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                        "title": "Improve generated workflow titles",
+                    },
+                    "github_issue_ref": "MoonLadderStudios/MoonMind#3143",
+                },
+            }
+        },
+        integration="github",
+    )
+
+    assert result.display_title == (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143 — "
+        "Improve generated workflow titles"
+    )
+    assert result.source == "integration_target"
+    assert result.confidence == "high"
+    assert result.targets[0].provider == "github"
+    assert result.targets[0].key == "MoonLadderStudios/MoonMind#3143"
+
+
+def test_enriches_any_preset_label_from_github_issue_reference() -> None:
+    result = synthesize_execution_title(
+        requested_title="Issue Quality Review",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "issue-quality-review"},
+                "inputs": {
+                    "github_issue_ref": "MoonLadderStudios/AnotherRepo#27",
+                },
+            }
+        },
+    )
+
+    assert result.display_title == (
+        "Issue Quality Review: MoonLadderStudios/AnotherRepo#27"
+    )
+    assert result.source == "integration_target"
+
+
+def test_enriches_preset_label_from_applied_step_template_provenance() -> None:
+    result = synthesize_execution_title(
+        requested_title="GitHub Issue Implement",
+        parameters={
+            "workflow": {
+                "appliedStepTemplates": [
+                    {"slug": "github-issue-implement", "stepIds": ["step-1"]}
+                ],
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    }
+                },
+            }
+        },
+        integration="github",
+    )
+
+    assert result.display_title == (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143"
+    )
+    assert result.source == "integration_target"
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {
+            "github_issue": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "number": 0,
+            }
+        },
+        {"github_issue_ref": "MoonLadderStudios/MoonMind#0"},
+        {"github_issue_ref": "MoonLadderStudios/MoonMind#000"},
+    ],
+)
+def test_rejects_non_positive_github_issue_numbers(inputs: dict[str, object]) -> None:
+    result = synthesize_execution_title(
+        requested_title="GitHub Issue Implement",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "github-issue-implement"},
+                "inputs": inputs,
+            }
+        },
+        integration="github",
+    )
+
+    assert result.display_title == "GitHub Issue Implement"
+    assert result.source == "preset_template"
+    assert result.targets == ()
+
+
+def test_preserves_custom_title_for_structured_github_issue_preset() -> None:
+    result = synthesize_execution_title(
+        requested_title="Fix the workflow title regression",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "github-issue-implement"},
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    }
+                },
+            }
+        },
+        integration="github",
+    )
+
+    assert result.display_title == "Fix the workflow title regression"
+    assert result.source == "user_explicit"
+
+
 def test_jira_implement_ignores_load_brief_step_title() -> None:
     result = synthesize_execution_title(
         requested_title="Load Jira preset brief",

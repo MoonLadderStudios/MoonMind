@@ -5,12 +5,53 @@ import pytest
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
+    RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH,
     MoonMindRunWorkflow,
     bounded_story_loop_resume_decision,
     bounded_story_loop_scope_guard,
     bounded_story_loop_step_effects,
 )
+
+
+def _explicit_remediation_chain(max_attempts: int) -> list[dict[str, object]]:
+    nodes: list[dict[str, object]] = [
+        {
+            "id": "verify-initial",
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        }
+    ]
+    for attempt in range(1, max_attempts + 1):
+        nodes.extend(
+            [
+                {
+                    "id": f"remediate-{attempt}",
+                    "inputs": {
+                        "annotations": {
+                            "issueImplementRole": "moonspec-remediation",
+                            "moonSpecRemediationAttempt": attempt,
+                            "moonSpecRemediationMaxAttempts": max_attempts,
+                        }
+                    },
+                },
+                {
+                    "id": f"verify-{attempt}",
+                    "inputs": {
+                        "selectedSkill": "moonspec-verify",
+                        "annotations": {
+                            "issueImplementRole": "moonspec-verification-gate",
+                            "moonSpecRemediationAttempt": attempt,
+                            "moonSpecRemediationMaxAttempts": max_attempts,
+                            "moonSpecFinalRemediationGate": (
+                                attempt == max_attempts
+                            ),
+                        },
+                    },
+                },
+            ]
+        )
+    return nodes
 
 
 def test_workflow_boundary_records_failed_attempt_refs_without_publication() -> None:
@@ -301,6 +342,126 @@ def test_parent_loop_stops_when_verification_makes_no_progress(
     assert second["continueLoop"] is False
     assert second["reason"] == "no_progress_attempts_exhausted"
     assert second["hasRemainingRemediationStep"] is True
+
+
+def test_explicit_remediation_budget_governs_repeated_verifier_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for mm:bd3dedc3-6cf3-4801-95b4-be177b70ef6b."""
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(run, "_patched_or_false_outside_workflow", lambda _: True)
+    ordered_nodes = _explicit_remediation_chain(max_attempts=6)
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        feedback="The verifier emitted the same sparse remaining-work summary.",
+        recommended_next_action="reattempt_current_step",
+    )
+
+    decisions = []
+    for attempt in range(0, 7):
+        logical_step_id = "verify-initial" if attempt == 0 else f"verify-{attempt}"
+        run._step_terminal_dispositions[logical_step_id] = "accepted"
+        decisions.append(
+            run._bounded_story_loop_continuation_decision(
+                logical_step_id=logical_step_id,
+                gate_result=gate,
+                gate_result_ref=f"artifact://gate/{attempt}",
+                ordered_nodes=ordered_nodes,
+                current_index=attempt * 2,
+            )
+        )
+
+    first_post_remediation = decisions[1]
+    assert first_post_remediation["continueLoop"] is True
+    assert first_post_remediation["reason"] == "verification_requested_remediation"
+    assert first_post_remediation["nextLogicalStepId"] == "remediate-2"
+    assert first_post_remediation["budget"][
+        "maxConsecutiveNoProgressAttempts"
+    ] == 6
+    assert first_post_remediation["budget"]["consumed"][
+        "consecutiveNoProgressAttempts"
+    ] == 1
+
+    assert all(decision["continueLoop"] for decision in decisions[:-1])
+    assert decisions[-1]["continueLoop"] is False
+    assert decisions[-1]["reason"] == "max_attempts_exhausted"
+    assert decisions[-1]["remediationBudget"]["maxAttempts"] == 6
+    assert decisions[-1]["remediationBudget"]["currentAttempt"] == 6
+
+
+def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(run, "_patched_or_false_outside_workflow", lambda _: True)
+    run._publish_context["boundedStoryLoop"] = {
+        "budgets": {"maxConsecutiveNoProgressAttempts": 1}
+    }
+    ordered_nodes = _explicit_remediation_chain(max_attempts=6)
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        feedback="Unchanged remaining work.",
+    )
+
+    run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-initial",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/initial",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert decision["continueLoop"] is False
+    assert decision["reason"] == "no_progress_attempts_exhausted"
+    assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 1
+    assert decision["remediationBudget"]["remainingAttempts"] == 6
+
+
+def test_remediation_budget_patch_preserves_legacy_no_progress_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        run,
+        "_patched_or_false_outside_workflow",
+        lambda patch_id: patch_id
+        in {
+            RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
+            RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
+        },
+    )
+    ordered_nodes = _explicit_remediation_chain(max_attempts=6)
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        feedback="Unchanged remaining work.",
+    )
+
+    run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-initial",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/initial",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH.endswith("-v1")
+    assert decision["continueLoop"] is False
+    assert decision["reason"] == "no_progress_attempts_exhausted"
+    assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 1
 
 
 def test_parent_loop_continues_when_verification_progress_changes(
