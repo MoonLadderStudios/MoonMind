@@ -6,15 +6,19 @@ from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
+from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.workflows.run import (
     GateTransitionDecision,
+    RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
+    RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
+    RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
 )
 from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
-    mock_run_environment,
+    mock_run_environment,  # noqa: F401
 )
 
 
@@ -92,6 +96,85 @@ class _CurrentRemediationReplayFixture:
         return ["verify-1", decision.successor.logical_step_id]
 
 
+def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = [
+        {
+            "id": "verify-initial",
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        }
+    ]
+    for attempt in range(1, 3):
+        nodes.extend(
+            [
+                {
+                    "id": f"remediate-{attempt}",
+                    "inputs": {
+                        "annotations": {
+                            "issueImplementRole": "moonspec-remediation",
+                            "moonSpecRemediationAttempt": attempt,
+                            "moonSpecRemediationMaxAttempts": 2,
+                        }
+                    },
+                },
+                {
+                    "id": f"verify-{attempt}",
+                    "inputs": {
+                        "selectedSkill": "moonspec-verify",
+                        "annotations": {
+                            "issueImplementRole": "moonspec-verification-gate",
+                            "moonSpecRemediationAttempt": attempt,
+                            "moonSpecRemediationMaxAttempts": 2,
+                            "moonSpecFinalRemediationGate": attempt == 2,
+                        },
+                    },
+                },
+            ]
+        )
+    return nodes
+
+
+@workflow.defn(name="MM3379NoProgressBudgetReplayFixture")
+class _LegacyNoProgressBudgetReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        # Patch-marker shape of the release that stopped the example after its
+        # first unchanged post-remediation verification.
+        workflow.patched(RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH)
+        workflow.patched(RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH)
+        workflow.patched(RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH)
+        return ["verify-initial", "stop"]
+
+
+@workflow.defn(name="MM3379NoProgressBudgetReplayFixture")
+class _CurrentNoProgressBudgetReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        run_workflow = MoonMindRunWorkflow()
+        nodes = _mm3379_remediation_nodes()
+        gate = StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            feedback="Unchanged sparse remaining-work summary.",
+        )
+        run_workflow._bounded_story_loop_continuation_decision(
+            logical_step_id="verify-initial",
+            gate_result=gate,
+            gate_result_ref="artifact://gate/initial",
+            ordered_nodes=nodes,
+            current_index=0,
+        )
+        decision = run_workflow._bounded_story_loop_continuation_decision(
+            logical_step_id="verify-1",
+            gate_result=gate,
+            gate_result_ref="artifact://gate/1",
+            ordered_nodes=nodes,
+            current_index=2,
+        )
+        return [
+            "verify-initial",
+            "remediate-2" if decision["continueLoop"] else "stop",
+        ]
+
+
 @workflow.defn(name="MMCanonicalNoCommitReplayFixture")
 class _LegacyCanonicalNoCommitReplayFixture:
     @workflow.run
@@ -139,7 +222,7 @@ class _CurrentCanonicalNoCommitReplayFixture:
         return [run_workflow._publish_status, status, publish_failure]
 
 @pytest.mark.asyncio
-async def test_workflow_determinism_replay(mock_run_environment):
+async def test_workflow_determinism_replay(mock_run_environment):  # noqa: F811
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
@@ -230,6 +313,45 @@ async def test_moonspec_remediation_pre_and_post_patch_histories_replay() -> Non
     assert current_commands.count("verify-1") == 1
     replayer = Replayer(
         workflows=[_CurrentRemediationReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_no_progress_budget_pre_and_post_fix_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3379-legacy-replay",
+            workflows=[_LegacyNoProgressBudgetReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyNoProgressBudgetReplayFixture.run,
+                id="test-mm3379-legacy-history",
+                task_queue="test-mm3379-legacy-replay",
+            )
+            assert await legacy.result() == ["verify-initial", "stop"]
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3379-current-replay",
+            workflows=[_CurrentNoProgressBudgetReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentNoProgressBudgetReplayFixture.run,
+                id="test-mm3379-current-history",
+                task_queue="test-mm3379-current-replay",
+            )
+            assert await current.result() == ["verify-initial", "remediate-2"]
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentNoProgressBudgetReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)
