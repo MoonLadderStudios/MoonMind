@@ -119,6 +119,10 @@ _PR_URL_RE = re.compile(r"/pull/(\d+)(?=$|[/?#]|\b)", re.IGNORECASE)
 _PR_TEXT_RE = re.compile(r"\b(?:PR|pull request)\s*#?(\d+)\b", re.IGNORECASE)
 _GITHUB_SHORTHAND_RE = re.compile(r"(?<![\w/])#(\d+)\b")
 _MAX_PR_NUMBER_DIGITS = 10
+_MAX_GITHUB_REPOSITORY_LENGTH = 200
+_GITHUB_REPOSITORY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+)
 
 
 @dataclass(frozen=True)
@@ -268,24 +272,7 @@ def _capability_label(
             if payload is not None
         )
 
-    template_payloads = [
-        payload
-        for payload in (
-            _mapping(task_payload.get("taskTemplate")),
-            _mapping(task_payload.get("task_template")),
-            (
-                _mapping(workflow_payload.get("taskTemplate"))
-                if workflow_payload
-                else None
-            ),
-            (
-                _mapping(workflow_payload.get("task_template"))
-                if workflow_payload
-                else None
-            ),
-        )
-        if payload is not None
-    ]
+    template_payloads = _preset_payloads(task_payload)
     # A selected preset is the workflow-level capability. Its label must win over
     # the normalized first-step tool, which is only one implementation detail of
     # the expanded preset.
@@ -622,7 +609,16 @@ def _first_step_title(
 
 
 def _preset_slug(task_payload: Mapping[str, Any]) -> str | None:
-    candidates: list[Any] = []
+    for template in _preset_payloads(task_payload):
+        for key in ("slug", "name", "id"):
+            value = _clean_text(template.get(key))
+            if value:
+                return value
+    return None
+
+
+def _preset_payloads(task_payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    presets: list[Mapping[str, Any]] = []
     for payload in (task_payload, _mapping(task_payload.get("workflow"))):
         if payload is None:
             continue
@@ -630,14 +626,15 @@ def _preset_slug(task_payload: Mapping[str, Any]) -> str | None:
             payload.get("task_template")
         )
         if template is not None:
-            candidates.extend(
-                template.get(key) for key in ("slug", "name", "id") if template.get(key)
+            presets.append(template)
+        applied_templates = payload.get("appliedStepTemplates") or payload.get(
+            "applied_step_templates"
+        )
+        if isinstance(applied_templates, list):
+            presets.extend(
+                item for item in applied_templates if isinstance(item, Mapping)
             )
-    for candidate in candidates:
-        value = _clean_text(candidate)
-        if value:
-            return value
-    return None
+    return presets
 
 
 def _extract_issue_from_mapping(
@@ -728,13 +725,19 @@ def _extract_github_issue(text: str) -> str | None:
 
 def _render_github_issue(repository: str, digits: str) -> str | None:
     normalized_repository = repository.strip()
-    if not re.fullmatch(
-        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-        normalized_repository,
+    if len(normalized_repository) > _MAX_GITHUB_REPOSITORY_LENGTH:
+        return None
+    repository_parts = normalized_repository.split("/")
+    if len(repository_parts) != 2 or any(not part for part in repository_parts):
+        return None
+    if any(
+        character not in _GITHUB_REPOSITORY_CHARS
+        for part in repository_parts
+        for character in part
     ):
         return None
-    issue_num = digits.lstrip("0") or "0"
-    if not issue_num.isdigit() or len(issue_num) > _MAX_PR_NUMBER_DIGITS:
+    issue_num = digits.lstrip("0")
+    if not issue_num or not issue_num.isdigit() or len(issue_num) > _MAX_PR_NUMBER_DIGITS:
         return None
     return f"{normalized_repository}#{issue_num}"
 

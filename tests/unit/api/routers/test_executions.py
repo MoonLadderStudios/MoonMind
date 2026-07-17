@@ -310,6 +310,17 @@ def test_derive_task_title_enriches_generated_preset_label() -> None:
     )
 
 
+def test_derive_task_title_preserves_explicit_instruction_only_title() -> None:
+    title = _derive_task_title(
+        {
+            "title": "My custom title",
+            "instructions": "Do the work",
+        }
+    )
+
+    assert title == "My custom title"
+
+
 def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summary() -> None:
     payload = _step_execution_detail_payload(
         _phase_11_manifest(),
@@ -7107,13 +7118,19 @@ def test_create_task_shaped_execution_enriches_github_issue_preset_title(
                     "title": "GitHub Issue Implement",
                     "instructions": "Implement the selected GitHub issue.",
                     "runtime": {"mode": "claude_code"},
-                    "taskTemplate": {"slug": "github-issue-implement"},
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "github-issue-implement",
+                            "stepIds": ["step-1"],
+                        }
+                    ],
                     "tool": {
                         "type": "skill",
                         "name": "github.load_issue_preset_brief",
                     },
                     "steps": [
                         {
+                            "id": "step-1",
                             "title": "Load GitHub issue brief",
                             "instructions": "Load the selected GitHub issue.",
                             "tool": {

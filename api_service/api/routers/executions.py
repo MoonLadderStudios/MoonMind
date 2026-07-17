@@ -8920,7 +8920,12 @@ def _derive_task_title(
         isinstance(task_payload.get(key), Mapping)
         for key in ("tool", "skill", "workflow")
     )
-    if instructions and not has_tool_context and not normalized_steps:
+    if (
+        instructions
+        and not has_tool_context
+        and not normalized_steps
+        and (not current_title or is_generic_title(current_title))
+    ):
         normalized = " ".join(instructions[: _MAX_TASK_TITLE_LENGTH * 2].split())
         if normalized:
             return normalized[:_MAX_TASK_TITLE_LENGTH]

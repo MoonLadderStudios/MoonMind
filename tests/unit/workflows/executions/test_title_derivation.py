@@ -442,6 +442,61 @@ def test_enriches_any_preset_label_from_github_issue_reference() -> None:
     assert result.source == "integration_target"
 
 
+def test_enriches_preset_label_from_applied_step_template_provenance() -> None:
+    result = synthesize_execution_title(
+        requested_title="GitHub Issue Implement",
+        parameters={
+            "workflow": {
+                "appliedStepTemplates": [
+                    {"slug": "github-issue-implement", "stepIds": ["step-1"]}
+                ],
+                "inputs": {
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 3143,
+                    }
+                },
+            }
+        },
+        integration="github",
+    )
+
+    assert result.display_title == (
+        "GitHub Issue Implement: MoonLadderStudios/MoonMind#3143"
+    )
+    assert result.source == "integration_target"
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {
+            "github_issue": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "number": 0,
+            }
+        },
+        {"github_issue_ref": "MoonLadderStudios/MoonMind#0"},
+        {"github_issue_ref": "MoonLadderStudios/MoonMind#000"},
+    ],
+)
+def test_rejects_non_positive_github_issue_numbers(inputs: dict[str, object]) -> None:
+    result = synthesize_execution_title(
+        requested_title="GitHub Issue Implement",
+        parameters={
+            "workflow": {
+                "taskTemplate": {"slug": "github-issue-implement"},
+                "inputs": inputs,
+            }
+        },
+        integration="github",
+    )
+
+    assert result.display_title == "GitHub Issue Implement"
+    assert result.source == "preset_template"
+    assert result.targets == ()
+
+
 def test_preserves_custom_title_for_structured_github_issue_preset() -> None:
     result = synthesize_execution_title(
         requested_title="Fix the workflow title regression",
