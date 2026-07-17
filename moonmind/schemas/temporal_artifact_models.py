@@ -269,6 +269,12 @@ class SessionResourceModel(BaseModel):
     default_read_ref: Optional[ArtifactRefModel] = None
     preview_artifact_ref: Optional[ArtifactRefModel] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    preview_available: bool = False
+    download_available: bool = True
+    completeness_status: Literal["complete", "degraded", "pending"] = "complete"
+    unavailable_reason: Optional[str] = None
+    source_event_sequence: Optional[int] = None
+    related_resource_ids: list[str] = Field(default_factory=list)
     content_url: str
     download_url: str
 

@@ -79,6 +79,7 @@ async def test_bridge_resource_harvester_writes_section_12_artifacts(tmp_path) -
     assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
     assert manifest["sessionFiles"][0]["filename"] == "session.log"
     assert manifest["patchUnavailable"] is False
+    assert manifest["changedFiles"][0]["diffArtifactRef"] == manifest["workspaceDiffs"][0]["artifactRef"]
     assert refs["changedFilesIndexRef"].endswith(
         "/output.omnigent.changed_files.index.json"
     )

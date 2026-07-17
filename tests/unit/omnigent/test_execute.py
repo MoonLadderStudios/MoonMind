@@ -697,8 +697,21 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     )
     manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schemaVersion"] == 1
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
+    assert manifest["evidenceCompleteness"]["status"] == "complete"
+    assert manifest["capturePolicy"]["limits"]["maxListEntries"] == 100
+    assert [group["groupKey"] for group in manifest["resourceGroups"]] == [
+        "changed_files",
+        "diffs",
+        "workspace_files",
+        "session_files",
+        "snapshots",
+        "logs_and_journals",
+        "diagnostics",
+        "manifests",
+    ]
     external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
     external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
     assert external_state["endpointRef"] == "omnigent:endpoint:retry"

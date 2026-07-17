@@ -25,6 +25,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
+_CAPTURE_MANIFEST_SCHEMA_VERSION = 1
 
 
 class OmnigentContractError(RuntimeError):
@@ -1097,6 +1098,72 @@ def _patch_evidence(manifest: dict[str, Any]) -> dict[str, Any]:
     return evidence
 
 
+def _reconcile_changed_file_evidence(manifest: dict[str, Any]) -> None:
+    """Durably associate each changed file with its harvested diff outcome."""
+
+    diffs_by_path = {
+        str(item.get("path") or ""): str(item.get("artifactRef") or "")
+        for item in manifest.get("workspaceDiffs", [])
+        if isinstance(item, dict) and item.get("path") and item.get("artifactRef")
+    }
+    unavailable = str(
+        manifest.get("workspaceDiffsUnavailable")
+        or "No diff artifact was published for this changed file."
+    )
+    for changed_file in manifest.get("changedFiles", []):
+        if not isinstance(changed_file, dict) or not changed_file.get("path"):
+            continue
+        diff_ref = diffs_by_path.get(str(changed_file["path"]))
+        if diff_ref:
+            changed_file["diffArtifactRef"] = diff_ref
+            changed_file.pop("diffUnavailable", None)
+        else:
+            changed_file["diffUnavailable"] = unavailable
+
+
+def _associate_resource_events(
+    manifest: dict[str, Any], normalized_events: list[dict[str, Any]]
+) -> None:
+    """Attach harvested changed files to the durable announcing event sequence."""
+
+    sequence_by_path: dict[str, int] = {}
+    for event in normalized_events:
+        event_type = str(event.get("type") or event.get("eventType") or "")
+        if event_type != "resource.changed_file":
+            continue
+        path = _resource_path(event)
+        sequence = event.get("sequence")
+        if path and isinstance(sequence, int):
+            sequence_by_path.setdefault(path, sequence)
+    for changed_file in manifest.get("changedFiles", []):
+        if not isinstance(changed_file, dict):
+            continue
+        sequence = sequence_by_path.get(str(changed_file.get("path") or ""))
+        if sequence is not None:
+            changed_file["sourceEventSequence"] = sequence
+
+
+def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project the manifest into stable UI-oriented evidence groups."""
+
+    definitions = (
+        ("changed_files", "Changed files", "changedFiles"),
+        ("diffs", "Diffs", "workspaceDiffs"),
+        ("workspace_files", "Workspace files", "workspaceFiles"),
+        ("session_files", "Session files", "sessionFiles"),
+        ("snapshots", "Snapshots", "snapshotEvidence"),
+        ("logs_and_journals", "Logs and event journals", "journalEvidence"),
+        ("diagnostics", "Diagnostics", "diagnosticEvidence"),
+        ("manifests", "Capture and checkpoint manifests", "manifestEvidence"),
+    )
+    groups: list[dict[str, Any]] = []
+    for key, title, manifest_key in definitions:
+        raw_items = manifest.get(manifest_key, [])
+        items = raw_items if isinstance(raw_items, list) else []
+        groups.append({"groupKey": key, "title": title, "items": items})
+    return groups
+
+
 async def _build_capture_bundle(
     *,
     client: OmnigentHttpClient | None,
@@ -1177,12 +1244,23 @@ async def _build_capture_bundle(
         link_type="output.omnigent.snapshot.final",
     )
     manifest: dict[str, Any] = {
+        "schemaVersion": _CAPTURE_MANIFEST_SCHEMA_VERSION,
         "provider": "omnigent",
         "omnigentSessionId": session_id,
         "omnigentAgentId": agent_id,
         "terminalStatus": terminal_status,
         "artifactRefs": refs,
         "patchUnavailable": True,
+        "capturePolicy": {
+            "requested": dict(capture_policy or {}),
+            "limits": {
+                "maxListEntries": _MAX_OMNIGENT_HARVEST_ITEMS,
+                "maxHarvestedFiles": _MAX_OMNIGENT_HARVEST_ITEMS,
+            },
+            "optionalEvidenceFailureIsFatal": _capture_requires_full_evidence(
+                capture_policy
+            ),
+        },
     }
     child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
     manifest["childSessions"] = len(child_session_ids)
@@ -1271,6 +1349,8 @@ async def _build_capture_bundle(
                 manifest=manifest,
                 refs=refs,
             )
+    _associate_resource_events(manifest, normalized_events)
+    _reconcile_changed_file_evidence(manifest)
     optional_harvest_failed = _optional_resource_harvest_failed(manifest)
     require_full_evidence = _capture_requires_full_evidence(capture_policy)
     resource_harvest_failure_class: str | None = None
@@ -1289,6 +1369,21 @@ async def _build_capture_bundle(
             ),
             "failureClass": resource_harvest_failure_class,
         }
+    unavailable_reasons = {
+        key: value
+        for key, value in manifest.items()
+        if key.endswith("Unavailable") and value
+    }
+    manifest["evidenceCompleteness"] = {
+        "status": (
+            "required_missing"
+            if resource_harvest_failure_class
+            else "degraded"
+            if optional_harvest_failed
+            else "complete"
+        ),
+        "unavailableReasons": unavailable_reasons,
+    }
     diagnostics_payload = {
         "provider": "omnigent",
         "omnigentSessionId": session_id,
@@ -1305,6 +1400,26 @@ async def _build_capture_bundle(
         payload=diagnostics_payload,
         link_type="diagnostics.omnigent",
     )
+    manifest["snapshotEvidence"] = [
+        {"label": label, "artifactRef": refs[ref_key]}
+        for label, ref_key in (
+            ("Initial session snapshot", "initialSnapshotRef"),
+            ("Final session snapshot", "finalSnapshotRef"),
+        )
+        if ref_key in refs
+    ] + list(manifest.get("childSessionEvidence", []))
+    manifest["journalEvidence"] = [
+        {"label": label, "artifactRef": refs[ref_key]}
+        for label, ref_key in (
+            ("Raw event journal", "rawSseStreamRef"),
+            ("Normalized event journal", "normalizedEventStreamRef"),
+            ("Child-session journal", "childSessionsRef"),
+        )
+        if ref_key in refs
+    ]
+    manifest["diagnosticEvidence"] = [
+        {"label": "Capture diagnostics", "artifactRef": diagnostics_ref}
+    ]
     if external_state is not None:
         first_message_state = dict(external_state.get("firstMessage", {}))
         first_message_state.setdefault("requestRef", refs.get("firstMessageRequestRef"))
@@ -1399,6 +1514,15 @@ async def _build_capture_bundle(
             link_type="checkpoint.omnigent.external_state_ref",
         )
         manifest["externalStateRef"] = external_state_ref
+    manifest["manifestEvidence"] = [
+        {
+            "label": "External-state checkpoint",
+            "artifactRef": refs["externalStateRef"],
+        }
+        for _ in (0,)
+        if "externalStateRef" in refs
+    ]
+    manifest["resourceGroups"] = _capture_resource_groups(manifest)
     manifest_ref = await _capture_artifact_json(
         artifact_gateway,
         request,

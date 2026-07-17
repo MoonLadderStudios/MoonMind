@@ -395,6 +395,8 @@ def _build_session_resource_list(
                 or None
             )
             resource_id = artifact.artifact_id
+            unavailable_reason = str(metadata.get("unavailableReason") or "").strip() or None
+            source_sequence = metadata.get("sourceEventSequence")
             resources.append(
                 SessionResourceModel(
                     resource_id=resource_id,
@@ -409,6 +411,24 @@ def _build_session_resource_list(
                     default_read_ref=artifact.default_read_ref,
                     preview_artifact_ref=artifact.preview_artifact_ref,
                     metadata=metadata,
+                    preview_available=bool(
+                        artifact.default_read_ref or artifact.preview_artifact_ref
+                    ),
+                    download_available=artifact.status == "available",
+                    completeness_status=(
+                        "degraded" if unavailable_reason else "complete"
+                    ),
+                    unavailable_reason=unavailable_reason,
+                    source_event_sequence=(
+                        int(source_sequence)
+                        if isinstance(source_sequence, int)
+                        else None
+                    ),
+                    related_resource_ids=[
+                        str(value)
+                        for value in metadata.get("relatedResourceIds", [])
+                        if isinstance(value, str) and value.strip()
+                    ] if isinstance(metadata.get("relatedResourceIds"), list) else [],
                     content_url=_session_resource_url(
                         projection.session_id,
                         artifact.artifact_id,
