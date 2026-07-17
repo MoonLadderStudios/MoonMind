@@ -33,6 +33,7 @@ from moonmind.omnigent.bridge_security import (
     OmnigentAuthorizationError,
     assert_bridge_session_binding,
     authorize_bridge_access,
+    redact_raw_events,
 )
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
@@ -440,6 +441,37 @@ async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
     except asyncio.CancelledError:
         # Expected after requesting cancellation of a helper task.
         pass
+
+
+async def _publish_active_journals(
+    *,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Finalize the current crash-safe journal prefix before its DB commit."""
+
+    def jsonl(items: list[dict[str, Any]]) -> str:
+        return "".join(
+            f"{json.dumps(item, sort_keys=True, default=str)}\n" for item in items
+        )
+
+    raw_ref = await artifact_gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.raw.jsonl",
+        payload=jsonl(redact_raw_events(raw_events)),
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await artifact_gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.normalized.jsonl",
+        payload=jsonl(normalized_events),
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+    return raw_ref, normalized_ref
 
 
 async def run_omnigent_execution(
@@ -861,6 +893,27 @@ async def run_omnigent_execution(
                     if normalized_bridge_event.diagnostic is not None:
                         event_diagnostics.append(normalized_bridge_event.diagnostic)
                     normalized_events.append(normalized_bridge_event.event)
+                    if run_store is not None and bridge_session_id:
+                        # Durability policy: publish the redacted journals first,
+                        # then commit each normalized index row. A crash can leave
+                        # an unreferenced artifact, never a DB row whose evidence
+                        # does not exist. Per-event commits favor loss bounds over
+                        # throughput for this interactive stream.
+                        raw_ref, normalized_ref = await _publish_active_journals(
+                            artifact_gateway=artifact_gateway,
+                            request=request,
+                            raw_events=raw_events,
+                            normalized_events=normalized_events,
+                        )
+                        normalized_bridge_event.event["artifactRef"] = normalized_ref
+                        await run_store.attach_active_journal_refs(
+                            bridge_session_id,
+                            raw_ref=raw_ref,
+                            normalized_ref=normalized_ref,
+                        )
+                        await run_store.append_events(
+                            bridge_session_id, [normalized_bridge_event.event]
+                        )
                     normalized = normalized_bridge_event.event["normalizedStatus"]
                     _safe_heartbeat(
                         {
@@ -925,6 +978,22 @@ async def run_omnigent_execution(
                         bridge_session_id=bridge_session_id,
                     )
                     normalized_events.append(normalized_bridge_event.event)
+                    if run_store is not None and bridge_session_id:
+                        raw_ref, normalized_ref = await _publish_active_journals(
+                            artifact_gateway=artifact_gateway,
+                            request=request,
+                            raw_events=raw_events,
+                            normalized_events=normalized_events,
+                        )
+                        normalized_bridge_event.event["artifactRef"] = normalized_ref
+                        await run_store.attach_active_journal_refs(
+                            bridge_session_id,
+                            raw_ref=raw_ref,
+                            normalized_ref=normalized_ref,
+                        )
+                        await run_store.append_events(
+                            bridge_session_id, [normalized_bridge_event.event]
+                        )
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
                     raise OmnigentSessionStillRunningError(
                         "Omnigent stream ended while the provider session is still running"

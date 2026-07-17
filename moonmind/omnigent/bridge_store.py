@@ -22,11 +22,11 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
-from moonmind.omnigent.bridge_security import BridgeSessionBinding
+from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
@@ -292,6 +292,22 @@ class OmnigentBridgeSessionStore:
             journal.append(entry)
             row_metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal[-100:]
             row.metadata_ = row_metadata
+            lifecycle_dedup_key = (
+                f"lifecycle:{entry['type']}:{entry.get('code') or ''}"
+            )
+            await self._append_events_locked(
+                session,
+                row,
+                [{
+                    "eventType": entry["type"],
+                    "direction": "system",
+                    "timestamp": entry["timestamp"],
+                    "normalizedStatus": None,
+                    "textPreview": entry.get("summary"),
+                    "metadata": entry.get("metadata") or {},
+                    "deduplicationKey": lifecycle_dedup_key,
+                }],
+            )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -519,6 +535,22 @@ class OmnigentBridgeSessionStore:
                 )
                 metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal
                 row.metadata_ = metadata
+                await self._append_events_locked(
+                    session,
+                    row,
+                    [{
+                        "eventType": SESSION_CREATED_EVENT_TYPE,
+                        "direction": "system",
+                        "timestamp": journal[-1]["timestamp"],
+                        "normalizedStatus": "created",
+                        "metadata": {
+                            "omnigentSessionId": session_id,
+                            "omnigentAgentId": agent_id,
+                            "endpointRef": endpoint_ref,
+                        },
+                        "deduplicationKey": f"lifecycle:session.created:{session_id}",
+                    }],
+                )
                 await session.commit()
                 await session.refresh(row)
             return _detached(session, row)
@@ -593,19 +625,9 @@ class OmnigentBridgeSessionStore:
                 for column, value in _canonical_ref_columns(terminal_refs).items():
                     setattr(row, column, value)
             if events:
-                # Terminal event indexing must be idempotent: a Temporal activity
-                # retry that reattaches to the durable session can call
-                # ``mark_terminal`` again for the same idempotency key. Replace the
-                # session's event rows rather than appending, so ``list_events``
-                # never returns duplicate sequences (§7.2).
-                await session.execute(
-                    delete(OmnigentBridgeSessionEvent).where(
-                        OmnigentBridgeSessionEvent.bridge_session_id
-                        == row.bridge_session_id
-                    )
-                )
-                for event_row in _build_event_rows(row.bridge_session_id, events):
-                    session.add(event_row)
+                # Reconcile terminal evidence by append/dedup. Previously committed
+                # live rows are authoritative and are never deleted or renumbered.
+                await self._append_events_locked(session, row, events)
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -652,42 +674,82 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
-            max_sequence_result = await session.execute(
-                select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
-                    OmnigentBridgeSessionEvent.bridge_session_id == key
-                )
-            )
-            next_sequence = int(max_sequence_result.scalar() or 0) + 1
-            prepared_events: list[dict[str, Any]] = []
-            for offset, event in enumerate(events):
-                prepared = dict(event)
-                prepared["sequence"] = next_sequence + offset
-                prepared_events.append(prepared)
-            rows = _build_event_rows(key, prepared_events)
-            for event_row in rows:
-                session.add(event_row)
-            next_status = None
-            for event in prepared_events:
-                normalized = _string_or_none(event.get("normalizedStatus"))
-                if normalized is None:
-                    continue
-                coalesced = coalesce_bridge_status(normalized)
-                if (
-                    next_status in _TERMINAL_STATUSES
-                    and coalesced not in _TERMINAL_STATUSES
-                ):
-                    continue
-                next_status = coalesced
-            if next_status is not None and not (
-                row.status in _TERMINAL_STATUSES
-                and next_status not in _TERMINAL_STATUSES
-            ):
-                row.status = next_status
+            rows = await self._append_events_locked(session, row, events)
             await session.commit()
             for event_row in rows:
                 await session.refresh(event_row)
                 session.expunge(event_row)
             return rows
+
+    async def attach_active_journal_refs(
+        self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
+    ) -> None:
+        """Link journals only after both artifacts exist."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            row.raw_events_ref = raw_ref
+            row.normalized_events_ref = normalized_ref
+            await session.commit()
+
+    async def _append_events_locked(
+        self,
+        session: AsyncSession,
+        row: OmnigentBridgeSession,
+        events: Sequence[dict[str, Any]],
+    ) -> list[OmnigentBridgeSessionEvent]:
+        key = row.bridge_session_id
+        dedup_keys = [_event_deduplication_key(event) for event in events]
+        existing_result = await session.execute(
+            select(OmnigentBridgeSessionEvent.deduplication_key).where(
+                OmnigentBridgeSessionEvent.bridge_session_id == key,
+                OmnigentBridgeSessionEvent.deduplication_key.in_(dedup_keys),
+            )
+        )
+        existing = set(existing_result.scalars().all())
+        pending = [
+            (event, dedup_key)
+            for event, dedup_key in zip(events, dedup_keys, strict=True)
+            if dedup_key not in existing
+        ]
+        if not pending:
+            return []
+        max_sequence_result = await session.execute(
+            select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                OmnigentBridgeSessionEvent.bridge_session_id == key
+            )
+        )
+        next_sequence = int(max_sequence_result.scalar() or 0) + 1
+        prepared_events: list[dict[str, Any]] = []
+        for offset, (event, dedup_key) in enumerate(pending):
+            prepared = redact_raw_events([dict(event)])[0]
+            prepared["sequence"] = next_sequence + offset
+            prepared["deduplicationKey"] = dedup_key
+            prepared_events.append(prepared)
+        rows = _build_event_rows(key, prepared_events)
+        for event_row in rows:
+            session.add(event_row)
+        next_status = None
+        for event in prepared_events:
+            normalized = _string_or_none(event.get("normalizedStatus"))
+            if normalized is None:
+                continue
+            coalesced = coalesce_bridge_status(normalized)
+            if (
+                next_status in _TERMINAL_STATUSES
+                and coalesced not in _TERMINAL_STATUSES
+            ):
+                continue
+            next_status = coalesced
+        if next_status is not None and not (
+            row.status in _TERMINAL_STATUSES and next_status not in _TERMINAL_STATUSES
+        ):
+            row.status = next_status
+        return rows
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str
@@ -756,7 +818,8 @@ def _build_event_rows(
                 event_id=f"bse_{uuid4().hex}",
                 bridge_session_id=bridge_session_id,
                 sequence=int(sequence) if sequence is not None else index,
-                timestamp=now,
+                deduplication_key=_event_deduplication_key(event),
+                timestamp=_event_timestamp(event, default=now),
                 direction=str(event.get("direction") or "host_to_moonmind"),
                 event_type=str(event.get("eventType") or event.get("event_type") or ""),
                 # Preserve the full, non-lossy normalized status stream (§7.2):
@@ -768,6 +831,40 @@ def _build_event_rows(
             )
         )
     return rows
+
+
+def _event_deduplication_key(event: dict[str, Any]) -> str:
+    """Prefer provider identity; otherwise bind content to the durable cursor.
+
+    Including the cursor keeps reconnect replay idempotent while allowing two
+    identical text deltas at distinct stream positions to remain distinct.
+    """
+    import hashlib
+    import json
+
+    explicit = _string_or_none(event.get("deduplicationKey"))
+    if explicit:
+        return explicit[:128]
+    metadata = event.get("metadata") or {}
+    reconciliation = metadata.get("reconciliation") or {}
+    provider_id = _string_or_none(reconciliation.get("providerEventId"))
+    if provider_id:
+        return f"provider:{provider_id}"[:128]
+    cursor = reconciliation.get("streamCursor", event.get("sequence"))
+    canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(canonical.encode()).hexdigest()
+    return f"cursor:{cursor}:{digest}"[:128]
+
+
+def _event_timestamp(event: dict[str, Any], *, default: datetime) -> datetime:
+    raw = _string_or_none(event.get("timestamp"))
+    if raw is None:
+        return default
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return default
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _workflow_id(request: AgentExecutionRequest) -> str:
