@@ -8,6 +8,11 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+MOUNTED_TOOL_PATH = (
+    "/opt/moonmind-tools/bin:"
+    "${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
+    "/usr/bin:/usr/sbin:/bin:/sbin}"
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -543,6 +548,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     host_env = _env_map(host_service["environment"])
     assert host_env == {
         "HOME": "/home/app",
+        "PATH": MOUNTED_TOOL_PATH,
         "CLAUDE_HOME": "/home/app/.claude",
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
         "CLAUDE_CONFIG_DIR": "/home/app/.claude",
@@ -600,6 +606,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {
         "HOME": "/home/app",
+        "PATH": MOUNTED_TOOL_PATH,
         "CODEX_HOME": "/home/app/.codex",
         "CODEX_CONFIG_HOME": "/home/app/.codex",
         "CODEX_CONFIG_PATH": "/home/app/.codex/config.toml",
