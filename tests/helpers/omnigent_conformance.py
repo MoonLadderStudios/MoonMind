@@ -56,9 +56,14 @@ class FakeOmnigentServer:
     def app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/api/agents", self.list_agents)
+        app.router.add_get("/api/hosts", self.list_hosts)
         app.router.add_post("/v1/sessions", self.create_session)
         app.router.add_get("/v1/sessions/{session_id}", self.get_session)
         app.router.add_post("/v1/sessions/{session_id}/events", self.post_event)
+        app.router.add_post(
+            "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+            self.resolve_elicitation,
+        )
         app.router.add_delete("/v1/sessions/{session_id}", self.delete_session)
         app.router.add_get("/v1/sessions/{session_id}/stream", self.stream)
         app.router.add_get(
@@ -91,6 +96,11 @@ class FakeOmnigentServer:
 
     async def list_agents(self, _request: web.Request) -> web.Response:
         return web.json_response({"agents": [{"id": "agent-1", "name": "codex"}]})
+
+    async def list_hosts(self, _request: web.Request) -> web.Response:
+        return web.json_response(
+            {"hosts": [{"id": "host-1", "name": "managed", "status": "ready", "secret": "excluded"}]}
+        )
 
     async def create_session(self, request: web.Request) -> web.Response:
         payload = await request.json()
@@ -127,6 +137,13 @@ class FakeOmnigentServer:
         if payload.get("type") not in {"interrupt", "stop_session"}:
             self.first_message_posted.set()
         return web.json_response({"pending_id": "pending-1", "item_id": "item-1"})
+
+    async def resolve_elicitation(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        self.events.append(
+            {"type": "elicitation.resolve", "id": request.match_info["elicitation_id"], **payload}
+        )
+        return web.json_response({"ok": True})
 
     async def delete_session(self, request: web.Request) -> web.Response:
         self.events.append(

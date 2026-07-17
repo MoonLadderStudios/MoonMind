@@ -108,7 +108,11 @@ class OmnigentHttpClient:
             return [dict(item) for item in data if isinstance(item, Mapping)]
         if isinstance(data, Mapping) and isinstance(data.get("hosts"), list):
             return [dict(item) for item in data["hosts"] if isinstance(item, Mapping)]
-        return []
+        raise OmnigentClientError(
+            "Omnigent host catalog has an unsupported response shape",
+            response_body=data,
+            failure_class="integration_error",
+        )
 
     async def create_agent_bundle(
         self,
