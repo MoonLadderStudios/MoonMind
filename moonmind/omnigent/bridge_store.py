@@ -296,6 +296,7 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            has_explicit_identity = event_identity is not None
             event_identity = event_identity or (
                 f"{event_type}:{code or ''}:{summary or ''}"
             )
@@ -374,7 +375,11 @@ class OmnigentBridgeSessionStore:
                     deduplication_key=f"lifecycle:{event_identity}"[:128],
                     timestamp=datetime.now(tz=UTC),
                     direction="moonmind_system",
-                    event_type=str(event_type)[:96],
+                    event_type=(
+                        f"lifecycle.{str(event_type)[:86]}"
+                        if has_explicit_identity
+                        else str(event_type)[:96]
+                    ),
                     normalized_status=("waiting" if status == "waiting" else None),
                     text_preview=safe_summary,
                     artifact_ref=(
