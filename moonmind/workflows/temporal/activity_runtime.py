@@ -10963,19 +10963,40 @@ class TemporalAgentRuntimeActivities:
         from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 
         existing = await store.list_events(row.bridge_session_id)
+
         def identity(event: Mapping[str, Any]) -> tuple[Any, ...]:
-            data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
-            mm = ((event.get("metadata") or {}).get("moonmind") or {}) if isinstance(event.get("metadata"), Mapping) else {}
+            data = (
+                event.get("data")
+                if isinstance(event.get("data"), Mapping)
+                else {}
+            )
+            mm = (
+                ((event.get("metadata") or {}).get("moonmind") or {})
+                if isinstance(event.get("metadata"), Mapping)
+                else {}
+            )
+            event_type = event.get("eventType") or event.get("type")
+            turn_id = mm.get("turnId") or data.get("turnId")
+            if event_type == "session.started":
+                turn_id = None
             return (
-                event.get("eventType") or event.get("type"),
-                mm.get("directManagedSessionId") or data.get("directManagedSessionId"),
+                event_type,
+                mm.get("directManagedSessionId")
+                or data.get("directManagedSessionId"),
                 mm.get("sessionEpoch") or data.get("sessionEpoch"),
-                mm.get("turnId") or data.get("turnId"),
-                mm.get("sourceEventId") or data.get("requestId") or data.get("idempotencyKey") or data.get("controlId") or data.get("approvalId"),
-                mm.get("sourceOutcome") or data.get("outcome") or data.get("status"),
+                turn_id,
+                mm.get("sourceEventId")
+                or data.get("requestId")
+                or data.get("idempotencyKey")
+                or data.get("controlId")
+                or data.get("approvalId"),
+                mm.get("sourceOutcome")
+                or data.get("outcome")
+                or data.get("status"),
                 event.get("textPreview") or "",
                 event.get("artifactRef") or "",
             )
+
         seen = {
             identity(
                 {
