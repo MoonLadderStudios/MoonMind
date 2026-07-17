@@ -603,3 +603,33 @@ async def test_resource_identifier_rejects_traversal_and_double_encoding(
 async def test_resource_lists_are_bounded() -> None:
     result = _bound_resource_lists({"files": list(range(300))})
     assert len(result["files"]) == 250
+
+
+@pytest.mark.parametrize(
+    ("status_code", "optional", "expected"),
+    [
+        (401, False, "omnigent_bridge_upstream_auth"),
+        (403, False, "omnigent_bridge_upstream_auth"),
+        (404, False, "omnigent_bridge_upstream_missing"),
+        (429, False, "omnigent_bridge_upstream_transport"),
+        (500, False, "omnigent_bridge_upstream_transport"),
+        (504, False, "omnigent_bridge_upstream_timeout"),
+        (404, True, "omnigent_bridge_capability_unavailable"),
+        (501, True, "omnigent_bridge_capability_unavailable"),
+    ],
+)
+async def test_facade_error_mapping_is_stable(status_code, optional, expected) -> None:
+    from moonmind.omnigent.bridge_proxy import _bridge_client_error
+    from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
+
+    error = _bridge_client_error(
+        OmnigentClientError(
+            "upstream failure",
+            status_code=status_code,
+            failure_class="integration_error",
+        ),
+        optional=optional,
+    )
+    assert error.code == expected
+    assert error.failure_class == "integration_error"
+    assert error.status_code == status_code
