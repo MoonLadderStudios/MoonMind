@@ -1421,6 +1421,8 @@ const BridgeSessionEventsPageSchema = z
     events: page.items,
     truncated: page.retentionGap != null,
     sessionSnapshot: undefined,
+    nextCursor: page.nextCursor,
+    hasMore: page.hasMore,
   }));
 
 const ObservabilityEventsResponseSchema = z.union([
@@ -2519,14 +2521,26 @@ async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
 ): Promise<z.infer<typeof ObservabilityEventsResponseSchema> | null> {
-  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'events'), {
-    credentials: 'include',
-  });
-  if (!resp.ok) {
-    if (resp.status === 404) return null;
-    throw buildObservabilityRequestError(resp.status);
-  }
-  return ObservabilityEventsResponseSchema.parse(await resp.json());
+  const events: z.infer<typeof ObservabilityEventSchema>[] = [];
+  let cursor: string | null = null;
+  let truncated = false;
+  do {
+    const route = bridgeSessionRoute(apiBase, bridgeSessionId, 'events');
+    const url = cursor ? `${route}?cursor=${encodeURIComponent(cursor)}` : route;
+    const resp = await fetch(url, { credentials: 'include' });
+    if (!resp.ok) {
+      if (resp.status === 404) return null;
+      throw buildObservabilityRequestError(resp.status);
+    }
+    const page = BridgeSessionEventsPageSchema.parse(await resp.json());
+    events.push(...page.events);
+    truncated ||= page.truncated;
+    cursor = page.hasMore ? page.nextCursor : null;
+    if (page.hasMore && cursor == null) {
+      throw new Error('Bridge event page hasMore without nextCursor');
+    }
+  } while (cursor != null);
+  return { events, truncated, sessionSnapshot: undefined };
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {

@@ -381,6 +381,9 @@ def build_omnigent_result(
 
 def build_omnigent_terminal_refs(
     capture_bundle: OmnigentCaptureBundle,
+    *,
+    terminal_status: str,
+    final_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     """Build bridge-store terminal refs from published MoonMind artifacts."""
 
@@ -390,10 +393,22 @@ def build_omnigent_terminal_refs(
     _assert_no_provider_native_refs(
         [*output_refs, diagnostics_ref, *metadata_refs.values()]
     )
+    summary = _compact_summary(
+        final_snapshot.get("summary"),
+        fallback=(
+            "Omnigent session completed"
+            if terminal_status == "completed"
+            else "Omnigent session failed"
+        ),
+    )
     return {
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
+        "failureClass": failure_class_for_terminal_status(terminal_status),
+        "failureCode": final_snapshot.get("providerErrorCode")
+        or final_snapshot.get("failureCode"),
+        "summary": summary,
     }
 
 

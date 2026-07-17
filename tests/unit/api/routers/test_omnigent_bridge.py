@@ -396,7 +396,9 @@ def test_list_bridge_session_events_handles_nullable_event_type() -> None:
             event_id="evt-null",
             bridge_session_id="brs-1",
             sequence=1,
-            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            timestamp=SimpleNamespace(
+                isoformat=lambda: "2026-07-09T00:00:00+00:00"
+            ),
             direction="host_to_moonmind",
             event_type=None,
             normalized_status="running",
@@ -519,14 +521,31 @@ def test_unknown_and_foreign_sessions_have_identical_projection_failure() -> Non
         assert foreign_response.json() == unknown_response.json()
 
 
-def test_stream_rejects_conflicting_cursor_sources() -> None:
-    client, _, _ = _build()
+def test_stream_resumes_from_greatest_cursor_source() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id=f"evt-{sequence}",
+            bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.delta",
+            normalized_status="completed" if sequence == 3 else "running",
+            text_preview=str(sequence),
+            artifact_ref=None,
+            metadata_={},
+        )
+        for sequence in range(1, 4)
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
     resp = client.get(
         f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?cursor=1",
         headers={"Last-Event-ID": "2"},
     )
-    assert resp.status_code == 400
-    assert resp.json()["detail"]["code"] == "conflicting_bridge_event_cursors"
+    assert resp.status_code == 200
+    assert "evt-1" not in resp.text
+    assert "evt-2" not in resp.text
+    assert "evt-3" in resp.text
 
 
 def test_terminal_page_falls_back_to_durable_session_evidence_without_events() -> None:

@@ -475,7 +475,9 @@ class OmnigentBridgeSessionStore:
                 return _detached(session, rows[0]) if rows else None
 
         if key:
-            return await self.get_existing(key)
+            keyed = await self.get_existing(key)
+            if keyed is not None:
+                return keyed
         if not workflow:
             return None
         async with self._session_factory() as session:

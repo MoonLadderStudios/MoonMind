@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -582,7 +582,7 @@ class BridgeEventPageResponse(BaseModel):
 
 
 def _terminal_envelope(row: Any) -> BridgeTerminalEnvelope | None:
-    if str(row.status or "") not in _BRIDGE_TERMINAL_STATUSES:
+    if row is None or str(row.status or "") not in _BRIDGE_TERMINAL_STATUSES:
         return None
     refs = dict(row.terminal_refs or {})
     metadata = dict(row.metadata_ or {})
@@ -708,8 +708,8 @@ async def resolve_omnigent_bridge_session_projection(
         )
     except BridgeProjectionAmbiguousError as exc:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "omnigent_bridge_session_ambiguous"},
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "omnigent_bridge_session_unknown"},
         ) from exc
     if row is None:
         raise HTTPException(
@@ -820,12 +820,13 @@ async def stream_omnigent_bridge_session_events(
         raise HTTPException(
             status_code=400, detail={"code": "invalid_bridge_event_cursor"}
         ) from exc
-    supplied = {value for value in (cursor, header_cursor, since) if value is not None}
-    if len(supplied) > 1:
-        raise HTTPException(
-            status_code=400, detail={"code": "conflicting_bridge_event_cursors"}
-        )
-    initial_cursor = next(iter(supplied), 0)
+    # EventSource reconnects retain the original query string and add the most
+    # recently delivered sequence as Last-Event-ID. Resume after the greatest
+    # acknowledged sequence instead of rejecting that standard request shape.
+    initial_cursor = max(
+        (value for value in (cursor, header_cursor, since) if value is not None),
+        default=0,
+    )
 
     async def _event_stream():
         last_sequence = initial_cursor

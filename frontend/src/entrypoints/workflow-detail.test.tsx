@@ -32,6 +32,21 @@ describe('bridge projection response contract', () => {
       }),
     ).toThrow();
   });
+
+  it('preserves bridge pagination metadata for page draining', () => {
+    expect(
+      parseObservabilityEventsResponse({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1',
+        bridgeSessionId: 'brs-1',
+        items: [],
+        after: 0,
+        nextCursor: '100',
+        hasMore: true,
+        terminal: false,
+        latestSequence: 101,
+      }),
+    ).toMatchObject({ nextCursor: '100', hasMore: true });
+  });
 });
 import {
   taskCompareHref,
