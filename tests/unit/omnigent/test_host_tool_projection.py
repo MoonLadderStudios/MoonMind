@@ -36,4 +36,4 @@ def test_login_profile_prepends_tools_path_idempotently() -> None:
     profile = Path("services/omnigent/scripts/moonmind-tools.sh").read_text()
 
     assert "*:/opt/moonmind-tools/bin:*)" in profile
-    assert 'export PATH="/opt/moonmind-tools/bin:${PATH}"' in profile
+    assert 'export PATH="/opt/moonmind-tools/bin${PATH:+:$PATH}"' in profile
