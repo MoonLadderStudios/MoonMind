@@ -628,6 +628,29 @@ class OmnigentBridgeSessionStore:
                 session.expunge(row)
             return rows
 
+    async def list_events_page(
+        self,
+        bridge_session_id: str,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> list[OmnigentBridgeSessionEvent]:
+        """Return one cursor page plus a look-ahead row for truncation detection."""
+
+        statement = select(OmnigentBridgeSessionEvent).where(
+            OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id
+        )
+        if after is not None:
+            statement = statement.where(OmnigentBridgeSessionEvent.sequence > after)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                statement.order_by(OmnigentBridgeSessionEvent.sequence).limit(limit + 1)
+            )
+            rows = list(result.scalars().all())
+            for row in rows:
+                session.expunge(row)
+            return rows
+
     async def append_events(
         self,
         bridge_session_id: str,

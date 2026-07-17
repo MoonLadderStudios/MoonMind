@@ -107,11 +107,10 @@ const USER_MESSAGE_KINDS = new Set(['user_message_submitted']);
 const RESPONSE_STARTED_KINDS = new Set(['turn_started', 'response_started']);
 const ASSISTANT_DELTA_KINDS = new Set(['assistant_message_delta']);
 const ASSISTANT_FINAL_KINDS = new Set(['assistant_message_completed', 'assistant_message']);
-const TOOL_CALL_KINDS = new Set(['tool_call_started']);
+const TOOL_CALL_KINDS = new Set(['tool_call_started', 'session_item_started']);
 const TOOL_RESULT_KINDS = new Set([
   'tool_call_progress', 'tool_call_output', 'tool_call_completed', 'tool_call_failed',
-  'session_item_started', 'session_item_progress', 'session_item_output', 'session_item_completed',
-  'session_item_failed',
+  'session_item_progress', 'session_item_output', 'session_item_completed',
 ]);
 const APPROVAL_KINDS = new Set([
   'approval_requested',
@@ -140,10 +139,11 @@ const FAILURE_KINDS = new Set([
   'turn_interrupted',
   'response_failed',
   'tool_call_failed',
+  'session_item_failed',
   'empty_assistant_turn_detected',
   'session_failed', 'run_failed', 'cancelled', 'canceled', 'session_cancelled',
   'session_canceled', 'timeout', 'timed_out', 'session_timed_out', 'interrupted',
-  'stop_requested', 'stopped',
+  'stopped',
 ]);
 const RESOURCE_KINDS = new Set([
   'resource_available', 'resource_published', 'changed_file', 'changed_files',
@@ -328,7 +328,7 @@ export function reduceChatSessionEvent(
       appendBlock(next, event, 'status', event.text || event.status || 'Runtime status.');
       break;
     case 'failure':
-      if (event.sourceKind === 'tool_call_failed') {
+      if (event.sourceKind === 'tool_call_failed' || event.sourceKind === 'session_item_failed') {
         upsertToolBlock(next, event, event.text || event.status || 'Tool failed.');
         closeTool(next, event);
       }

@@ -3578,48 +3578,6 @@ function ChatSessionView({
   wrapLines: boolean;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
-  const blockListRef = useRef<HTMLDivElement | null>(null);
-  const shouldStickToBottomRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  const lastBlockSignature = chatBlocks.length > 0
-    ? `${chatBlocks.at(-1)?.id}:${chatBlocks.at(-1)?.text}`
-    : 'empty';
-
-  const updateStickToBottom = () => {
-    const currentElement = blockListRef.current;
-    if (currentElement) {
-      const distanceFromBottom = currentElement.scrollHeight - currentElement.scrollTop - currentElement.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom <= 48;
-    }
-    if (scrollFrameRef.current !== null) return;
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      const element = blockListRef.current;
-      if (!element) return;
-      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-      shouldStickToBottomRef.current = distanceFromBottom <= 48;
-    });
-  };
-
-  useEffect(() => () => {
-    if (scrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(scrollFrameRef.current);
-    }
-  }, []);
-
-  const scrollToBottom = () => {
-    const element = blockListRef.current;
-    if (!element) return;
-    window.requestAnimationFrame(() => {
-      element.scrollTop = element.scrollHeight;
-    });
-  };
-
-  useEffect(() => {
-    if (!shouldStickToBottomRef.current) return;
-    scrollToBottom();
-  }, [lastBlockSignature]);
-
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
       <div className="chat-session-header">
@@ -3637,13 +3595,11 @@ function ChatSessionView({
         </div>
       ) : (
         <div
-          ref={blockListRef}
           className="chat-session-blocks"
           data-testid="chat-session-blocks"
-          onScroll={updateStickToBottom}
         >
           <Virtuoso
-            style={{ height: 480 }}
+            style={{ height: 'min(480px, 62vh)' }}
             data={chatBlocks}
             followOutput={(atBottom) => atBottom ? 'smooth' : false}
             computeItemKey={(index, block) => `${block.id}:${index}`}
@@ -3956,6 +3912,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled,
   structuredHistoryEnabled,
   row,
+  workflowId,
   routes,
 }: {
   apiBase: string;
@@ -3963,6 +3920,7 @@ function StepObservabilityGroup({
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
+  workflowId: string;
   routes: AgentRunRouteTemplates;
 }) {
   const agentRunId = row.refs.agentRunId;
@@ -3973,13 +3931,14 @@ function StepObservabilityGroup({
     row.refs.omnigent_bridge_session_id ||
     '';
   const bridgeIdempotencyKey = row.refs.idempotencyKey || row.refs.idempotency_key || '';
-  const bridgeWorkflowId = typeof row.workflowId === 'string' ? row.workflowId : '';
+  const bridgeWorkflowId = workflowId;
   const bridgeResolutionQuery = useQuery({
     queryKey: [
       'omnigent-bridge-step-projection',
       bridgeWorkflowId,
       row.logicalStepId,
       row.executionOrdinal,
+      agentRunId,
       bridgeIdempotencyKey,
     ],
     queryFn: () =>
@@ -3987,7 +3946,7 @@ function StepObservabilityGroup({
         apiBase,
         workflowId: bridgeWorkflowId,
         agentRunId,
-        idempotencyKey: bridgeIdempotencyKey,
+        idempotencyKey: agentRunId ? null : bridgeIdempotencyKey,
       }),
     enabled: Boolean(
         logStreamingEnabled &&
@@ -5172,6 +5131,7 @@ function StepLedgerRowCard({
                 sessionTimelineEnabled={sessionTimelineEnabled}
                 structuredHistoryEnabled={structuredHistoryEnabled}
                 row={row}
+                workflowId={workflowId}
                 routes={routes}
               />
             </section>
@@ -5621,10 +5581,13 @@ function BridgeSessionLogsPanel({
   });
   const historyRows = useMemo(() => {
     const rows = mapEventsToTimelineRows(eventsQuery.data);
-    if (!eventsQuery.data?.retentionGap) return rows;
+    if (!eventsQuery.data?.retentionGap && !eventsQuery.data?.truncated) return rows;
+    const warningText = eventsQuery.data?.retentionGap
+      ? 'Earlier bridge events are outside the retained replay window. Use diagnostic artifacts for missing evidence.'
+      : 'Bridge replay exceeded the display cap. Later events, including terminal evidence, may be omitted; use diagnostic artifacts for the complete record.';
     return [{
       id: `${bridgeSessionId}-retention-gap`,
-      text: 'Earlier bridge events are outside the retained replay window. Use diagnostic artifacts for missing evidence.',
+      text: warningText,
       stream: 'system' as TimelineStream,
       kind: 'retention_gap',
       sequence: 0,

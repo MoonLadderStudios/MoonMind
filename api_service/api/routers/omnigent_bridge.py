@@ -607,17 +607,21 @@ async def list_omnigent_bridge_session_events(
         service=service,
         store=store,
     )
-    events = await store.list_events(bridge_session_id)
-    if after is not None:
-        events = [event for event in events if event.sequence > after]
+    events = await store.list_events_page(
+        bridge_session_id,
+        after=after,
+        limit=limit,
+    )
     page = events[:limit]
     has_more = len(events) > limit
+    expected_first_sequence = (after or 0) + 1
+    retention_gap = bool(page and page[0].sequence > expected_first_sequence)
     return {
         "bridgeSessionId": bridge_session_id,
         "events": [_bridge_event_payload(row) for row in page],
         "nextCursor": page[-1].sequence if has_more and page else None,
         "truncated": has_more,
-        "retentionGap": False,
+        "retentionGap": retention_gap,
     }
 
 

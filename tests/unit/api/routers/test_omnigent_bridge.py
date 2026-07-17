@@ -135,6 +135,12 @@ class _FakeStore:
     async def list_events(self, bridge_session_id: str):
         return self._rows
 
+    async def list_events_page(self, bridge_session_id: str, *, after: int | None, limit: int):
+        rows = self._rows
+        if after is not None:
+            rows = [row for row in rows if row.sequence > after]
+        return rows[: limit + 1]
+
     async def resolve_projection_session(self, **kwargs):
         if self._owner is None:
             return None
@@ -370,6 +376,30 @@ def test_list_bridge_session_events_returns_bounded_cursor_pages() -> None:
     assert first["retentionGap"] is False
     assert [event["sequence"] for event in second["events"]] == [3, 4]
     assert second["nextCursor"] == 4
+
+
+def test_list_bridge_session_events_reports_retention_gap() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-150",
+            bridge_session_id="brs-1",
+            sequence=150,
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
+            direction="host_to_moonmind",
+            event_type="response.output_text.delta",
+            normalized_status="running",
+            text_preview="retained",
+            artifact_ref=None,
+            metadata_={},
+        )
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    body = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?after=100"
+    ).json()
+
+    assert body["retentionGap"] is True
 
 
 def test_list_bridge_session_events_handles_nullable_event_type() -> None:

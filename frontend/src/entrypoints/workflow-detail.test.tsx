@@ -38,6 +38,7 @@ type MockVirtuosoProps<Row = MockVirtuosoRow> = {
   computeItemKey?: (index: number, row: Row) => string;
   itemContent: (index: number, row: Row) => ReactNode;
   initialItemCount?: number;
+  followOutput?: (atBottom: boolean) => 'smooth' | false;
 };
 
 const { virtuosoPropsSpy } = vi.hoisted(() => ({
@@ -9859,7 +9860,7 @@ describe('LiveLogsPanel', () => {
     }
   });
 
-  it('sticks the chat transcript to the bottom while allowing scroll escape', async () => {
+  it('uses Virtuoso follow-output to stick at the bottom while allowing scroll escape', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
@@ -9894,10 +9895,7 @@ describe('LiveLogsPanel', () => {
     renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    const blockList = await screen.findByTestId('chat-session-blocks');
-    Object.defineProperty(blockList, 'clientHeight', { configurable: true, value: 100 });
-    Object.defineProperty(blockList, 'scrollHeight', { configurable: true, value: 300 });
-    blockList.scrollTop = 200;
+    await screen.findByTestId('chat-session-blocks');
 
     await waitForEventSourceInstance();
     const es = MockEventSource.instances.at(-1)!;
@@ -9912,10 +9910,9 @@ describe('LiveLogsPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Live assistant update.')).toBeTruthy());
-    await waitFor(() => expect(blockList.scrollTop).toBe(300));
-
-    blockList.scrollTop = 0;
-    fireEvent.scroll(blockList);
+    const followOutput = virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput;
+    expect(followOutput?.(true)).toBe('smooth');
+    expect(followOutput?.(false)).toBe(false);
     act(() =>
       es.triggerLogChunk({
         sequence: 3,
@@ -9926,7 +9923,7 @@ describe('LiveLogsPanel', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Second live update.')).toBeTruthy());
-    expect(blockList.scrollTop).toBe(0);
+    expect(virtuosoPropsSpy.mock.calls.at(-1)?.[0].followOutput?.(false)).toBe(false);
   });
 
   it('does not create EventSource for ended runs', async () => {
