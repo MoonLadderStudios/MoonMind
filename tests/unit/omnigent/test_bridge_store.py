@@ -23,6 +23,7 @@ from moonmind.omnigent.bridge_store import (
     STATUS_ACTIVE,
     STATUS_CREATING,
     STATUS_DECLARED,
+    BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
@@ -228,7 +229,7 @@ async def test_get_session_owner_resolves_by_session_id(store):
 
 
 @pytest.mark.asyncio
-async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(store):
+async def test_resolve_projection_session_falls_back_after_explicit_key_miss(store):
     first = await store.get_or_create(
         request=_request("idem-first"),
         endpoint_ref="default",
@@ -270,6 +271,42 @@ async def test_resolve_projection_session_prefers_idempotency_then_latest_workfl
     )
     assert scoped is not None
     assert scoped.bridge_session_id == first.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_binding_precedes_idempotency(store):
+    first = await store.get_or_create(
+        request=_request("idem-first"), endpoint_ref="default", agent_id="ag_1",
+        agent_name="Agent One", target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner", agent_run_id="ar-first",
+    )
+    second = await store.get_or_create(
+        request=_request("idem-second"), endpoint_ref="default", agent_id="ag_1",
+        agent_name="Agent Two", target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner", agent_run_id="ar-second",
+    )
+    resolved = await store.resolve_projection_session(
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+        idempotency_key="idem-second",
+    )
+    assert resolved is not None
+    assert resolved.bridge_session_id == first.bridge_session_id
+    assert resolved.bridge_session_id != second.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_rejects_ambiguous_explicit_binding(store):
+    for key in ("idem-first", "idem-second"):
+        await store.get_or_create(
+            request=_request(key), endpoint_ref="default", agent_id="ag_1",
+            agent_name="Agent One", target_metadata={"hostType": "managed"},
+            workflow_id="mm:wf-owner", agent_run_id="ar-shared",
+        )
+    with pytest.raises(BridgeProjectionAmbiguousError):
+        await store.resolve_projection_session(
+            workflow_id="mm:wf-owner", agent_run_id="ar-shared"
+        )
 
 
 @pytest.mark.asyncio
