@@ -19,10 +19,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
+import hashlib
+import json
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -294,7 +296,23 @@ class OmnigentBridgeSessionStore:
             row.metadata_ = row_metadata
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        await self.append_events(
+            detached.bridge_session_id,
+            [
+                {
+                    "eventType": entry["type"],
+                    "normalizedStatus": "running",
+                    "direction": "moonmind_to_host",
+                    "sourceCursor": f"lifecycle:{entry['sequence']}",
+                    "deduplicationKey": _stable_key(
+                        f"lifecycle:{entry['sequence']}:{entry['type']}"
+                    ),
+                    "metadata": entry,
+                }
+            ],
+        )
+        return detached
 
     async def get_binding(self, idempotency_key: str) -> BridgeSessionBinding | None:
         """Return the MoonMind identity already bound to a bridge session.
@@ -506,22 +524,37 @@ class OmnigentBridgeSessionStore:
             already_recorded = any(
                 entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
             )
+            appended_entry: dict[str, Any] | None = None
             if not already_recorded:
-                journal.append(
-                    {
-                        "type": SESSION_CREATED_EVENT_TYPE,
-                        "sequence": len(journal) + 1,
-                        "timestamp": datetime.now(tz=UTC).isoformat(),
-                        "omnigentSessionId": session_id,
-                        "omnigentAgentId": agent_id,
-                        "endpointRef": endpoint_ref,
-                    }
-                )
+                appended_entry = {
+                    "type": SESSION_CREATED_EVENT_TYPE,
+                    "sequence": len(journal) + 1,
+                    "timestamp": datetime.now(tz=UTC).isoformat(),
+                    "omnigentSessionId": session_id,
+                    "omnigentAgentId": agent_id,
+                    "endpointRef": endpoint_ref,
+                }
+                journal.append(appended_entry)
                 metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal
                 row.metadata_ = metadata
                 await session.commit()
                 await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        if appended_entry is not None:
+            await self.append_events(
+                detached.bridge_session_id,
+                [
+                    {
+                        "eventType": SESSION_CREATED_EVENT_TYPE,
+                        "normalizedStatus": "created",
+                        "direction": "moonmind_to_host",
+                        "sourceCursor": "lifecycle:session.created",
+                        "deduplicationKey": _stable_key("lifecycle:session.created"),
+                        "metadata": appended_entry,
+                    }
+                ],
+            )
+        return detached
 
     async def mark_prepared(
         self, idempotency_key: str, *, digest: str, marker: str
@@ -592,23 +625,15 @@ class OmnigentBridgeSessionStore:
                 # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
                 for column, value in _canonical_ref_columns(terminal_refs).items():
                     setattr(row, column, value)
-            if events:
-                # Terminal event indexing must be idempotent: a Temporal activity
-                # retry that reattaches to the durable session can call
-                # ``mark_terminal`` again for the same idempotency key. Replace the
-                # session's event rows rather than appending, so ``list_events``
-                # never returns duplicate sequences (§7.2).
-                await session.execute(
-                    delete(OmnigentBridgeSessionEvent).where(
-                        OmnigentBridgeSessionEvent.bridge_session_id
-                        == row.bridge_session_id
-                    )
-                )
-                for event_row in _build_event_rows(row.bridge_session_id, events):
-                    session.add(event_row)
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        # Terminal capture reconciles through the same idempotent append contract
+        # as live proxy and embedded producers. Previously committed rows are
+        # never deleted or renumbered (MoonLadderStudios/MoonMind#3362).
+        if events:
+            await self.append_events(detached.bridge_session_id, events)
+        return detached
 
     async def list_events(
         self, bridge_session_id: str
@@ -658,10 +683,27 @@ class OmnigentBridgeSessionStore:
                 )
             )
             next_sequence = int(max_sequence_result.scalar() or 0) + 1
+            requested = [dict(event) for event in events]
+            keys = [_event_deduplication_key(event) for event in requested]
+            existing_result = None
+            if keys:
+                existing_result = await session.execute(
+                    select(OmnigentBridgeSessionEvent).where(
+                        OmnigentBridgeSessionEvent.bridge_session_id == key,
+                        OmnigentBridgeSessionEvent.deduplication_key.in_(keys),
+                    )
+                )
+            existing = {
+                item.deduplication_key: item
+                for item in (existing_result.scalars().all() if existing_result else [])
+            }
             prepared_events: list[dict[str, Any]] = []
-            for offset, event in enumerate(events):
+            for event, deduplication_key in zip(requested, keys, strict=True):
+                if deduplication_key in existing:
+                    continue
                 prepared = dict(event)
-                prepared["sequence"] = next_sequence + offset
+                prepared["sequence"] = next_sequence + len(prepared_events)
+                prepared["deduplicationKey"] = deduplication_key
                 prepared_events.append(prepared)
             rows = _build_event_rows(key, prepared_events)
             for event_row in rows:
@@ -687,7 +729,7 @@ class OmnigentBridgeSessionStore:
             for event_row in rows:
                 await session.refresh(event_row)
                 session.expunge(event_row)
-            return rows
+            return [*existing.values(), *rows]
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str
@@ -756,6 +798,8 @@ def _build_event_rows(
                 event_id=f"bse_{uuid4().hex}",
                 bridge_session_id=bridge_session_id,
                 sequence=int(sequence) if sequence is not None else index,
+                deduplication_key=_event_deduplication_key(event),
+                source_cursor=_string_or_none(event.get("sourceCursor")),
                 timestamp=now,
                 direction=str(event.get("direction") or "host_to_moonmind"),
                 event_type=str(event.get("eventType") or event.get("event_type") or ""),
@@ -768,6 +812,51 @@ def _build_event_rows(
             )
         )
     return rows
+
+
+def _event_deduplication_key(event: dict[str, Any]) -> str:
+    """Return a retry-stable key without collapsing distinct identical deltas.
+
+    Provider event/item identity wins. Producers otherwise supply a stream cursor;
+    its inclusion means equal text at different cursor positions remains distinct.
+    The final fallback hashes the bounded canonical event body for callers that
+    cannot expose either value.
+    """
+
+    explicit = _string_or_none(event.get("deduplicationKey"))
+    if explicit:
+        return explicit[:128]
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    source_id = next(
+        (
+            _string_or_none(value)
+            for value in (
+                event.get("sourceEventId"),
+                metadata.get("sourceEventId"),
+                data.get("event_id"),
+                data.get("eventId"),
+                data.get("item_id"),
+                data.get("itemId"),
+                data.get("id"),
+            )
+            if _string_or_none(value)
+        ),
+        None,
+    )
+    if source_id:
+        material = f"provider:{source_id}"
+    else:
+        cursor = _string_or_none(event.get("sourceCursor"))
+        body = {key: value for key, value in event.items() if key != "sequence"}
+        material = f"cursor:{cursor or 'unavailable'}:" + json.dumps(
+            body, sort_keys=True, separators=(",", ":"), default=str
+        )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _stable_key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _workflow_id(request: AgentExecutionRequest) -> str:

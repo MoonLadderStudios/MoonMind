@@ -860,7 +860,24 @@ async def run_omnigent_execution(
                     )
                     if normalized_bridge_event.diagnostic is not None:
                         event_diagnostics.append(normalized_bridge_event.diagnostic)
-                    normalized_events.append(normalized_bridge_event.event)
+                    durable_event = dict(normalized_bridge_event.event)
+                    # The provider identity is authoritative when present. The
+                    # stream ordinal is the retry-stable fallback and deliberately
+                    # distinguishes two equal deltas at different positions.
+                    source_id = next(
+                        (
+                            event.get(name)
+                            for name in ("event_id", "eventId", "item_id", "itemId", "id")
+                            if event.get(name) is not None
+                        ),
+                        None,
+                    )
+                    if source_id is not None:
+                        durable_event["sourceEventId"] = str(source_id)
+                    durable_event["sourceCursor"] = str(event_count["value"])
+                    normalized_events.append(durable_event)
+                    if run_store is not None and bridge_session_id:
+                        await run_store.append_events(bridge_session_id, [durable_event])
                     normalized = normalized_bridge_event.event["normalizedStatus"]
                     _safe_heartbeat(
                         {
@@ -924,7 +941,11 @@ async def run_omnigent_execution(
                         omnigent_session_id=session_id,
                         bridge_session_id=bridge_session_id,
                     )
-                    normalized_events.append(normalized_bridge_event.event)
+                    snapshot_event = dict(normalized_bridge_event.event)
+                    snapshot_event["sourceCursor"] = "final_snapshot"
+                    normalized_events.append(snapshot_event)
+                    if run_store is not None and bridge_session_id:
+                        await run_store.append_events(bridge_session_id, [snapshot_event])
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
                     raise OmnigentSessionStillRunningError(
                         "Omnigent stream ended while the provider session is still running"
