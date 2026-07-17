@@ -1388,6 +1388,7 @@ const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =
 );
 
 const LegacyObservabilityEventsResponseSchema = z.object({
+  schemaVersion: z.never().optional(),
   events: z.array(ObservabilityEventSchema).default([]),
   truncated: z.boolean().default(false),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
@@ -1396,9 +1397,25 @@ const LegacyObservabilityEventsResponseSchema = z.object({
 const BridgeSessionEventsPageSchema = z
   .object({
     schemaVersion: z.literal('moonmind.bridge-session-events-page.v1'),
+    bridgeSessionId: z.string(),
     items: z.array(ObservabilityEventSchema).default([]),
-    retentionGap: z.unknown().nullable().optional(),
-    terminalEnvelope: z.unknown().nullable().optional(),
+    after: z.number().int().nonnegative(),
+    nextCursor: z.string().nullable(),
+    hasMore: z.boolean(),
+    terminal: z.boolean(),
+    latestSequence: z.number().int().nonnegative(),
+    retentionGap: z
+      .object({ requestedAfter: z.number().int(), earliestAvailable: z.number().int() })
+      .nullable()
+      .optional(),
+    terminalEnvelope: z
+      .object({
+        schemaVersion: z.literal('moonmind.bridge-session-terminal.v1'),
+        status: z.enum(['completed', 'failed', 'canceled', 'timed_out']),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .transform((page) => ({
     events: page.items,
@@ -1410,6 +1427,10 @@ const ObservabilityEventsResponseSchema = z.union([
   BridgeSessionEventsPageSchema,
   LegacyObservabilityEventsResponseSchema,
 ]);
+
+export function parseObservabilityEventsResponse(value: unknown) {
+  return ObservabilityEventsResponseSchema.parse(value);
+}
 
 const ArtifactListSchema = z.object({
   artifacts: z

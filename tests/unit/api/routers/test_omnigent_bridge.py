@@ -109,14 +109,18 @@ class _FakeProxy:
 
 class _FakeStore:
     def __init__(
-        self, *, owner: Any | None = _UNSET, rows: list[Any] | None = None
+        self,
+        *,
+        owner: Any | None = _UNSET,
+        rows: list[Any] | None = None,
+        session_overrides: dict[str, Any] | None = None,
     ) -> None:
         self._owner = (
             SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
             if owner is _UNSET
             else owner
         )
-        self._rows = rows or [
+        self._rows = rows if rows is not None else [
             SimpleNamespace(
                 event_id="evt-1",
                 bridge_session_id="brs-1",
@@ -132,6 +136,7 @@ class _FakeStore:
                 metadata_={"responseId": "resp-1"},
             )
         ]
+        self._session_overrides = session_overrides or {}
 
     async def get_bridge_session_owner(self, bridge_session_id: str):
         return self._owner
@@ -161,7 +166,7 @@ class _FakeStore:
             ),
             None,
         )
-        return SimpleNamespace(
+        values = dict(
             bridge_session_id="brs-1",
             moonmind_workflow_id=self._owner.workflow_id,
             moonmind_run_id="run-1",
@@ -183,6 +188,8 @@ class _FakeStore:
             normalized_events_ref=None,
             external_state_ref=None,
         )
+        values.update(self._session_overrides)
+        return SimpleNamespace(**values)
 
     async def resolve_projection_session(self, **kwargs):
         if self._owner is None:
@@ -494,8 +501,64 @@ def test_event_page_is_bounded_and_cursor_based() -> None:
 def test_list_bridge_session_events_denies_non_owner() -> None:
     client, _, _ = _build(owner_id=uuid4())
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == {"code": "omnigent_bridge_session_unknown"}
+
+
+def test_unknown_and_foreign_sessions_have_identical_projection_failure() -> None:
+    foreign, _, _ = _build(owner_id=uuid4())
+    unknown, _, _ = _build(store=_FakeStore(owner=None))
+    for suffix in ("events", "stream"):
+        foreign_response = foreign.get(
+            f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/{suffix}"
+        )
+        unknown_response = unknown.get(
+            f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/{suffix}"
+        )
+        assert foreign_response.status_code == unknown_response.status_code == 404
+        assert foreign_response.json() == unknown_response.json()
+
+
+def test_stream_rejects_conflicting_cursor_sources() -> None:
+    client, _, _ = _build()
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?cursor=1",
+        headers={"Last-Event-ID": "2"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "conflicting_bridge_event_cursors"
+
+
+def test_terminal_page_falls_back_to_durable_session_evidence_without_events() -> None:
+    store = _FakeStore(
+        rows=[],
+        session_overrides={
+            "status": "failed",
+            "terminal_refs": {
+                "failureClass": "execution_error",
+                "failureCode": "provider_failed",
+                "summary": "failed before stream",
+                "cleanupState": "completed",
+                "leaseReleaseState": "released",
+            },
+            "diagnostics_ref": "artifact://diagnostics",
+            "capture_manifest_ref": "artifact://capture",
+            "final_snapshot_ref": "artifact://final",
+            "external_state_ref": "artifact://external",
+        },
+    )
+    client, _, _ = _build(store=store)
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
+    assert resp.status_code == 200
+    envelope = resp.json()["terminalEnvelope"]
+    assert resp.json()["terminal"] is True
+    assert envelope["failureClass"] == "execution_error"
+    assert envelope["diagnosticsRef"] == "artifact://diagnostics"
+    assert envelope["captureManifestRef"] == "artifact://capture"
+    assert envelope["finalSnapshotRef"] == "artifact://final"
+    assert envelope["externalStateRef"] == "artifact://external"
+    assert envelope["cleanupState"] == "completed"
+    assert envelope["leaseReleaseState"] == "released"
 
 
 def test_routes_registered_under_configured_mount_path() -> None:

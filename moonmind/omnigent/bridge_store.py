@@ -87,6 +87,10 @@ class OmnigentDigestMismatchError(OmnigentIdempotencyError):
     """Raised when an idempotency key is reused for different first-message text."""
 
 
+class BridgeProjectionAmbiguousError(RuntimeError):
+    """Raised when an explicitly scoped projection resolves to multiple sessions."""
+
+
 class BridgeEventPage(NamedTuple):
     """One bounded read of the durable event journal."""
 
@@ -421,26 +425,59 @@ class OmnigentBridgeSessionStore:
         self,
         *,
         workflow_id: str | None = None,
+        run_id: str | None = None,
+        step_execution_id: str | None = None,
         agent_run_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> OmnigentBridgeSession | None:
         """Resolve the Workflow Chat bridge projection target (§15).
 
-        Resolution prefers an explicit idempotency key when supplied; otherwise
-        it returns the latest bridge session for the workflow, optionally scoped
-        to the step/agent-run binding.
+        Explicit AgentRun/step identity has precedence over workflow run/step
+        scope, which has precedence over an explicit idempotency key. Only an
+        unscoped workflow lookup selects the latest eligible session.
         """
-
-        key = (idempotency_key or "").strip()
-        if key:
-            row = await self.get_existing(key)
-            if row is not None:
-                return row
-
         workflow = (workflow_id or "").strip()
+        run = (run_id or "").strip()
+        step = (step_execution_id or "").strip()
+        agent_run = (agent_run_id or "").strip()
+        key = (idempotency_key or "").strip()
+        scoped_filters: list[Any] = []
+        if agent_run or step:
+            if agent_run:
+                scoped_filters.append(
+                    OmnigentBridgeSession.moonmind_agent_run_id == agent_run
+                )
+            if step:
+                scoped_filters.append(OmnigentBridgeSession.step_execution_id == step)
+            if workflow:
+                scoped_filters.append(
+                    OmnigentBridgeSession.moonmind_workflow_id == workflow
+                )
+            if run:
+                scoped_filters.append(OmnigentBridgeSession.moonmind_run_id == run)
+        elif workflow and run:
+            scoped_filters.extend(
+                (
+                    OmnigentBridgeSession.moonmind_workflow_id == workflow,
+                    OmnigentBridgeSession.moonmind_run_id == run,
+                )
+            )
+        if scoped_filters:
+            async with self._session_factory() as session:
+                result = await session.execute(
+                    select(OmnigentBridgeSession).where(*scoped_filters).limit(2)
+                )
+                rows = list(result.scalars().all())
+                if len(rows) > 1:
+                    raise BridgeProjectionAmbiguousError(
+                        "Multiple bridge sessions match the explicit projection scope"
+                    )
+                return _detached(session, rows[0]) if rows else None
+
+        if key:
+            return await self.get_existing(key)
         if not workflow:
             return None
-        agent_run = (agent_run_id or "").strip()
         async with self._session_factory() as session:
             statement = select(OmnigentBridgeSession).where(
                 OmnigentBridgeSession.moonmind_workflow_id == workflow
@@ -453,6 +490,7 @@ class OmnigentBridgeSessionStore:
                 OmnigentBridgeSession.updated_at.desc(),
                 OmnigentBridgeSession.first_message_post_attempted_at.desc().nulls_last(),
                 OmnigentBridgeSession.created_at.desc(),
+                OmnigentBridgeSession.bridge_session_id.desc(),
             ).limit(1)
             result = await session.execute(statement)
             row = result.scalars().first()

@@ -49,7 +49,10 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    BridgeProjectionAmbiguousError,
+    OmnigentBridgeSessionStore,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -456,13 +459,7 @@ async def _authorize_bridge_session_projection(
     if owner is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "omnigent_bridge_session_unknown",
-                "message": (
-                    "No Omnigent bridge session is bound to the requested "
-                    "bridge session id."
-                ),
-            },
+            detail={"code": "omnigent_bridge_session_unknown"},
         )
     principal = await resolve_execution_principal(
         user=user,
@@ -472,14 +469,8 @@ async def _authorize_bridge_session_projection(
     )
     if not principal.workflow_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "workflow_ownership_denied",
-                "message": (
-                    "The authenticated principal does not own the workflow "
-                    "that owns this Omnigent bridge session."
-                ),
-            },
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "omnigent_bridge_session_unknown"},
         )
 
 
@@ -488,6 +479,9 @@ _BRIDGE_EVENTS_SCHEMA = "moonmind.bridge-session-events-page.v1"
 _BRIDGE_RESOLUTION_SCHEMA = "moonmind.bridge-session-resolution.v1"
 _BRIDGE_TERMINAL_SCHEMA = "moonmind.bridge-session-terminal.v1"
 _BRIDGE_PAGE_MAX = 500
+_BRIDGE_STREAM_PAGE_SIZE = 100
+_BRIDGE_STREAM_POLL_SECONDS = 1.0
+_BRIDGE_STREAM_MAX_IDLE_POLLS = 300
 
 
 class BridgeSessionResolution(BaseModel):
@@ -546,6 +540,29 @@ class BridgeTerminalEnvelope(BaseModel):
     evidence_incomplete_reason: str | None = None
 
 
+class BridgeEventPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    sequence: int
+    timestamp: str
+    stream: str
+    text: str
+    kind: str
+    bridgeSessionId: str
+    sessionId: str
+    normalizedStatus: str | None = None
+    artifactRef: str | None = None
+    metadata: dict[str, Any]
+
+
+class BridgeSseFrame(BaseModel):
+    """Versioned data shapes emitted by the bridge SSE optimization."""
+
+    event: str
+    id: str | None = None
+    data: BridgeEventPayload | BridgeRetentionGap | BridgeTerminalEnvelope
+
+
 class BridgeEventPageResponse(BaseModel):
     model_config = ConfigDict(
         alias_generator=lambda value: value.split("_")[0]
@@ -554,7 +571,7 @@ class BridgeEventPageResponse(BaseModel):
     )
     schema_version: str = _BRIDGE_EVENTS_SCHEMA
     bridge_session_id: str
-    items: list[dict[str, Any]]
+    items: list[BridgeEventPayload]
     after: int
     next_cursor: str | None
     has_more: bool
@@ -670,6 +687,8 @@ def _bridge_event_payload(row: Any) -> dict[str, Any]:
 @router.get("/bridge-sessions/resolve", response_model=BridgeSessionResolution)
 async def resolve_omnigent_bridge_session_projection(
     workflow_id: str | None = Query(default=None, alias="workflowId"),
+    run_id: str | None = Query(default=None, alias="runId"),
+    step_execution_id: str | None = Query(default=None, alias="stepExecutionId"),
     agent_run_id: str | None = Query(default=None, alias="agentRunId"),
     idempotency_key: str | None = Query(default=None, alias="idempotencyKey"),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
@@ -679,11 +698,19 @@ async def resolve_omnigent_bridge_session_projection(
 ) -> BridgeSessionResolution:
     """Resolve the bridge session Workflow Chat should read before legacy logs."""
 
-    row = await store.resolve_projection_session(
-        workflow_id=workflow_id,
-        agent_run_id=agent_run_id,
-        idempotency_key=idempotency_key,
-    )
+    try:
+        row = await store.resolve_projection_session(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_execution_id=step_execution_id,
+            agent_run_id=agent_run_id,
+            idempotency_key=idempotency_key,
+        )
+    except BridgeProjectionAmbiguousError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "omnigent_bridge_session_ambiguous"},
+        ) from exc
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -770,6 +797,7 @@ async def list_omnigent_bridge_session_events(
 @router.get("/bridge-sessions/{bridge_session_id}/stream")
 async def stream_omnigent_bridge_session_events(
     bridge_session_id: str,
+    request: Request,
     since: int | None = Query(default=None),
     cursor: int | None = Query(default=None, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
@@ -792,15 +820,23 @@ async def stream_omnigent_bridge_session_events(
         raise HTTPException(
             status_code=400, detail={"code": "invalid_bridge_event_cursor"}
         ) from exc
-    supplied = [value for value in (cursor, header_cursor, since) if value is not None]
-    initial_cursor = max(supplied, default=0)
+    supplied = {value for value in (cursor, header_cursor, since) if value is not None}
+    if len(supplied) > 1:
+        raise HTTPException(
+            status_code=400, detail={"code": "conflicting_bridge_event_cursors"}
+        )
+    initial_cursor = next(iter(supplied), 0)
 
     async def _event_stream():
         last_sequence = initial_cursor
         idle_polls = 0
         while True:
+            if await request.is_disconnected():
+                return
             page = await store.list_event_page(
-                bridge_session_id, after=last_sequence, limit=100
+                bridge_session_id,
+                after=last_sequence,
+                limit=_BRIDGE_STREAM_PAGE_SIZE,
             )
             if (
                 page.earliest_sequence is not None
@@ -811,6 +847,7 @@ async def stream_omnigent_bridge_session_events(
                     earliest_available=page.earliest_sequence,
                 )
                 yield f"event: retention_gap\ndata: {gap.model_dump_json(by_alias=True)}\n\n"
+                return
             for row in page.rows:
                 last_sequence = row.sequence
                 idle_polls = 0
@@ -823,13 +860,20 @@ async def stream_omnigent_bridge_session_events(
                 and last_sequence >= page.latest_sequence
                 and not page.has_more
             ):
+                confirmation = await store.list_event_page(
+                    bridge_session_id, after=last_sequence, limit=1
+                )
+                if confirmation.rows or confirmation.latest_sequence > last_sequence:
+                    continue
                 yield f"event: terminal\ndata: {envelope.model_dump_json(by_alias=True)}\n\n"
                 return
             if page.has_more:
                 continue
             idle_polls += 1
             yield ": keepalive\n\n"
-            await asyncio.sleep(1.0 if idle_polls < 30 else 5.0)
+            if idle_polls >= _BRIDGE_STREAM_MAX_IDLE_POLLS:
+                return
+            await asyncio.sleep(_BRIDGE_STREAM_POLL_SECONDS)
 
     return StreamingResponse(_event_stream(), media_type="text/event-stream")
 

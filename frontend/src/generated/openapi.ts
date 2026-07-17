@@ -4619,9 +4619,7 @@ export interface components {
             /** Bridgesessionid */
             bridgeSessionId: string;
             /** Items */
-            items: {
-                [key: string]: unknown;
-            }[];
+            items: components["schemas"]["BridgeEventPayload"][];
             /** After */
             after: number;
             /** Nextcursor */
@@ -4634,6 +4632,35 @@ export interface components {
             latestSequence: number;
             retentionGap?: components["schemas"]["BridgeRetentionGap"] | null;
             terminalEnvelope?: components["schemas"]["BridgeTerminalEnvelope"] | null;
+        };
+        /** BridgeEventPayload */
+        BridgeEventPayload: {
+            /** Id */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /** Timestamp */
+            timestamp: string;
+            /** Stream */
+            stream: string;
+            /** Text */
+            text: string;
+            /** Kind */
+            kind: string;
+            /** Bridgesessionid */
+            bridgeSessionId: string;
+            /** Sessionid */
+            sessionId: string;
+            /** Normalizedstatus */
+            normalizedStatus?: string | null;
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
         };
         /** BridgeRetentionGap */
         BridgeRetentionGap: {
@@ -17660,6 +17687,8 @@ export interface operations {
         parameters: {
             query?: {
                 workflowId?: string | null;
+                runId?: string | null;
+                stepExecutionId?: string | null;
                 agentRunId?: string | null;
                 idempotencyKey?: string | null;
             };
