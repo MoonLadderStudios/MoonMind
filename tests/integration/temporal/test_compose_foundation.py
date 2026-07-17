@@ -176,6 +176,46 @@ def test_temporal_compose_topology_and_private_exposure():
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
 
+
+def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
+    compose = _load_compose()
+    services = compose["services"]
+    initializer = services["omnigent-tools-init"]
+
+    assert initializer["user"] == "0:0"
+    assert initializer["restart"] == "no"
+    assert initializer["volumes"] == [
+        "omnigent-tools:/output",
+        "./services/omnigent/tools:/opt/moonmind-tools-init:ro",
+    ]
+    assert compose["volumes"]["omnigent-tools"]["name"] == (
+        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}"
+    )
+
+    for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
+        host = services[service_name]
+        environment = _env_map(host["environment"])
+        assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
+        assert host["depends_on"]["omnigent-tools-init"] == {
+            "condition": "service_completed_successfully"
+        }
+        tool_mount = next(
+            mount
+            for mount in host["volumes"]
+            if isinstance(mount, dict) and mount.get("target") == "/opt/moonmind-tools"
+        )
+        assert tool_mount == {
+            "type": "volume",
+            "source": "omnigent-tools",
+            "target": "/opt/moonmind-tools",
+            "read_only": True,
+            "volume": {"subpath": "bundle"},
+        }
+        assert (
+            "./services/omnigent/profile/moonmind-tools.sh:"
+            "/etc/profile.d/moonmind-tools.sh:ro"
+        ) in host["volumes"]
+
 def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     compose = _load_compose()
     services = compose["services"]

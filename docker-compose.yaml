@@ -802,11 +802,26 @@ services:
     networks:
       - local-network
 
+  omnigent-tools-init:
+    profiles: ["omnigent-host", "omnigent-host-claude", "omnigent-host-codex"]
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    user: "0:0"
+    command: ["python", "/opt/moonmind-tools-init/init_omnigent_tools.py"]
+    environment:
+      OMNIGENT_TOOLS_LOCK: /opt/moonmind-tools-init/manifest.lock.json
+      OMNIGENT_TOOLS_OUTPUT: /output
+      OMNIGENT_TOOL_BUNDLE_VERSION: ${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}
+    volumes:
+      - omnigent-tools:/output
+      - ./services/omnigent/tools:/opt/moonmind-tools-init:ro
+    restart: "no"
+
   omnigent-host:
     profiles: ["omnigent-host"]
     image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
     command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
     environment:
+      - PATH=/opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -816,12 +831,21 @@ services:
         required: false
     volumes:
       - omnigent-host-state:/root/.omnigent
+      - type: volume
+        source: omnigent-tools
+        target: /opt/moonmind-tools
+        read_only: true
+        volume:
+          subpath: bundle
+      - ./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./omnigent_workspaces:/workspaces
       # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
       - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
     depends_on:
       omnigent:
         condition: service_started
+      omnigent-tools-init:
+        condition: service_completed_successfully
     networks:
       - local-network
     restart: unless-stopped
@@ -835,6 +859,7 @@ services:
     command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
     environment:
       HOME: /home/app
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       CLAUDE_HOME: /home/app/.claude
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
@@ -847,6 +872,13 @@ services:
       GOOGLE_API_KEY: ""
     volumes:
       - omnigent-host-claude-state:/home/app/.omnigent
+      - type: volume
+        source: omnigent-tools
+        target: /opt/moonmind-tools
+        read_only: true
+        volume:
+          subpath: bundle
+      - ./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - claude_auth_volume:/home/app/.claude
       - ./omnigent_workspaces:/workspaces
       # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
@@ -855,6 +887,8 @@ services:
       omnigent:
         condition: service_started
       claude-auth-init:
+        condition: service_completed_successfully
+      omnigent-tools-init:
         condition: service_completed_successfully
     networks:
       - local-network
@@ -893,6 +927,7 @@ services:
     command: ["/opt/moonmind/start-codex-oauth-host.sh"]
     environment:
       HOME: /home/app
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       CODEX_HOME: /home/app/.codex
       CODEX_CONFIG_HOME: /home/app/.codex
       CODEX_CONFIG_PATH: /home/app/.codex/config.toml
@@ -901,6 +936,13 @@ services:
       OMNIGENT_SERVER_URL: http://omnigent:8000
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
+      - type: volume
+        source: omnigent-tools
+        target: /opt/moonmind-tools
+        read_only: true
+        volume:
+          subpath: bundle
+      - ./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - ./omnigent_workspaces:/workspaces
@@ -910,6 +952,8 @@ services:
       omnigent:
         condition: service_started
       omnigent-host-codex-init:
+        condition: service_completed_successfully
+      omnigent-tools-init:
         condition: service_completed_successfully
     networks:
       - local-network
@@ -1108,6 +1152,8 @@ volumes:
   omnigent-host-state:
   omnigent-host-claude-state:
   omnigent-host-codex-state:
+  omnigent-tools:
+    name: moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}
   postgres-data:
   minio-data:
   workflow_workspaces:
