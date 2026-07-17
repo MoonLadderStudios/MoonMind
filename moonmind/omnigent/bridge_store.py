@@ -45,6 +45,8 @@ FIRST_MESSAGE_TERMINAL = "terminal"
 # first-message prepare/post.
 BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
 SESSION_CREATED_EVENT_TYPE = "session.created"
+RESOURCE_HARVEST_COMPLETED_KEY = "resource_harvest_completed_at"
+PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
 
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
@@ -657,6 +659,41 @@ class OmnigentBridgeSessionStore:
                 await session.commit()
                 await session.refresh(row)
             return _detached(session, row)
+
+    async def record_resource_harvest_completed(self, session_id: str) -> None:
+        """Persist authority that provider resources were harvested successfully."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession).where(
+                    OmnigentBridgeSession.omnigent_session_id == session_id
+                )
+            )
+            row = result.scalars().one_or_none()
+            if row is None:
+                raise OmnigentIdempotencyError("provider session is not bridge-bound")
+            metadata = dict(row.metadata_ or {})
+            metadata[RESOURCE_HARVEST_COMPLETED_KEY] = datetime.now(tz=UTC).isoformat()
+            row.metadata_ = metadata
+            await session.commit()
+
+    async def record_provider_session_deleted(self, session_id: str) -> None:
+        """Clear a deleted provider binding so create retries cannot reuse it."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession).where(
+                    OmnigentBridgeSession.omnigent_session_id == session_id
+                )
+            )
+            row = result.scalars().one_or_none()
+            if row is None:
+                raise OmnigentIdempotencyError("provider session is not bridge-bound")
+            metadata = dict(row.metadata_ or {})
+            metadata[PROVIDER_SESSION_DELETED_KEY] = datetime.now(tz=UTC).isoformat()
+            row.metadata_ = metadata
+            row.omnigent_session_id = None
+            await session.commit()
 
     async def mark_prepared(
         self, idempotency_key: str, *, digest: str, marker: str

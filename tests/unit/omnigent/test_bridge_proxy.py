@@ -46,6 +46,7 @@ class _FakeRow:
         self.omnigent_agent_name = agent_name
         self.omnigent_endpoint_ref = endpoint_ref
         self.target_metadata: dict[str, Any] = {}
+        self.metadata_: dict[str, Any] = {}
 
 
 class _FakeStore:
@@ -65,6 +66,25 @@ class _FakeStore:
                     agent_run_id=row.moonmind_agent_run_id,
                 )
         return None
+
+    async def get_session_by_provider_session_id(self, session_id: str):
+        return next(
+            (
+                row
+                for row in self.rows.values()
+                if row.omnigent_session_id == session_id
+            ),
+            None,
+        )
+
+    async def record_resource_harvest_completed(self, session_id: str) -> None:
+        row = await self.get_session_by_provider_session_id(session_id)
+        row.metadata_["resource_harvest_completed_at"] = "now"
+
+    async def record_provider_session_deleted(self, session_id: str) -> None:
+        row = await self.get_session_by_provider_session_id(session_id)
+        row.metadata_["provider_session_deleted_at"] = "now"
+        row.omnigent_session_id = None
 
     async def get_or_create(
         self,
@@ -175,6 +195,12 @@ class _FakeClient:
 
     async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
         return f"session:{file_id}\n".encode()
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        return {"ok": True}
+
+    async def stream_events(self, session_id: str):
+        yield {"type": "status", "status": "running"}
 
 
 def _binding(key: str = "idem-1") -> BridgePrincipalBinding:
@@ -597,7 +623,9 @@ async def test_post_event_forwards_native_control() -> None:
 
 async def test_harvest_session_is_bridge_local_policy() -> None:
     client = _FakeClient()
-    proxy = _proxy(_FakeStore(), client)
+    store = _FakeStore()
+    store.rows["idem-1"] = _FakeRow(session_id="sess-1")
+    proxy = _proxy(store, client)
 
     response = await proxy.post_event(
         session_id="sess-1",
@@ -727,9 +755,7 @@ async def test_resource_index_total_size_is_bounded() -> None:
 
     client.list_workspace_files = oversized  # type: ignore[method-assign]
     with pytest.raises(OmnigentBridgeError) as excinfo:
-        await _proxy(_FakeStore(), client).get_resource(
-            "workspace_files", "sess-1"
-        )
+        await _proxy(_FakeStore(), client).get_resource("workspace_files", "sess-1")
     assert excinfo.value.code == "omnigent_bridge_response_too_large"
 
 
@@ -761,3 +787,55 @@ async def test_facade_error_mapping_is_stable(status_code, optional, expected) -
     assert error.code == expected
     assert error.failure_class == "integration_error"
     assert error.status_code == (502 if status_code in {401, 403} else status_code)
+
+
+async def test_attach_rejects_malformed_labels() -> None:
+    class _MalformedClient(_FakeClient):
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            return {"id": session_id, "labels": ["not", "a", "mapping"]}
+
+    store = _FakeStore()
+    store.rows["idem-1"] = _FakeRow(workflow_id="mm:w1", agent_run_id="ar-1")
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(store, _MalformedClient()).attach_session(
+            session_id="sess-9", binding=_binding()
+        )
+    assert excinfo.value.code == "omnigent_bridge_upstream_payload"
+
+
+async def test_delete_requires_harvest_and_clears_durable_binding() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    row = _FakeRow(session_id="sess-9", workflow_id="mm:w1", agent_run_id="ar-1")
+    store.rows["idem-1"] = row
+    config = parse_bridge_config(
+        {"sessionDefaults": {"deleteProviderSessionAfterHarvest": True}}
+    )
+    proxy = _proxy(store, client, config=config)
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await proxy.delete_session("sess-9")
+    assert excinfo.value.code == "omnigent_bridge_harvest_required"
+
+    row.metadata_["resource_harvest_completed_at"] = "now"
+    assert await proxy.delete_session("sess-9") == {"ok": True}
+    assert row.omnigent_session_id is None
+    assert row.metadata_["provider_session_deleted_at"] == "now"
+
+
+async def test_stream_timed_out_snapshot_is_terminal() -> None:
+    class _DisconnectedClient(_FakeClient):
+        async def stream_events(self, session_id: str):
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            return {"id": session_id, "status": "timed_out"}
+
+    events = [
+        event
+        async for event in _proxy(_FakeStore(), _DisconnectedClient()).stream_events(
+            "sess-9"
+        )
+    ]
+    assert events == []

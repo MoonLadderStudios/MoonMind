@@ -1003,7 +1003,11 @@ async def list_omnigent_hosts(
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.get(_ROUTES.stream_events)
+@router.get(
+    _ROUTES.stream_events,
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
 async def stream_upstream_omnigent_events(
     session_id: str,
     _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
@@ -1015,22 +1019,15 @@ async def stream_upstream_omnigent_events(
         session_id=session_id, user=user, service=service, proxy=proxy
     )
 
-    upstream = proxy.stream_events(session_id)
-    try:
-        first_event = await anext(upstream)
-    except StopAsyncIteration:
-        first_event = None
-    except OmnigentBridgeError as exc:
-        raise _http_error_from_bridge(exc) from exc
-
     async def _stream():
-        if first_event is not None:
-            yield f"data: {json.dumps(first_event, separators=(',', ':'))}\n\n"
         try:
-            async for event in upstream:
+            async for event in proxy.stream_events(session_id):
                 yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
         except OmnigentBridgeError as exc:
-            payload = {"code": exc.code, "message": str(exc)}
+            payload = {
+                "code": exc.code,
+                "message": "The upstream Omnigent event stream became unavailable.",
+            }
             yield f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")

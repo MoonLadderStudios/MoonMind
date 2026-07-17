@@ -33,7 +33,10 @@ from moonmind.omnigent.bridge_config import (
     OmnigentBridgeConfig,
 )
 from moonmind.omnigent.bridge_security import BridgeSessionBinding
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    RESOURCE_HARVEST_COMPLETED_KEY,
+    OmnigentBridgeSessionStore,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAdapterError,
@@ -53,7 +56,14 @@ _MAX_BRIDGE_HARVEST_ITEMS = 25
 _MAX_FACADE_RESOURCE_ITEMS = 250
 _MAX_FACADE_RESOURCE_BYTES = 4 * 1024 * 1024
 _MAX_STREAM_RECONNECTS = 3
-_TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled", "canceled", "stopped"}
+_TERMINAL_SESSION_STATUSES = {
+    "completed",
+    "failed",
+    "cancelled",
+    "canceled",
+    "stopped",
+    "timed_out",
+}
 
 
 class OmnigentBridgeError(RuntimeError):
@@ -423,10 +433,18 @@ class OmnigentBridgeSessionProxy:
             )
         # Verify provider identity before persisting the attachment.
         snapshot = await self.get_session(session_id)
+        labels = snapshot.get("labels")
+        if labels is not None and not isinstance(labels, dict):
+            raise OmnigentBridgeError(
+                "Omnigent session labels have an unsupported response shape",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_upstream_payload",
+            )
         provider_key = str(
             snapshot.get("idempotency_key")
             or snapshot.get("idempotencyKey")
-            or (snapshot.get("labels") or {}).get("moonmind.idempotency_key")
+            or (labels or {}).get("moonmind.idempotency_key")
             or ""
         ).strip()
         # Stock Omnigent snapshots do not guarantee that the create request's
@@ -511,10 +529,21 @@ class OmnigentBridgeSessionProxy:
                 status_code=409,
                 code="omnigent_bridge_capability_unavailable",
             )
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        metadata = dict(getattr(row, "metadata_", None) or {}) if row else {}
+        if not metadata.get(RESOURCE_HARVEST_COMPLETED_KEY):
+            raise OmnigentBridgeError(
+                "Provider session cannot be deleted before resource harvest completes",
+                failure_class="user_error",
+                status_code=409,
+                code="omnigent_bridge_harvest_required",
+            )
         try:
-            return await self._client.delete_session(session_id)
+            response = await self._client.delete_session(session_id)
         except OmnigentClientError as exc:
             raise _bridge_client_error(exc) from exc
+        await self._run_store.record_provider_session_deleted(session_id)
+        return response
 
     async def get_resource(
         self, operation: str, session_id: str, value: str | None = None
@@ -644,7 +673,7 @@ class OmnigentBridgeSessionProxy:
             resources=resources,
             diagnostics=diagnostics,
         )
-        return {
+        result = {
             "type": "harvest_session",
             "status": "completed_with_diagnostics" if diagnostics else "completed",
             "moonmind": {
@@ -659,6 +688,9 @@ class OmnigentBridgeSessionProxy:
             },
             "resources": resources,
         }
+        if not diagnostics:
+            await self._run_store.record_resource_harvest_completed(session_id)
+        return result
 
     async def _harvest_changed_files(
         self,
@@ -964,8 +996,6 @@ def _bound_resource_lists(value: Any) -> Any:
 
 
 def _stable_error_code(failure_class: str, status_code: int | None) -> str:
-    if failure_class == "user_error":
-        return "omnigent_bridge_invalid_request"
     if status_code in {401, 403}:
         return "omnigent_bridge_upstream_auth"
     if status_code == 404:
@@ -974,6 +1004,8 @@ def _stable_error_code(failure_class: str, status_code: int | None) -> str:
         return "omnigent_bridge_upstream_timeout"
     if status_code in {400, 409, 422}:
         return "omnigent_bridge_upstream_payload"
+    if failure_class == "user_error":
+        return "omnigent_bridge_invalid_request"
     if failure_class == "integration_error":
         return "omnigent_bridge_upstream_transport"
     return "omnigent_bridge_internal"

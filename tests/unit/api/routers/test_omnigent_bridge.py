@@ -147,22 +147,26 @@ class _FakeStore:
             if owner is _UNSET
             else owner
         )
-        self._rows = rows if rows is not None else [
-            SimpleNamespace(
-                event_id="evt-1",
-                bridge_session_id="brs-1",
-                sequence=1,
-                timestamp=SimpleNamespace(
-                    isoformat=lambda: "2026-07-09T00:00:00+00:00"
-                ),
-                direction="host_to_moonmind",
-                event_type="response.delta",
-                normalized_status="running",
-                text_preview="hello from bridge",
-                artifact_ref=None,
-                metadata_={"responseId": "resp-1"},
-            )
-        ]
+        self._rows = (
+            rows
+            if rows is not None
+            else [
+                SimpleNamespace(
+                    event_id="evt-1",
+                    bridge_session_id="brs-1",
+                    sequence=1,
+                    timestamp=SimpleNamespace(
+                        isoformat=lambda: "2026-07-09T00:00:00+00:00"
+                    ),
+                    direction="host_to_moonmind",
+                    event_type="response.delta",
+                    normalized_status="running",
+                    text_preview="hello from bridge",
+                    artifact_ref=None,
+                    metadata_={"responseId": "resp-1"},
+                )
+            ]
+        )
         self._session_overrides = session_overrides or {}
 
     async def get_bridge_session_owner(self, bridge_session_id: str):
@@ -411,7 +415,7 @@ def test_provider_stream_authorizes_and_proxies_sse() -> None:
     assert '"type":"response.completed"' in resp.text
 
 
-def test_provider_stream_maps_setup_failure_before_http_200() -> None:
+def test_provider_stream_encodes_async_failure_without_disclosing_details() -> None:
     proxy = _FakeProxy()
     proxy.stream_error = OmnigentBridgeError(
         "upstream unavailable",
@@ -423,8 +427,10 @@ def test_provider_stream_maps_setup_failure_before_http_200() -> None:
 
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream")
 
-    assert resp.status_code == 502
-    assert resp.json()["detail"]["code"] == "omnigent_bridge_upstream_transport"
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert "omnigent_bridge_upstream_transport" in resp.text
+    assert "upstream unavailable" not in resp.text
 
 
 def test_all_resource_route_classes_delegate() -> None:
@@ -441,8 +447,12 @@ def test_all_resource_route_classes_delegate() -> None:
     for path in paths:
         assert client.get(path).status_code == 200
     assert [call[0] for call in proxy.resource_calls] == [
-        "changed_files", "workspace_files", "workspace_file",
-        "workspace_diff", "session_files", "session_file",
+        "changed_files",
+        "workspace_files",
+        "workspace_file",
+        "workspace_diff",
+        "session_files",
+        "session_file",
     ]
 
 
@@ -454,7 +464,9 @@ def test_all_id_bearing_route_classes_reject_unknown_owner() -> None:
         lambda: client.get(base),
         lambda: client.delete(base),
         lambda: client.post(f"{base}/events", json={"type": "interrupt"}),
-        lambda: client.post(f"{base}/elicitations/el-1/resolve", json={"answer": "yes"}),
+        lambda: client.post(
+            f"{base}/elicitations/el-1/resolve", json={"answer": "yes"}
+        ),
         lambda: client.get(f"{base}/stream"),
         lambda: client.get(f"{base}/resources/environments/default/changes"),
         lambda: client.get(f"{base}/resources/environments/default/filesystem"),
@@ -532,9 +544,7 @@ def test_list_bridge_session_events_handles_nullable_event_type() -> None:
             event_id="evt-null",
             bridge_session_id="brs-1",
             sequence=1,
-            timestamp=SimpleNamespace(
-                isoformat=lambda: "2026-07-09T00:00:00+00:00"
-            ),
+            timestamp=SimpleNamespace(isoformat=lambda: "2026-07-09T00:00:00+00:00"),
             direction="host_to_moonmind",
             event_type=None,
             normalized_status="running",
@@ -719,9 +729,13 @@ def test_terminal_page_falls_back_to_durable_session_evidence_without_events() -
 def test_routes_registered_under_configured_mount_path() -> None:
     paths = {route.path for route in router.routes}
     assert {
-        "/api/agents", "/api/hosts", "/v1/sessions",
-        "/v1/sessions/{session_id}", "/v1/sessions/{session_id}/attach",
-        "/v1/sessions/{session_id}/events", "/v1/sessions/{session_id}/stream",
+        "/api/agents",
+        "/api/hosts",
+        "/v1/sessions",
+        "/v1/sessions/{session_id}",
+        "/v1/sessions/{session_id}/attach",
+        "/v1/sessions/{session_id}/events",
+        "/v1/sessions/{session_id}/stream",
         "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
         "/v1/sessions/{session_id}/resources/environments/default/changes",
         "/v1/sessions/{session_id}/resources/environments/default/filesystem",
@@ -729,7 +743,8 @@ def test_routes_registered_under_configured_mount_path() -> None:
         "/v1/sessions/{session_id}/resources/environments/default/diff/{path:path}",
         "/v1/sessions/{session_id}/resources/files",
         "/v1/sessions/{session_id}/resources/files/{file_id}/content",
-        "/bridge-sessions/resolve", "/bridge-sessions/{bridge_session_id}/events",
+        "/bridge-sessions/resolve",
+        "/bridge-sessions/{bridge_session_id}/events",
         "/bridge-sessions/{bridge_session_id}/stream",
     } <= paths
     assert OMNIGENT_BRIDGE_MOUNT_PATH == "/api/omnigent"
