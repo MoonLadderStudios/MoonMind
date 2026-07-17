@@ -18,7 +18,7 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindUserWorkflow,
 )
 from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
-    mock_run_environment as _mock_run_environment,  # noqa: F401
+    mock_run_environment,  # noqa: F401
 )
 
 
@@ -222,7 +222,7 @@ class _CurrentCanonicalNoCommitReplayFixture:
         return [run_workflow._publish_status, status, publish_failure]
 
 @pytest.mark.asyncio
-async def test_workflow_determinism_replay(mock_run_environment):
+async def test_workflow_determinism_replay(mock_run_environment):  # noqa: F811
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,

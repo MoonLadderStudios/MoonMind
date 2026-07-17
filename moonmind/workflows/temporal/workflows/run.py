@@ -6527,16 +6527,16 @@ class MoonMindRunWorkflow:
             # let that declared budget govern repeated verifier results as well.
             # Defaulting this guard to one makes the first unchanged/sparse
             # post-remediation report shadow an explicit "attempt 1 of 6" plan.
-            declared_remediation_maxima = {
-                maximum
-                for candidate in ordered_nodes
-                if self._moonspec_step_role(candidate)
-                in {"moonspec-remediation", "moonspec-verification-gate"}
-                for _, maximum in [
-                    self._moonspec_remediation_attempt_metadata(candidate)
-                ]
-                if maximum is not None
-            }
+            declared_remediation_maxima: set[int] = set()
+            for candidate in ordered_nodes:
+                if self._moonspec_step_role(candidate) not in {
+                    "moonspec-remediation",
+                    "moonspec-verification-gate",
+                }:
+                    continue
+                _, maximum = self._moonspec_remediation_attempt_metadata(candidate)
+                if maximum is not None:
+                    declared_remediation_maxima.add(maximum)
             if len(declared_remediation_maxima) == 1:
                 max_no_progress_attempts = next(iter(declared_remediation_maxima))
         budget = LoopBudget.model_validate(
