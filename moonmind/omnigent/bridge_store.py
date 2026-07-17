@@ -368,6 +368,7 @@ class OmnigentBridgeSessionStore:
                     event_id=stable_event_id,
                     bridge_session_id=row.bridge_session_id,
                     sequence=sequence,
+                    deduplication_key=f"lifecycle:{event_identity}"[:128],
                     timestamp=datetime.now(tz=UTC),
                     direction="moonmind_system",
                     event_type=f"lifecycle.{str(event_type)[:96]}",
@@ -945,6 +946,7 @@ def _build_event_rows(
                 event_id=f"bse_{uuid4().hex}",
                 bridge_session_id=bridge_session_id,
                 sequence=int(sequence) if sequence is not None else index,
+                deduplication_key=_event_deduplication_key(event),
                 timestamp=now,
                 direction=str(event.get("direction") or "host_to_moonmind"),
                 event_type=str(event.get("eventType") or event.get("event_type") or ""),
@@ -957,6 +959,25 @@ def _build_event_rows(
             )
         )
     return rows
+
+
+def _event_deduplication_key(event: dict[str, Any]) -> str:
+    """Prefer explicit/provider identity, otherwise bind content to its cursor."""
+    import hashlib
+    import json
+
+    explicit = _string_or_none(event.get("deduplicationKey"))
+    if explicit:
+        return explicit[:128]
+    metadata = event.get("metadata") or {}
+    reconciliation = metadata.get("reconciliation") or {}
+    provider_id = _string_or_none(reconciliation.get("providerEventId"))
+    if provider_id:
+        return f"provider:{provider_id}"[:128]
+    cursor = reconciliation.get("streamCursor") or event.get("sequence") or 0
+    canonical = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(canonical.encode()).hexdigest()
+    return f"cursor:{cursor}:{digest}"[:128]
 
 
 def _workflow_id(request: AgentExecutionRequest) -> str:
