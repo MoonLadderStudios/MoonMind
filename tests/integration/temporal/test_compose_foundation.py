@@ -512,7 +512,9 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
     assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
 
-    host_volumes = set(host_service["volumes"])
+    host_volumes = {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    }
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert "codex_auth_volume:/root/.codex" not in host_volumes
@@ -563,7 +565,9 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "GOOGLE_API_KEY": "",
     }
 
-    host_volumes = set(host_service["volumes"])
+    host_volumes = {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    }
     assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
     assert "claude_auth_volume:/home/app/.claude" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
@@ -577,6 +581,7 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "omnigent": {"condition": "service_started"},
         "omnigent-tools-init": {"condition": "service_completed_successfully"},
         "claude-auth-init": {"condition": "service_completed_successfully"},
+        "omnigent-tools-init": {"condition": "service_completed_successfully"},
     }
     assert _network_names(host_service) == {"local-network"}
     assert host_service["restart"] == "unless-stopped"
@@ -632,7 +637,9 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "GOOGLE_API_KEY",
     }
     assert set(entrypoint[1::2]) == {"-u"}
-    assert set(host_service["volumes"]) == {
+    assert {
+        volume for volume in host_service["volumes"] if isinstance(volume, str)
+    } == {
         "omnigent-host-codex-state:/home/app/.omnigent",
         "codex_auth_volume:/home/app/.codex",
         "omnigent-tools:/opt/moonmind-tools:ro",
@@ -643,6 +650,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
             "/workspaces/MoonMind:ro"
         ),
         "./services/omnigent/scripts:/opt/moonmind:ro",
+        "./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
     }
     assert "omnigent-host-codex-state" in compose["volumes"]
     assert host_service["depends_on"] == {
@@ -651,6 +659,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "omnigent-host-codex-init": {
             "condition": "service_completed_successfully"
         },
+        "omnigent-tools-init": {"condition": "service_completed_successfully"},
     }
     init_service = compose["services"]["omnigent-host-codex-init"]
     assert init_service["user"] == "0:0"

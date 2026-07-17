@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,10 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
     deterministic_host_container_name,
     validate_preflight_result,
+)
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_mounted_tools,
 )
 from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
@@ -104,6 +109,10 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         workspace_key: str,
         repository_url: str | None = None,
+        target_repository: str = "",
+        required_capabilities: tuple[str, ...] = (),
+        github_token: str | None = None,
+        github_mutation_required: bool = False,
     ) -> dict[str, Any]:
         workspace_source = await self._prepare_workspace(
             workspace_key=workspace_key,
@@ -119,6 +128,7 @@ class OmnigentOAuthHostRuntime:
                 host_lease=host_lease,
                 container_name=container_name,
                 workspace_source=workspace_source,
+                github_token=github_token,
             )
             await self._exec_check(container_name)
             await self._exec_tools_check(container_name)
@@ -135,6 +145,13 @@ class OmnigentOAuthHostRuntime:
                 "registered host does not advertise codex-native",
                 code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
             )
+        mounted_tool_evidence = await self._preflight_mounted_tools(
+            binding=binding,
+            host_lease=host_lease,
+            required_capabilities=required_capabilities,
+            repository=target_repository,
+            mutation_required=github_mutation_required,
+        )
         result = {
             "status": "ready",
             "providerProfileId": binding.provider_profile_id,
@@ -148,6 +165,7 @@ class OmnigentOAuthHostRuntime:
             "hostId": host_id,
             "harness": "codex-native",
             "competingCredentialsPresent": False,
+            "mountedTools": mounted_tool_evidence,
             "workspacePath": (
                 "/workspaces/run"
                 if binding.host_launch_profile_ref
@@ -160,6 +178,7 @@ class OmnigentOAuthHostRuntime:
             host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
         )
         validated["workspacePath"] = result["workspacePath"]
+        validated["mountedTools"] = mounted_tool_evidence
         return validated
 
     async def stop_host(
@@ -231,6 +250,7 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         container_name: str,
         workspace_source: Path,
+        github_token: str | None = None,
     ) -> None:
         if await self.container_exists(container_name):
             return
@@ -319,6 +339,31 @@ class OmnigentOAuthHostRuntime:
         if token:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
+        if github_token:
+            child_env["GH_TOKEN"] = github_token
+            child_env["GIT_TOKEN"] = github_token
+            args.extend(
+                [
+                    "--env",
+                    "GH_TOKEN",
+                    "--env",
+                    "GIT_TOKEN",
+                    "--env",
+                    "GIT_USERNAME=x-access-token",
+                    "--env",
+                    "GH_CONFIG_DIR=/workspaces/run/.config/gh",
+                    "--env",
+                    "GH_PROMPT_DISABLED=1",
+                    "--env",
+                    "GH_NO_UPDATE_NOTIFIER=1",
+                    "--env",
+                    "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
+                    "--env",
+                    "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
+                    "GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,"
+                    "GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER",
+                ]
+            )
         for key, value in labels.items():
             args.extend(["--label", f"{key}={value}"])
         args.extend(["--entrypoint", "/usr/bin/env"])
@@ -379,6 +424,54 @@ class OmnigentOAuthHostRuntime:
             "-lc",
             "test -f /opt/moonmind-tools/manifest.json "
             "&& command -v gh >/dev/null && gh --version >/dev/null",
+        )
+
+    async def _preflight_mounted_tools(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        required_capabilities: tuple[str, ...],
+        repository: str,
+        mutation_required: bool,
+    ) -> dict[str, Any]:
+        if "gh" not in {item.strip().lower() for item in required_capabilities}:
+            return {"status": "not_required", "boundaries": []}
+        if not binding.host_launch_profile_ref:
+            raise MountedToolPreflightError(
+                "Required gh credentials cannot be isolated on a reusable static host",
+                code="github_auth_unavailable",
+                evidence={"tool": "gh", "phase": "host_launch", "hostMode": "static"},
+            )
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+
+        async def host_runner(command: str) -> tuple[int, str, str]:
+            return await self._run(
+                "docker", "exec", container_name, "bash", "-lc", command, check=False
+            )
+
+        async def runner_runner(command: str) -> tuple[int, str, str]:
+            # Mirror the stock host's explicit runner passthrough allowlist.  This
+            # proves the shell/environment that the harness constructs, not the
+            # worker container that launched the host.
+            runner_command = (
+                'env -i HOME="$HOME" PATH="$PATH" GH_TOKEN="$GH_TOKEN" '
+                'GH_CONFIG_DIR="$GH_CONFIG_DIR" GH_PROMPT_DISABLED=1 '
+                'GH_NO_UPDATE_NOTIFIER=1 GH_NO_EXTENSION_UPDATE_NOTIFIER=1 '
+                f"bash -lc {shlex.quote(command)}"
+            )
+            return await self._run(
+                "docker", "exec", container_name, "bash", "-lc", runner_command, check=False
+            )
+
+        return await preflight_mounted_tools(
+            required_capabilities=required_capabilities,
+            repository=repository,
+            mutation_required=mutation_required,
+            host_runner=host_runner,
+            runner_runner=runner_runner,
         )
 
     async def _prepare_workspace(
