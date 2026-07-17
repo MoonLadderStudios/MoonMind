@@ -10990,9 +10990,7 @@ class TemporalAgentRuntimeActivities:
                 or data.get("idempotencyKey")
                 or data.get("controlId")
                 or data.get("approvalId"),
-                mm.get("sourceOutcome")
-                or data.get("outcome")
-                or data.get("status"),
+                mm.get("sourceOutcome") or data.get("outcome"),
                 event.get("textPreview") or "",
                 event.get("artifactRef") or "",
             )
@@ -11010,6 +11008,11 @@ class TemporalAgentRuntimeActivities:
         }
         normalized = []
         for event_payload in event_payloads:
+            source_data = (
+                event_payload.get("data")
+                if isinstance(event_payload.get("data"), Mapping)
+                else {}
+            )
             event = build_omnigent_bridge_event(
                 payload=event_payload,
                 sequence=1,
@@ -11034,8 +11037,7 @@ class TemporalAgentRuntimeActivities:
                         ),
                         None,
                     ),
-                    "sourceOutcome": (event.get("data") or {}).get("outcome")
-                    or (event.get("data") or {}).get("status"),
+                    "sourceOutcome": source_data.get("outcome"),
                 }
             )
             key = identity(event)
