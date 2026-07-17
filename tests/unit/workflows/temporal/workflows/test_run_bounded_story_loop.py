@@ -5,6 +5,7 @@ import pytest
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     MoonMindRunWorkflow,
     bounded_story_loop_resume_decision,
     bounded_story_loop_scope_guard,
@@ -359,6 +360,93 @@ def test_parent_loop_continues_when_verification_progress_changes(
     assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
     assert second["continueLoop"] is True
     assert second["reason"] == "verification_requested_remediation"
+
+
+def test_parent_loop_progress_tracks_changed_verifier_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sparse structured gates still carry progress in verifier feedback."""
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _: True)
+    workflow._step_terminal_dispositions.update(
+        {"verify-1": "accepted", "verify-2": "accepted"}
+    )
+    ordered_nodes = [
+        {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-1",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+        {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        {
+            "id": "remediate-2",
+            "inputs": {
+                "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+            },
+        },
+    ]
+
+    first = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            feedback="Proxy events are buffered until terminal capture.",
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/initial",
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    second = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            feedback="Active journals exist; retry-stable cursors remain.",
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/remediation-1",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+
+    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert second["continueLoop"] is True
+    assert second["nextAttemptKind"] == "remediation"
+
+
+def test_feedback_progress_patch_preserves_prior_history_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        workflow,
+        "_patched_or_false_outside_workflow",
+        lambda patch_id: patch_id
+        == RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
+    )
+
+    first = workflow._bounded_story_loop_gate_from_step_gate(
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            feedback="Initial remaining work.",
+        ),
+        gate_result_ref="artifact://gate/one",
+        logical_step_id="verify-1",
+        progress_budget_enabled=True,
+    )
+    second = workflow._bounded_story_loop_gate_from_step_gate(
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            feedback="Changed remaining work.",
+        ),
+        gate_result_ref="artifact://gate/two",
+        logical_step_id="verify-2",
+        progress_budget_enabled=True,
+    )
+
+    assert first.progress_signature == second.progress_signature
 
 
 def test_parent_loop_progress_tracks_remaining_work_refs(

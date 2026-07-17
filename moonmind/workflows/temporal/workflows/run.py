@@ -626,6 +626,9 @@ RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH = "run-moonspec-gate-contract-repair-v1"
 RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH = (
     "run-bounded-story-loop-progress-budget-v1"
 )
+RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH = (
+    "run-bounded-story-loop-feedback-progress-v1"
+)
 RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH = (
     "run-moonspec-gate-contract-repair-fresh-source-v1"
 )
@@ -634,6 +637,9 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 )
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
+)
+RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
+    "run-moonspec-draft-publish-recovery-handoff-v1"
 )
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
@@ -6315,6 +6321,15 @@ class MoonMindRunWorkflow:
             ),
             "recoverableInCurrentRuntime": gate_result.recoverable_in_current_runtime,
         }
+        if self._patched_or_false_outside_workflow(
+            RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH
+        ):
+            # Verifiers may report their remaining gaps in feedback even when
+            # they omit the optional structured issues/remainingWorkRef fields.
+            # Excluding that authoritative summary makes distinct verifier
+            # reports look identical and can exhaust the no-progress budget
+            # after the first remediation attempt.
+            progress_payload["feedback"] = gate_result.feedback
         progress_signature = hashlib.sha256(
             json.dumps(
                 progress_payload,
@@ -10838,6 +10853,29 @@ class MoonMindRunWorkflow:
                                 )
                             )
                             self._summary = draft_summary
+                            # Draft publication is an explicit recovery handoff.
+                            # The remaining plan is skipped below, so preserve
+                            # already-pushed changes for the post-loop native PR
+                            # boundary even when an earlier auxiliary tool result
+                            # left a stale not_required/no-commit projection.
+                            if workflow.patched(
+                                RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH
+                            ) and self._execution_result_has_publishable_changes(
+                                execution_result
+                            ):
+                                require_pull_request_url = True
+                                if self._publish_status in {
+                                    "not_required",
+                                    "skipped",
+                                }:
+                                    self._publish_status = None
+                                    self._publish_reason = None
+                                    self._publish_context.pop(
+                                        "noCommitPublish", None
+                                    )
+                                    self._publish_context.pop(
+                                        "noChangePublish", None
+                                    )
                             self._mark_remaining_plan_steps_skipped(
                                 ordered_nodes=ordered_nodes,
                                 completed_index=index - 1,
