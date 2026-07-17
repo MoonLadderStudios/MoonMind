@@ -15,12 +15,14 @@ from moonmind.omnigent.bridge_artifacts import (
     OmnigentArtifactError,
     OmnigentCaptureBundle,
     build_omnigent_result,
+    build_omnigent_terminal_refs,
 )
 from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
     _resolve_agent_id,
+    _restore_active_journals,
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
@@ -38,6 +40,37 @@ def _request() -> AgentExecutionRequest:
     )
 
 
+@pytest.mark.asyncio
+async def test_restore_active_journals_preserves_committed_retry_prefix(tmp_path) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    request = _request()
+    raw_ref = await gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.raw.jsonl",
+        payload='{"type":"response.delta","token":"[REDACTED]"}\n',
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.normalized.jsonl",
+        payload='{"eventType":"response.delta","sequence":1}\n',
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+
+    class DurableRow:
+        raw_events_ref = raw_ref
+        normalized_events_ref = normalized_ref
+
+    raw, normalized = await _restore_active_journals(
+        artifact_gateway=gateway, durable_row=DurableRow()
+    )
+
+    assert raw == [{"type": "response.delta", "token": "[REDACTED]"}]
+    assert normalized == [{"eventType": "response.delta", "sequence": 1}]
+
+
 def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
     payload = {
         "output_refs": ["artifact://omnigent/corr-1/output.omnigent.snapshot.final.json"],
@@ -51,6 +84,18 @@ def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
     }
     payload.update(overrides)
     return OmnigentCaptureBundle(**payload)
+
+
+def test_build_terminal_refs_persists_router_terminal_metadata() -> None:
+    refs = build_omnigent_terminal_refs(
+        _bundle(),
+        terminal_status="failed",
+        final_snapshot={"summary": "provider failed", "failureCode": "provider_error"},
+    )
+
+    assert refs["failureClass"] == "execution_error"
+    assert refs["failureCode"] == "provider_error"
+    assert refs["summary"] == "provider failed"
 
 
 def test_normalize_waiting_with_elicitation_is_internal_awaiting_approval() -> None:

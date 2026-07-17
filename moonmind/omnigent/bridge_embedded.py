@@ -11,7 +11,6 @@ and persists them into the canonical bridge session store.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hmac import compare_digest
 from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,10 +28,11 @@ from moonmind.omnigent.bridge_proxy import (
     validate_bridge_host_fields,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.host_auth_adapter import (
+    OmnigentHostAuthAdapter,
+    UpstreamHostAuthError,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-
-_HOST_TOKEN_HEADER = "x-omnigent-host-token"
-
 
 class EmbeddedHostRegisterRequest(BaseModel):
     """Host registration payload accepted from an unchanged Omnigent host."""
@@ -68,6 +68,8 @@ class EmbeddedHostAuthContext:
 
     auth_mode: str
     protocol_profile: str
+    runner_id: str
+    credential_generation: int
 
 
 def verify_embedded_host_auth(
@@ -78,36 +80,35 @@ def verify_embedded_host_auth(
 ) -> EmbeddedHostAuthContext:
     """Verify the embedded host/runner auth profile (§16 rule 8).
 
-    ``header_or_token`` accepts either ``Authorization: Bearer <token>`` or the
-    Omnigent-shaped ``X-Omnigent-Host-Token`` header. The token is service-side
-    configuration and is never accepted from bridge config or workflow payloads.
+    Authentication is delegated to the pinned upstream runner-tunnel verifier.
     """
 
     embedded = config.host_connection.embedded
     auth_mode = str(embedded.auth_mode or "").strip()
-    if auth_mode != "header_or_token":
+    if auth_mode != "upstream_runner_tunnel":
         raise OmnigentBridgeError(
             f"Unsupported embedded host auth mode: {auth_mode}",
             failure_class="system_error",
             status_code=501,
         )
-    expected = str(configured_token or "").strip()
-    if not expected:
+    try:
+        identity = OmnigentHostAuthAdapter(
+            allowed_tokens=frozenset({str(configured_token or "").strip()})
+            if str(configured_token or "").strip()
+            else frozenset()
+        ).verify(headers)
+    except UpstreamHostAuthError as exc:
+        unavailable = "configured" in str(exc) or "entrypoint" in str(exc)
         raise OmnigentBridgeError(
-            "Embedded Omnigent host auth requires OMNIGENT_HOST_RUNNER_TOKEN",
-            failure_class="system_error",
-            status_code=503,
-        )
-    provided = _extract_host_token(headers)
-    if not provided or not compare_digest(provided, expected):
-        raise OmnigentBridgeError(
-            "Embedded Omnigent host authentication failed",
-            failure_class="user_error",
-            status_code=401,
-        )
+            str(exc),
+            failure_class="system_error" if unavailable else "user_error",
+            status_code=503 if unavailable else 401,
+        ) from exc
     return EmbeddedHostAuthContext(
         auth_mode=auth_mode,
-        protocol_profile=embedded.protocol_profile,
+        protocol_profile=identity.protocol_profile,
+        runner_id=identity.runner_id,
+        credential_generation=1,
     )
 
 
@@ -189,8 +190,14 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
-        host_id = _clean(request.host_id) or "embedded-host"
-        runner_id = _clean(request.runner_id)
+        host_id = _clean(request.host_id) or auth.runner_id
+        runner_id = _clean(request.runner_id) or auth.runner_id
+        if runner_id != auth.runner_id or host_id != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner or host identity does not match registration",
+                failure_class="user_error",
+                status_code=403,
+            )
         return {
             "hostId": host_id,
             "runnerId": runner_id,
@@ -211,6 +218,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        if _clean(host_id) != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner identity does not match host binding",
+                failure_class="user_error",
+                status_code=403,
+            )
         return {
             "hostId": _clean(host_id),
             "status": request.status,
@@ -231,6 +244,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        if _clean(host_id) != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner identity does not match session binding",
+                failure_class="user_error",
+                status_code=403,
+            )
         row = await self._run_store.get_session_by_provider_session_id(session_id)
         if row is None:
             raise OmnigentBridgeError(
@@ -243,10 +262,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         payload.setdefault("data", {})
         if isinstance(payload["data"], dict):
             payload["data"].setdefault("hostId", _clean(host_id))
+        existing_events = await self._run_store.list_events(row.bridge_session_id)
+        next_sequence = max((event.sequence for event in existing_events), default=0) + 1
         try:
             normalized = build_omnigent_bridge_event(
                 payload=payload,
-                sequence=1,
+                sequence=next_sequence,
                 request=_request_for_row(row),
                 omnigent_session_id=session_id,
                 bridge_session_id=row.bridge_session_id,
@@ -328,18 +349,6 @@ def _assert_row_owner(row: Any, binding: BridgePrincipalBinding) -> None:
             failure_class="user_error",
             status_code=409,
         )
-
-def _extract_host_token(headers: Mapping[str, Any]) -> str:
-    normalized = {str(key).lower(): str(value) for key, value in headers.items()}
-    explicit = normalized.get(_HOST_TOKEN_HEADER)
-    if explicit:
-        return explicit.strip()
-    authorization = normalized.get("authorization", "").strip()
-    prefix = "bearer "
-    if authorization.lower().startswith(prefix):
-        return authorization[len(prefix) :].strip()
-    return ""
-
 
 def _request_for_row(row: Any) -> AgentExecutionRequest:
     return AgentExecutionRequest(

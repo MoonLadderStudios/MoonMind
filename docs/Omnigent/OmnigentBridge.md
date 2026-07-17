@@ -297,8 +297,8 @@ hostConnection:
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
-    authMode: header_or_token
-    protocolProfile: omnigent.host_runner.v1
+    authMode: upstream_runner_tunnel
+    protocolProfile: omnigent.runner_tunnel.b95e41ec
 
 sessionDefaults:
   hostType: managed
@@ -773,6 +773,33 @@ top-level `communication` field, so the mode must live inside `parameters`
 Introducing a first-class top-level `communication` field would instead require
 an explicit `AgentExecutionRequest` schema change with worker-boundary tests; it
 must not be assumed by the contract until that change lands.
+
+The `moonmind.codex_direct_compat.v1` producer is disabled unless that explicit
+mode is selected. It publishes the active session/start, submitted user message,
+and turn-start records before the direct turn runs, then appends output,
+tool/control/approval outcomes, reset boundaries, resource notices, and the
+terminal result. Activity retries deduplicate those records against the durable
+bridge index; raw stdout/stderr and live-log lines remain artifact-backed and are
+referenced as resources instead of copied into the chat event stream.
+
+For internal parity validation, deployments may set
+`communication.comparisonMode` to `dual_write`. Workflow Detail still renders
+only the bridge projection. Comparison diagnostics report missing shared event
+classes and dropped compatibility records; they never create a second visible
+timeline or claim an Omnigent host identity.
+
+This producer may be removed only when all of the following are true:
+
+- production Codex executions have profile-bound Omnigent coverage;
+- direct and Omnigent conformance fixtures have projection parity;
+- the historical direct-session reader has served its configured retention
+  window; and
+- no active Temporal history can schedule or retry the compatibility write
+  activity.
+
+Until then, existing direct-session durability and historical reads remain the
+source evidence behind this temporary projection. A checkpoint is session-state
+continuity evidence and is never presented as workspace capture/restore proof.
 
 ### 14.2 Terminal result
 

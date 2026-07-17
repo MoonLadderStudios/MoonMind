@@ -23,6 +23,7 @@ from moonmind.omnigent.bridge_store import (
     STATUS_ACTIVE,
     STATUS_CREATING,
     STATUS_DECLARED,
+    BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
@@ -228,7 +229,7 @@ async def test_get_session_owner_resolves_by_session_id(store):
 
 
 @pytest.mark.asyncio
-async def test_resolve_projection_session_prefers_idempotency_then_latest_workflow(store):
+async def test_resolve_projection_session_falls_back_after_explicit_key_miss(store):
     first = await store.get_or_create(
         request=_request("idem-first"),
         endpoint_ref="default",
@@ -270,6 +271,54 @@ async def test_resolve_projection_session_prefers_idempotency_then_latest_workfl
     )
     assert scoped is not None
     assert scoped.bridge_session_id == first.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_binding_precedes_idempotency(store):
+    first = await store.get_or_create(
+        request=_request("idem-first"),
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent One",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+    )
+    second = await store.get_or_create(
+        request=_request("idem-second"),
+        endpoint_ref="default",
+        agent_id="ag_1",
+        agent_name="Agent Two",
+        target_metadata={"hostType": "managed"},
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-second",
+    )
+    resolved = await store.resolve_projection_session(
+        workflow_id="mm:wf-owner",
+        agent_run_id="ar-first",
+        idempotency_key="idem-second",
+    )
+    assert resolved is not None
+    assert resolved.bridge_session_id == first.bridge_session_id
+    assert resolved.bridge_session_id != second.bridge_session_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_projection_session_rejects_ambiguous_explicit_binding(store):
+    for key in ("idem-first", "idem-second"):
+        await store.get_or_create(
+            request=_request(key),
+            endpoint_ref="default",
+            agent_id="ag_1",
+            agent_name="Agent One",
+            target_metadata={"hostType": "managed"},
+            workflow_id="mm:wf-owner",
+            agent_run_id="ar-shared",
+        )
+    with pytest.raises(BridgeProjectionAmbiguousError):
+        await store.resolve_projection_session(
+            workflow_id="mm:wf-owner", agent_run_id="ar-shared"
+        )
 
 
 @pytest.mark.asyncio
@@ -339,6 +388,29 @@ async def test_missing_row_requires_get_or_create(store):
 
 
 @pytest.mark.asyncio
+async def test_terminal_lifecycle_event_projects_session_terminal_state(store):
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="pending",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="terminal",
+        status="failed",
+        event_identity="idem-1:attempt:1:terminal:failed",
+    )
+
+    projected = await store.get_bridge_session(row.bridge_session_id)
+    assert projected is not None
+    assert projected.status == "failed"
+    assert projected.first_message_state == FIRST_MESSAGE_TERMINAL
+
+
+@pytest.mark.asyncio
 async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
     request = _request()
     created = await store.get_or_create(
@@ -347,6 +419,12 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
         agent_id=None,
         agent_name=None,
         target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="profile_resolution",
+        status="completed",
+        event_identity="idem-1:attempt:1:profile_resolution:completed",
     )
 
     # Full non-lossy normalized status stream, including a terminal timeout.
@@ -359,7 +437,11 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
             "sequence": 3,
         },
         {"eventType": "response.delta", "normalizedStatus": "running", "sequence": 4},
-        {"eventType": "response.failed", "normalizedStatus": "timed_out", "sequence": 5},
+        {
+            "eventType": "response.failed",
+            "normalizedStatus": "timed_out",
+            "sequence": 5,
+        },
     ]
 
     terminal = await store.mark_terminal(
@@ -376,16 +458,17 @@ async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
     events = await store.list_events(created.bridge_session_id)
     # The event index preserves the full, non-lossy per-event normalized stream,
     # including the non-terminal statuses coalesced away at the session level.
-    assert [e.sequence for e in events] == [1, 2, 3, 4, 5]
-    assert [e.normalized_status for e in events] == [
+    assert [e.sequence for e in events] == [1, 2, 3, 4, 5, 6]
+    assert events[0].event_type == "lifecycle.profile_resolution"
+    assert [e.normalized_status for e in events[1:]] == [
         "created",
         "running",
         "awaiting_approval",
         "running",
         "timed_out",
     ]
-    assert all(e.direction == "host_to_moonmind" for e in events)
-    assert events[0].event_type == "session.created"
+    assert all(e.direction == "host_to_moonmind" for e in events[1:])
+    assert events[1].event_type == "session.created"
 
 
 @pytest.mark.asyncio
@@ -403,15 +486,25 @@ async def test_mark_terminal_event_indexing_is_idempotent_on_retry(store):
     )
     stream = [
         {"eventType": "session.created", "normalizedStatus": "created", "sequence": 1},
-        {"eventType": "response.completed", "normalizedStatus": "completed", "sequence": 2},
+        {
+            "eventType": "response.completed",
+            "normalizedStatus": "completed",
+            "sequence": 2,
+        },
     ]
 
     await store.mark_terminal(
-        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+        "idem-1",
+        status="completed",
+        terminal_refs={"outputRefs": ["art"]},
+        events=stream,
     )
     # Retry: same key, same events.
     await store.mark_terminal(
-        "idem-1", status="completed", terminal_refs={"outputRefs": ["art"]}, events=stream
+        "idem-1",
+        status="completed",
+        terminal_refs={"outputRefs": ["art"]},
+        events=stream,
     )
 
     events = await store.list_events(created.bridge_session_id)
@@ -493,7 +586,9 @@ async def test_unique_idempotency_key_enforced(store):
 
 
 @pytest.mark.asyncio
-async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(store):
+async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_status(
+    store,
+):
     row = await store.get_or_create(
         request=_request(),
         endpoint_ref="default",
@@ -523,6 +618,75 @@ async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_st
     final = await store.get_bridge_session(row.bridge_session_id)
     assert final is not None
     assert final.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_append_events_deduplicates_replay_but_preserves_identical_distinct_deltas(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    first = {
+        "eventType": "response.delta", "normalizedStatus": "running",
+        "textPreview": "same", "deduplicationKey": "cursor:7:abc",
+    }
+    second = {**first, "deduplicationKey": "cursor:8:abc"}
+
+    assert len(await store.append_events(row.bridge_session_id, [first])) == 1
+    assert await store.append_events(row.bridge_session_id, [first]) == []
+    assert len(await store.append_events(row.bridge_session_id, [second])) == 1
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.text_preview for event in events] == ["same", "same"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_reconciliation_never_deletes_live_rows(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    live = {
+        "eventType": "response.delta", "normalizedStatus": "running",
+        "deduplicationKey": "provider:event-1",
+    }
+    terminal = {
+        "eventType": "response.completed", "normalizedStatus": "completed",
+        "deduplicationKey": "provider:event-2",
+    }
+    await store.append_events(row.bridge_session_id, [live])
+    await store.mark_terminal("idem-1", status="completed", events=[live, terminal])
+    await store.mark_terminal("idem-1", status="completed", events=[live, terminal])
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.event_type for event in events] == [
+        "response.delta", "response.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_events_share_the_ordered_projection(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        "idem-1", event_type="profile.resolved", code="ready",
+        summary="Profile authorized",
+    )
+    await store.append_events(
+        row.bridge_session_id,
+        [{"eventType": "response.delta", "normalizedStatus": "running",
+          "deduplicationKey": "provider:event-1"}],
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2]
+    assert [event.event_type for event in events] == [
+        "profile.resolved", "response.delta",
+    ]
 
 
 # --- session.created journal (MM-1155, §8.2 step 6) -------------------------

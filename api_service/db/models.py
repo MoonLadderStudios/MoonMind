@@ -486,12 +486,20 @@ class OmnigentBridgeSessionEvent(Base):
             "ix_omnigent_bridge_session_events_sequence",
             "bridge_session_id",
             "sequence",
+            unique=True,
+        ),
+        Index(
+            "ix_omnigent_bridge_session_events_dedup",
+            "bridge_session_id",
+            "deduplication_key",
+            unique=True,
         ),
     )
 
     event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     bridge_session_id: Mapped[str] = mapped_column(String(255), nullable=False)
     sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    deduplication_key: Mapped[str] = mapped_column(String(128), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     direction: Mapped[str] = mapped_column(String(32), nullable=False)
     event_type: Mapped[str] = mapped_column(String(255), nullable=False)

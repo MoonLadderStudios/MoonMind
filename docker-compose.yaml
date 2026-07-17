@@ -859,6 +859,7 @@ services:
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       OMNIGENT_SERVER_URL: http://omnigent:8000
       HOME: /home/app
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       CLAUDE_HOME: /home/app/.claude
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
@@ -925,6 +926,7 @@ services:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       HOME: /home/app
+      PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
       CODEX_HOME: /home/app/.codex
       CODEX_CONFIG_HOME: /home/app/.codex
       CODEX_CONFIG_PATH: /home/app/.codex/config.toml
