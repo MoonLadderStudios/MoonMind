@@ -13,6 +13,10 @@ until /opt/moonmind/check-codex-oauth-host.sh; do
   sleep 5
 done
 
-/opt/moonmind/check-runner-projections.sh
+until /opt/moonmind/check-runner-projections.sh; do
+  echo "Codex OAuth host waiting for a resolved Skill projection" >&2
+  sleep 5
+done
+/opt/moonmind/clear-stale-host-daemons.sh
 
 exec omnigent host --server "$server" --non-interactive

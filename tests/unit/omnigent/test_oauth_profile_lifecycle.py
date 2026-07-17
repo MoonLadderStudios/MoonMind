@@ -610,6 +610,47 @@ def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) ->
     assert "2.77.0" in login.stdout
 
 
+def test_stale_host_daemon_cleanup_removes_only_runtime_markers(tmp_path) -> None:
+    scripts = Path(__file__).resolve().parents[3] / "services" / "omnigent" / "scripts"
+    state_root = tmp_path / ".omnigent"
+    daemon_root = state_root / "daemons"
+    daemon_root.mkdir(parents=True)
+    stale_marker = daemon_root / "host.json"
+    preserved_file = daemon_root / "README"
+    config = state_root / "config.yaml"
+    stale_marker.write_text('{"pid":1}\n', encoding="utf-8")
+    preserved_file.write_text("operator note\n", encoding="utf-8")
+    config.write_text("host_id: fixture\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["sh", str(scripts / "clear-stale-host-daemons.sh")],
+        env={**os.environ, "OMNIGENT_STATE_PATH": str(state_root)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not stale_marker.exists()
+    assert preserved_file.read_text(encoding="utf-8") == "operator note\n"
+    assert config.read_text(encoding="utf-8") == "host_id: fixture\n"
+
+
+def test_host_launchers_wait_for_projection_and_clear_stale_state_before_starting() -> None:
+    scripts = Path(__file__).resolve().parents[3] / "services" / "omnigent" / "scripts"
+
+    for script_name in (
+        "start-codex-oauth-host.sh",
+        "start-host-with-projections.sh",
+    ):
+        source = (scripts / script_name).read_text(encoding="utf-8")
+        assert "until /opt/moonmind/check-runner-projections.sh; do" in source
+        assert "waiting for a resolved Skill projection" in source
+        assert source.index("/opt/moonmind/clear-stale-host-daemons.sh") < source.index(
+            "exec omnigent host"
+        )
+
+
 def test_omnigent_projects_portable_pr_resolver_semantics_without_copying_them() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     helper = runpy.run_path(
