@@ -25,6 +25,12 @@ _SECRET = re.compile(
     r"(?:ghp_|github_pat_|AIza|ATATT|AKIA|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"(?i:token|password|authorization)\s*[:=]\s*[^\s,;]+)"
 )
+REQUIRED_EVIDENCE_CHANNELS = (
+    "logs",
+    "temporalHistory",
+    "screenshots",
+    "archives",
+)
 
 
 class ConformanceContractError(ValueError):
@@ -43,6 +49,14 @@ class CaseResult:
             raise ConformanceContractError(f"invalid case status: {self.status}")
         if not self.case_id.strip():
             raise ConformanceContractError("case_id is required")
+        if not self.evidence_refs:
+            raise ConformanceContractError(
+                f"case {self.case_id!r} must include at least one evidence ref"
+            )
+        if any(not ref.strip() for ref in self.evidence_refs):
+            raise ConformanceContractError(
+                f"case {self.case_id!r} contains an empty evidence ref"
+            )
         return {
             "caseId": self.case_id,
             "status": self.status,
@@ -105,10 +119,33 @@ def build_report(
     auth_mode: str,
     capabilities: Iterable[str],
     cases: Iterable[CaseResult],
+    protocol_version: str,
+    evidence_scans: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     if profile.get("profileVersion") != PROFILE_VERSION:
         raise ConformanceContractError("report profile version is unsupported")
     require_pinned_images(images)
+    if (
+        not host_architecture.strip()
+        or not auth_mode.strip()
+        or not protocol_version.strip()
+    ):
+        raise ConformanceContractError(
+            "host architecture, auth mode, and protocol version are required"
+        )
+    missing_channels = sorted(set(REQUIRED_EVIDENCE_CHANNELS) - set(evidence_scans))
+    if missing_channels:
+        raise ConformanceContractError(
+            f"missing evidence-channel secret scans: {missing_channels}"
+        )
+    for channel in REQUIRED_EVIDENCE_CHANNELS:
+        scan = evidence_scans[channel]
+        if scan.get("status") != "passed" or not str(
+            scan.get("evidenceRef", "")
+        ).strip():
+            raise ConformanceContractError(
+                f"evidence-channel secret scan did not pass: {channel}"
+            )
     results = [case.as_dict() for case in cases]
     declared = {case["id"] for case in profile["cases"]}
     observed = {case["caseId"] for case in results}
@@ -125,7 +162,9 @@ def build_report(
         "images": dict(images),
         "hostArchitecture": host_architecture,
         "authMode": auth_mode,
+        "protocolVersion": protocol_version,
         "capabilities": sorted(set(capabilities)),
+        "evidenceScans": {key: dict(value) for key, value in evidence_scans.items()},
         "cases": results,
         "summary": {
             status: sum(case["status"] == status for case in results)

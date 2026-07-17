@@ -41,7 +41,9 @@ def main() -> int:
         images=evidence["images"],
         host_architecture=evidence["hostArchitecture"],
         auth_mode=evidence["authMode"],
+        protocol_version=evidence["protocolVersion"],
         capabilities=evidence.get("capabilities", ()),
+        evidence_scans=evidence["evidenceScans"],
         cases=cases,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,13 @@ from moonmind.omnigent.conformance import (
 PROFILE = Path("tests/fixtures/omnigent/conformance-v1.json")
 
 
+def _scans() -> dict[str, dict[str, str]]:
+    return {
+        channel: {"status": "passed", "evidenceRef": f"artifact://scan/{channel}"}
+        for channel in ("logs", "temporalHistory", "screenshots", "archives")
+    }
+
+
 def test_versioned_profile_spans_all_required_layers() -> None:
     profile = load_profile(PROFILE)
     assert profile["profileVersion"] == PROFILE_VERSION
@@ -52,6 +59,8 @@ def test_report_requires_every_case_and_records_machine_readable_evidence() -> N
         host_architecture="linux/amd64",
         auth_mode="oauth",
         capabilities=("codex-native", "events"),
+        protocol_version="omnigent/v1",
+        evidence_scans=_scans(),
         cases=cases,
     )
     assert report["summary"] == {"passed": len(cases), "failed": 0, "skipped": 0}
@@ -71,7 +80,58 @@ def test_report_rejects_incomplete_layer_results() -> None:
             host_architecture="linux/amd64",
             auth_mode="oauth",
             capabilities=(),
+            protocol_version="omnigent/v1",
+            evidence_scans=_scans(),
             cases=[CaseResult("proxy.routes", "passed", ("artifact://routes",))],
+        )
+
+
+def test_report_rejects_empty_case_evidence_refs() -> None:
+    profile = load_profile(PROFILE)
+    digest = "c" * 64
+    cases = [
+        CaseResult(case["id"], "passed", (f"artifact://{case['id']}",))
+        for case in profile["cases"]
+    ]
+    cases[0] = CaseResult(cases[0].case_id, "passed", ())
+    with pytest.raises(ConformanceContractError, match="evidence ref"):
+        build_report(
+            profile=profile,
+            images={
+                "server": f"server@sha256:{digest}",
+                "host": f"host@sha256:{digest}",
+            },
+            host_architecture="linux/amd64",
+            auth_mode="oauth",
+            protocol_version="omnigent/v1",
+            evidence_scans=_scans(),
+            capabilities=(),
+            cases=cases,
+        )
+
+
+def test_report_requires_each_raw_evidence_channel_scan() -> None:
+    profile = load_profile(PROFILE)
+    digest = "d" * 64
+    cases = [
+        CaseResult(case["id"], "passed", (f"artifact://{case['id']}",))
+        for case in profile["cases"]
+    ]
+    scans = _scans()
+    del scans["screenshots"]
+    with pytest.raises(ConformanceContractError, match="screenshots"):
+        build_report(
+            profile=profile,
+            images={
+                "server": f"server@sha256:{digest}",
+                "host": f"host@sha256:{digest}",
+            },
+            host_architecture="linux/amd64",
+            auth_mode="oauth",
+            protocol_version="omnigent/v1",
+            evidence_scans=scans,
+            capabilities=(),
+            cases=cases,
         )
 
 
