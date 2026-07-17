@@ -660,10 +660,31 @@ class OmnigentBridgeSessionStore:
                 )
             )
             next_sequence = int(max_sequence_result.scalar() or 0) + 1
+            existing_result = await session.execute(
+                select(OmnigentBridgeSessionEvent.metadata_).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == key
+                )
+            )
+            existing_deduplication_keys = {
+                str(moonmind.get("deduplicationKey"))
+                for metadata in existing_result.scalars().all()
+                if isinstance(metadata, dict)
+                and isinstance((moonmind := metadata.get("moonmind")), dict)
+                and moonmind.get("deduplicationKey")
+            }
             prepared_events: list[dict[str, Any]] = []
-            for offset, event in enumerate(events):
+            for event in events:
                 prepared = dict(event)
-                prepared["sequence"] = next_sequence + offset
+                metadata = prepared.get("metadata")
+                moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else None
+                deduplication_key = (
+                    str(moonmind.get("deduplicationKey"))
+                    if isinstance(moonmind, dict) and moonmind.get("deduplicationKey")
+                    else None
+                )
+                if deduplication_key in existing_deduplication_keys:
+                    continue
+                prepared["sequence"] = next_sequence + len(prepared_events)
                 prepared_events.append(prepared)
             rows = _build_event_rows(key, prepared_events)
             for event_row in rows:

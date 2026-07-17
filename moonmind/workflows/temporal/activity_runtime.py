@@ -10625,29 +10625,40 @@ class TemporalAgentRuntimeActivities:
 
         binding_raw = payload.get("binding")
         locator_raw = payload.get("locator")
+        phase = str(payload.get("phase") or "terminal").strip()
         turn_raw = payload.get("turnResponse")
         summary_raw = payload.get("summary")
         publication_raw = payload.get("publication")
-        if not all(
-            isinstance(value, Mapping)
-            for value in (
-                binding_raw,
-                locator_raw,
-                turn_raw,
-                summary_raw,
-                publication_raw,
+        if not isinstance(binding_raw, Mapping) or not isinstance(locator_raw, Mapping):
+            raise TemporalActivityRuntimeError(
+                "payload.binding and locator are required"
             )
+        if phase not in {"turn_started", "terminal"}:
+            raise TemporalActivityRuntimeError("payload.phase must be turn_started or terminal")
+        if phase == "terminal" and not all(
+            isinstance(value, Mapping)
+            for value in (turn_raw, summary_raw, publication_raw)
         ):
             raise TemporalActivityRuntimeError(
-                "payload.binding, locator, turnResponse, summary, and publication are required"
+                "terminal publication requires turnResponse, summary, and publication"
             )
 
         binding = CodexManagedSessionBinding.model_validate(dict(binding_raw))
         locator = CodexManagedSessionLocator.model_validate(dict(locator_raw))
-        turn_response = CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
-        summary = CodexManagedSessionSummary.model_validate(dict(summary_raw))
-        publication = CodexManagedSessionArtifactsPublication.model_validate(
-            dict(publication_raw)
+        turn_response = (
+            CodexManagedSessionTurnResponse.model_validate(dict(turn_raw))
+            if isinstance(turn_raw, Mapping)
+            else None
+        )
+        summary = (
+            CodexManagedSessionSummary.model_validate(dict(summary_raw))
+            if isinstance(summary_raw, Mapping)
+            else None
+        )
+        publication = (
+            CodexManagedSessionArtifactsPublication.model_validate(dict(publication_raw))
+            if isinstance(publication_raw, Mapping)
+            else None
         )
         compatibility_profile = (
             str(
@@ -10680,60 +10691,82 @@ class TemporalAgentRuntimeActivities:
                 "source": "codex_direct_compat",
                 "directManagedSessionId": locator.session_id,
                 "directSessionEpoch": locator.session_epoch,
-                "directTurnId": turn_response.turn_id,
+                "directTurnId": turn_response.turn_id if turn_response else None,
                 "directContainerId": locator.container_id,
             },
             provider="codex_direct_compat",
             compatibility_profile=compatibility_profile,
         )
 
+        direct_turn_id = (
+            turn_response.turn_id
+            if turn_response is not None
+            else f"{request.idempotency_key}:initial"
+        )
+        source_metadata = {
+            "compatibilityProfile": compatibility_profile,
+            "directManagedSessionId": locator.session_id,
+            "sessionEpoch": locator.session_epoch,
+            "turnId": direct_turn_id,
+            "containerId": locator.container_id,
+            "publicationPhase": phase,
+        }
+        if phase == "turn_started":
+            initial_payloads = [
+                {
+                    "type": "session.started",
+                    "status": "running",
+                    "data": {
+                        "sessionId": locator.session_id,
+                        "sessionEpoch": locator.session_epoch,
+                        "containerId": locator.container_id,
+                        "managedSessionWorkflowId": binding.workflow_id,
+                        "managedAgentRunId": binding.agent_run_id,
+                    },
+                },
+                {"type": "session.ready", "status": "running", "data": {"sessionEpoch": locator.session_epoch}},
+                {
+                    "type": "session.input.user_message",
+                    "status": "running",
+                    "text": str(payload.get("instructions") or "").strip(),
+                    "data": {"turnId": direct_turn_id},
+                },
+                {"type": "turn.started", "status": "running", "data": {"turnId": direct_turn_id, "sessionEpoch": locator.session_epoch}},
+                {"type": "session.status", "status": "running", "data": {"turnId": direct_turn_id}},
+            ]
+            initial_events = []
+            for index, event_payload in enumerate(initial_payloads, start=1):
+                event = build_omnigent_bridge_event(
+                    payload=event_payload,
+                    sequence=index,
+                    request=request,
+                    omnigent_session_id=None,
+                    bridge_session_id=row.bridge_session_id,
+                    source="codex_direct_compat",
+                    source_metadata=source_metadata,
+                ).event
+                event["metadata"]["moonmind"]["deduplicationKey"] = (
+                    f"{request.idempotency_key}:{locator.session_epoch}:turn_started:{event['eventType']}"
+                )
+                initial_events.append(event)
+            appended = await store.append_events(row.bridge_session_id, initial_events)
+            return {
+                "bridgeSessionId": row.bridge_session_id,
+                "directManagedSessionId": locator.session_id,
+                "eventCount": len(appended),
+                "phase": phase,
+                "compatibilityProfile": compatibility_profile,
+            }
+
+        assert turn_response is not None
+        assert summary is not None
+        assert publication is not None
         assistant_text = str(
             turn_response.metadata.get("assistantText")
             or summary.metadata.get("lastAssistantText")
             or ""
         ).strip()
-        source_metadata = {
-            "compatibilityProfile": compatibility_profile,
-            "directManagedSessionId": locator.session_id,
-            "sessionEpoch": locator.session_epoch,
-            "turnId": turn_response.turn_id,
-            "containerId": locator.container_id,
-        }
-        event_payloads: list[dict[str, Any]] = [
-            {
-                "type": "session.started",
-                "status": "running",
-                "data": {
-                    "sessionId": locator.session_id,
-                    "sessionEpoch": locator.session_epoch,
-                    "containerId": locator.container_id,
-                    "threadId": locator.thread_id,
-                    "managedSessionWorkflowId": binding.workflow_id,
-                    "managedAgentRunId": binding.agent_run_id,
-                    "compatibilityProfile": compatibility_profile,
-                    "producer": "direct_codex_managed_session",
-                },
-            },
-            {
-                "type": "session.ready",
-                "status": "running",
-                "data": {"sessionEpoch": locator.session_epoch},
-            },
-            {
-                "type": "session.input.user_message",
-                "status": "running",
-                "text": str(parameters.get("instructions") or "").strip(),
-                "data": {"turnId": turn_response.turn_id},
-            },
-            {
-                "type": "turn.started",
-                "status": "running",
-                "data": {
-                    "turnId": turn_response.turn_id,
-                    "sessionEpoch": locator.session_epoch,
-                },
-            },
-        ]
+        event_payloads: list[dict[str, Any]] = []
         if assistant_text:
             event_payloads.append(
                 {
@@ -10852,6 +10885,12 @@ class TemporalAgentRuntimeActivities:
             ).event
             for index, event_payload in enumerate(event_payloads, start=1)
         ]
+        for index, event in enumerate(events):
+            event["metadata"]["moonmind"]["deduplicationKey"] = (
+                f"{request.idempotency_key}:{locator.session_epoch}:terminal:"
+                f"{index}:{event['eventType']}"
+            )
+        appended_events = await store.append_events(row.bridge_session_id, events)
         await store.mark_terminal(
             request.idempotency_key,
             status=terminal_status,
@@ -10864,12 +10903,12 @@ class TemporalAgentRuntimeActivities:
                 },
                 "publishedArtifactRefs": list(publication.published_artifact_refs),
             },
-            events=events,
         )
         return {
             "bridgeSessionId": row.bridge_session_id,
             "directManagedSessionId": locator.session_id,
-            "eventCount": len(events),
+            "eventCount": len(appended_events),
+            "phase": phase,
             "compatibilityProfile": compatibility_profile,
         }
 

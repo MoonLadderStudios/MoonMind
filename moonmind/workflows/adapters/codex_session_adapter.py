@@ -748,6 +748,18 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
             session_interventions: list[dict[str, Any]] = []
 
+            # Publish the durable session/turn boundary before the blocking
+            # managed-session turn activity.  The terminal publication below
+            # enriches this projection with output and artifact evidence, but
+            # Workflow Detail can now observe the direct session while active.
+            await self._publish_direct_codex_bridge_events(
+                request=request,
+                binding=binding,
+                locator=current_locator,
+                instructions=instructions,
+                phase="turn_started",
+            )
+
             async def _send_current_turn() -> CodexManagedSessionTurnResponse:
                 return await self._coerce_turn_response(
                     self._send_turn(
@@ -1623,9 +1635,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         request: AgentExecutionRequest,
         binding: CodexManagedSessionBinding,
         locator: CodexManagedSessionLocator,
-        turn_response: CodexManagedSessionTurnResponse,
-        summary: CodexManagedSessionSummary,
-        publication: CodexManagedSessionArtifactsPublication,
+        turn_response: CodexManagedSessionTurnResponse | None = None,
+        summary: CodexManagedSessionSummary | None = None,
+        publication: CodexManagedSessionArtifactsPublication | None = None,
+        instructions: str | None = None,
+        phase: str = "terminal",
         terminal_status: str | None = None,
     ) -> None:
         if self._publish_bridge_events is None:
@@ -1641,9 +1655,23 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 ),
                 "binding": binding.model_dump(mode="json", by_alias=True),
                 "locator": locator.model_dump(mode="json", by_alias=True),
-                "turnResponse": turn_response.model_dump(mode="json", by_alias=True),
-                "summary": summary.model_dump(mode="json", by_alias=True),
-                "publication": publication.model_dump(mode="json", by_alias=True),
+                "turnResponse": (
+                    turn_response.model_dump(mode="json", by_alias=True)
+                    if turn_response is not None
+                    else None
+                ),
+                "summary": (
+                    summary.model_dump(mode="json", by_alias=True)
+                    if summary is not None
+                    else None
+                ),
+                "publication": (
+                    publication.model_dump(mode="json", by_alias=True)
+                    if publication is not None
+                    else None
+                ),
+                "instructions": instructions,
+                "phase": phase,
                 "terminalStatus": terminal_status,
                 "compatibilityProfile": "moonmind.codex_direct_compat.v1",
                 "producer": "direct_codex_managed_session",

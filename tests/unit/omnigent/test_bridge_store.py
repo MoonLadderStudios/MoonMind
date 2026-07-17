@@ -525,6 +525,26 @@ async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_st
     assert final.status == "completed"
 
 
+@pytest.mark.asyncio
+async def test_append_events_deduplicates_retry_key(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    event = {
+        "eventType": "turn.started",
+        "normalizedStatus": "running",
+        "metadata": {"moonmind": {"deduplicationKey": "idem-1:turn-started"}},
+    }
+
+    first = await store.append_events(row.bridge_session_id, [event])
+    retry = await store.append_events(row.bridge_session_id, [event])
+
+    assert len(first) == 1
+    assert retry == []
+    assert len(await store.list_events(row.bridge_session_id)) == 1
+
+
 # --- session.created journal (MM-1155, §8.2 step 6) -------------------------
 
 
