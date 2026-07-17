@@ -38,6 +38,28 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import build_omnigent_se
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
 
 
+def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
+    """Return stable launch classification and operator remediation."""
+
+    code = str(getattr(exc, "code", type(exc).__name__))[:96]
+    lowered = code.lower()
+    if "credential" in lowered or "oauth" in lowered:
+        return code, "configuration_error", "validate_codex_oauth"
+    if "lease" in lowered:
+        return code, "resource_unavailable", "wait_for_profile_lease"
+    if "auth" in lowered:
+        return code, "configuration_error", "repair_bridge_authentication"
+    if "binding" in lowered or "harness" in lowered:
+        return code, "configuration_error", "correct_host_binding"
+    if "image" in lowered or "container" in lowered:
+        return code, "configuration_error", "repair_host_image"
+    if "network" in lowered or "endpoint" in lowered:
+        return code, "integration_error", "repair_server_endpoint"
+    if "policy" in lowered or "authorization" in lowered:
+        return code, "authorization_error", "contact_administrator"
+    return code, "integration_error", "retry_transient_upstream"
+
+
 def _request_identity(request: AgentExecutionRequest) -> tuple[str, str | None]:
     parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
     step = parameters.get("stepExecution")
@@ -111,24 +133,85 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         profile_id = str(request.execution_profile_ref or "").strip()
-        if not profile_id:
-            raise OmnigentOAuthHostError(
-                "OAuth-backed Omnigent execution requires executionProfileRef",
-                code="profile_resolution_failed",
-            )
         workflow_id, step_execution_id = _request_identity(request)
-        bridge_ready = False
+        await self._run_store.get_or_create(
+            request=request,
+            endpoint_ref="pending",
+            agent_id=None,
+            agent_name=None,
+            target_metadata={
+                "providerProfileId": profile_id or None,
+                "workflowId": workflow_id,
+                "stepExecutionId": step_execution_id,
+                "attemptIdentity": request.idempotency_key,
+            },
+        )
+        bridge_ready = True
+        current_stage = "request_validated"
+
+        async def emit(
+            stage: str,
+            status: str,
+            *,
+            code: str | None = None,
+            summary: str | None = None,
+            failure_class: str | None = None,
+            remediation_action: str | None = None,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
+            await self._run_store.record_lifecycle_event(
+                request.idempotency_key,
+                event_type=stage,
+                status=status,
+                event_identity=f"{request.idempotency_key}:{stage}:{status}",
+                code=code,
+                summary=summary,
+                failure_class=failure_class,
+                remediation_action=remediation_action,
+                metadata={
+                    "workflowId": workflow_id,
+                    "stepExecutionId": step_execution_id,
+                    **dict(metadata or {}),
+                },
+            )
+
         provider_lease: CredentialLease | None = None
         host_lease = None
         binding = None
+        terminal_status = "completed"
         try:
+            if not profile_id:
+                raise OmnigentOAuthHostError(
+                    "OAuth-backed Omnigent execution requires executionProfileRef",
+                    code="profile_resolution_failed",
+                )
+            await emit("request_validated", "completed")
+            current_stage = "profile_resolution"
+            await emit(current_stage, "started")
             profile = await self._resolve_profile(profile_id)
+            await emit(
+                current_stage,
+                "completed",
+                metadata={"providerProfileId": profile_id},
+            )
+            current_stage = "profile_readiness"
+            await emit(current_stage, "started")
+            if not provider_profile_launch_ready(profile):
+                raise OmnigentOAuthHostError(
+                    "Provider Profile is not launch ready",
+                    code="profile_readiness_failed",
+                )
+            await emit(current_stage, "ready")
             owner_id = deterministic_lease_owner_id(
                 profile_id=profile_id,
                 purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
                 workflow_id=workflow_id,
                 step_execution_id=step_execution_id,
                 idempotency_key=request.idempotency_key,
+            )
+            current_stage = "profile_lease_wait"
+            await emit(
+                current_stage, "waiting", metadata={"providerProfileId": profile_id}
             )
             provider_lease = await self._lease_client.acquire_execution_lease(
                 runtime_id="codex_cli",
@@ -145,6 +228,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "ownerIsWorkflow": False,
                 },
             )
+            await emit(
+                "profile_lease_acquired",
+                "completed",
+                metadata={
+                    "providerProfileId": profile_id,
+                    "providerLeaseId": provider_lease.lease_id,
+                },
+            )
+            current_stage = "host_binding_resolution"
+            await emit(current_stage, "started")
             binding = await self._hosts.get_binding_for_profile(profile_id)
             if binding is None:
                 binding = await self._hosts.create_or_update_static_binding(
@@ -155,6 +248,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                         os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE") or None
                     ),
                 )
+            await emit(
+                current_stage,
+                "completed",
+                metadata={"hostBindingRef": binding.binding_ref},
+            )
+            current_stage = "host_lease_created"
+            await emit(current_stage, "started")
             host_lease = await self._hosts.create_or_get_host_lease(
                 binding=binding,
                 provider_lease_id=provider_lease.lease_id,
@@ -164,6 +264,11 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             if host_lease.status in {"stopped", "failed"}:
                 host_lease = await self._hosts.restart_host_lease(host_lease.lease_id)
+            await emit(
+                current_stage,
+                "completed",
+                metadata={"hostLeaseRef": host_lease.lease_id},
+            )
             bridge = await self._run_store.bind_profile_authorization(
                 request=request,
                 endpoint_ref=binding.endpoint_ref,
@@ -174,23 +279,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=binding.static_host_id,
             )
-            bridge_ready = True
-            await self._run_store.record_lifecycle_event(
-                request.idempotency_key,
-                event_type="profile_lease_acquired",
-                metadata={
-                    "providerProfileId": profile_id,
-                    "providerLeaseId": provider_lease.lease_id,
-                    "hostBindingRef": binding.binding_ref,
-                    "hostLeaseRef": host_lease.lease_id,
-                },
-            )
             if host_lease.status == "allocating":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
                     expected_status="allocating",
                     new_status="starting",
                 )
+            current_stage = "container_start"
+            await emit(current_stage, "started")
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
@@ -199,6 +295,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ),
                 repository_url=self._repository_url(request),
             )
+            await emit(current_stage, "completed")
             host_id = str(preflight["hostId"])
             if binding.static_host_id is None and not binding.host_launch_profile_ref:
                 binding = await self._hosts.create_or_update_static_binding(
@@ -223,10 +320,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=host_id,
             )
-            await self._run_store.record_lifecycle_event(
-                request.idempotency_key,
-                event_type="credential_preflight_ready",
-                metadata={
+            await emit(
+                "credential_preflight", "ready", metadata={
                     "providerProfileId": profile_id,
                     "credentialGeneration": host_lease.credential_generation,
                     "omnigentHostId": host_id,
@@ -239,6 +334,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                     new_status="assigned",
                     fields={"bridge_session_id": bridge.bridge_session_id},
                 )
+            current_stage = "session_creation"
+            await emit(current_stage, "started", metadata={"omnigentHostId": host_id})
             result = await self._execute(
                 _bind_exact_host(
                     request,
@@ -258,6 +355,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_gateway,
                 run_store=self._run_store,
             )
+            await emit(current_stage, "completed", metadata={"omnigentHostId": host_id})
+            await emit("session_running", "completed")
             if str(result.provider_error_code or "") == "429":
                 await self._lease_client.record_cooldown(
                     runtime_id="codex_cli",
@@ -268,18 +367,23 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             return result
         except Exception as exc:
+            terminal_status = "failed"
             if bridge_ready:
-                await self._run_store.record_lifecycle_event(
-                    request.idempotency_key,
-                    event_type="cleanup_started",
-                    code=getattr(exc, "code", type(exc).__name__),
+                code, failure_class, remediation = _failure_evidence(exc)
+                await emit(
+                    current_stage,
+                    "failed",
+                    code=code,
                     summary=str(exc),
+                    failure_class=failure_class,
+                    remediation_action=remediation,
                 )
             raise
         finally:
             safe_to_release_provider = host_lease is None
             if host_lease is not None and binding is not None:
                 try:
+                    await emit("host_cleanup", "started")
                     if host_lease.status == "assigned":
                         host_lease = await self._hosts.transition_host_lease(
                             host_lease.lease_id,
@@ -291,11 +395,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
                     await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
                     safe_to_release_provider = True
-                    if bridge_ready:
-                        await self._run_store.record_lifecycle_event(
-                            request.idempotency_key,
-                            event_type="cleanup_completed",
-                        )
+                    await emit(
+                        "host_cleanup",
+                        "completed",
+                        metadata={"cleanupCompleted": True},
+                    )
                 except Exception as cleanup_exc:
                     try:
                         await self._hosts.mark_host_lease_failed(
@@ -307,15 +411,31 @@ class OmnigentProfileBoundExecutionCoordinator:
                         # Preserve the primary cleanup failure when best-effort
                         # persistence of that failure also becomes unavailable.
                         pass
-                    if bridge_ready:
-                        await self._run_store.record_lifecycle_event(
-                            request.idempotency_key,
-                            event_type="cleanup_failed",
-                            code=type(cleanup_exc).__name__,
-                            summary=str(cleanup_exc),
-                        )
+                    await emit(
+                        "host_cleanup", "failed",
+                        code=type(cleanup_exc).__name__, summary=str(cleanup_exc),
+                        failure_class="system_error",
+                        remediation_action="inspect_cleanup_diagnostics",
+                        metadata={"cleanupCompleted": False, "janitorRequired": True},
+                    )
             if provider_lease is not None and safe_to_release_provider:
                 await self._lease_client.release_lease(provider_lease)
+                await emit(
+                    "profile_lease_release",
+                    "completed",
+                    metadata={"leaseReleased": True},
+                )
+            await emit(
+                "terminal",
+                terminal_status,
+                metadata={
+                    "cleanupCompleted": safe_to_release_provider,
+                    "leaseReleased": provider_lease is None or safe_to_release_provider,
+                    "janitorRequired": (
+                        provider_lease is not None and not safe_to_release_provider
+                    ),
+                },
+            )
 
     async def recover_from_checkpoint(
         self,
@@ -442,11 +562,6 @@ class OmnigentProfileBoundExecutionCoordinator:
             if profile is None:
                 raise OmnigentOAuthHostError(
                     "Provider Profile was not found", code="profile_resolution_failed"
-                )
-            if not provider_profile_launch_ready(profile):
-                raise OmnigentOAuthHostError(
-                    "Provider Profile is not launch ready",
-                    code="profile_resolution_failed",
                 )
             if not is_codex_oauth_profile(
                 runtime_id=profile.runtime_id,

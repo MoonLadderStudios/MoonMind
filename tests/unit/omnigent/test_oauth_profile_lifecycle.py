@@ -534,6 +534,10 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("host_cleanup")
 
     class Store:
+        async def get_or_create(self, **_kwargs):
+            actions.append("bridge_envelope_created")
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
         async def bind_profile_authorization(self, **_kwargs):
             actions.append("bridge_bound")
             return SimpleNamespace(bridge_session_id="bridge-1")
@@ -560,7 +564,20 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         artifact_gateway=object(),
     )
     coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
-        return_value=SimpleNamespace(cooldown_after_429_seconds=900)
+        return_value=SimpleNamespace(
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            secret_refs={},
+            command_behavior={},
+        )
     )
     result = await coordinator.execute(
         AgentExecutionRequest(
@@ -575,4 +592,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
-    assert actions[-3:] == ["host_stopped", "cleanup_completed", "provider_released"]
+    assert actions[0] == "bridge_envelope_created"
+    assert "host_cleanup" in actions
+    assert "profile_lease_release" in actions
+    assert actions[-1] == "terminal"
+    assert actions.index("host_stopped") < actions.index("profile_lease_release")
+    assert actions.index("provider_released") < actions.index("profile_lease_release")

@@ -153,6 +153,37 @@ async def test_get_or_create_is_idempotent_and_declared(store):
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_event_uses_canonical_index_and_deduplicates_retry(store):
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="pending",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    kwargs = {
+        "event_type": "profile_resolution",
+        "status": "failed",
+        "event_identity": "idem-1:profile_resolution:failed",
+        "code": "profile_resolution_failed",
+        "summary": "token=secret profile unavailable",
+        "failure_class": "configuration_error",
+        "remediation_action": "validate_codex_oauth",
+    }
+    await store.record_lifecycle_event(request.idempotency_key, **kwargs)
+    await store.record_lifecycle_event(request.idempotency_key, **kwargs)
+
+    events = await store.list_events(row.bridge_session_id)
+    assert len(events) == 1
+    assert events[0].event_type == "lifecycle.profile_resolution"
+    assert events[0].metadata_["status"] == "failed"
+    assert events[0].metadata_["failureClass"] == "configuration_error"
+    assert events[0].metadata_["remediationAction"] == "validate_codex_oauth"
+    assert "secret" not in (events[0].text_preview or "")
+
+
+@pytest.mark.asyncio
 async def test_get_or_create_persists_binding_identity_override(store):
     # The Session API Facade holds a verified workflow id out-of-band and
     # synthesizes a request with no step_execution (correlation id != workflow

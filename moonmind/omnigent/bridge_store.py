@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -231,6 +231,8 @@ class OmnigentBridgeSessionStore:
                 "host_binding_ref": host_binding_ref,
                 "host_lease_ref": host_lease_ref,
             }
+            if stored.omnigent_endpoint_ref == "pending":
+                stored.omnigent_endpoint_ref = endpoint_ref
             for field, value in expected.items():
                 current = getattr(stored, field)
                 if current is not None and current != value:
@@ -254,8 +256,13 @@ class OmnigentBridgeSessionStore:
         idempotency_key: str,
         *,
         event_type: str,
+        status: str,
+        event_identity: str,
         code: str | None = None,
         summary: str | None = None,
+        failure_class: str | None = None,
+        diagnostics_ref: str | None = None,
+        remediation_action: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> OmnigentBridgeSession:
         """Append a bounded, secret-safe pre-stream lifecycle event."""
@@ -263,18 +270,46 @@ class OmnigentBridgeSessionStore:
         from moonmind.utils.logging import redact_sensitive_text
 
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .with_for_update()
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            stable_event_id = "bse_" + uuid5(
+                NAMESPACE_URL, f"{row.bridge_session_id}:{event_identity}"
+            ).hex
+            existing = await session.get(OmnigentBridgeSessionEvent, stable_event_id)
+            if existing is not None:
+                return _detached(session, row)
+            max_sequence_result = await session.execute(
+                select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id
+                    == row.bridge_session_id
+                )
+            )
+            sequence = int(max_sequence_result.scalar() or 0) + 1
             row_metadata = dict(row.metadata_ or {})
             journal = list(row_metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
             entry = {
                 "type": str(event_type)[:96],
-                "sequence": len(journal) + 1,
+                "status": str(status)[:32],
+                "sequence": sequence,
                 "timestamp": datetime.now(tz=UTC).isoformat(),
             }
             if code:
                 entry["code"] = str(code)[:96]
             if summary:
                 entry["summary"] = redact_sensitive_text(summary)[:512]
+            if failure_class:
+                entry["failureClass"] = str(failure_class)[:64]
+            if diagnostics_ref:
+                entry["diagnosticsRef"] = str(diagnostics_ref)[:1024]
+            if remediation_action:
+                entry["remediationAction"] = str(remediation_action)[:96]
             if metadata:
                 entry["metadata"] = {
                     str(key)[:64]: value
@@ -287,11 +322,37 @@ class OmnigentBridgeSessionStore:
                         "hostBindingRef",
                         "hostLeaseRef",
                         "omnigentHostId",
+                        "workflowId",
+                        "stepExecutionId",
+                        "cleanupCompleted",
+                        "leaseReleased",
+                        "janitorRequired",
                     }
                 }
             journal.append(entry)
             row_metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal[-100:]
             row.metadata_ = row_metadata
+            safe_summary = redact_sensitive_text(summary or "")[:512] or None
+            event_metadata = dict(entry)
+            event_metadata["eventIdentity"] = str(event_identity)[:255]
+            session.add(
+                OmnigentBridgeSessionEvent(
+                    event_id=stable_event_id,
+                    bridge_session_id=row.bridge_session_id,
+                    sequence=sequence,
+                    timestamp=datetime.now(tz=UTC),
+                    direction="moonmind_system",
+                    event_type=f"lifecycle.{str(event_type)[:96]}",
+                    normalized_status=(
+                        "waiting" if status == "waiting" else None
+                    ),
+                    text_preview=safe_summary,
+                    artifact_ref=(
+                        str(diagnostics_ref)[:1024] if diagnostics_ref else None
+                    ),
+                    metadata_=event_metadata,
+                )
+            )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
