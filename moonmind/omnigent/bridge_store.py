@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
@@ -85,6 +85,15 @@ class OmnigentIdempotencyError(RuntimeError):
 
 class OmnigentDigestMismatchError(OmnigentIdempotencyError):
     """Raised when an idempotency key is reused for different first-message text."""
+
+
+class BridgeEventPage(NamedTuple):
+    """One bounded read of the durable event journal."""
+
+    rows: list[OmnigentBridgeSessionEvent]
+    has_more: bool
+    latest_sequence: int
+    earliest_sequence: int | None
 
 
 def coalesce_bridge_status(value: str) -> str:
@@ -627,6 +636,47 @@ class OmnigentBridgeSessionStore:
             for row in rows:
                 session.expunge(row)
             return rows
+
+    async def list_event_page(
+        self, bridge_session_id: str, *, after: int = 0, limit: int = 100
+    ) -> BridgeEventPage:
+        """Read at most ``limit`` events after a durable sequence cursor.
+
+        The extra row establishes ``has_more`` without loading the remaining
+        history. Min/max are scalar index queries used for retention-gap and
+        terminal-drain decisions.
+        """
+
+        async with self._session_factory() as session:
+            bounds = await session.execute(
+                select(
+                    func.min(OmnigentBridgeSessionEvent.sequence),
+                    func.max(OmnigentBridgeSessionEvent.sequence),
+                ).where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id
+                )
+            )
+            earliest, latest = bounds.one()
+            result = await session.execute(
+                select(OmnigentBridgeSessionEvent)
+                .where(
+                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id,
+                    OmnigentBridgeSessionEvent.sequence > after,
+                )
+                .order_by(OmnigentBridgeSessionEvent.sequence)
+                .limit(limit + 1)
+            )
+            rows = list(result.scalars().all())
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            for row in rows:
+                session.expunge(row)
+            return BridgeEventPage(
+                rows,
+                has_more,
+                int(latest or 0),
+                int(earliest) if earliest is not None else None,
+            )
 
     async def append_events(
         self,

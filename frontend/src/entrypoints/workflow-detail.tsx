@@ -1387,11 +1387,29 @@ const ObservabilityEventSchema = RawObservabilityEventSchema.transform((event) =
   normalizeObservabilityEvent(event),
 );
 
-const ObservabilityEventsResponseSchema = z.object({
+const LegacyObservabilityEventsResponseSchema = z.object({
   events: z.array(ObservabilityEventSchema).default([]),
   truncated: z.boolean().default(false),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
 });
+
+const BridgeSessionEventsPageSchema = z
+  .object({
+    schemaVersion: z.literal('moonmind.bridge-session-events-page.v1'),
+    items: z.array(ObservabilityEventSchema).default([]),
+    retentionGap: z.unknown().nullable().optional(),
+    terminalEnvelope: z.unknown().nullable().optional(),
+  })
+  .transform((page) => ({
+    events: page.items,
+    truncated: page.retentionGap != null,
+    sessionSnapshot: undefined,
+  }));
+
+const ObservabilityEventsResponseSchema = z.union([
+  BridgeSessionEventsPageSchema,
+  LegacyObservabilityEventsResponseSchema,
+]);
 
 const ArtifactListSchema = z.object({
   artifacts: z
