@@ -1255,6 +1255,14 @@ const SessionResourceSchema = z
     contentUrl: z.string().optional(),
     download_url: z.string().optional(),
     downloadUrl: z.string().optional(),
+    preview_available: z.boolean().optional(),
+    previewAvailable: z.boolean().optional(),
+    download_available: z.boolean().optional(),
+    downloadAvailable: z.boolean().optional(),
+    completeness_status: z.enum(['complete', 'degraded', 'pending']).optional(),
+    completenessStatus: z.enum(['complete', 'degraded', 'pending']).optional(),
+    unavailable_reason: z.string().nullable().optional(),
+    unavailableReason: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
   })
   .passthrough()
@@ -1268,6 +1276,10 @@ const SessionResourceSchema = z
     sizeBytes: resource.sizeBytes ?? resource.size_bytes ?? null,
     contentUrl: resource.contentUrl ?? resource.content_url ?? null,
     downloadUrl: resource.downloadUrl ?? resource.download_url ?? null,
+    previewAvailable: resource.previewAvailable ?? resource.preview_available ?? false,
+    downloadAvailable: resource.downloadAvailable ?? resource.download_available ?? true,
+    completenessStatus: resource.completenessStatus ?? resource.completeness_status ?? 'complete',
+    unavailableReason: resource.unavailableReason ?? resource.unavailable_reason ?? null,
     metadata: resource.metadata ?? {},
   }));
 
@@ -6298,6 +6310,15 @@ function SessionContinuityPanel({
 
   const projection = projectionQuery.data;
   const sessionResources = resourcesQuery.data?.resources ?? [];
+  const sessionResourceGroups = Array.from(
+    sessionResources.reduce((groups, resource) => {
+      const key = resource.groupKey || 'resources';
+      const existing = groups.get(key) ?? { title: resource.groupTitle, resources: [] as typeof sessionResources };
+      existing.resources.push(resource);
+      groups.set(key, existing);
+      return groups;
+    }, new Map<string, { title: string; resources: typeof sessionResources }>()),
+  );
   const latestBadges = [
     ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
     ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
@@ -6476,8 +6497,11 @@ function SessionContinuityPanel({
       {!compact && sessionResources.length > 0 ? (
         <div className="stack">
           <h4>Resource Evidence</h4>
-          <div className="grid-2">
-            {sessionResources.map((resource) => {
+          {sessionResourceGroups.map(([groupKey, group]) => (
+          <details key={groupKey} className="card" open={group.resources.length <= 8}>
+            <summary>{group.title} ({group.resources.length})</summary>
+            <div className="grid-2" style={{ marginTop: '0.5rem' }}>
+            {group.resources.map((resource) => {
               const label = resource.label || resource.artifactId;
               const contentHref = resource.contentUrl
                 ? resolveApiBaseTemplate(apiBase, resource.contentUrl)
@@ -6488,20 +6512,23 @@ function SessionContinuityPanel({
               return (
                 <div key={resource.resourceId || resource.artifactId} className="card">
                   <strong>{label}</strong>
-                  <div className="small">{resource.groupTitle}</div>
+                  <div className="small">{resource.completenessStatus === 'pending' ? 'Harvesting…' : resource.completenessStatus}</div>
                   <code className="text-xs break-all">{resource.artifactId}</code>
+                  {resource.unavailableReason ? <p className="small notice warning">{resource.unavailableReason}</p> : null}
                   <div className="actions" style={{ marginTop: '0.5rem' }}>
-                    <a className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
+                    {resource.previewAvailable ? <a aria-label={`Open ${label}`} className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
                       Open
-                    </a>
-                    <a className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
+                    </a> : null}
+                    {resource.downloadAvailable ? <a aria-label={`Download ${label}`} className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
                       Download
-                    </a>
+                    </a> : null}
                   </div>
                 </div>
               );
             })}
-          </div>
+            </div>
+          </details>
+          ))}
         </div>
       ) : null}
 
