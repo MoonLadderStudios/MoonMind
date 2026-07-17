@@ -34,6 +34,11 @@ _FORBIDDEN_ENV = (
     "GOOGLE_API_KEY",
 )
 
+_TOOLS_PATH = "/opt/moonmind-tools/bin"
+_DEFAULT_HOST_PATH = (
+    "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+)
+
 
 class OmnigentOAuthHostRuntime:
     """Launch/check/stop hosts using server-resolved resources only."""
@@ -48,6 +53,7 @@ class OmnigentOAuthHostRuntime:
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
         tools_volume: str | None = None,
+        tools_profile_path: Path | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -77,6 +83,19 @@ class OmnigentOAuthHostRuntime:
         self._tools_volume = tools_volume or os.getenv(
             "OMNIGENT_TOOLS_VOLUME", "moonmind-omnigent-tools-gh-2.74.2-1"
         )
+        self._tools_profile_path = (
+            tools_profile_path
+            or Path(
+                os.getenv(
+                    "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR",
+                    "/workspace/host_project",
+                )
+            )
+            / "services"
+            / "omnigent"
+            / "profile"
+            / "moonmind-tools.sh"
+        ).resolve()
 
     async def prepare_host(
         self,
@@ -102,6 +121,7 @@ class OmnigentOAuthHostRuntime:
                 workspace_source=workspace_source,
             )
             await self._exec_check(container_name)
+            await self._exec_tools_check(container_name)
         else:
             await self._compose_static_check()
 
@@ -216,6 +236,8 @@ class OmnigentOAuthHostRuntime:
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
+        await self._validate_tools_profile_bind_source()
+        host_path = await self._discover_upstream_path()
         # A retry may find a stopped container with this deterministic name.
         # Remove only that lease-owned container, then initialize the dedicated
         # state volume as root before the actual host drops to UID/GID 1000.
@@ -267,9 +289,16 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--mount",
+            f"type=bind,src={workspace_source},dst=/workspaces/run",
+            "--mount",
             f"type=volume,src={self._tools_volume},dst=/opt/moonmind-tools,readonly",
             "--mount",
-            f"type=bind,src={workspace_source},dst=/workspaces/run",
+            (
+                f"type=bind,src={self._tools_profile_path},"
+                "dst=/etc/profile.d/moonmind-tools.sh,readonly"
+            ),
+            "--env",
+            f"PATH={self._prepend_tools_path(host_path)}",
             "--env",
             "HOME=/home/app",
             "--env",
@@ -284,8 +313,6 @@ class OmnigentOAuthHostRuntime:
             f"CODEX_CREDENTIAL_GENERATION={host_lease.credential_generation}",
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
-            "--env",
-            "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)
@@ -299,6 +326,60 @@ class OmnigentOAuthHostRuntime:
             args.extend(["-u", key])
         args.extend([self._image, "/opt/moonmind/start-codex-oauth-host.sh"])
         await self._run(*args, env=child_env)
+
+    async def _discover_upstream_path(self) -> str:
+        """Read the selected image's PATH without replacing image-specific entries."""
+        result = await self._run(
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            self._image,
+            check=False,
+        )
+        if result[0] == 0:
+            for line in result[1].splitlines():
+                if line.startswith("PATH="):
+                    return line.removeprefix("PATH=") or _DEFAULT_HOST_PATH
+        return _DEFAULT_HOST_PATH
+
+    async def _validate_tools_profile_bind_source(self) -> None:
+        """Prove the profile bind source is a file in the Docker daemon namespace."""
+
+        await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            (
+                f"type=bind,src={self._tools_profile_path},"
+                "dst=/etc/profile.d/moonmind-tools.sh,readonly"
+            ),
+            "--entrypoint",
+            "/usr/bin/test",
+            self._image,
+            "-f",
+            "/etc/profile.d/moonmind-tools.sh",
+        )
+
+    @staticmethod
+    def _prepend_tools_path(upstream_path: str) -> str:
+        entries = [entry for entry in upstream_path.split(":") if entry]
+        return ":".join([_TOOLS_PATH, *(e for e in entries if e != _TOOLS_PATH)])
+
+    async def _exec_tools_check(self, container_name: str) -> None:
+        """Verify the mounted bundle through the host's login-shell boundary."""
+
+        await self._run(
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-lc",
+            "test -f /opt/moonmind-tools/manifest.json "
+            "&& command -v gh >/dev/null && gh --version >/dev/null",
+        )
 
     async def _prepare_workspace(
         self, *, workspace_key: str, repository_url: str | None

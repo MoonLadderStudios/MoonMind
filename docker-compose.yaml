@@ -839,6 +839,8 @@ services:
     depends_on:
       omnigent:
         condition: service_started
+      omnigent-tools-init:
+        condition: service_completed_successfully
     networks:
       - local-network
     restart: unless-stopped
@@ -874,6 +876,8 @@ services:
     depends_on:
       omnigent:
         condition: service_started
+      omnigent-tools-init:
+        condition: service_completed_successfully
       claude-auth-init:
         condition: service_completed_successfully
     networks:
@@ -932,6 +936,8 @@ services:
     depends_on:
       omnigent:
         condition: service_started
+      omnigent-tools-init:
+        condition: service_completed_successfully
       omnigent-host-codex-init:
         condition: service_completed_successfully
     networks:
