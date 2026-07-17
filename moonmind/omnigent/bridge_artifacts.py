@@ -86,6 +86,9 @@ class OmnigentArtifactGateway:
     async def read_text(self, artifact_ref: str) -> str:
         raise NotImplementedError
 
+    async def read_bytes(self, artifact_ref: str) -> bytes:
+        return (await self.read_text(artifact_ref)).encode("utf-8")
+
 
 class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
     """Local MoonMind artifact gateway for Omnigent evidence capture."""
@@ -189,6 +192,17 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 )
             if path.is_file():
                 return path.read_text(encoding="utf-8")
+        raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
+
+    async def read_bytes(self, artifact_ref: str) -> bytes:
+        if artifact_ref in self._readable_refs:
+            return self._readable_refs[artifact_ref].encode("utf-8")
+        prefix = "artifact://omnigent/"
+        if artifact_ref.startswith(prefix):
+            relative = artifact_ref[len(prefix) :]
+            path = (self._root / relative).resolve()
+            if path.is_relative_to(self._root) and path.is_file():
+                return path.read_bytes()
         raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
 
 

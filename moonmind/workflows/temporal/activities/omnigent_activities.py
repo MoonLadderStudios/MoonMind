@@ -32,6 +32,10 @@ async def omnigent_execute_activity(
     from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
     from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
 
     artifact_gateway = LocalOmnigentArtifactGateway()
     run_store = OmnigentBridgeSessionStore(async_session_maker)
@@ -49,16 +53,20 @@ async def omnigent_execute_activity(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        coordinator = OmnigentProfileBoundExecutionCoordinator(
-            session_factory=async_session_maker,
-            lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-            host_repository=OmnigentOAuthHostRepository(async_session_maker),
-            host_runtime=OmnigentOAuthHostRuntime(client=omnigent_client),
-            run_store=run_store,
-            execution_runner=run_omnigent_execution,
-            artifact_gateway=artifact_gateway,
-        )
-        return await coordinator.execute(request)
+        async with async_session_maker() as artifact_session:
+            coordinator = OmnigentProfileBoundExecutionCoordinator(
+                session_factory=async_session_maker,
+                lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
+                host_repository=OmnigentOAuthHostRepository(async_session_maker),
+                host_runtime=OmnigentOAuthHostRuntime(client=omnigent_client),
+                run_store=run_store,
+                execution_runner=run_omnigent_execution,
+                artifact_gateway=artifact_gateway,
+                artifact_service=TemporalArtifactService(
+                    TemporalArtifactRepository(artifact_session)
+                ),
+            )
+            return await coordinator.execute(request)
 
 
 @activity.defn(name="integration.omnigent.profile_bound_execute")

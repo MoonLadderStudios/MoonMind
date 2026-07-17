@@ -1,4 +1,9 @@
 from datetime import UTC, datetime, timedelta
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -246,6 +251,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         host_lease=lease,
         container_name="mm-host-lease-1",
         workspace_source=tmp_path,
+        skill_projection=tmp_path / "skills",
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -258,7 +264,10 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "type=volume,src=moonmind-omnigent-tools-gh-2.76.2,"
         "dst=/opt/moonmind-tools,readonly"
     ) in commands[2]
-    assert "MOONMIND_ACTIVE_SKILLS_DIR=/workspaces/run/.agents/skills" in commands[2]
+    assert "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills" in commands[2]
+    assert (
+        f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
+    ) in commands[2]
     assert (
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
@@ -337,6 +346,85 @@ def test_exact_host_preflight_rejects_generation_mismatch() -> None:
             result=result, binding=_binding(), host_lease=_host_lease()
         )
     assert exc_info.value.code == "CODEX_OAUTH_GENERATION_STALE"
+
+
+@pytest.mark.asyncio
+async def test_host_rejects_missing_skill_projection_before_workspace_mutation(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    runtime._prepare_workspace = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime.prepare_host(
+            binding=_binding(),
+            host_lease=_host_lease(),
+            workspace_key="run-1",
+        )
+
+    assert exc_info.value.code == "OMNIGENT_SKILL_PROJECTION_UNAVAILABLE"
+    runtime._prepare_workspace.assert_not_awaited()
+
+
+def test_projection_scripts_install_real_gh_and_resolve_login_shell(tmp_path) -> None:
+    scripts = Path(__file__).resolve().parents[3] / "services" / "omnigent" / "scripts"
+    fake_bin = tmp_path / "source"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text("#!/bin/sh\necho 'gh version 2.76.2 (fixture)'\n", encoding="utf-8")
+    fake_gh.chmod(0o755)
+    output = tmp_path / "bundle"
+    env = {
+        **os.environ,
+        "MOONMIND_GH_SOURCE": str(fake_gh),
+        "MOONMIND_GH_VERSION": "2.76.2",
+        "MOONMIND_TOOL_BUNDLE_OUTPUT": str(output),
+    }
+
+    installed = subprocess.run(
+        ["sh", str(scripts / "init-mounted-tools.sh")],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert installed.returncode == 0, installed.stderr
+    assert json.loads((output / "manifest.json").read_text())["tools"][0]["name"] == "gh"
+    assert (output / "bin" / "gh").stat().st_mode & 0o222 == 0
+    login_home = tmp_path / "home"
+    login_home.mkdir()
+    (login_home / ".bash_profile").write_text(
+        f"export PATH={output / 'bin'}:$PATH\n", encoding="utf-8"
+    )
+    login = subprocess.run(
+        ["bash", "-lc", "command -v gh && gh --version"],
+        env={
+            **os.environ,
+            "HOME": str(login_home),
+            "PATH": f"{output / 'bin'}:{os.environ.get('PATH', '')}",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert login.returncode == 0, login.stderr
+    assert "2.76.2" in login.stdout
+
+
+def test_omnigent_projects_portable_pr_resolver_semantics_without_copying_them() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    helper = runpy.run_path(
+        str(repo_root / ".agents/skills/pr-resolver/bin/pr_resolve_snapshot.py")
+    )
+    actionable, reason = helper["_classify_comment_actionability"](
+        {"type": "review_comment", "body": "Please fix this", "user": "reviewer"}
+    )
+    assert (actionable, reason) == (True, "actionable")
+    adapter_source = (repo_root / "moonmind/omnigent/oauth_host_runtime.py").read_text()
+    assert "_classify_comment_actionability" not in adapter_source
+    assert "MOONMIND_ACTIVE_SKILLS_DIR" in adapter_source
 
 
 def test_checkpoint_live_reattach_requires_every_original_authority() -> None:

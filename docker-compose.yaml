@@ -820,7 +820,7 @@ services:
     entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-      MOONMIND_ACTIVE_SKILLS_DIR: /workspaces/MoonMind/.agents/skills
+      MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       OMNIGENT_SERVER_URL: http://omnigent:8000
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -832,6 +832,7 @@ services:
     volumes:
       - omnigent-host-state:/root/.omnigent
       - omnigent-tools:/opt/moonmind-tools:ro
+      - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - ./omnigent_workspaces:/workspaces
@@ -855,7 +856,7 @@ services:
     entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-      MOONMIND_ACTIVE_SKILLS_DIR: /workspaces/MoonMind/.agents/skills
+      MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       OMNIGENT_SERVER_URL: http://omnigent:8000
       HOME: /home/app
       CLAUDE_HOME: /home/app/.claude
@@ -871,6 +872,7 @@ services:
     volumes:
       - omnigent-host-claude-state:/home/app/.omnigent
       - omnigent-tools:/opt/moonmind-tools:ro
+      - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
       - claude_auth_volume:/home/app/.claude
@@ -921,7 +923,7 @@ services:
     command: ["/opt/moonmind/start-codex-oauth-host.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-      MOONMIND_ACTIVE_SKILLS_DIR: /workspaces/MoonMind/.agents/skills
+      MOONMIND_ACTIVE_SKILLS_DIR: /opt/moonmind-skills
       HOME: /home/app
       CODEX_HOME: /home/app/.codex
       CODEX_CONFIG_HOME: /home/app/.codex
@@ -932,6 +934,7 @@ services:
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
       - omnigent-tools:/opt/moonmind-tools:ro
+      - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro

@@ -20,6 +20,11 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.skills.run_projection import (
+    load_resolved_skillset,
+    materialize_run_skill_snapshot,
+    verify_skill_projection,
+)
 
 _FORBIDDEN_ENV = (
     "OPENAI_API_KEY",
@@ -84,7 +89,14 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         workspace_key: str,
         repository_url: str | None = None,
+        resolved_skillset_ref: str | None = None,
+        artifact_gateway: Any | None = None,
     ) -> dict[str, Any]:
+        skill_projection = await self._prepare_skill_projection(
+            workspace_key=workspace_key,
+            resolved_skillset_ref=resolved_skillset_ref,
+            artifact_gateway=artifact_gateway,
+        )
         workspace_source = await self._prepare_workspace(
             workspace_key=workspace_key,
             repository_url=repository_url,
@@ -99,10 +111,11 @@ class OmnigentOAuthHostRuntime:
                 host_lease=host_lease,
                 container_name=container_name,
                 workspace_source=workspace_source,
+                skill_projection=skill_projection,
             )
             await self._exec_check(container_name)
         else:
-            await self._compose_static_check()
+            await self._compose_static_check(skill_projection=skill_projection)
 
         host = await self._resolve_exact_host(binding=binding, host_lease=host_lease)
         host_id = str(host.get("id") or host.get("host_id") or host.get("hostId") or "")
@@ -139,7 +152,52 @@ class OmnigentOAuthHostRuntime:
             host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
         )
         validated["workspacePath"] = result["workspacePath"]
+        validated["activeSkillsPath"] = str(skill_projection)
         return validated
+
+    async def _prepare_skill_projection(
+        self,
+        *,
+        workspace_key: str,
+        resolved_skillset_ref: str | None,
+        artifact_gateway: Any | None,
+    ) -> Path:
+        """Materialize and verify the run snapshot before workspace/host mutation."""
+
+        skillset_ref = str(resolved_skillset_ref or "").strip()
+        if not skillset_ref or artifact_gateway is None:
+            raise OmnigentOAuthHostError(
+                "resolved Skill projection is required before Omnigent host mutation",
+                code="OMNIGENT_SKILL_PROJECTION_UNAVAILABLE",
+            )
+
+        if hasattr(artifact_gateway, "read"):
+            artifact_service = artifact_gateway
+        else:
+            class _GatewayArtifactService:
+                async def read(self, *, artifact_id: str, **_kwargs: Any):
+                    payload = await artifact_gateway.read_bytes(artifact_id)
+                    return None, payload
+
+            artifact_service = _GatewayArtifactService()
+        resolved_skillset = await load_resolved_skillset(
+            artifact_service, skillset_ref
+        )
+        digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
+        projection_root = (self._workspace_root / ".skill-projections" / digest).resolve()
+        metadata = await materialize_run_skill_snapshot(
+            workspace_path=projection_root,
+            run_root=projection_root,
+            runtime_id="omnigent",
+            resolved_skillset=resolved_skillset,
+            artifact_service=artifact_service,
+            project_adapter_aliases=False,
+        )
+        await verify_skill_projection(
+            materialization_metadata=metadata,
+            resolved_skillset=resolved_skillset,
+        )
+        return Path(str(metadata["visiblePath"])).resolve()
 
     async def stop_host(
         self, *, binding: OmnigentOAuthHostBinding, host_lease: OmnigentHostLease
@@ -210,6 +268,7 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         container_name: str,
         workspace_source: Path,
+        skill_projection: Path,
     ) -> None:
         if await self.container_exists(container_name):
             return
@@ -269,6 +328,8 @@ class OmnigentOAuthHostRuntime:
             f"type=volume,src={self._tool_bundle_volume},dst=/opt/moonmind-tools,readonly",
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
+            "--mount",
+            f"type=bind,src={skill_projection},dst=/opt/moonmind-skills,readonly",
             "--env",
             "HOME=/home/app",
             "--env",
@@ -284,7 +345,7 @@ class OmnigentOAuthHostRuntime:
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
-            "MOONMIND_ACTIVE_SKILLS_DIR=/workspaces/run/.agents/skills",
+            "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills",
             "--env",
             "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
@@ -314,7 +375,10 @@ class OmnigentOAuthHostRuntime:
             await self._run("git", "clone", "--", repository_url, str(workspace))
         return workspace
 
-    async def _compose_static_check(self) -> None:
+    async def _compose_static_check(self, *, skill_projection: Path | None = None) -> None:
+        child_env = dict(os.environ)
+        if skill_projection is not None:
+            child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
         await self._run(
             "docker",
             "compose",
@@ -325,6 +389,7 @@ class OmnigentOAuthHostRuntime:
             "up",
             "-d",
             "omnigent-host-codex",
+            env=child_env,
         )
         await self._run(
             "docker",
@@ -337,6 +402,7 @@ class OmnigentOAuthHostRuntime:
             "-T",
             "omnigent-host-codex",
             "/opt/moonmind/check-runner-projections.sh",
+            env=child_env,
         )
 
     async def _exec_check(self, container_name: str) -> None:
