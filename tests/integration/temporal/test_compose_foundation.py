@@ -472,6 +472,10 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert _network_names(host_service) == {"local-network"}
 
     host_env = _env_map(host_service["environment"])
+    assert host_env["PATH"] == (
+        "/opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:"
+        "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}"
+    )
     assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
     assert "CODEX_HOME" not in host_env
     assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
@@ -480,6 +484,11 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
 
     host_volumes = set(host_service["volumes"])
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
+    assert "omnigent-tools:/opt/moonmind-tools:ro" in host_volumes
+    assert (
+        "./services/omnigent/profile/moonmind-tools.sh:"
+        "/etc/profile.d/moonmind-tools.sh:ro"
+    ) in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert "codex_auth_volume:/root/.codex" not in host_volumes
     # Operator-managed sanitized workspace, exposed read-only.
@@ -488,6 +497,9 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         "/workspaces/MoonMind:ro"
     ) in host_volumes
     assert "omnigent-host-state" in volumes
+    assert volumes["omnigent-tools"]["name"] == (
+        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-v1}"
+    )
     assert "codex_auth_volume" in volumes
     assert "omnigent-server-state" not in volumes
 
@@ -515,6 +527,10 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
 
     host_env = _env_map(host_service["environment"])
     assert host_env == {
+        "PATH": (
+            "/opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:"
+            "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}"
+        ),
         "HOME": "/home/app",
         "CLAUDE_HOME": "/home/app/.claude",
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
@@ -531,6 +547,11 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     host_volumes = set(host_service["volumes"])
     assert "omnigent-host-claude-state:/home/app/.omnigent" in host_volumes
     assert "claude_auth_volume:/home/app/.claude" in host_volumes
+    assert "omnigent-tools:/opt/moonmind-tools:ro" in host_volumes
+    assert (
+        "./services/omnigent/profile/moonmind-tools.sh:"
+        "/etc/profile.d/moonmind-tools.sh:ro"
+    ) in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert (
         "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
@@ -572,6 +593,10 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["working_dir"] == "/home/app"
     assert "env_file" not in host_service
     assert _env_map(host_service["environment"]) == {
+        "PATH": (
+            "/opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:"
+            "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}"
+        ),
         "HOME": "/home/app",
         "CODEX_HOME": "/home/app/.codex",
         "CODEX_CONFIG_HOME": "/home/app/.codex",
@@ -604,6 +629,11 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
             "/workspaces/MoonMind:ro"
         ),
         "./services/omnigent/scripts:/opt/moonmind:ro",
+        "omnigent-tools:/opt/moonmind-tools:ro",
+        (
+            "./services/omnigent/profile/moonmind-tools.sh:"
+            "/etc/profile.d/moonmind-tools.sh:ro"
+        ),
     }
     assert "omnigent-host-codex-state" in compose["volumes"]
     assert host_service["depends_on"] == {

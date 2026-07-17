@@ -252,26 +252,60 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
-    assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
-    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
-    assert commands[2][:3] == ("docker", "run", "-d")
-    assert commands[1][commands[1].index("--user") + 1] == "0:0"
-    assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
-    launch = commands[2]
+    validation = commands[0]
+    assert validation[:3] == ("docker", "run", "--rm")
+    assert validation[validation.index("--entrypoint") + 1] == "/usr/bin/test"
+    assert validation[-2:] == ("-f", "/etc/profile.d/moonmind-tools.sh")
+    assert commands[1][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
+    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[2]
+    assert commands[3][:3] == ("docker", "run", "-d")
+    assert commands[2][commands[2].index("--user") + 1] == "0:0"
+    assert commands[3][commands[3].index("--workdir") + 1] == "/home/app"
+    launch = commands[3]
     assert (
         "type=volume,src=moonmind-omnigent-tools-v1,dst=/opt/moonmind-tools,readonly"
         in launch
     )
     assert any(
-        value.endswith(
-            ",dst=/etc/profile.d/moonmind-tools.sh,readonly"
-        )
+        value.endswith(",dst=/etc/profile.d/moonmind-tools.sh,readonly")
         for value in launch
     )
     assert (
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
         in launch
     )
+
+
+@pytest.mark.asyncio
+async def test_on_demand_host_fails_before_launch_when_profile_is_not_daemon_visible(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        tools_profile_path=tmp_path / "worker-only-profile.sh",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._run = AsyncMock(
+        side_effect=OmnigentOAuthHostError("profile bind is not daemon-visible")
+    )
+
+    with pytest.raises(OmnigentOAuthHostError, match="not daemon-visible"):
+        await runtime._launch_on_demand(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            container_name="mm-host-lease-1",
+            workspace_source=tmp_path,
+        )
+
+    assert runtime._run.await_count == 1
+    assert runtime._run.await_args.args[:3] == ("docker", "run", "--rm")
 
 
 def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:

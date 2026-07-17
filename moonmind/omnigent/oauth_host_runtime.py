@@ -234,6 +234,7 @@ class OmnigentOAuthHostRuntime:
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
+        await self._validate_tools_profile_bind_source()
         host_path = await self._discover_upstream_path()
         # A retry may find a stopped container with this deterministic name.
         # Remove only that lease-owned container, then initialize the dedicated
@@ -326,12 +327,6 @@ class OmnigentOAuthHostRuntime:
 
     async def _discover_upstream_path(self) -> str:
         """Read the selected image's PATH without replacing image-specific entries."""
-
-        if not self._tools_profile_path.is_file():
-            raise OmnigentOAuthHostError(
-                "Omnigent tools profile bind source does not exist",
-                code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
-            )
         result = await self._run(
             "docker",
             "image",
@@ -344,6 +339,25 @@ class OmnigentOAuthHostRuntime:
             if line.startswith("PATH="):
                 return line.removeprefix("PATH=") or _DEFAULT_HOST_PATH
         return _DEFAULT_HOST_PATH
+
+    async def _validate_tools_profile_bind_source(self) -> None:
+        """Prove the profile bind source is a file in the Docker daemon namespace."""
+
+        await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            (
+                f"type=bind,src={self._tools_profile_path},"
+                "dst=/etc/profile.d/moonmind-tools.sh,readonly"
+            ),
+            "--entrypoint",
+            "/usr/bin/test",
+            self._image,
+            "-f",
+            "/etc/profile.d/moonmind-tools.sh",
+        )
 
     @staticmethod
     def _prepend_tools_path(upstream_path: str) -> str:
