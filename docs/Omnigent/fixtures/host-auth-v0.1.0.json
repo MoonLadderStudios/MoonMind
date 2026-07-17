@@ -1,0 +1,17 @@
+{
+  "distribution": "omnigent",
+  "version": "0.1.0",
+  "verifierEntrypoint": "omnigent.server.auth:verify_host_request",
+  "protocolProfile": "omnigent.host_runner.v1",
+  "credentialSource": "service-side SecretRef",
+  "acceptedRequestMaterial": "delegated unchanged to the upstream verifier",
+  "requiredIdentityClaims": [
+    "hostId",
+    "profileId",
+    "credentialGeneration"
+  ],
+  "optionalIdentityClaims": ["runnerId"],
+  "moonmindUserAuthAccepted": false,
+  "driftPolicy": "fail closed on distribution version, entrypoint, or claim-shape mismatch",
+  "productionGate": "Requires proxy conformance, live smoke, and host-auth conformance evidence; issue #3368 remains authoritative."
+}

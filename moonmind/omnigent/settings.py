@@ -94,11 +94,11 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
 
 
-def resolved_host_runner_token(*, env: Mapping[str, Any] | None = None) -> str:
-    """Return the embedded host/runner auth token configured service-side."""
+def resolved_host_runner_secret_ref(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return the service-side SecretRef used by the upstream host verifier."""
 
     source = env if env is not None else os.environ
-    return _clean(source.get("OMNIGENT_HOST_RUNNER_TOKEN"))
+    return _clean(source.get("OMNIGENT_HOST_RUNNER_SECRET_REF"))
 
 
 def resolved_proxy_forward_headers(
@@ -127,7 +127,7 @@ __all__ = [
     "is_omnigent_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",
-    "resolved_host_runner_token",
+    "resolved_host_runner_secret_ref",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

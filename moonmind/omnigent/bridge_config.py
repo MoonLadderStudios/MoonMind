@@ -374,9 +374,17 @@ class BridgeEmbeddedHostConnection(BaseModel):
 
     bind_address: str = Field("0.0.0.0", alias="bindAddress")
     port: int = Field(8000, ge=1, le=65535)
-    auth_mode: str = Field("header_or_token", alias="authMode")
+    auth_mode: str = Field("upstream_verifier", alias="authMode")
     protocol_profile: str = Field(
         "omnigent.host_runner.v1", alias="protocolProfile"
+    )
+    upstream_auth_distribution: str = Field(
+        "omnigent", alias="upstreamAuthDistribution"
+    )
+    upstream_auth_version: str = Field("0.1.0", alias="upstreamAuthVersion")
+    upstream_verifier_entrypoint: str = Field(
+        "omnigent.server.auth:verify_host_request",
+        alias="upstreamVerifierEntrypoint",
     )
     proxy_conformance_evidence_ref: str | None = Field(
         None, alias="proxyConformanceEvidenceRef"

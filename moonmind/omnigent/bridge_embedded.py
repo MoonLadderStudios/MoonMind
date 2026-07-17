@@ -11,8 +11,10 @@ and persists them into the canonical bridge session store.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hmac import compare_digest
-from typing import Any, Mapping
+import importlib
+import importlib.metadata
+import inspect
+from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,7 +33,9 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
-_HOST_TOKEN_HEADER = "x-omnigent-host-token"
+_FORBIDDEN_HOST_AUTH_HEADERS = frozenset(
+    {"cookie", "x-moonmind-execution-principal", "x-moonmind-workflow-id"}
+)
 
 
 class EmbeddedHostRegisterRequest(BaseModel):
@@ -68,47 +72,138 @@ class EmbeddedHostAuthContext:
 
     auth_mode: str
     protocol_profile: str
+    host_id: str
+    runner_id: str | None
+    credential_generation: int
+    profile_id: str
 
 
-def verify_embedded_host_auth(
+UpstreamHostVerifier = Callable[..., Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
+
+
+async def verify_embedded_host_auth(
     *,
     headers: Mapping[str, Any],
     config: OmnigentBridgeConfig,
-    configured_token: str,
+    secret_ref: str,
+    verifier: UpstreamHostVerifier | None = None,
+    secret_resolver: Callable[[str], Awaitable[str]] | None = None,
 ) -> EmbeddedHostAuthContext:
-    """Verify the embedded host/runner auth profile (§16 rule 8).
-
-    ``header_or_token`` accepts either ``Authorization: Bearer <token>`` or the
-    Omnigent-shaped ``X-Omnigent-Host-Token`` header. The token is service-side
-    configuration and is never accepted from bridge config or workflow payloads.
-    """
+    """Delegate host authentication to the exactly pinned upstream verifier."""
 
     embedded = config.host_connection.embedded
     auth_mode = str(embedded.auth_mode or "").strip()
-    if auth_mode != "header_or_token":
+    if auth_mode != "upstream_verifier":
         raise OmnigentBridgeError(
             f"Unsupported embedded host auth mode: {auth_mode}",
             failure_class="system_error",
             status_code=501,
         )
-    expected = str(configured_token or "").strip()
-    if not expected:
+    ref = str(secret_ref or "").strip()
+    if not ref:
         raise OmnigentBridgeError(
-            "Embedded Omnigent host auth requires OMNIGENT_HOST_RUNNER_TOKEN",
+            "Embedded Omnigent host auth requires OMNIGENT_HOST_RUNNER_SECRET_REF",
             failure_class="system_error",
             status_code=503,
         )
-    provided = _extract_host_token(headers)
-    if not provided or not compare_digest(provided, expected):
+    normalized = {str(k).lower(): v for k, v in headers.items()}
+    forbidden = sorted(_FORBIDDEN_HOST_AUTH_HEADERS.intersection(normalized))
+    if forbidden:
         raise OmnigentBridgeError(
-            "Embedded Omnigent host authentication failed",
+            "MoonMind user/session authentication material is not valid host auth",
             failure_class="user_error",
+            status_code=400,
+        )
+    selected_verifier = verifier or _load_pinned_upstream_verifier(config)
+    resolver = secret_resolver or _resolve_host_secret
+    try:
+        secret = await resolver(ref)
+        result = selected_verifier(headers=headers, server_credential=secret)
+        if inspect.isawaitable(result):
+            result = await result
+    except OmnigentBridgeError:
+        raise
+    except Exception as exc:
+        raise OmnigentBridgeError(
+            "Upstream Omnigent host authentication failed",
+            failure_class="integration_error",
             status_code=401,
+        ) from exc
+    claims = dict(result or {})
+    host_id = _clean(claims.get("host_id") or claims.get("hostId"))
+    generation = claims.get(
+        "credential_generation", claims.get("credentialGeneration")
+    )
+    profile_id = _clean(claims.get("profile_id") or claims.get("profileId"))
+    if (
+        not host_id
+        or not profile_id
+        or not isinstance(generation, int)
+        or generation < 1
+    ):
+        raise OmnigentBridgeError(
+            "Upstream Omnigent verifier returned an unsupported identity shape",
+            failure_class="integration_error",
+            status_code=502,
         )
     return EmbeddedHostAuthContext(
         auth_mode=auth_mode,
         protocol_profile=embedded.protocol_profile,
+        host_id=host_id,
+        runner_id=_clean(claims.get("runner_id") or claims.get("runnerId")),
+        credential_generation=generation,
+        profile_id=profile_id,
     )
+
+
+async def _resolve_host_secret(secret_ref: str) -> str:
+    from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+        resolve_managed_api_key_reference,
+    )
+
+    return await resolve_managed_api_key_reference(secret_ref)
+
+
+def _load_pinned_upstream_verifier(config: OmnigentBridgeConfig) -> UpstreamHostVerifier:
+    embedded = config.host_connection.embedded
+    try:
+        installed = importlib.metadata.version(embedded.upstream_auth_distribution)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise OmnigentBridgeError(
+            "Pinned upstream Omnigent auth distribution is not installed",
+            failure_class="system_error",
+            status_code=503,
+        ) from exc
+    if installed != embedded.upstream_auth_version:
+        raise OmnigentBridgeError(
+            "Installed upstream Omnigent auth version does not match the pin",
+            failure_class="system_error",
+            status_code=503,
+        )
+    module_name, separator, attribute = (
+        embedded.upstream_verifier_entrypoint.partition(":")
+    )
+    if not separator or not module_name or not attribute:
+        raise OmnigentBridgeError(
+            "Invalid upstream Omnigent verifier entrypoint",
+            failure_class="system_error",
+            status_code=503,
+        )
+    try:
+        candidate = getattr(importlib.import_module(module_name), attribute)
+    except (ImportError, AttributeError) as exc:
+        raise OmnigentBridgeError(
+            "Pinned upstream Omnigent verifier entrypoint is unavailable",
+            failure_class="system_error",
+            status_code=503,
+        ) from exc
+    if not callable(candidate):
+        raise OmnigentBridgeError(
+            "Pinned upstream Omnigent verifier entrypoint is not callable",
+            failure_class="system_error",
+            status_code=503,
+        )
+    return candidate
 
 
 class OmnigentEmbeddedHostProtocolFacade:
@@ -189,8 +284,9 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
-        host_id = _clean(request.host_id) or "embedded-host"
-        runner_id = _clean(request.runner_id)
+        host_id = _clean(request.host_id) or auth.host_id
+        runner_id = _clean(request.runner_id) or auth.runner_id
+        _assert_auth_identity(auth, host_id=host_id, runner_id=runner_id)
         return {
             "hostId": host_id,
             "runnerId": runner_id,
@@ -211,6 +307,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        _assert_auth_identity(auth, host_id=_clean(host_id), runner_id=None)
         return {
             "hostId": _clean(host_id),
             "status": request.status,
@@ -231,12 +328,23 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        _assert_auth_identity(auth, host_id=_clean(host_id), runner_id=None)
         row = await self._run_store.get_session_by_provider_session_id(session_id)
         if row is None:
             raise OmnigentBridgeError(
                 "No Omnigent bridge session is bound to the requested session id.",
                 failure_class="user_error",
                 status_code=404,
+            )
+        if (
+            row.omnigent_host_id != auth.host_id
+            or row.provider_profile_id != auth.profile_id
+            or row.credential_generation != auth.credential_generation
+        ):
+            raise OmnigentBridgeError(
+                "Verified host identity is not bound to this session",
+                failure_class="user_error",
+                status_code=403,
             )
         payload = request.model_dump(by_alias=True)
         payload.setdefault("direction", "host_to_moonmind")
@@ -329,16 +437,21 @@ def _assert_row_owner(row: Any, binding: BridgePrincipalBinding) -> None:
             status_code=409,
         )
 
-def _extract_host_token(headers: Mapping[str, Any]) -> str:
-    normalized = {str(key).lower(): str(value) for key, value in headers.items()}
-    explicit = normalized.get(_HOST_TOKEN_HEADER)
-    if explicit:
-        return explicit.strip()
-    authorization = normalized.get("authorization", "").strip()
-    prefix = "bearer "
-    if authorization.lower().startswith(prefix):
-        return authorization[len(prefix) :].strip()
-    return ""
+def _assert_auth_identity(
+    auth: EmbeddedHostAuthContext, *, host_id: str, runner_id: str | None
+) -> None:
+    if not host_id or host_id != auth.host_id:
+        raise OmnigentBridgeError(
+            "Verified host identity does not match the requested host",
+            failure_class="user_error",
+            status_code=403,
+        )
+    if runner_id and runner_id != auth.runner_id:
+        raise OmnigentBridgeError(
+            "Verified runner identity does not match the requested runner",
+            failure_class="user_error",
+            status_code=403,
+        )
 
 
 def _request_for_row(row: Any) -> AgentExecutionRequest:

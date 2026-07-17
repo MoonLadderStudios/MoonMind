@@ -54,7 +54,7 @@ from moonmind.omnigent.settings import (
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
-    resolved_host_runner_token,
+    resolved_host_runner_secret_ref,
     resolved_server_url,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
@@ -220,16 +220,16 @@ def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     )
 
 
-def _embedded_auth_context(
+async def _embedded_auth_context(
     *,
     request: Request,
     config: OmnigentBridgeConfig,
 ):
     try:
-        return verify_embedded_host_auth(
+        return await verify_embedded_host_auth(
             headers=request.headers,
             config=config,
-            configured_token=resolved_host_runner_token(),
+            secret_ref=resolved_host_runner_secret_ref(),
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -729,7 +729,7 @@ async def register_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Register an unchanged host against MoonMind's embedded host facade."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.register_host(request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -746,7 +746,7 @@ async def heartbeat_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Accept a host heartbeat through the embedded host facade."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.heartbeat(host_id=host_id, request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -764,7 +764,7 @@ async def ingest_embedded_omnigent_host_event(
 ) -> dict[str, Any]:
     """Ingest host/session events into the canonical bridge projection."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.ingest_session_event(
             host_id=host_id,

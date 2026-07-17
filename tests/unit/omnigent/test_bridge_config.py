@@ -59,7 +59,7 @@ hostConnection:
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
-    authMode: header_or_token
+    authMode: upstream_verifier
     protocolProfile: omnigent.host_runner.v1
 
 sessionDefaults:

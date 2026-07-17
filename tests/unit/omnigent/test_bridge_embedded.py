@@ -63,26 +63,49 @@ def _request():
     )
 
 
-def test_embedded_host_auth_accepts_bearer_token() -> None:
-    context = verify_embedded_host_auth(
+@pytest.mark.asyncio
+async def test_embedded_host_auth_delegates_to_upstream_verifier() -> None:
+    seen = {}
+
+    def verifier(**kwargs):
+        seen.update(kwargs)
+        return {
+            "hostId": "host-1",
+            "runnerId": "runner-1",
+            "profileId": "profile-1",
+            "credentialGeneration": 2,
+        }
+
+    async def resolve(ref):
+        assert ref == "env://HOST_AUTH"
+        return "runner-token"
+
+    context = await verify_embedded_host_auth(
         headers={"Authorization": "Bearer runner-token"},
         config=_embedded_config(),
-        configured_token="runner-token",
+        secret_ref="env://HOST_AUTH",
+        verifier=verifier,
+        secret_resolver=resolve,
     )
 
-    assert context.auth_mode == "header_or_token"
+    assert context.auth_mode == "upstream_verifier"
     assert context.protocol_profile == "omnigent.host_runner.v1"
+    assert context.host_id == "host-1"
+    assert context.credential_generation == 2
+    assert seen["server_credential"] == "runner-token"
 
 
-def test_embedded_host_auth_rejects_missing_or_wrong_token() -> None:
+@pytest.mark.asyncio
+async def test_embedded_host_auth_rejects_moonmind_auth_material() -> None:
     with pytest.raises(OmnigentBridgeError) as excinfo:
-        verify_embedded_host_auth(
-            headers={"X-Omnigent-Host-Token": "wrong"},
+        await verify_embedded_host_auth(
+            headers={"Cookie": "moonmind_session=secret"},
             config=_embedded_config(),
-            configured_token="runner-token",
+            secret_ref="env://HOST_AUTH",
+            verifier=lambda **_: {},
         )
 
-    assert excinfo.value.status_code == 401
+    assert excinfo.value.status_code == 400
     assert excinfo.value.failure_class == "user_error"
 
 
@@ -93,8 +116,12 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
         config=_embedded_config(),
     )
     auth = EmbeddedHostAuthContext(
-        auth_mode="header_or_token",
+        auth_mode="upstream_verifier",
         protocol_profile="omnigent.host_runner.v1",
+        host_id="host-1",
+        runner_id="runner-1",
+        credential_generation=1,
+        profile_id="profile-1",
     )
 
     registered = await facade.register_host(
@@ -123,6 +150,16 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
         agent_run_id="run-embedded",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -136,8 +173,12 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
             data={"text": "hello"},
         ),
         auth=EmbeddedHostAuthContext(
-            auth_mode="header_or_token",
+            auth_mode="upstream_verifier",
             protocol_profile="omnigent.host_runner.v1",
+            host_id="host-1",
+            runner_id=None,
+            credential_generation=1,
+            profile_id="profile-1",
         ),
     )
     events = await store.list_events(row.bridge_session_id)
@@ -198,13 +239,27 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         agent_run_id="run-embedded",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
     )
     auth = EmbeddedHostAuthContext(
-        auth_mode="header_or_token",
+        auth_mode="upstream_verifier",
         protocol_profile="omnigent.host_runner.v1",
+        host_id="host-1",
+        runner_id=None,
+        credential_generation=1,
+        profile_id="profile-1",
     )
 
     await facade.ingest_session_event(

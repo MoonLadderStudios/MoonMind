@@ -297,8 +297,11 @@ hostConnection:
   embedded:
     bindAddress: 0.0.0.0
     port: 8000
-    authMode: header_or_token
+    authMode: upstream_verifier
     protocolProfile: omnigent.host_runner.v1
+    upstreamAuthDistribution: omnigent
+    upstreamAuthVersion: 0.1.0
+    upstreamVerifierEntrypoint: omnigent.server.auth:verify_host_request
 
 sessionDefaults:
   hostType: managed
