@@ -66,6 +66,7 @@ class _FakeProxy:
         self.attached: list[str] = []
         self.deleted: list[str] = []
         self.create_error: OmnigentBridgeError | None = None
+        self.stream_error: OmnigentBridgeError | None = None
         # By default a read resolves to the mm:w1 owner used across the tests;
         # pass ``session_owner=None`` to simulate a session the bridge does not
         # own, or an explicit binding to simulate a foreign owner.
@@ -96,6 +97,8 @@ class _FakeProxy:
         return {"ok": True}
 
     async def stream_events(self, session_id: str):
+        if self.stream_error is not None:
+            raise self.stream_error
         yield {"type": "response.completed", "session": {"status": "completed"}}
 
     async def post_event(self, *, session_id: str, event):
@@ -360,6 +363,22 @@ def test_provider_stream_authorizes_and_proxies_sse() -> None:
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream")
     assert resp.status_code == 200
     assert '"type":"response.completed"' in resp.text
+
+
+def test_provider_stream_maps_setup_failure_before_http_200() -> None:
+    proxy = _FakeProxy()
+    proxy.stream_error = OmnigentBridgeError(
+        "upstream unavailable",
+        failure_class="integration_error",
+        status_code=502,
+        code="omnigent_bridge_upstream_transport",
+    )
+    client, _, _ = _build(proxy=proxy)
+
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream")
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["code"] == "omnigent_bridge_upstream_transport"
 
 
 def test_all_resource_route_classes_delegate() -> None:

@@ -136,7 +136,15 @@ class _FakeClient:
 
     async def get_session(self, session_id: str) -> dict[str, Any]:
         self.get_calls.append(session_id)
-        return {"id": session_id, "status": "running", "summary": "ok"}
+        return {
+            "id": session_id,
+            "status": "running",
+            "summary": "ok",
+            "idempotency_key": "idem-1",
+        }
+
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        return [{"id": "host-1", "status": "ready"}]
 
     async def post_event(
         self, session_id: str, payload: dict[str, Any]
@@ -323,6 +331,37 @@ async def test_create_session_rejects_cross_workflow_idempotency_key() -> None:
     assert excinfo.value.status_code == 409
     assert not client.created_payloads
     assert not store.created_events
+
+
+async def test_attach_rejects_provider_session_owned_by_another_workflow() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(workflow_id="mm:w1", agent_run_id="ar-1")
+    store.rows["other"] = _FakeRow(
+        session_id="sess-other", workflow_id="mm:other", agent_run_id="ar-other"
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(store, client).attach_session(
+            session_id="sess-other", binding=_binding()
+        )
+
+    assert excinfo.value.code == "omnigent_bridge_session_conflict"
+    assert client.get_calls == []
+
+
+async def test_attach_records_reconciliation_evidence() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(
+        workflow_id="mm:w1", agent_run_id="ar-1", agent_id="agent-1"
+    )
+
+    response = await _proxy(store, client).attach_session(
+        session_id="sess-9", binding=_binding()
+    )
+
+    assert response["id"] == "sess-9"
+    assert store.attached == [("idem-1", "sess-9")]
+    assert store.created_events[0]["session_id"] == "sess-9"
 
 
 async def test_create_session_reuse_skips_target_resolution() -> None:
@@ -605,6 +644,20 @@ async def test_resource_lists_are_bounded() -> None:
     assert len(result["files"]) == 250
 
 
+async def test_resource_index_total_size_is_bounded() -> None:
+    client = _FakeClient()
+
+    async def oversized(_session_id: str) -> dict[str, Any]:
+        return {"items": [{"path": "x" * (4 * 1024 * 1024)}]}
+
+    client.list_workspace_files = oversized  # type: ignore[method-assign]
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(_FakeStore(), client).get_resource(
+            "workspace_files", "sess-1"
+        )
+    assert excinfo.value.code == "omnigent_bridge_response_too_large"
+
+
 @pytest.mark.parametrize(
     ("status_code", "optional", "expected"),
     [
@@ -632,4 +685,4 @@ async def test_facade_error_mapping_is_stable(status_code, optional, expected) -
     )
     assert error.code == expected
     assert error.failure_class == "integration_error"
-    assert error.status_code == status_code
+    assert error.status_code == (502 if status_code in {401, 403} else status_code)

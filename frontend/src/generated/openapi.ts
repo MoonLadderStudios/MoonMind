@@ -18119,6 +18119,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                    "application/octet-stream": unknown;
                 };
             };
             /** @description Validation Error */
@@ -18151,6 +18152,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                    "text/x-diff": unknown;
                 };
             };
             /** @description Validation Error */
@@ -18216,6 +18218,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                    "application/octet-stream": unknown;
                 };
             };
             /** @description Validation Error */

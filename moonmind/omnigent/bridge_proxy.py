@@ -20,6 +20,8 @@ parallel implementation.
 from __future__ import annotations
 
 import base64
+import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -50,6 +52,8 @@ SOURCE_ISSUE = "MoonLadderStudios/MoonMind#3361"
 _MAX_BRIDGE_HARVEST_ITEMS = 25
 _MAX_FACADE_RESOURCE_ITEMS = 250
 _MAX_FACADE_RESOURCE_BYTES = 4 * 1024 * 1024
+_MAX_STREAM_RECONNECTS = 3
+_TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled", "canceled", "stopped"}
 
 
 class OmnigentBridgeError(RuntimeError):
@@ -400,10 +404,40 @@ class OmnigentBridgeSessionProxy:
                 status_code=409,
                 code="omnigent_bridge_session_conflict",
             )
-        # Verify the provider session before persisting the attachment.
+        owner = await self._run_store.get_session_owner(session_id)
+        if owner is not None and (
+            owner.workflow_id != binding.workflow_id
+            or (owner.agent_run_id or None) != (binding.agent_run_id or None)
+        ):
+            raise OmnigentBridgeError(
+                "Provider session is already attached to another MoonMind owner",
+                failure_class="user_error",
+                status_code=409,
+                code="omnigent_bridge_session_conflict",
+            )
+        # Verify provider identity before persisting the attachment.
         snapshot = await self.get_session(session_id)
+        provider_key = str(
+            snapshot.get("idempotency_key")
+            or snapshot.get("idempotencyKey")
+            or (snapshot.get("labels") or {}).get("moonmind.idempotency_key")
+            or ""
+        ).strip()
+        if provider_key != binding.idempotency_key:
+            raise OmnigentBridgeError(
+                "Provider session ownership metadata does not match this binding",
+                failure_class="user_error",
+                status_code=409,
+                code="omnigent_bridge_session_conflict",
+            )
         if not attached:
             await self._run_store.attach_session(binding.idempotency_key, session_id)
+        await self._run_store.record_session_created(
+            binding.idempotency_key,
+            session_id=session_id,
+            agent_id=getattr(row, "omnigent_agent_id", None),
+            endpoint_ref=getattr(row, "omnigent_endpoint_ref", None),
+        )
         return self._session_response(
             snapshot=snapshot, session_id=session_id, binding=binding, reused=True
         )
@@ -416,6 +450,13 @@ class OmnigentBridgeSessionProxy:
             hosts = await self._client.list_hosts()
         except OmnigentClientError as exc:
             raise _bridge_client_error(exc) from exc
+        if not isinstance(hosts, list):
+            raise OmnigentBridgeError(
+                "Omnigent host catalog has an unsupported response shape",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_upstream_payload",
+            )
         return [
             {
                 key: host[key]
@@ -428,11 +469,25 @@ class OmnigentBridgeSessionProxy:
 
     async def stream_events(self, session_id: str):
         self._require_proxy_mode()
-        try:
-            async for event in self._client.stream_events(session_id):
-                yield event
-        except OmnigentClientError as exc:
-            raise _bridge_client_error(exc) from exc
+        for attempt in range(_MAX_STREAM_RECONNECTS + 1):
+            try:
+                async for event in self._client.stream_events(session_id):
+                    yield event
+            except OmnigentClientError as exc:
+                if attempt >= _MAX_STREAM_RECONNECTS:
+                    raise _bridge_client_error(exc) from exc
+            snapshot = await self.get_session(session_id)
+            status = str(snapshot.get("status") or "").strip().lower()
+            if status in _TERMINAL_SESSION_STATUSES:
+                return
+            if attempt < _MAX_STREAM_RECONNECTS:
+                await asyncio.sleep(min(2**attempt, 4))
+        raise OmnigentBridgeError(
+            "Omnigent event stream disconnected while the session remained active",
+            failure_class="integration_error",
+            status_code=502,
+            code="omnigent_bridge_upstream_transport",
+        )
 
     async def delete_session(self, session_id: str) -> dict[str, Any]:
         self._require_proxy_mode()
@@ -483,7 +538,24 @@ class OmnigentBridgeSessionProxy:
                     code="omnigent_bridge_response_too_large",
                 )
             return result
-        return _bound_resource_lists(result)
+        bounded = _bound_resource_lists(result)
+        try:
+            encoded = json.dumps(bounded, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise OmnigentBridgeError(
+                "Upstream resource index is malformed",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_upstream_payload",
+            ) from exc
+        if len(encoded) > _MAX_FACADE_RESOURCE_BYTES:
+            raise OmnigentBridgeError(
+                "Upstream resource index exceeds the bridge response limit",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_response_too_large",
+            )
+        return bounded
 
     async def post_event(
         self,
@@ -879,6 +951,8 @@ def _bound_resource_lists(value: Any) -> Any:
 
 
 def _stable_error_code(failure_class: str, status_code: int | None) -> str:
+    if failure_class == "user_error":
+        return "omnigent_bridge_invalid_request"
     if status_code in {401, 403}:
         return "omnigent_bridge_upstream_auth"
     if status_code == 404:
@@ -898,10 +972,11 @@ def _bridge_client_error(
     code = _stable_error_code(exc.failure_class, exc.status_code)
     if optional and exc.status_code in {404, 405, 501}:
         code = "omnigent_bridge_capability_unavailable"
+    facade_status = 502 if exc.status_code in {401, 403} else exc.status_code
     return OmnigentBridgeError(
         str(exc),
         failure_class=exc.failure_class,
-        status_code=exc.status_code,
+        status_code=facade_status,
         code=code,
     )
 

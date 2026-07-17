@@ -799,9 +799,23 @@ async def stream_upstream_omnigent_events(
         session_id=session_id, user=user, service=service, proxy=proxy
     )
 
+    upstream = proxy.stream_events(session_id)
+    try:
+        first_event = await anext(upstream)
+    except StopAsyncIteration:
+        first_event = None
+    except OmnigentBridgeError as exc:
+        raise _http_error_from_bridge(exc) from exc
+
     async def _stream():
-        async for event in proxy.stream_events(session_id):
-            yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+        if first_event is not None:
+            yield f"data: {json.dumps(first_event, separators=(',', ':'))}\n\n"
+        try:
+            async for event in upstream:
+                yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+        except OmnigentBridgeError as exc:
+            payload = {"code": exc.code, "message": str(exc)}
+            yield f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
 
@@ -860,7 +874,10 @@ async def list_omnigent_workspace_files(
     )
 
 
-@router.get(_ROUTES.workspace_file)
+@router.get(
+    _ROUTES.workspace_file,
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
 async def get_omnigent_workspace_file(
     session_id: str,
     path: str,
@@ -880,7 +897,10 @@ async def get_omnigent_workspace_file(
     return Response(content=content, media_type="application/octet-stream")
 
 
-@router.get(_ROUTES.workspace_diffs)
+@router.get(
+    _ROUTES.workspace_diffs,
+    responses={200: {"content": {"text/x-diff": {}}}},
+)
 async def get_omnigent_workspace_diff(
     session_id: str,
     path: str,
@@ -918,7 +938,10 @@ async def list_omnigent_session_files(
     )
 
 
-@router.get(_ROUTES.session_file)
+@router.get(
+    _ROUTES.session_file,
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
 async def get_omnigent_session_file(
     session_id: str,
     file_id: str,
