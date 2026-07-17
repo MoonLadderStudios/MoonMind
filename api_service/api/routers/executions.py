@@ -8915,8 +8915,6 @@ def _derive_task_title(
     normalized_steps: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
     current_title = str(task_payload.get("title") or "").strip()
-    if current_title and not is_generic_title(current_title):
-        return current_title[:_MAX_TASK_TITLE_LENGTH]
     instructions = str(task_payload.get("instructions") or "").strip()
     has_tool_context = normalized_tool is not None or any(
         isinstance(task_payload.get(key), Mapping)
@@ -10086,10 +10084,7 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         normalized_steps=normalized_steps,
     )
-    if derived_task_title and (
-        "title" not in normalized_task_for_planner
-        or is_generic_title(normalized_task_for_planner.get("title"))
-    ):
+    if derived_task_title:
         normalized_task_for_planner["title"] = derived_task_title
 
     # --- Model resolution ---
