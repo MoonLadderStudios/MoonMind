@@ -107,6 +107,12 @@ class BridgePrincipalBinding:
     idempotency_key: str
     agent_run_id: str | None = None
 
+    @property
+    def effective_agent_run_id(self) -> str:
+        """Return the durable AgentRun owner used by the bridge store."""
+
+        return str(self.agent_run_id or "").strip() or self.correlation_id
+
 
 def validate_bridge_host_fields(
     *,
@@ -263,7 +269,7 @@ class OmnigentBridgeSessionProxy:
                 "workspace": selection.session.workspace,
             },
             workflow_id=binding.workflow_id,
-            agent_run_id=binding.agent_run_id,
+            agent_run_id=binding.effective_agent_run_id,
         )
         # Re-assert ownership after get_or_create closes the concurrent-create
         # race: a row created by another workflow under the same key must not be
@@ -407,7 +413,7 @@ class OmnigentBridgeSessionProxy:
         owner = await self._run_store.get_session_owner(session_id)
         if owner is not None and (
             owner.workflow_id != binding.workflow_id
-            or (owner.agent_run_id or None) != (binding.agent_run_id or None)
+            or owner.agent_run_id != binding.effective_agent_run_id
         ):
             raise OmnigentBridgeError(
                 "Provider session is already attached to another MoonMind owner",
@@ -423,7 +429,14 @@ class OmnigentBridgeSessionProxy:
             or (snapshot.get("labels") or {}).get("moonmind.idempotency_key")
             or ""
         ).strip()
-        if provider_key != binding.idempotency_key:
+        # Stock Omnigent snapshots do not guarantee that the create request's
+        # idempotency key is echoed back.  An already-attached durable row is
+        # authoritative evidence for reconciliation after the session id and
+        # owner checks above.  A previously unattached row still requires the
+        # provider marker so callers cannot claim an arbitrary session.
+        if provider_key != binding.idempotency_key and not (
+            attached and not provider_key
+        ):
             raise OmnigentBridgeError(
                 "Provider session ownership metadata does not match this binding",
                 failure_class="user_error",
@@ -844,7 +857,7 @@ class OmnigentBridgeSessionProxy:
         response["id"] = session_id
         response["moonmind"] = {
             "workflowId": binding.workflow_id,
-            "agentRunId": binding.agent_run_id,
+            "agentRunId": binding.effective_agent_run_id,
             "idempotencyKey": binding.idempotency_key,
             "reused": reused,
             "hostProtocolMode": self._config.host_protocol_mode,

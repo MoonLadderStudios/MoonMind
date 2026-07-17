@@ -349,6 +349,70 @@ async def test_attach_rejects_provider_session_owned_by_another_workflow() -> No
     assert client.get_calls == []
 
 
+async def test_attach_uses_correlation_id_when_agent_run_id_is_absent() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-9",
+        workflow_id="mm:w1",
+        agent_run_id="corr-1",
+        agent_id="agent-1",
+    )
+    binding = BridgePrincipalBinding(
+        workflow_id="mm:w1",
+        correlation_id="corr-1",
+        idempotency_key="idem-1",
+    )
+
+    response = await _proxy(store, client).attach_session(
+        session_id="sess-9", binding=binding
+    )
+
+    assert response["id"] == "sess-9"
+    assert response["moonmind"]["agentRunId"] == "corr-1"
+
+
+async def test_attach_reconciles_existing_binding_without_provider_key() -> None:
+    class _StockSnapshotClient(_FakeClient):
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            self.get_calls.append(session_id)
+            return {"id": session_id, "status": "running"}
+
+    store, client = _FakeStore(), _StockSnapshotClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-9",
+        workflow_id="mm:w1",
+        agent_run_id="ar-1",
+        agent_id="agent-1",
+    )
+
+    response = await _proxy(store, client).attach_session(
+        session_id="sess-9", binding=_binding()
+    )
+
+    assert response["id"] == "sess-9"
+    assert store.attached == []
+
+
+async def test_attach_requires_provider_key_for_new_binding() -> None:
+    class _StockSnapshotClient(_FakeClient):
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            self.get_calls.append(session_id)
+            return {"id": session_id, "status": "running"}
+
+    store, client = _FakeStore(), _StockSnapshotClient()
+    store.rows["idem-1"] = _FakeRow(
+        workflow_id="mm:w1", agent_run_id="ar-1", agent_id="agent-1"
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(store, client).attach_session(
+            session_id="sess-9", binding=_binding()
+        )
+
+    assert excinfo.value.code == "omnigent_bridge_session_conflict"
+    assert store.attached == []
+
+
 async def test_attach_records_reconciliation_evidence() -> None:
     store, client = _FakeStore(), _FakeClient()
     store.rows["idem-1"] = _FakeRow(
