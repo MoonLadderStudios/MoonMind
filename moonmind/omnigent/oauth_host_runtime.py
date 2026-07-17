@@ -73,6 +73,9 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
         ).resolve()
+        self._tool_bundle_volume = os.getenv(
+            "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
+        )
 
     async def prepare_host(
         self,
@@ -263,6 +266,8 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--mount",
+            f"type=volume,src={self._tool_bundle_volume},dst=/opt/moonmind-tools,readonly",
+            "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
             "--env",
             "HOME=/home/app",
@@ -278,6 +283,10 @@ class OmnigentOAuthHostRuntime:
             f"CODEX_CREDENTIAL_GENERATION={host_lease.credential_generation}",
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
+            "--env",
+            "MOONMIND_ACTIVE_SKILLS_DIR=/workspaces/run/.agents/skills",
+            "--env",
+            "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)
@@ -327,12 +336,12 @@ class OmnigentOAuthHostRuntime:
             "exec",
             "-T",
             "omnigent-host-codex",
-            "/opt/moonmind/check-codex-oauth-host.sh",
+            "/opt/moonmind/check-runner-projections.sh",
         )
 
     async def _exec_check(self, container_name: str) -> None:
         await self._run(
-            "docker", "exec", container_name, "/opt/moonmind/check-codex-oauth-host.sh"
+            "docker", "exec", container_name, "/opt/moonmind/check-runner-projections.sh"
         )
 
     async def _resolve_exact_host(

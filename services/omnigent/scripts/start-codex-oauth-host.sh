@@ -13,4 +13,6 @@ until /opt/moonmind/check-codex-oauth-host.sh; do
   sleep 5
 done
 
+/opt/moonmind/check-runner-projections.sh
+
 exec omnigent host --server "$server" --non-interactive

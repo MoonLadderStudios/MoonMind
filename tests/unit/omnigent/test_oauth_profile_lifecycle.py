@@ -254,6 +254,15 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[2][:3] == ("docker", "run", "-d")
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    assert (
+        "type=volume,src=moonmind-omnigent-tools-gh-2.76.2,"
+        "dst=/opt/moonmind-tools,readonly"
+    ) in commands[2]
+    assert "MOONMIND_ACTIVE_SKILLS_DIR=/workspaces/run/.agents/skills" in commands[2]
+    assert (
+        "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
+        "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+    ) in commands[2]
 
 
 @pytest.mark.asyncio
@@ -291,7 +300,7 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
             "exec",
             "-T",
             "omnigent-host-codex",
-            "/opt/moonmind/check-codex-oauth-host.sh",
+            "/opt/moonmind/check-runner-projections.sh",
         ),
         (
             "docker",
