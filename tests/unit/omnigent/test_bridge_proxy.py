@@ -19,6 +19,8 @@ from moonmind.omnigent.bridge_proxy import (
     BridgeSessionEventRequest,
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
+    _bound_resource_lists,
+    _safe_resource_identifier,
     validate_bridge_host_fields,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
@@ -44,6 +46,7 @@ class _FakeRow:
         self.omnigent_agent_name = agent_name
         self.omnigent_endpoint_ref = endpoint_ref
         self.target_metadata: dict[str, Any] = {}
+        self.metadata_: dict[str, Any] = {}
 
 
 class _FakeStore:
@@ -63,6 +66,25 @@ class _FakeStore:
                     agent_run_id=row.moonmind_agent_run_id,
                 )
         return None
+
+    async def get_session_by_provider_session_id(self, session_id: str):
+        return next(
+            (
+                row
+                for row in self.rows.values()
+                if row.omnigent_session_id == session_id
+            ),
+            None,
+        )
+
+    async def record_resource_harvest_completed(self, session_id: str) -> None:
+        row = await self.get_session_by_provider_session_id(session_id)
+        row.metadata_["resource_harvest_completed_at"] = "now"
+
+    async def record_provider_session_deleted(self, session_id: str) -> None:
+        row = await self.get_session_by_provider_session_id(session_id)
+        row.metadata_["provider_session_deleted_at"] = "now"
+        row.omnigent_session_id = None
 
     async def get_or_create(
         self,
@@ -134,7 +156,15 @@ class _FakeClient:
 
     async def get_session(self, session_id: str) -> dict[str, Any]:
         self.get_calls.append(session_id)
-        return {"id": session_id, "status": "running", "summary": "ok"}
+        return {
+            "id": session_id,
+            "status": "running",
+            "summary": "ok",
+            "idempotency_key": "idem-1",
+        }
+
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        return [{"id": "host-1", "status": "ready"}]
 
     async def post_event(
         self, session_id: str, payload: dict[str, Any]
@@ -166,6 +196,12 @@ class _FakeClient:
     async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
         return f"session:{file_id}\n".encode()
 
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        return {"ok": True}
+
+    async def stream_events(self, session_id: str):
+        yield {"type": "status", "status": "running"}
+
 
 def _binding(key: str = "idem-1") -> BridgePrincipalBinding:
     return BridgePrincipalBinding(
@@ -176,13 +212,26 @@ def _binding(key: str = "idem-1") -> BridgePrincipalBinding:
     )
 
 
-def _proxy(store: _FakeStore, client: _FakeClient, **kwargs) -> OmnigentBridgeSessionProxy:
+def _proxy(
+    store: _FakeStore, client: _FakeClient, **kwargs
+) -> OmnigentBridgeSessionProxy:
     return OmnigentBridgeSessionProxy(
         run_store=store,
         client=client,
         default_agent_name="codex",
         **kwargs,
     )
+
+
+async def test_binding_uses_correlation_id_for_blank_agent_run_id() -> None:
+    binding = BridgePrincipalBinding(
+        workflow_id="mm:w1",
+        correlation_id="corr-1",
+        idempotency_key="idem-1",
+        agent_run_id="   ",
+    )
+
+    assert binding.effective_agent_run_id == "corr-1"
 
 
 async def test_create_session_forwards_persists_and_emits() -> None:
@@ -198,7 +247,10 @@ async def test_create_session_forwards_persists_and_emits() -> None:
 
     # Forwarded to the stock Omnigent Server with idempotency + traceability.
     assert client.created_payloads[0]["idempotency_key"] == "idem-1"
-    assert client.created_payloads[0]["labels"]["moonmind.issue"] == "MM-1155"
+    assert (
+        client.created_payloads[0]["labels"]["moonmind.issue"]
+        == "MoonLadderStudios/MoonMind#3361"
+    )
     assert client.created_payloads[0]["workspace"] == "https://github.com/org/repo#main"
     # Session id persisted before first message, then session.created emitted.
     assert store.attached == [("idem-1", "sess-9")]
@@ -216,7 +268,7 @@ async def test_create_session_forwards_persists_and_emits() -> None:
     assert response["moonmind"]["workflowId"] == "mm:w1"
     assert response["moonmind"]["idempotencyKey"] == "idem-1"
     assert response["moonmind"]["reused"] is False
-    assert response["moonmind"]["sourceIssue"] == "MM-1155"
+    assert response["moonmind"]["sourceIssue"] == "MoonLadderStudios/MoonMind#3361"
 
 
 async def test_create_session_reuse_is_idempotent() -> None:
@@ -316,6 +368,101 @@ async def test_create_session_rejects_cross_workflow_idempotency_key() -> None:
     assert excinfo.value.status_code == 409
     assert not client.created_payloads
     assert not store.created_events
+
+
+async def test_attach_rejects_provider_session_owned_by_another_workflow() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(workflow_id="mm:w1", agent_run_id="ar-1")
+    store.rows["other"] = _FakeRow(
+        session_id="sess-other", workflow_id="mm:other", agent_run_id="ar-other"
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(store, client).attach_session(
+            session_id="sess-other", binding=_binding()
+        )
+
+    assert excinfo.value.code == "omnigent_bridge_session_conflict"
+    assert client.get_calls == []
+
+
+async def test_attach_uses_correlation_id_when_agent_run_id_is_absent() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-9",
+        workflow_id="mm:w1",
+        agent_run_id="corr-1",
+        agent_id="agent-1",
+    )
+    binding = BridgePrincipalBinding(
+        workflow_id="mm:w1",
+        correlation_id="corr-1",
+        idempotency_key="idem-1",
+    )
+
+    response = await _proxy(store, client).attach_session(
+        session_id="sess-9", binding=binding
+    )
+
+    assert response["id"] == "sess-9"
+    assert response["moonmind"]["agentRunId"] == "corr-1"
+
+
+async def test_attach_reconciles_existing_binding_without_provider_key() -> None:
+    class _StockSnapshotClient(_FakeClient):
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            self.get_calls.append(session_id)
+            return {"id": session_id, "status": "running"}
+
+    store, client = _FakeStore(), _StockSnapshotClient()
+    store.rows["idem-1"] = _FakeRow(
+        session_id="sess-9",
+        workflow_id="mm:w1",
+        agent_run_id="ar-1",
+        agent_id="agent-1",
+    )
+
+    response = await _proxy(store, client).attach_session(
+        session_id="sess-9", binding=_binding()
+    )
+
+    assert response["id"] == "sess-9"
+    assert store.attached == []
+
+
+async def test_attach_requires_provider_key_for_new_binding() -> None:
+    class _StockSnapshotClient(_FakeClient):
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            self.get_calls.append(session_id)
+            return {"id": session_id, "status": "running"}
+
+    store, client = _FakeStore(), _StockSnapshotClient()
+    store.rows["idem-1"] = _FakeRow(
+        workflow_id="mm:w1", agent_run_id="ar-1", agent_id="agent-1"
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(store, client).attach_session(
+            session_id="sess-9", binding=_binding()
+        )
+
+    assert excinfo.value.code == "omnigent_bridge_session_conflict"
+    assert store.attached == []
+
+
+async def test_attach_records_reconciliation_evidence() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    store.rows["idem-1"] = _FakeRow(
+        workflow_id="mm:w1", agent_run_id="ar-1", agent_id="agent-1"
+    )
+
+    response = await _proxy(store, client).attach_session(
+        session_id="sess-9", binding=_binding()
+    )
+
+    assert response["id"] == "sess-9"
+    assert store.attached == [("idem-1", "sess-9")]
+    assert store.created_events[0]["session_id"] == "sess-9"
 
 
 async def test_create_session_reuse_skips_target_resolution() -> None:
@@ -476,7 +623,9 @@ async def test_post_event_forwards_native_control() -> None:
 
 async def test_harvest_session_is_bridge_local_policy() -> None:
     client = _FakeClient()
-    proxy = _proxy(_FakeStore(), client)
+    store = _FakeStore()
+    store.rows["idem-1"] = _FakeRow(session_id="sess-1")
+    proxy = _proxy(store, client)
 
     response = await proxy.post_event(
         session_id="sess-1",
@@ -534,15 +683,15 @@ async def test_resolve_elicitation_proxies_compatibility_route() -> None:
     )
 
     assert response == {"ok": True, "elicitationId": "el-1"}
-    assert client.resolved_elicitations == [
-        ("sess-1", "el-1", {"answer": "yes"})
-    ]
+    assert client.resolved_elicitations == [("sess-1", "el-1", {"answer": "yes"})]
 
 
 async def test_non_proxy_mode_fails_fast() -> None:
     embedded = parse_bridge_config(
         {
-            "compatibility": {"hostProtocolMode": "embedded_omnigent_compatible_server"},
+            "compatibility": {
+                "hostProtocolMode": "embedded_omnigent_compatible_server"
+            },
             "hostConnection": {
                 "embedded": {
                     "proxyConformanceEvidenceRef": "artifact://omnigent/proxy-conformance",
@@ -580,3 +729,113 @@ async def test_validate_bridge_host_fields_external_requires_absolute_path() -> 
         validate_bridge_host_fields(
             host_type="external", host_id="h1", workspace="relative/dir"
         )
+
+
+@pytest.mark.parametrize(
+    "path", ["../secret", "src/../secret", "/etc/passwd", r"src\\secret", "%252e%252e"]
+)
+async def test_resource_identifier_rejects_traversal_and_double_encoding(
+    path: str,
+) -> None:
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        _safe_resource_identifier(path)
+    assert excinfo.value.code == "omnigent_bridge_resource_path_invalid"
+
+
+async def test_resource_lists_are_bounded() -> None:
+    result = _bound_resource_lists({"files": list(range(300))})
+    assert len(result["files"]) == 250
+
+
+async def test_resource_index_total_size_is_bounded() -> None:
+    client = _FakeClient()
+
+    async def oversized(_session_id: str) -> dict[str, Any]:
+        return {"items": [{"path": "x" * (4 * 1024 * 1024)}]}
+
+    client.list_workspace_files = oversized  # type: ignore[method-assign]
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(_FakeStore(), client).get_resource("workspace_files", "sess-1")
+    assert excinfo.value.code == "omnigent_bridge_response_too_large"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "optional", "expected"),
+    [
+        (401, False, "omnigent_bridge_upstream_auth"),
+        (403, False, "omnigent_bridge_upstream_auth"),
+        (404, False, "omnigent_bridge_upstream_missing"),
+        (429, False, "omnigent_bridge_upstream_transport"),
+        (500, False, "omnigent_bridge_upstream_transport"),
+        (504, False, "omnigent_bridge_upstream_timeout"),
+        (404, True, "omnigent_bridge_capability_unavailable"),
+        (501, True, "omnigent_bridge_capability_unavailable"),
+    ],
+)
+async def test_facade_error_mapping_is_stable(status_code, optional, expected) -> None:
+    from moonmind.omnigent.bridge_proxy import _bridge_client_error
+    from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
+
+    error = _bridge_client_error(
+        OmnigentClientError(
+            "upstream failure",
+            status_code=status_code,
+            failure_class="integration_error",
+        ),
+        optional=optional,
+    )
+    assert error.code == expected
+    assert error.failure_class == "integration_error"
+    assert error.status_code == (502 if status_code in {401, 403} else status_code)
+
+
+async def test_attach_rejects_malformed_labels() -> None:
+    class _MalformedClient(_FakeClient):
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            return {"id": session_id, "labels": ["not", "a", "mapping"]}
+
+    store = _FakeStore()
+    store.rows["idem-1"] = _FakeRow(workflow_id="mm:w1", agent_run_id="ar-1")
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await _proxy(store, _MalformedClient()).attach_session(
+            session_id="sess-9", binding=_binding()
+        )
+    assert excinfo.value.code == "omnigent_bridge_upstream_payload"
+
+
+async def test_delete_requires_harvest_and_clears_durable_binding() -> None:
+    store, client = _FakeStore(), _FakeClient()
+    row = _FakeRow(session_id="sess-9", workflow_id="mm:w1", agent_run_id="ar-1")
+    store.rows["idem-1"] = row
+    config = parse_bridge_config(
+        {"sessionDefaults": {"deleteProviderSessionAfterHarvest": True}}
+    )
+    proxy = _proxy(store, client, config=config)
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await proxy.delete_session("sess-9")
+    assert excinfo.value.code == "omnigent_bridge_harvest_required"
+
+    row.metadata_["resource_harvest_completed_at"] = "now"
+    assert await proxy.delete_session("sess-9") == {"ok": True}
+    assert row.omnigent_session_id is None
+    assert row.metadata_["provider_session_deleted_at"] == "now"
+
+
+async def test_stream_timed_out_snapshot_is_terminal() -> None:
+    class _DisconnectedClient(_FakeClient):
+        async def stream_events(self, session_id: str):
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, Any]:
+            return {"id": session_id, "status": "timed_out"}
+
+    events = [
+        event
+        async for event in _proxy(_FakeStore(), _DisconnectedClient()).stream_events(
+            "sess-9"
+        )
+    ]
+    assert events == []

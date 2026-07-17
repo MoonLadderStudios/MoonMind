@@ -163,7 +163,7 @@ async def test_omnigent_client_does_not_leak_moonmind_auth_headers_upstream() ->
     assert captured["authorization"] == "Bearer server-token"
     assert "cookie" not in captured
     assert "x-moonmind-auth" not in captured
-    assert captured["x-trace-id"] == "trace-1"
+    assert "x-trace-id" not in captured
 
 
 @pytest.mark.asyncio

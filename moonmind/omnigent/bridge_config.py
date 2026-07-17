@@ -224,9 +224,7 @@ def _validate_omnigent_route(field_name: str, path: str) -> str:
 
     candidate = str(path).strip()
     if not candidate:
-        raise BridgeConfigError(
-            f"publicApi.routes.{field_name} must not be empty"
-        )
+        raise BridgeConfigError(f"publicApi.routes.{field_name} must not be empty")
     if not candidate.startswith("/"):
         raise BridgeConfigError(
             f"publicApi.routes.{field_name} '{candidate}' must be an absolute path "
@@ -311,16 +309,19 @@ class BridgePublicApiRoutes(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     agents: str = "/api/agents"
+    hosts: str = "/api/hosts"
     create_session: str = Field("/v1/sessions", alias="createSession")
     get_session: str = Field("/v1/sessions/{session_id}", alias="getSession")
+    attach_session: str = Field(
+        "/v1/sessions/{session_id}/attach", alias="attachSession"
+    )
+    delete_session: str = Field("/v1/sessions/{session_id}", alias="deleteSession")
     post_event: str = Field("/v1/sessions/{session_id}/events", alias="postEvent")
     resolve_elicitation: str = Field(
         "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
         alias="resolveElicitation",
     )
-    stream_events: str = Field(
-        "/v1/sessions/{session_id}/stream", alias="streamEvents"
-    )
+    stream_events: str = Field("/v1/sessions/{session_id}/stream", alias="streamEvents")
     changed_files: str = Field(
         "/v1/sessions/{session_id}/resources/environments/default/changes",
         alias="changedFiles",
@@ -329,12 +330,20 @@ class BridgePublicApiRoutes(BaseModel):
         "/v1/sessions/{session_id}/resources/environments/default/filesystem",
         alias="workspaceFiles",
     )
+    workspace_file: str = Field(
+        "/v1/sessions/{session_id}/resources/environments/default/filesystem/{path:path}",
+        alias="workspaceFile",
+    )
     workspace_diffs: str = Field(
-        "/v1/sessions/{session_id}/resources/environments/default/diff/{path}",
+        "/v1/sessions/{session_id}/resources/environments/default/diff/{path:path}",
         alias="workspaceDiffs",
     )
     session_files: str = Field(
         "/v1/sessions/{session_id}/resources/files", alias="sessionFiles"
+    )
+    session_file: str = Field(
+        "/v1/sessions/{session_id}/resources/files/{file_id}/content",
+        alias="sessionFile",
     )
 
     @model_validator(mode="after")
@@ -381,9 +390,7 @@ class BridgeEmbeddedHostConnection(BaseModel):
     proxy_conformance_evidence_ref: str | None = Field(
         None, alias="proxyConformanceEvidenceRef"
     )
-    live_smoke_evidence_ref: str | None = Field(
-        None, alias="liveSmokeEvidenceRef"
-    )
+    live_smoke_evidence_ref: str | None = Field(None, alias="liveSmokeEvidenceRef")
     host_auth_conformance_evidence_ref: str | None = Field(
         None, alias="hostAuthConformanceEvidenceRef"
     )
@@ -419,7 +426,9 @@ class BridgeEmbeddedHostConnection(BaseModel):
             return None
         candidate = str(value).strip()
         if not candidate:
-            raise BridgeConfigError("embedded enablement evidence refs must not be empty")
+            raise BridgeConfigError(
+                "embedded enablement evidence refs must not be empty"
+            )
         return candidate
 
 
@@ -502,9 +511,7 @@ class BridgeObservability(BaseModel):
         True, alias="writeNormalizedEventJournal"
     )
     feed_workflow_chat: bool = Field(True, alias="feedWorkflowChat")
-    feed_agent_run_observability: bool = Field(
-        True, alias="feedAgentRunObservability"
-    )
+    feed_agent_run_observability: bool = Field(True, alias="feedAgentRunObservability")
     fallback_to_legacy_managed_run_logs: bool = Field(
         True, alias="fallbackToLegacyManagedRunLogs"
     )
@@ -535,9 +542,7 @@ class OmnigentBridgeConfig(BaseModel):
         default_factory=BridgeSessionDefaults, alias="sessionDefaults"
     )
     idempotency: BridgeIdempotency = Field(default_factory=BridgeIdempotency)
-    observability: BridgeObservability = Field(
-        default_factory=BridgeObservability
-    )
+    observability: BridgeObservability = Field(default_factory=BridgeObservability)
 
     @model_validator(mode="after")
     def _resolve_host_protocol_mode(self) -> "OmnigentBridgeConfig":
@@ -624,8 +629,7 @@ def parse_bridge_config(data: Mapping[str, Any]) -> OmnigentBridgeConfig:
 
     if not isinstance(data, Mapping):
         raise BridgeConfigError(
-            "bridge config must be a mapping/object, got "
-            f"{type(data).__name__}"
+            f"bridge config must be a mapping/object, got {type(data).__name__}"
         )
 
     _reject_external_vocabulary(data)
@@ -647,9 +651,7 @@ def load_bridge_config(text: str) -> OmnigentBridgeConfig:
     try:
         loaded = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise BridgeConfigError(
-            f"bridge config is not valid YAML/JSON: {exc}"
-        ) from exc
+        raise BridgeConfigError(f"bridge config is not valid YAML/JSON: {exc}") from exc
     if loaded is None:
         raise BridgeConfigError("bridge config document is empty")
     if not isinstance(loaded, Mapping):

@@ -19,6 +19,8 @@ from api_service.db.models import OmnigentBridgeSession
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
+    BridgeSessionEventRequest,
+    OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import (
@@ -103,7 +105,10 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
     assert created["status"] == "running"
     assert created["moonmind"]["reused"] is False
     assert server.create_payloads[0]["idempotency_key"] == "idem-1"
-    assert server.create_payloads[0]["labels"]["moonmind.issue"] == "MM-1155"
+    assert (
+        server.create_payloads[0]["labels"]["moonmind.issue"]
+        == "MoonLadderStudios/MoonMind#3361"
+    )
 
     # Provider session id persisted + session.created recorded on the row.
     row = await _row(session_maker, "idem-1")
@@ -129,3 +134,55 @@ async def test_bridge_proxy_create_get_and_journal(fake_server, store) -> None:
         BRIDGE_EVENT_JOURNAL_KEY
     ]
     assert len(journal_after) == 1
+
+
+async def test_bridge_proxy_complete_route_matrix(fake_server, store) -> None:
+    server, base_url = fake_server
+    run_store, _ = store
+    proxy = _proxy(run_store, base_url)
+    binding = BridgePrincipalBinding(
+        workflow_id="mm:w2", correlation_id="corr-2", idempotency_key="idem-2"
+    )
+    request = BridgeSessionCreateRequest(agent_id="agent-1", host_type="managed")
+    created = await proxy.create_session(request=request, binding=binding)
+    session_id = created["id"]
+
+    assert await proxy.list_hosts() == [
+        {"id": "host-1", "name": "managed", "status": "ready"}
+    ]
+    attached = await proxy.attach_session(session_id=session_id, binding=binding)
+    assert attached["id"] == session_id
+
+    assert (await proxy.post_event(
+        session_id=session_id, event=BridgeSessionEventRequest(type="interrupt")
+    ))["pending_id"] == "pending-1"
+    assert (await proxy.post_event(
+        session_id=session_id, event=BridgeSessionEventRequest(type="stop_session")
+    ))["item_id"] == "item-1"
+    assert await proxy.resolve_elicitation(
+        session_id=session_id, elicitation_id="el-1", payload={"answer": "yes"}
+    ) == {"ok": True}
+
+    # A normal message unlocks the stock-shaped SSE response.
+    await proxy.post_event(
+        session_id=session_id, event=BridgeSessionEventRequest(type="message", text="hello")
+    )
+    events = [event async for event in proxy.stream_events(session_id)]
+    assert events[-1]["type"] == "response.completed"
+    assert await proxy.get_resource("changed_files", session_id) == {
+        "items": [{"path": "src/app.py"}]
+    }
+    assert len((await proxy.get_resource("workspace_files", session_id))["items"]) == 3
+    assert await proxy.get_resource("workspace_file", session_id, "src/app.py") == b"print('fake')\n"
+    assert (await proxy.get_resource("workspace_diff", session_id, "src/app.py")).startswith(b"diff --git")
+    assert (await proxy.get_resource("session_files", session_id))["items"][0]["id"] == "file-1"
+    assert await proxy.get_resource("session_file", session_id, "file-1") == b"session file evidence\n"
+
+
+async def test_bridge_proxy_optional_diff_capability_and_delete_policy(fake_server, store) -> None:
+    _, base_url = fake_server
+    run_store, _ = store
+    proxy = _proxy(run_store, base_url)
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await proxy.delete_session("session-1")
+    assert getattr(excinfo.value, "code") == "omnigent_bridge_capability_unavailable"

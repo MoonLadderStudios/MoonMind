@@ -250,11 +250,12 @@ def sanitize_proxy_headers(
     *,
     allowed_upstream_headers: Iterable[str] = (),
 ) -> dict[str, str]:
-    """Strip MoonMind-internal auth headers before forwarding upstream.
+    """Forward only explicitly allowlisted end-to-end headers upstream.
 
     Proxy mode must not leak MoonMind internal auth headers to the upstream
     Omnigent Server unless an operator explicitly allowlists them by name
-    (OmnigentBridge.md §16 rule 7). Non-auth headers pass through unchanged.
+    (OmnigentBridge.md §16 rule 7). Request framing, routing, hop-by-hop, and
+    credential headers are never copied from the inbound MoonMind request.
     """
 
     allowlist = {
@@ -269,14 +270,26 @@ def sanitize_proxy_headers(
             continue
         normalized = name.lower()
         fragment_key = _credential_fragment_key(name)
-        if normalized in allowlist:
+        if (
+            normalized in allowlist
+            and normalized not in {
+                "connection",
+                "content-length",
+                "host",
+                "keep-alive",
+                "proxy-authenticate",
+                "proxy-authorization",
+                "te",
+                "trailer",
+                "transfer-encoding",
+                "upgrade",
+            }
+            and normalized not in _MOONMIND_INTERNAL_AUTH_HEADERS
+            and not any(
+                fragment in fragment_key for fragment in _SENSITIVE_HEADER_FRAGMENTS
+            )
+        ):
             forwarded[name] = str(raw_value)
-            continue
-        if normalized in _MOONMIND_INTERNAL_AUTH_HEADERS:
-            continue
-        if any(fragment in fragment_key for fragment in _SENSITIVE_HEADER_FRAGMENTS):
-            continue
-        forwarded[name] = str(raw_value)
     return forwarded
 
 
