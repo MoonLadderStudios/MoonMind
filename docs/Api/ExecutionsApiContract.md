@@ -4,7 +4,7 @@
 **Doc type:** API contract 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
-**Last updated:** 2026-06-25 (UTC)
+**Last updated:** 2026-07-16 (UTC)
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
@@ -373,6 +373,15 @@ On successful create:
 - `state` begins as `initializing`,
 - baseline `searchAttributes` and `memo` are materialized,
 - the response body is an `ExecutionModel`.
+
+Display titles are resolved deterministically before `memo` and Visibility
+metadata are materialized. A caller-provided title wins when it is meaningfully
+different from the selected preset or capability label. Otherwise MoonMind
+combines that label with up to two structured targets, such as a Jira issue,
+GitHub `owner/repository#number` issue reference, pull request, branch, or
+failing check. A preset label with no recognized target remains the fallback.
+Generated step identifiers and other execution bookkeeping fields are not title
+targets. Resolved titles are limited to 150 characters.
 
 ### 9.6 Success response
 
