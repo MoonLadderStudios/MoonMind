@@ -219,6 +219,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
 COPY pr_resolver_core /app/pr_resolver_core/
+COPY services/omnigent/tools/manifest.lock.json /app/services/omnigent/tools/manifest.lock.json
+COPY services/omnigent/profile/moonmind-tools.sh /app/services/omnigent/profile/moonmind-tools.sh
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/
