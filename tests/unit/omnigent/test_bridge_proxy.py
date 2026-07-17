@@ -197,6 +197,17 @@ def _proxy(
     )
 
 
+async def test_binding_uses_correlation_id_for_blank_agent_run_id() -> None:
+    binding = BridgePrincipalBinding(
+        workflow_id="mm:w1",
+        correlation_id="corr-1",
+        idempotency_key="idem-1",
+        agent_run_id="   ",
+    )
+
+    assert binding.effective_agent_run_id == "corr-1"
+
+
 async def test_create_session_forwards_persists_and_emits() -> None:
     store, client = _FakeStore(), _FakeClient()
     proxy = _proxy(store, client)
