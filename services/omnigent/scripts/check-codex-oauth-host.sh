@@ -22,3 +22,13 @@ done
 [ -f "$state_root/credential-generation" ] || exit 79
 [ "$(cat "$state_root/credential-generation")" = "$expected_generation" ] || exit 80
 codex login status >/dev/null 2>&1 || exit 81
+command -v gh >/dev/null 2>&1 || exit 82
+gh --version >/dev/null 2>&1 || exit 83
+if [ -n "${GH_TOKEN:-}" ]; then
+  [ "$GH_CONFIG_DIR" = "/workspaces/run/.config/gh" ] || exit 84
+  [ "$(stat -c '%a' "$GH_CONFIG_DIR")" = "700" ] || exit 85
+  [ "${GH_PROMPT_DISABLED:-}" = "1" ] || exit 86
+  [ "${GH_NO_UPDATE_NOTIFIER:-}" = "1" ] || exit 87
+  [ "${GH_NO_EXTENSION_UPDATE_NOTIFIER:-}" = "1" ] || exit 88
+  gh auth status >/dev/null 2>&1 || exit 89
+fi

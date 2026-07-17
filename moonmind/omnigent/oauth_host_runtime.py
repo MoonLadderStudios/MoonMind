@@ -20,6 +20,9 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
+)
 
 _FORBIDDEN_ENV = (
     "OPENAI_API_KEY",
@@ -47,6 +50,7 @@ class OmnigentOAuthHostRuntime:
         server_url: str | None = None,
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
+        tool_bundle_volume: str | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -73,6 +77,11 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
         ).resolve()
+        bundle_version = os.getenv("OMNIGENT_TOOL_BUNDLE_VERSION", "v1")
+        self._tool_bundle_volume = tool_bundle_volume or os.getenv(
+            "OMNIGENT_TOOL_BUNDLE_VOLUME",
+            f"moonmind-omnigent-tools-{bundle_version}",
+        )
 
     async def prepare_host(
         self,
@@ -81,10 +90,12 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         workspace_key: str,
         repository_url: str | None = None,
+        github_token: str | None = None,
     ) -> dict[str, Any]:
         workspace_source = await self._prepare_workspace(
             workspace_key=workspace_key,
             repository_url=repository_url,
+            github_token=github_token,
         )
         if binding.host_launch_profile_ref:
             container_name = (
@@ -96,6 +107,7 @@ class OmnigentOAuthHostRuntime:
                 host_lease=host_lease,
                 container_name=container_name,
                 workspace_source=workspace_source,
+                github_token=github_token,
             )
             await self._exec_check(container_name)
         else:
@@ -207,6 +219,7 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         container_name: str,
         workspace_source: Path,
+        github_token: str | None = None,
     ) -> None:
         if await self.container_exists(container_name):
             return
@@ -264,6 +277,10 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
+            "--mount",
+            f"type=volume,src={self._tool_bundle_volume},dst=/opt/moonmind-tools,readonly",
+            "--mount",
+            f"type=bind,src={self._scripts_dir.parent / 'profile' / 'moonmind-tools.sh'},dst=/etc/profile.d/moonmind-tools.sh,readonly",
             "--env",
             "HOME=/home/app",
             "--env",
@@ -278,12 +295,36 @@ class OmnigentOAuthHostRuntime:
             f"CODEX_CREDENTIAL_GENERATION={host_lease.credential_generation}",
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
+            "--env",
+            "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")
         child_env = dict(os.environ)
         if token:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
+        if github_token:
+            gh_config_dir = workspace_source / ".config" / "gh"
+            gh_config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            gh_config_dir.chmod(0o700)
+            child_env["MM_OMNIGENT_GITHUB_TOKEN"] = github_token
+            for env_arg in (
+                "GIT_TOKEN=MM_OMNIGENT_GITHUB_TOKEN",
+                "GH_TOKEN=MM_OMNIGENT_GITHUB_TOKEN",
+            ):
+                target, source = env_arg.split("=", 1)
+                child_env[target] = child_env[source]
+                args.extend(["--env", target])
+            args.extend(
+                [
+                    "--env", "GIT_USERNAME=x-access-token",
+                    "--env", "GH_CONFIG_DIR=/workspaces/run/.config/gh",
+                    "--env", "GH_PROMPT_DISABLED=1",
+                    "--env", "GH_NO_UPDATE_NOTIFIER=1",
+                    "--env", "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
+                    "--env", "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER",
+                ]
+            )
         for key, value in labels.items():
             args.extend(["--label", f"{key}={value}"])
         args.extend(["--entrypoint", "/usr/bin/env"])
@@ -293,7 +334,11 @@ class OmnigentOAuthHostRuntime:
         await self._run(*args, env=child_env)
 
     async def _prepare_workspace(
-        self, *, workspace_key: str, repository_url: str | None
+        self,
+        *,
+        workspace_key: str,
+        repository_url: str | None,
+        github_token: str | None = None,
     ) -> Path:
         self._workspace_root.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
@@ -302,7 +347,14 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError("workspace escaped configured root")
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if repository_url and not any(workspace.iterdir()):
-            await self._run("git", "clone", "--", repository_url, str(workspace))
+            git_env = (
+                build_github_token_git_environment(github_token)
+                if github_token
+                else None
+            )
+            await self._run(
+                "git", "clone", "--", repository_url, str(workspace), env=git_env
+            )
         return workspace
 
     async def _compose_static_check(self) -> None:

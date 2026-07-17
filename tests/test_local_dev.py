@@ -531,6 +531,11 @@ def test_omnigent_env_template_and_optional_config_for_mm_970():
         "OMNIGENT_CONFIG",
         "OMNIGENT_HOST_IMAGE",
         "OMNIGENT_HOST_IMAGE_TAG",
+        "OMNIGENT_GH_IMAGE",
+        "OMNIGENT_GH_SHA256",
+        "OMNIGENT_TOOL_BUNDLE_VERSION",
+        "OMNIGENT_TOOL_BUNDLE_VOLUME",
+        "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE",
     ):
         assert f"{expected_name}=" in env_template
     for removed_name in (

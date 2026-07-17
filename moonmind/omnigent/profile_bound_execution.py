@@ -33,6 +33,9 @@ from moonmind.provider_profiles.lease_client import (
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.adapters.omnigent_agent_adapter import build_omnigent_selection
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_github_token_for_launch,
+)
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
@@ -122,6 +125,19 @@ class OmnigentProfileBoundExecutionCoordinator:
         host_lease = None
         binding = None
         try:
+            required_capabilities = {
+                str(value).strip().lower()
+                for value in request.parameters.get("requiredCapabilities", [])
+                if str(value).strip()
+            }
+            github_token: str | None = None
+            if "gh" in required_capabilities:
+                github_token = await resolve_github_token_for_launch()
+                if not github_token:
+                    raise OmnigentOAuthHostError(
+                        "GitHub-aware Omnigent execution requires a GitHub credential",
+                        code="github_auth_unavailable",
+                    )
             profile = await self._resolve_profile(profile_id)
             owner_id = deterministic_lease_owner_id(
                 profile_id=profile_id,
@@ -146,15 +162,29 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             binding = await self._hosts.get_binding_for_profile(profile_id)
+            host_launch_profile_ref = (
+                os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE") or ""
+            ).strip()
             if binding is None:
                 binding = await self._hosts.create_or_update_static_binding(
                     profile_id=profile_id,
                     endpoint_ref="default",
                     static_host_id=None,
-                    host_launch_profile_ref=(
-                        os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE") or None
-                    ),
+                    host_launch_profile_ref=host_launch_profile_ref or None,
                 )
+            if "gh" in required_capabilities and not binding.host_launch_profile_ref:
+                if host_launch_profile_ref:
+                    binding = await self._hosts.create_or_update_static_binding(
+                        profile_id=profile_id,
+                        endpoint_ref=binding.endpoint_ref,
+                        static_host_id=None,
+                        host_launch_profile_ref=host_launch_profile_ref,
+                    )
+                else:
+                    raise OmnigentOAuthHostError(
+                        "GitHub-aware Omnigent execution requires an on-demand or run-dedicated host",
+                        code="github_run_isolation_unavailable",
+                    )
             host_lease = await self._hosts.create_or_get_host_lease(
                 binding=binding,
                 provider_lease_id=provider_lease.lease_id,
@@ -198,6 +228,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),
                 repository_url=self._repository_url(request),
+                github_token=github_token,
             )
             host_id = str(preflight["hostId"])
             if binding.static_host_id is None and not binding.host_launch_profile_ref:

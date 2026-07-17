@@ -254,6 +254,76 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[2][:3] == ("docker", "run", "-d")
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    assert any(
+        "dst=/opt/moonmind-tools,readonly" in value for value in commands[2]
+    )
+    assert (
+        "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
+        "/usr/bin:/usr/sbin:/bin:/sbin"
+        in commands[2]
+    )
+
+
+@pytest.mark.asyncio
+async def test_github_environment_is_only_injected_for_authorized_run(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path / "scripts",
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    await runtime._launch_on_demand(
+        binding=binding,
+        host_lease=lease,
+        container_name="mm-host-lease-1",
+        workspace_source=workspace,
+        github_token="run-secret",
+    )
+
+    launch = runtime._run.await_args_list[2]
+    command = launch.args
+    child_env = launch.kwargs["env"]
+    assert "run-secret" not in command
+    assert child_env["GH_TOKEN"] == "run-secret"
+    assert child_env["GIT_TOKEN"] == "run-secret"
+    assert "GH_TOKEN" in command
+    assert "GH_CONFIG_DIR=/workspaces/run/.config/gh" in command
+    assert (
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,GH_PROMPT_DISABLED,"
+        "GH_NO_UPDATE_NOTIFIER,GH_NO_EXTENSION_UPDATE_NOTIFIER"
+        in command
+    )
+    assert (workspace / ".config" / "gh").stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.asyncio
+async def test_private_workspace_clone_uses_token_free_url_and_git_environment(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    repository_url = "https://github.com/example/private.git"
+
+    await runtime._prepare_workspace(
+        workspace_key="run-1",
+        repository_url=repository_url,
+        github_token="run-secret",
+    )
+
+    clone = runtime._run.await_args
+    assert clone.args[0:4] == ("git", "clone", "--", repository_url)
+    assert "run-secret" not in clone.args
+    assert clone.kwargs["env"]["GITHUB_TOKEN"] == "run-secret"
 
 
 @pytest.mark.asyncio
