@@ -191,20 +191,22 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
     assert initializer["restart"] == "no"
     assert initializer["volumes"] == [
         "omnigent-tools:/output",
-        "./services/omnigent/tools:/opt/moonmind-tools-init:ro",
+        "./services/omnigent/scripts:/opt/moonmind:ro",
     ]
     assert compose["volumes"]["omnigent-tools"]["name"] == (
-        "moonmind-omnigent-tools-${OMNIGENT_TOOL_BUNDLE_VERSION:-gh-2.74.2-1}"
+        "moonmind-omnigent-tools-gh-${OMNIGENT_GH_VERSION:-2.76.2}"
     )
 
     for service_name in ("omnigent-host", "omnigent-host-claude", "omnigent-host-codex"):
         host = services[service_name]
         environment = _env_map(host["environment"])
         assert environment["PATH"].startswith("/opt/moonmind-tools/bin:")
-        assert "omnigent-tools-init" not in host["depends_on"]
+        assert host["depends_on"]["omnigent-tools-init"] == {
+            "condition": "service_completed_successfully"
+        }
         assert "omnigent-tools:/opt/moonmind-tools:ro" in host["volumes"]
         assert (
-            "./services/omnigent/profile/moonmind-tools.sh:"
+            "./services/omnigent/scripts/moonmind-tools.sh:"
             "/etc/profile.d/moonmind-tools.sh:ro"
         ) in host["volumes"]
 
@@ -636,7 +638,6 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "omnigent-host-codex-state:/home/app/.omnigent",
         "codex_auth_volume:/home/app/.codex",
         "omnigent-tools:/opt/moonmind-tools:ro",
-        "./services/omnigent/profile/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
         "./omnigent_workspaces:/workspaces",
         (
             "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
