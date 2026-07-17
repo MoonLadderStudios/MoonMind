@@ -15,9 +15,16 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.omnigent.mounted_tool_preflight import (
+    MountedToolPreflightError,
+    preflight_mounted_tools,
+)
 from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
     OmnigentHostLease,
+)
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -104,12 +111,19 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         workspace_key: str,
         repository_url: str | None = None,
+        target_repository: str = "",
+        required_capabilities: tuple[str, ...] = (),
+        github_token: str | None = None,
+        github_mutation_required: bool = False,
     ) -> dict[str, Any]:
         workspace_source = await self._prepare_workspace(
             workspace_key=workspace_key,
             repository_url=repository_url,
+            github_token=github_token,
         )
         if binding.host_launch_profile_ref:
+            if "gh" in {item.strip().lower() for item in required_capabilities}:
+                await self._initialize_required_tools()
             container_name = (
                 host_lease.container_name
                 or deterministic_host_container_name(host_lease.lease_id)
@@ -119,6 +133,7 @@ class OmnigentOAuthHostRuntime:
                 host_lease=host_lease,
                 container_name=container_name,
                 workspace_source=workspace_source,
+                github_token=github_token,
             )
             await self._exec_check(container_name)
             await self._exec_tools_check(container_name)
@@ -135,6 +150,13 @@ class OmnigentOAuthHostRuntime:
                 "registered host does not advertise codex-native",
                 code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
             )
+        mounted_tool_evidence = await self._preflight_mounted_tools(
+            binding=binding,
+            host_lease=host_lease,
+            required_capabilities=required_capabilities,
+            repository=target_repository,
+            mutation_required=github_mutation_required,
+        )
         result = {
             "status": "ready",
             "providerProfileId": binding.provider_profile_id,
@@ -148,6 +170,7 @@ class OmnigentOAuthHostRuntime:
             "hostId": host_id,
             "harness": "codex-native",
             "competingCredentialsPresent": False,
+            "mountedTools": mounted_tool_evidence,
             "workspacePath": (
                 "/workspaces/run"
                 if binding.host_launch_profile_ref
@@ -160,6 +183,7 @@ class OmnigentOAuthHostRuntime:
             host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
         )
         validated["workspacePath"] = result["workspacePath"]
+        validated["mountedTools"] = mounted_tool_evidence
         return validated
 
     async def stop_host(
@@ -231,6 +255,7 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         container_name: str,
         workspace_source: Path,
+        github_token: str | None = None,
     ) -> None:
         if await self.container_exists(container_name):
             return
@@ -319,6 +344,31 @@ class OmnigentOAuthHostRuntime:
         if token:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
+        if github_token:
+            child_env["GH_TOKEN"] = github_token
+            child_env["GIT_TOKEN"] = github_token
+            args.extend(
+                [
+                    "--env",
+                    "GH_TOKEN",
+                    "--env",
+                    "GIT_TOKEN",
+                    "--env",
+                    "GIT_USERNAME=x-access-token",
+                    "--env",
+                    "GH_CONFIG_DIR=/workspaces/run/.config/gh",
+                    "--env",
+                    "GH_PROMPT_DISABLED=1",
+                    "--env",
+                    "GH_NO_UPDATE_NOTIFIER=1",
+                    "--env",
+                    "GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
+                    "--env",
+                    "OMNIGENT_RUNNER_ENV_PASSTHROUGH=GH_TOKEN,GH_CONFIG_DIR,"
+                    + "GH_PROMPT_DISABLED,GH_NO_UPDATE_NOTIFIER,"
+                    + "GH_NO_EXTENSION_UPDATE_NOTIFIER",
+                ]
+            )
         for key, value in labels.items():
             args.extend(["--label", f"{key}={value}"])
         args.extend(["--entrypoint", "/usr/bin/env"])
@@ -381,8 +431,72 @@ class OmnigentOAuthHostRuntime:
             "&& command -v gh >/dev/null && gh --version >/dev/null",
         )
 
+    async def _preflight_mounted_tools(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        required_capabilities: tuple[str, ...],
+        repository: str,
+        mutation_required: bool,
+    ) -> dict[str, Any]:
+        if "gh" not in {item.strip().lower() for item in required_capabilities}:
+            return {"status": "not_required", "boundaries": []}
+        if not binding.host_launch_profile_ref:
+            raise MountedToolPreflightError(
+                "Required gh credentials cannot be isolated on a reusable static host",
+                code="github_auth_unavailable",
+                evidence={"tool": "gh", "phase": "host_launch", "hostMode": "static"},
+            )
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+
+        async def host_runner(command: str) -> tuple[int, str, str]:
+            return await self._run(
+                "docker", "exec", container_name, "bash", "-lc", command, check=False
+            )
+
+        async def runner_runner(command: str) -> tuple[int, str, str]:
+            # Execute with the stock host's authoritative runner environment
+            # constructor.  Importing this function from the installed Omnigent
+            # build keeps the pre-session proof on the exact path that
+            # HostConnect._handle_launch uses immediately before Popen.
+            runner_probe = (
+                "import os, subprocess, sys; "
+                "from omnigent.host.connect import _build_runner_env; "
+                "env = _build_runner_env(os.environ, server_url=os.environ.get("
+                "'OMNIGENT_SERVER_URL', ''), runner_id='preflight', "
+                "binding_token='preflight', workspace='/workspaces/run', "
+                "parent_pid=os.getpid()); "
+                "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
+                "text=True); raise SystemExit(result.returncode)"
+            )
+            return await self._run(
+                "docker",
+                "exec",
+                container_name,
+                "python",
+                "-c",
+                runner_probe,
+                command,
+                check=False,
+            )
+
+        return await preflight_mounted_tools(
+            required_capabilities=required_capabilities,
+            repository=repository,
+            mutation_required=mutation_required,
+            host_runner=host_runner,
+            runner_runner=runner_runner,
+        )
+
     async def _prepare_workspace(
-        self, *, workspace_key: str, repository_url: str | None
+        self,
+        *,
+        workspace_key: str,
+        repository_url: str | None,
+        github_token: str | None = None,
     ) -> Path:
         self._workspace_root.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
@@ -391,8 +505,28 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError("workspace escaped configured root")
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if repository_url and not any(workspace.iterdir()):
-            await self._run("git", "clone", "--", repository_url, str(workspace))
+            await self._run(
+                "git",
+                "clone",
+                "--",
+                repository_url,
+                str(workspace),
+                env=build_github_token_git_environment(github_token, base_env=os.environ),
+            )
         return workspace
+
+    async def _initialize_required_tools(self) -> None:
+        await self._run(
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "--profile",
+            "omnigent-host-codex",
+            "run",
+            "--rm",
+            "omnigent-tools-init",
+        )
 
     async def _compose_static_check(self) -> None:
         await self._run(

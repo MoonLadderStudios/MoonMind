@@ -90,7 +90,7 @@ def _runtime_manifest(lock: dict, platform_key: str) -> dict:
                 "name": tool["name"],
                 "version": tool["version"],
                 "platform": platform_key,
-                "sha256": selected["sha256"],
+                "sha256": selected["executableSha256"],
                 "path": tool["path"],
                 "versionProbe": tool["versionProbe"],
             }
@@ -112,8 +112,13 @@ def _validate_completed(bundle: Path, manifest: dict) -> None:
         raise RuntimeError("completed tool bundle manifest does not match pinned manifest")
     for tool in manifest["tools"]:
         executable = bundle / _safe_relative_path(tool["path"])
-        if not executable.is_file() or not os.access(executable, os.X_OK):
+        if not executable.is_file():
+            raise RuntimeError(f"executable missing for {tool['path']}")
+        if not os.access(executable, os.X_OK):
             raise RuntimeError(f"invalid executable permissions for {tool['path']}")
+        digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        if digest != tool["sha256"]:
+            raise RuntimeError(f"SHA-256 mismatch for {tool['path']}")
         subprocess.run(
             [str(executable), *tool["versionProbe"]],
             check=True,
