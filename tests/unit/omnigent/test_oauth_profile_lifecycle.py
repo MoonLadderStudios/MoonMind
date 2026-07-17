@@ -233,6 +233,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
         workspace_root=tmp_path / "workspaces",
+        gh_sha256="a" * 64,
     )
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._run = AsyncMock(return_value=(0, "", ""))
@@ -250,18 +251,51 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
-    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
-    assert commands[2][:3] == ("docker", "run", "-d")
-    assert commands[1][commands[1].index("--user") + 1] == "0:0"
-    assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
+    assert "/opt/moonmind/init-omnigent-tools.sh" in commands[1]
+    assert "OMNIGENT_GH_SHA256=" + "a" * 64 in commands[1]
+    assert "type=volume,src=moonmind-omnigent-tools-v1,dst=/output" in commands[1]
+    assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[2]
+    assert commands[3][:3] == ("docker", "run", "-d")
+    assert commands[2][commands[2].index("--user") + 1] == "0:0"
+    assert commands[3][commands[3].index("--workdir") + 1] == "/home/app"
     assert any(
-        "dst=/opt/moonmind-tools,readonly" in value for value in commands[2]
+        "dst=/opt/moonmind-tools,readonly" in value for value in commands[3]
     )
     assert (
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
         "/usr/bin:/usr/sbin:/bin:/sbin"
-        in commands[2]
+        in commands[3]
     )
+    assert "GH_TOKEN" not in commands[3]
+    assert "GH_CONFIG_DIR=/workspaces/run/.config/gh" not in commands[3]
+
+
+@pytest.mark.asyncio
+async def test_on_demand_host_rejects_unpinned_gh_bundle(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        gh_sha256="",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime._launch_on_demand(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            container_name="mm-host-lease-1",
+            workspace_source=tmp_path,
+        )
+
+    assert exc_info.value.code == "omnigent_tool_bundle_checksum_required"
+    assert len(runtime._run.await_args_list) == 1
 
 
 @pytest.mark.asyncio
@@ -270,6 +304,7 @@ async def test_github_environment_is_only_injected_for_authorized_run(tmp_path) 
         client=SimpleNamespace(),
         scripts_dir=tmp_path / "scripts",
         workspace_root=tmp_path / "workspaces",
+        gh_sha256="a" * 64,
     )
     runtime.container_exists = AsyncMock(return_value=False)
     runtime._run = AsyncMock(return_value=(0, "", ""))
@@ -288,7 +323,7 @@ async def test_github_environment_is_only_injected_for_authorized_run(tmp_path) 
         github_token="run-secret",
     )
 
-    launch = runtime._run.await_args_list[2]
+    launch = runtime._run.await_args_list[3]
     command = launch.args
     child_env = launch.kwargs["env"]
     assert "run-secret" not in command
@@ -543,8 +578,14 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
+async def test_coordinator_routes_github_authorization_through_runtime_boundary(
+    monkeypatch,
+) -> None:
     actions: list[str] = []
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.resolve_github_token_for_launch",
+        AsyncMock(return_value="run-secret"),
+    )
     provider_lease = SimpleNamespace(
         profile_id="codex",
         runtime_id="codex_cli",
@@ -571,7 +612,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             )
 
         async def get_binding_for_profile(self, _profile_id):
-            return _binding()
+            return _binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            )
 
         async def create_or_get_host_lease(self, **_kwargs):
             actions.append("host_lease_created")
@@ -596,7 +642,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("host_failed")
 
     class Runtime:
-        async def prepare_host(self, **_kwargs):
+        async def prepare_host(self, **kwargs):
+            assert kwargs["github_token"] == "run-secret"
+            assert kwargs["repository_url"] == "https://example.com/repo.git"
             actions.append("preflight")
             return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
 
@@ -640,9 +688,88 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             correlationId="workflow-1",
             idempotencyKey="idem-1",
             parameters={
+                "requiredCapabilities": ["gh"],
                 "omnigent": {"session": {"workspace": "https://example.com/repo.git"}}
             },
         )
     )
     assert result.summary == "done"
     assert actions[-3:] == ["host_stopped", "cleanup_completed", "provider_released"]
+
+
+@pytest.mark.asyncio
+async def test_coordinator_rejects_gh_request_without_github_credential(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.resolve_github_token_for_launch",
+        AsyncMock(return_value=None),
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await coordinator.execute(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                executionProfileRef="codex",
+                correlationId="workflow-1",
+                idempotencyKey="idem-1",
+                parameters={"requiredCapabilities": ["gh"]},
+            )
+        )
+
+    assert exc_info.value.code == "github_auth_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_rejects_static_binding_for_gh_request(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE", raising=False)
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.resolve_github_token_for_launch",
+        AsyncMock(return_value="run-secret"),
+    )
+    provider_lease = SimpleNamespace(
+        lease_id="provider-lease-1",
+        owner_id="owner-1",
+    )
+    lease_client = SimpleNamespace(
+        acquire_execution_lease=AsyncMock(return_value=provider_lease),
+        release_lease=AsyncMock(),
+    )
+    hosts = SimpleNamespace(get_binding_for_profile=AsyncMock(return_value=_binding()))
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=lease_client,
+        host_repository=hosts,
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(return_value=SimpleNamespace())
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await coordinator.execute(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                executionProfileRef="codex",
+                correlationId="workflow-1",
+                idempotencyKey="idem-1",
+                parameters={"requiredCapabilities": ["gh"]},
+            )
+        )
+
+    assert exc_info.value.code == "github_run_isolation_unavailable"
+    lease_client.release_lease.assert_awaited_once_with(provider_lease)

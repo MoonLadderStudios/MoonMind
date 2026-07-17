@@ -51,6 +51,9 @@ class OmnigentOAuthHostRuntime:
         scripts_dir: Path | None = None,
         workspace_root: Path | None = None,
         tool_bundle_volume: str | None = None,
+        tool_bundle_image: str | None = None,
+        tool_bundle_version: str | None = None,
+        gh_sha256: str | None = None,
     ) -> None:
         self._client = client
         if image:
@@ -77,11 +80,17 @@ class OmnigentOAuthHostRuntime:
             workspace_root
             or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
         ).resolve()
-        bundle_version = os.getenv("OMNIGENT_TOOL_BUNDLE_VERSION", "v1")
+        self._tool_bundle_version = tool_bundle_version or os.getenv(
+            "OMNIGENT_TOOL_BUNDLE_VERSION", "v1"
+        )
         self._tool_bundle_volume = tool_bundle_volume or os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME",
-            f"moonmind-omnigent-tools-{bundle_version}",
+            f"moonmind-omnigent-tools-{self._tool_bundle_version}",
         )
+        self._tool_bundle_image = tool_bundle_image or os.getenv(
+            "OMNIGENT_GH_IMAGE", "ghcr.io/cli/cli:2.74.2"
+        )
+        self._gh_sha256 = gh_sha256 or os.getenv("OMNIGENT_GH_SHA256", "")
 
     async def prepare_host(
         self,
@@ -229,6 +238,7 @@ class OmnigentOAuthHostRuntime:
         # Remove only that lease-owned container, then initialize the dedicated
         # state volume as root before the actual host drops to UID/GID 1000.
         await self._run("docker", "rm", "-f", container_name, check=False)
+        await self._prepare_tool_bundle()
         await self._run(
             "docker",
             "run",
@@ -332,6 +342,35 @@ class OmnigentOAuthHostRuntime:
             args.extend(["-u", key])
         args.extend([self._image, "/opt/moonmind/start-codex-oauth-host.sh"])
         await self._run(*args, env=child_env)
+
+    async def _prepare_tool_bundle(self) -> None:
+        """Initialize and validate the versioned real-gh bundle for this launch."""
+
+        if not self._gh_sha256:
+            raise OmnigentOAuthHostError(
+                "OMNIGENT_GH_SHA256 is required to initialize the on-demand gh tool bundle",
+                code="omnigent_tool_bundle_checksum_required",
+            )
+        await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--mount",
+            f"type=volume,src={self._tool_bundle_volume},dst=/output",
+            "--mount",
+            f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
+            "--env",
+            "OMNIGENT_TOOL_BUNDLE_OUTPUT=/output",
+            "--env",
+            f"OMNIGENT_TOOL_BUNDLE_VERSION={self._tool_bundle_version}",
+            "--env",
+            f"OMNIGENT_GH_SHA256={self._gh_sha256}",
+            "--entrypoint",
+            "/opt/moonmind/init-omnigent-tools.sh",
+            self._tool_bundle_image,
+        )
 
     async def _prepare_workspace(
         self,
