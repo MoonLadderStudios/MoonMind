@@ -26,7 +26,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
-from moonmind.omnigent.bridge_security import BridgeSessionBinding
+from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
