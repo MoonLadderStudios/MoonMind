@@ -1206,6 +1206,17 @@ async def _run_coordinator_failure_case(
         async def get_binding_for_profile(self, _profile_id):
             if fail_at == "binding":
                 raise error
+            if fail_at in {
+                "container_start", "image_pull", "network_start",
+                "credential_volume_missing", "credential_volume_owner",
+                "credential_generation", "credential_login",
+                "host_registration", "host_registration_timeout",
+                "host_capability", "harness_readiness",
+                "bridge_authentication", "server_endpoint",
+            }:
+                return _binding().model_copy(
+                    update={"static_host_id": None, "host_launch_profile_ref": "codex"}
+                )
             return _binding()
 
         async def create_or_get_host_lease(self, **_kwargs):
@@ -1228,34 +1239,62 @@ async def _run_coordinator_failure_case(
         async def mark_host_lease_failed(self, *_args, **_kwargs):
             return None
 
-    class Runtime:
-        async def prepare_host(self, **_kwargs):
-            # These mirror the ordered owners inside
-            # OmnigentOAuthHostRuntime.prepare_host instead of collapsing all
-            # launch failures into one caller-level mock branch.
-            for owner in (
-                "container_start",
-                "image_pull",
-                "network_start",
-                "credential_volume_missing",
-                "credential_volume_owner",
-                "credential_generation",
-                "credential_login",
-                "host_registration",
-                "host_registration_timeout",
-                "host_capability",
-                "harness_readiness",
-                "bridge_authentication",
-                "server_endpoint",
-            ):
-                await owners.fail(owner)
-            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
+        return_value=Path("/tmp/skills")
+    )
+    runtime._prepare_workspace = AsyncMock(  # type: ignore[method-assign]
+        return_value=Path("/tmp/workspace")
+    )
+    runtime._launch_on_demand = AsyncMock()  # type: ignore[method-assign]
+    runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
+    runtime._exec_tools_check = AsyncMock()  # type: ignore[method-assign]
+    runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
+        return_value={"id": "host-1", "harnesses": ["codex-native"]}
+    )
+    runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value={"status": "not_required", "boundaries": []}
+    )
 
-        async def stop_host(self, *, binding, **_kwargs):
-            if binding.host_launch_profile_ref:
-                await owners.remove_on_demand_host()
-            else:
-                await owners.stop_static_host()
+    runtime_failure_owner = {
+        "container_start": "_launch_on_demand",
+        "image_pull": "_launch_on_demand",
+        "network_start": "_launch_on_demand",
+        "credential_volume_missing": "_launch_on_demand",
+        "credential_volume_owner": "_launch_on_demand",
+        "credential_generation": "_launch_on_demand",
+        "credential_login": "_exec_check",
+        "host_registration": "_resolve_exact_host",
+        "host_registration_timeout": "_resolve_exact_host",
+        "host_capability": "_resolve_exact_host",
+        "harness_readiness": "_preflight_mounted_tools",
+        "bridge_authentication": "_resolve_exact_host",
+        "server_endpoint": "_resolve_exact_host",
+    }.get(fail_at)
+    if runtime_failure_owner is not None:
+        owner_mock = getattr(runtime, runtime_failure_owner)
+
+        async def fail_from_production_runtime(*_args, **_kwargs):
+            owners.calls.append(fail_at)
+            raise error
+
+        owner_mock.side_effect = fail_from_production_runtime
+
+    async def run_cleanup_command(*args, **_kwargs):
+        command = tuple(args[:3])
+        if command[:2] == ("docker", "stop"):
+            owners.calls.append("host_remove")
+            if fail_at == "host_remove":
+                raise error
+            actions.append("host_stopped")
+        elif command == ("docker", "compose", "-f"):
+            owners.calls.append("host_stop")
+            if fail_at == "host_stop":
+                raise error
+            actions.append("host_stopped")
+        return 0, "", ""
+
+    runtime._run = AsyncMock(side_effect=run_cleanup_command)  # type: ignore[method-assign]
 
     class Store:
         async def get_or_create(self, **_kwargs):
@@ -1282,7 +1321,7 @@ async def _run_coordinator_failure_case(
         session_factory=lambda: None,
         lease_client=LeaseClient(),
         host_repository=Hosts(),
-        host_runtime=Runtime(),
+        host_runtime=runtime,
         run_store=Store(),
         execution_runner=execute,
         artifact_gateway=object(),
@@ -1325,77 +1364,6 @@ async def _run_coordinator_failure_case(
             await coordinator.execute(request)
         assert captured.value.code == code
     return events, actions, owners.calls
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("owner_method", "code"),
-    [
-        ("_launch_on_demand", "container_start_failed"),
-        ("_launch_on_demand", "image_pull_failed"),
-        ("_launch_on_demand", "network_unavailable"),
-        ("_launch_on_demand", "credential_volume_missing"),
-        ("_launch_on_demand", "credential_owner_mismatch"),
-        ("_launch_on_demand", "credential_generation_stale"),
-        ("_exec_check", "oauth_login_preflight_failed"),
-        ("_resolve_exact_host", "host_registration_failed"),
-        ("_resolve_exact_host", "host_registration_timeout"),
-        ("_resolve_exact_host", "codex_native_capability_missing"),
-        ("_preflight_mounted_tools", "harness_incompatible"),
-        ("_resolve_exact_host", "bridge_auth_401"),
-        ("_resolve_exact_host", "server_endpoint_invalid"),
-        ("stop_host", "host_remove_failed"),
-        ("stop_static_host", "host_stop_failed"),
-    ],
-)
-async def test_failure_injection_uses_real_oauth_runtime_owner_methods(
-    monkeypatch, owner_method: str, code: str
-) -> None:
-    """Keep the coordinator matrix anchored to production runtime boundaries.
-
-    The larger matrix below checks the durable projection for every stable
-    failure code.  This test separately proves that its host-runtime owner
-    groups are injectable on the actual methods invoked by
-    ``OmnigentOAuthHostRuntime.prepare_host`` and cleanup, rather than only on
-    similarly named test helpers.
-    """
-
-    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
-    injected = _injected_launch_error(code)
-    owner = getattr(runtime, owner_method)
-    monkeypatch.setattr(runtime, owner_method, AsyncMock(side_effect=injected))
-
-    kwargs = {
-        "_launch_on_demand": {
-            "binding": _binding(),
-            "host_lease": _host_lease(),
-            "container_name": "host-1",
-            "workspace_source": Path("/tmp/workspace"),
-            "skill_projection": Path("/tmp/skills"),
-        },
-        "_exec_check": {"container_name": "host-1"},
-        "_resolve_exact_host": {
-            "binding": _binding(),
-            "host_lease": _host_lease(),
-        },
-        "_preflight_mounted_tools": {
-            "binding": _binding(),
-            "host_lease": _host_lease(),
-            "required_capabilities": (),
-            "repository": "",
-            "mutation_required": False,
-        },
-        "stop_host": {"binding": _binding(), "host_lease": _host_lease()},
-        "stop_static_host": {},
-    }[owner_method]
-
-    with pytest.raises(OmnigentOAuthHostError) as captured:
-        await getattr(runtime, owner_method)(**kwargs)
-
-    assert captured.value is injected
-    assert captured.value.code == code
-    getattr(runtime, owner_method).assert_awaited_once()
-    assert getattr(owner, "__self__", None) is runtime
 
 
 @pytest.mark.asyncio
