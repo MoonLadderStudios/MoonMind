@@ -79,11 +79,12 @@ def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
         headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
         config=_embedded_config(),
         configured_token="runner-token",
+        runner_id="runner-1",
     )
 
     assert context.auth_mode == "upstream_runner_tunnel"
     assert context.protocol_profile == "omnigent.runner_tunnel.b95e41ec"
-    assert context.runner_id.startswith("runner_token_")
+    assert context.runner_id == "runner-1"
 
 
 def test_embedded_host_auth_rejects_missing_or_wrong_token() -> None:
@@ -92,6 +93,7 @@ def test_embedded_host_auth_rejects_missing_or_wrong_token() -> None:
             headers={"X-Omnigent-Runner-Tunnel-Token": "wrong"},
             config=_embedded_config(),
             configured_token="runner-token",
+            runner_id="runner-1",
         )
 
     assert excinfo.value.status_code == 401
@@ -108,6 +110,7 @@ def test_embedded_host_auth_rejects_user_bearer_and_cookie_domains() -> None:
             },
             config=_embedded_config(),
             configured_token="runner-token",
+            runner_id="runner-1",
         )
 
     assert excinfo.value.status_code == 401
@@ -125,10 +128,11 @@ def test_pinned_source_verifier_executes_without_importable_package() -> None:
     )
 
     identity = adapter.verify(
-        Headers(raw=[(b"x-omnigent-runner-tunnel-token", b"runner-token")])
+        Headers(raw=[(b"x-omnigent-runner-tunnel-token", b"runner-token")]),
+        runner_id="runner-1",
     )
 
-    assert identity.runner_id.startswith("runner_token_")
+    assert identity.runner_id == "runner-1"
 
 
 def test_embedded_host_auth_rejects_duplicate_tunnel_token_headers() -> None:
@@ -148,7 +152,7 @@ def test_embedded_host_auth_rejects_duplicate_tunnel_token_headers() -> None:
                     token="runner-token",
                 ),
             )
-        ).verify(headers)
+        ).verify(headers, runner_id="runner-1")
 
 
 def test_host_auth_rotation_selects_generation_without_exposing_token() -> None:
@@ -168,7 +172,8 @@ def test_host_auth_rotation_selects_generation_without_exposing_token() -> None:
     )
 
     identity = adapter.verify(
-        {"X-Omnigent-Runner-Tunnel-Token": "previous-token"}
+        {"X-Omnigent-Runner-Tunnel-Token": "previous-token"},
+        runner_id="runner-1",
     )
 
     assert identity.credential_generation == 2
@@ -193,7 +198,10 @@ def test_host_auth_revocation_prevents_new_connections() -> None:
     )
 
     with pytest.raises(UpstreamHostAuthError) as excinfo:
-        adapter.verify({"X-Omnigent-Runner-Tunnel-Token": "revoked-token"})
+        adapter.verify(
+            {"X-Omnigent-Runner-Tunnel-Token": "revoked-token"},
+            runner_id="runner-1",
+        )
 
     assert excinfo.value.code == "host_credential_rejected"
     assert excinfo.value.retryable is False
@@ -269,7 +277,7 @@ async def test_stock_runner_tunnel_rejection_is_stable_and_secret_free(monkeypat
     monkeypatch.setattr(omnigent_bridge, "_require_bridge_enabled", _embedded_config)
     websocket = _TunnelWebSocket([])
     await omnigent_bridge.embedded_omnigent_runner_tunnel(websocket, "runner-1")
-    assert websocket.accepted is False
+    assert websocket.accepted is True
     assert websocket.closed == [(4004, "runner tunnel authentication failed")]
     assert secret not in repr(websocket.__dict__)
 
@@ -281,6 +289,7 @@ def test_embedded_auth_context_uses_service_side_generation() -> None:
         configured_token="runner-token",
         credential_generation=7,
         credential_secret_ref="db://omnigent-host-token",
+        runner_id="runner-1",
     )
 
     assert context.credential_generation == 7
@@ -349,6 +358,37 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
 
     assert registered["status"] == "registered"
     assert heartbeat["moonmind"]["hostProtocolMode"] == HOST_PROTOCOL_MODE_EMBEDDED
+
+
+@pytest.mark.asyncio
+async def test_pinned_auth_and_durable_lease_authorize_without_boundary_mocks(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="runner-1",
+    )
+    auth = verify_embedded_host_auth(
+        headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
+        config=_embedded_config(),
+        configured_token="runner-token",
+        runner_id="runner-1",
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+
+    response = await facade.heartbeat(
+        host_id="runner-1",
+        request=EmbeddedHostHeartbeatRequest(),
+        auth=auth,
+    )
+
+    assert response["hostId"] == "runner-1"
 
 
 @pytest.mark.asyncio

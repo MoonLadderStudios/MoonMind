@@ -84,11 +84,18 @@ class OmnigentHostAuthAdapter:
         # while this adapter advertises PINNED_PROTOCOL_PROFILE.
         verify, identity = _load_pinned_source_entrypoints()
         self._verify = verify
-        self._token_bound_runner_id = getattr(identity, "token_bound_runner_id")
         self.token_header = str(getattr(identity, "RUNNER_TUNNEL_TOKEN_HEADER"))
 
-    def verify(self, headers: Mapping[str, Any]) -> UpstreamHostIdentity:
-        """Return the upstream token-bound identity without retaining secrets."""
+    def verify(
+        self, headers: Mapping[str, Any], *, runner_id: str
+    ) -> UpstreamHostIdentity:
+        """Authorize the requested runner using the pinned allow-list mode."""
+
+        claimed_runner_id = str(runner_id or "").strip()
+        if not claimed_runner_id:
+            raise UpstreamHostAuthError(
+                "runner identity is required", code="host_identity_malformed"
+            )
 
         entries = [(str(k), str(v)) for k, v in headers.items()]
         values = [v for k, v in entries if k.lower() == self.token_header.lower()]
@@ -103,9 +110,12 @@ class OmnigentHostAuthAdapter:
         }
         try:
             # The upstream allow-list verifier returns None after authorization;
-            # its identity helper is then the authoritative identity conversion.
-            self._verify(normalized, allowed_tunnel_tokens=self._allowed_tokens)
-            runner_id = self._token_bound_runner_id(values[0])
+            # in that mode the credential directly authorizes the path identity.
+            expected_runner_id = self._verify(
+                normalized, allowed_tunnel_tokens=self._allowed_tokens
+            )
+            if expected_runner_id is not None:
+                raise RuntimeError("pinned allow-list verifier changed identity mode")
         except (RuntimeError, ValueError) as exc:
             raise UpstreamHostAuthError(
                 "runner tunnel credential was rejected",
@@ -115,7 +125,7 @@ class OmnigentHostAuthAdapter:
             item.generation for item in self._credentials if item.token == values[0]
         )
         return UpstreamHostIdentity(
-            runner_id=runner_id,
+            runner_id=claimed_runner_id,
             credential_generation=generation,
         )
 

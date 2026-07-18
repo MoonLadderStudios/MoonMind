@@ -271,6 +271,7 @@ async def _embedded_auth_context(
     *,
     request: Request,
     config: OmnigentBridgeConfig,
+    runner_id: str,
 ):
     try:
         return verify_embedded_host_auth(
@@ -278,13 +279,14 @@ async def _embedded_auth_context(
             config=config,
             configured_token="unused-service-boundary-value",
             credentials=await _resolved_host_credentials(),
+            runner_id=runner_id,
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
 
 async def _embedded_websocket_auth_context(
-    *, websocket: WebSocket, config: OmnigentBridgeConfig
+    *, websocket: WebSocket, config: OmnigentBridgeConfig, runner_id: str
 ):
     """Authenticate a stock tunnel handshake without exposing credential data."""
 
@@ -293,6 +295,7 @@ async def _embedded_websocket_auth_context(
         config=config,
         configured_token="unused-service-boundary-value",
         credentials=await _resolved_host_credentials(),
+        runner_id=runner_id,
     )
 
 
@@ -1284,7 +1287,12 @@ async def register_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Register an unchanged host against MoonMind's embedded host facade."""
 
-    auth = await _embedded_auth_context(request=request, config=config)
+    claimed_runner_id = _clean(payload.runner_id) or _clean(payload.host_id)
+    if claimed_runner_id is None:
+        raise HTTPException(status_code=400, detail={"code": "host_identity_malformed"})
+    auth = await _embedded_auth_context(
+        request=request, config=config, runner_id=claimed_runner_id
+    )
     try:
         return await facade.register_host(request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -1301,7 +1309,9 @@ async def heartbeat_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Accept a host heartbeat through the embedded host facade."""
 
-    auth = await _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(
+        request=request, config=config, runner_id=host_id
+    )
     try:
         return await facade.heartbeat(host_id=host_id, request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -1319,7 +1329,9 @@ async def ingest_embedded_omnigent_host_event(
 ) -> dict[str, Any]:
     """Ingest host/session events into the canonical bridge projection."""
 
-    auth = await _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(
+        request=request, config=config, runner_id=host_id
+    )
     try:
         return await facade.ingest_session_event(
             host_id=host_id,
@@ -1346,7 +1358,7 @@ async def embedded_omnigent_runner_tunnel(
     try:
         config = _require_embedded_mode(_require_bridge_enabled())
         auth = await _embedded_websocket_auth_context(
-            websocket=websocket, config=config
+            websocket=websocket, config=config, runner_id=runner_id
         )
         if runner_id != auth.runner_id:
             raise OmnigentBridgeError(
@@ -1360,6 +1372,7 @@ async def embedded_omnigent_runner_tunnel(
         )
         await facade.authorize_host(host_id=runner_id, auth=auth)
     except (HTTPException, OmnigentBridgeError):
+        await websocket.accept()
         await websocket.close(code=4004, reason="runner tunnel authentication failed")
         return
 

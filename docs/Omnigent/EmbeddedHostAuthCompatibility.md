@@ -12,20 +12,21 @@ The authoritative transport is the upstream websocket runner tunnel at
 `X-Omnigent-Runner-Tunnel-Token` handshake header and the non-browser origin
 `omnigent://internal`. The server verifier is
 `omnigent.server.routes.runner_tunnel._expected_runner_id_from_headers`; the
-verified identity is produced by `omnigent.runner.identity.token_bound_runner_id`.
-MoonMind invokes these pinned entrypoints through `OmnigentHostAuthAdapter` and
+the configured allow-list mode returns no derived identity because the accepted
+credential directly authorizes the requested path runner id. MoonMind invokes
+this pinned entrypoint through `OmnigentHostAuthAdapter` and
 fails preflight when they cannot be imported.
 
 The binding token is a runner control-plane credential, distinct from Omnigent
 user authentication and MoonMind user/operator authentication. Authorization
 Bearer values, cookies, query/path values, execution-principal headers, and
 workflow payload values are not runner credentials. A successful verification
-returns only a token-derived runner identifier and the profile version; raw
+returns only the authorized path runner identifier and the profile version; raw
 headers and credential values are not retained in the auth context.
 
 The pinned upstream allow-list rejects missing, empty, and unauthorized tokens.
-The token-derived runner identifier prevents one credential from claiming a
-runner bound to another credential. The adapter accepts ephemeral credential
+The durable host lease prevents an accepted credential from claiming a runner
+bound to another host/profile. The adapter accepts ephemeral credential
 generations resolved at a service boundary; auth contexts retain the runner id,
 profile, and matched positive generation, never the ref or value. The API service
 resolves the current generation from `OMNIGENT_HOST_RUNNER_SECRET_REF`
@@ -44,10 +45,10 @@ Missing configuration and protocol drift require operator remediation
 (`host_auth_not_configured` and `host_auth_protocol_drift`). Missing,
 duplicate, invalid, expired, revoked, and stale credentials are permanent request
 failures (`host_credential_malformed` or `host_credential_rejected`) and must not
-reconnect forever. Upstream HTTP rejection is 403 before websocket acceptance for
-an invalid binding and protocol failures close the accepted socket according to
-the upstream tunnel route. The MoonMind HTTP facade maps credential failures to
-401 and unavailable verifier/configuration failures to 503 without reflecting
+reconnect forever. The pinned runner-token gate accepts the websocket and closes
+it with 4004 for an invalid binding; protocol failures close the accepted socket
+according to the upstream tunnel route. The MoonMind HTTP facade maps credential
+failures to 401 and unavailable verifier/configuration failures to 503 without reflecting
 headers, cookies, secret refs, credential values, or decoded verifier payloads.
 
 Embedded mode remains experimental and must not be presented as production

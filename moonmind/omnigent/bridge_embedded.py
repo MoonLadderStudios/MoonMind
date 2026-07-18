@@ -82,6 +82,7 @@ def verify_embedded_host_auth(
     credential_generation: int = 1,
     credential_secret_ref: str = "env://OMNIGENT_HOST_RUNNER_TOKEN",
     credentials: tuple[HostCredentialGeneration, ...] | None = None,
+    runner_id: str,
 ) -> EmbeddedHostAuthContext:
     """Verify the embedded host/runner auth profile (§16 rule 8).
 
@@ -107,7 +108,7 @@ def verify_embedded_host_auth(
             )
             if str(configured_token or "").strip()
             else ()
-        ).verify(headers)
+        ).verify(headers, runner_id=runner_id)
     except UpstreamHostAuthError as exc:
         unavailable = exc.code in {
             "host_auth_not_configured",
