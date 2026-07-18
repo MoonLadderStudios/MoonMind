@@ -14,7 +14,7 @@ def _workflow() -> dict:
 
 
 def _triggers(workflow: dict) -> dict:
-    return workflow.get("on") or workflow.get(True)
+    return workflow.get("on") or workflow.get(True) or {}
 
 
 def test_live_conformance_is_scheduled_and_manually_gated() -> None:
@@ -33,6 +33,7 @@ def test_live_conformance_is_scheduled_and_manually_gated() -> None:
 def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     job = _workflow()["jobs"]["live-matrix"]
     assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["max-parallel"] == 1
     assert job["strategy"]["matrix"]["mode"] == [
         "stock",
         "static",
@@ -49,12 +50,29 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     assert run_step["env"]["MOONMIND_OMNIGENT_ACTION_COMMAND"] == (
         "${{ secrets.MOONMIND_OMNIGENT_ACTION_COMMAND }}"
     )
+    assert run_step["env"]["OMNIGENT_ENABLED"] == "${{ vars.OMNIGENT_ENABLED }}"
+    assert run_step["env"]["OMNIGENT_SERVER_URL"] == (
+        "${{ vars.OMNIGENT_SERVER_URL }}"
+    )
+    assert run_step["env"]["OMNIGENT_API_TOKEN"] == (
+        "${{ secrets.OMNIGENT_API_TOKEN }}"
+    )
+    assert run_step["env"]["OMNIGENT_DEFAULT_AGENT_NAME"] == (
+        "${{ vars.OMNIGENT_DEFAULT_AGENT_NAME }}"
+    )
 
 
 def test_live_conformance_always_uploads_case_evidence() -> None:
     steps = _workflow()["jobs"]["live-matrix"]["steps"]
     upload = next(step for step in steps if step.get("name") == "Upload case evidence")
+    stage = next(
+        step for step in steps if step.get("name") == "Stage secret-safe case evidence"
+    )
+    assert 'if [[ "$LIVE_CASE_OUTCOME" == "success" ]]' in stage["run"]
+    assert "withheld-after-unsuccessful-safety-gate" in stage["run"]
     assert upload["if"] == "always()"
+    assert "github.run_attempt" in upload["with"]["name"]
+    assert upload["with"]["path"].endswith("upload/${{ matrix.mode }}")
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["retention-days"] == 30
 
@@ -75,4 +93,11 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         for step in job["steps"]
         if step.get("name") == "Upload published matrix"
     )
+    download = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Download passing case evidence"
+    )
+    assert "github.run_attempt" in download["with"]["pattern"]
+    assert "github.run_attempt" in upload["with"]["name"]
     assert upload["with"]["retention-days"] == 90

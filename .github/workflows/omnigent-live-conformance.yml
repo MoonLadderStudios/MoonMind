@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         mode: [stock, static, ondemand, failures]
     steps:
@@ -63,7 +64,12 @@ jobs:
           echo "server=$server_image" >> "$GITHUB_OUTPUT"
           echo "host=$host_image" >> "$GITHUB_OUTPUT"
       - name: Run credentialed live matrix case
+        id: live_case
         env:
+          OMNIGENT_ENABLED: ${{ vars.OMNIGENT_ENABLED }}
+          OMNIGENT_SERVER_URL: ${{ vars.OMNIGENT_SERVER_URL }}
+          OMNIGENT_API_TOKEN: ${{ secrets.OMNIGENT_API_TOKEN }}
+          OMNIGENT_DEFAULT_AGENT_NAME: ${{ vars.OMNIGENT_DEFAULT_AGENT_NAME }}
           MOONMIND_OMNIGENT_ACTION_COMMAND: ${{ secrets.MOONMIND_OMNIGENT_ACTION_COMMAND }}
           MOONMIND_OMNIGENT_LOG_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_LOG_EVIDENCE }}
           MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE }}
@@ -75,12 +81,27 @@ jobs:
             --server-image "${{ steps.images.outputs.server }}" \
             --host-image "${{ steps.images.outputs.host }}" \
             --output-dir "artifacts/omnigent-conformance/live/${{ matrix.mode }}"
+      - name: Stage secret-safe case evidence
+        if: always()
+        shell: bash
+        env:
+          LIVE_CASE_OUTCOME: ${{ steps.live_case.outcome }}
+        run: |
+          source_dir="artifacts/omnigent-conformance/live/${{ matrix.mode }}"
+          upload_dir="artifacts/omnigent-conformance/upload/${{ matrix.mode }}"
+          mkdir -p "$upload_dir"
+          if [[ "$LIVE_CASE_OUTCOME" == "success" ]]; then
+            cp -R "$source_dir"/. "$upload_dir"/
+          else
+            printf '{"mode":"%s","status":"failed","evidence":"withheld-after-unsuccessful-safety-gate"}\n' \
+              "${{ matrix.mode }}" > "$upload_dir/failure.json"
+          fi
       - name: Upload case evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: omnigent-live-${{ matrix.mode }}-${{ github.run_id }}
-          path: artifacts/omnigent-conformance/live/${{ matrix.mode }}
+          name: omnigent-live-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-conformance/upload/${{ matrix.mode }}
           if-no-files-found: error
           retention-days: 30
 
@@ -95,7 +116,7 @@ jobs:
       - name: Download passing case evidence
         uses: actions/download-artifact@v8
         with:
-          pattern: omnigent-live-*-${{ github.run_id }}
+          pattern: omnigent-live-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-conformance/published
       - name: Write publication manifest
         shell: bash
@@ -124,7 +145,7 @@ jobs:
       - name: Upload published matrix
         uses: actions/upload-artifact@v7
         with:
-          name: omnigent-live-published-matrix-${{ github.run_id }}
+          name: omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-conformance/published
           if-no-files-found: error
           retention-days: 90
@@ -136,5 +157,5 @@ jobs:
             echo ""
             echo "- Issue: \`MoonLadderStudios/MoonMind#3368\`"
             echo "- Result: all stock, static, on-demand, and failure cases passed"
-            echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}\`"
+            echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
