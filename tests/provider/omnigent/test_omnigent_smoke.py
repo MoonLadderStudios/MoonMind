@@ -43,10 +43,10 @@ _REQUIRED_STOCK_ROUTES = {
     "workspace.diff", "session.files", "session.content", "terminal.snapshot",
 }
 _REQUIRED_FAILURES = {
-    "invalid_oauth", "host_start_failure", "harness_mismatch",
-    "session_create_failure", "first_message_failure", "stream_disconnect",
-    "malformed_event", "resource_harvest_failure", "cleanup_failure",
-    "lease_release_failure",
+    "invalid_oauth", "profile_lease_busy", "host_image_start_failure",
+    "registration_timeout", "bridge_server_auth_failure", "server_unavailable",
+    "ambiguous_first_message_reconciliation", "active_session_disconnect",
+    "resource_route_unavailable", "cleanup_failure",
 }
 _ONDEMAND_ORDER = (
     "lease_acquired", "host_launched", "preflight_ready", "session_bound",

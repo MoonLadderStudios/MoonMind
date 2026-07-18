@@ -40,6 +40,23 @@ LIVE_CASES = {
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
 }
+STOCK_ROUTES = (
+    "agents", "hosts", "session.create", "session.get", "event.post",
+    "events.stream", "elicitation.resolve", "interrupt", "stop",
+    "changed-files", "workspace.files", "workspace.content", "workspace.diff",
+    "session.files", "session.content", "terminal.snapshot",
+)
+FAILURE_CASES = (
+    "invalid_oauth", "profile_lease_busy", "host_image_start_failure",
+    "registration_timeout", "bridge_server_auth_failure", "server_unavailable",
+    "ambiguous_first_message_reconciliation", "active_session_disconnect",
+    "resource_route_unavailable", "cleanup_failure",
+)
+ONDEMAND_ACTIONS = (
+    "lease_acquired", "host_launched", "preflight_ready", "session_bound",
+    "executed", "resources_harvested", "partial_start_retry", "janitor_recovery",
+    "host_removed", "workflow_detail_reloaded", "lease_released",
+)
 SCENARIOS = {
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
     "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
@@ -83,6 +100,56 @@ class LiveRunner:
             raise RuntimeError(f"{name} failed; see {log_path}")
         return log_path
 
+    def action(self, scenario: str, action: str, **inputs: object) -> dict[str, object]:
+        """Execute an operator-supplied live adapter and parse its observed result.
+
+        The adapter is a portable executable boundary, not an evidence file: each
+        invocation must perform the named action and return one JSON object on
+        stdout. This keeps credentials and deployment-specific API mechanics out
+        of this repository while making the runner own ordering and conclusions.
+        """
+        executable = self.env.get("MOONMIND_OMNIGENT_ACTION_COMMAND", "").strip()
+        if not executable:
+            raise ConformanceContractError("MOONMIND_OMNIGENT_ACTION_COMMAND is required")
+        command = [executable, scenario, action, json.dumps(inputs, separators=(",", ":"))]
+        result = subprocess.run(
+            command, cwd=REPO_ROOT, env=self.env, capture_output=True,
+            text=True, check=False,
+        )
+        log_path = self.output_dir / f"{scenario}-{action.replace('.', '-')}.log"
+        log_path.write_text(result.stderr, encoding="utf-8")
+        self.logs.append(log_path)
+        if result.returncode:
+            raise RuntimeError(f"{scenario}/{action} failed; see {log_path}")
+        try:
+            payload = json.loads(result.stdout)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ConformanceContractError(f"{scenario}/{action} returned invalid JSON") from exc
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            raise ConformanceContractError(f"{scenario}/{action} did not report observed success")
+        return payload
+
+    def write_evidence(self, mode: str, payload: dict[str, object]) -> Path:
+        path = self.output_dir / f"{mode}-evidence.json"
+        payload = {"schemaVersion": "moonmind.omnigent.live-evidence/v1", **payload}
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        self.env[SCENARIO_EVIDENCE_ENV[mode]] = str(path)
+        return path
+
+    def stock(self, images: dict[str, str]) -> None:
+        observed = {route: self.action("stock", route) for route in STOCK_ROUTES}
+        inventory = self.action("stock", "inventory")
+        self.write_evidence("stock", {
+            "images": images, "hostSource": "published-stock-image",
+            "moonmindHostPatch": False,
+            "protocolVersion": inventory.get("protocolVersion"),
+            "hostArchitecture": inventory.get("hostArchitecture"),
+            "advertisedAgents": inventory.get("agents"),
+            "advertisedCapabilities": inventory.get("capabilities"),
+            "assertions": {name: result["ok"] is True for name, result in observed.items()},
+        })
+        self.scenario("stock")
+
     @staticmethod
     def compose(*args: str) -> list[str]:
         return [
@@ -115,12 +182,56 @@ class LiveRunner:
             "static-up",
             self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
         )
+        executed = self.action("static", "execute")
+        identifiers = {key: executed.get(key) for key in ("workflowId", "agentRunId", "sessionId")}
+        if not all(identifiers.values()):
+            raise ConformanceContractError("static execute did not return durable identifiers")
+        self.write_evidence("static", {**identifiers, "assertions": {
+            **{name: bool(executed.get(name)) for name in (
+                "one_first_message", "live_events", "final_snapshot", "resources",
+                "workflow_detail", "secret_free")},
+            "workflow_created_through_static_profile": True,
+        }})
         self.scenario("static", phase="execute")
         self.run("static-restart", self.compose("restart", "omnigent", "omnigent-host-codex"))
         # Reload the persisted identifiers and assert the same workflow after
         # restart.  This is deliberately a real second provider invocation,
         # never collection-only evidence.
+        replayed = self.action("static", "replay", **identifiers)
+        if any(replayed.get(key) != value for key, value in identifiers.items()):
+            raise ConformanceContractError("static replay returned different durable identifiers")
+        self.write_evidence("static", {**identifiers, "assertions": {
+            **{name: bool(replayed.get(name)) for name in (
+                "one_first_message", "live_events", "final_snapshot", "resources",
+                "workflow_detail", "secret_free", "durable_replay")},
+            "services_restarted": True, "same_identifiers_reloaded": True,
+        }})
         self.scenario("static", phase="replay")
+
+    def ondemand(self) -> None:
+        events: list[str] = []
+        results: dict[str, dict[str, object]] = {}
+        for action in ONDEMAND_ACTIONS:
+            results[action] = self.action("ondemand", action)
+            events.append(action)
+        self.write_evidence("ondemand", {"events": events, "assertions": {
+            "exact_profile_host": bool(results["host_launched"].get("exactProfileHost")),
+            "partial_start_retry": True, "janitor_recovery": True,
+            "state_removed_per_policy": bool(results["host_removed"].get("stateRemoved")),
+            "unrelated_resources_survived": bool(results["host_removed"].get("unrelatedResourcesSurvived")),
+            "credential_volume_preserved": bool(results["host_removed"].get("credentialVolumePreserved")),
+            "workflow_detail_available_after_removal": bool(results["workflow_detail_reloaded"].get("available")),
+        }})
+        self.scenario("ondemand")
+
+    def failures(self) -> None:
+        cases = {}
+        for case in FAILURE_CASES:
+            result = self.action("failures", case)
+            cases[case] = {key: bool(result.get(key)) for key in (
+                "injected", "lifecycleProjected", "terminalProjected", "redacted")}
+        self.write_evidence("failures", {"failureCases": cases})
+        self.scenario("failures")
 
     def cleanup(self, mode: str) -> None:
         # No --volumes: OAuth and unrelated state must survive this runner.
@@ -163,7 +274,14 @@ def main() -> int:
     try:
         for mode in selected:
             try:
-                runner.static() if mode == "static" else runner.scenario(mode)
+                if mode == "stock":
+                    runner.stock(images)
+                elif mode == "static":
+                    runner.static()
+                elif mode == "ondemand":
+                    runner.ondemand()
+                else:
+                    runner.failures()
                 passed.update(LIVE_CASES[mode])
             finally:
                 runner.cleanup(mode)

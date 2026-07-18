@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -36,9 +37,61 @@ def test_static_restart_precedes_replay_and_cleanup_is_explicit(tmp_path, monkey
     runner = module.LiveRunner(output_dir=tmp_path, env={})
     monkeypatch.setattr(runner, "run", lambda name, command: names.append(name))
     monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: names.append(f"{mode}-{phase}"))
+    monkeypatch.setattr(runner, "write_evidence", lambda mode, payload: None)
+    monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: {
+        "ok": True, "workflowId": "w", "agentRunId": "a", "sessionId": "s",
+        "one_first_message": True, "live_events": True, "final_snapshot": True,
+        "resources": True, "workflow_detail": True, "secret_free": True,
+        "durable_replay": True,
+    })
     runner.static()
     runner.cleanup("static")
     assert names == ["static-up", "static-execute", "static-restart", "static-replay", "static-cleanup"]
+
+
+def test_stock_executes_every_route_and_derives_evidence(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: actions.append(action) or {
+        "ok": True, "protocolVersion": "v1", "hostArchitecture": "amd64",
+        "agents": ["codex"], "capabilities": ["events"],
+    })
+    monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
+    runner.stock({"server": "s@sha256:x", "host": "h@sha256:y"})
+    evidence = json.loads((tmp_path / "stock-evidence.json").read_text())
+    assert actions == [*module.STOCK_ROUTES, "inventory"]
+    assert all(evidence["assertions"].values())
+
+
+def test_ondemand_release_is_last_and_all_actions_execute(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: actions.append(action) or {
+        "ok": True, "exactProfileHost": True, "stateRemoved": True,
+        "unrelatedResourcesSurvived": True, "credentialVolumePreserved": True,
+        "available": True,
+    })
+    monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
+    runner.ondemand()
+    assert actions == list(module.ONDEMAND_ACTIONS)
+    assert actions[-1] == "lease_released"
+
+
+def test_failure_matrix_executes_exact_issue_cases(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: actions.append(action) or {
+        "ok": True, "injected": True, "lifecycleProjected": True,
+        "terminalProjected": True, "redacted": True,
+    })
+    monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
+    runner.failures()
+    evidence = json.loads((tmp_path / "failures-evidence.json").read_text())
+    assert actions == list(module.FAILURE_CASES)
+    assert set(evidence["failureCases"]) == set(module.FAILURE_CASES)
 
 
 def test_scan_rejects_secret_like_live_evidence(tmp_path):
