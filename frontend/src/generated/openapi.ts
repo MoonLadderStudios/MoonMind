@@ -4905,6 +4905,10 @@ export interface components {
             hostBindingRef?: string | null;
             /** Providersessionref */
             providerSessionRef?: string | null;
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: boolean;
+            };
         };
         /** BridgeTerminalEnvelope */
         BridgeTerminalEnvelope: {

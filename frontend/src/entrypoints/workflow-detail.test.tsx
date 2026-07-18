@@ -47,6 +47,36 @@ describe('bridge projection response contract', () => {
       }),
     ).toMatchObject({ nextCursor: '100', hasMore: true });
   });
+
+  it('preserves the authoritative terminal envelope', () => {
+    expect(parseObservabilityEventsResponse({
+      schemaVersion: 'moonmind.bridge-session-events-page.v1',
+      bridgeSessionId: 'brs-failed',
+      items: [],
+      after: 0,
+      nextCursor: null,
+      hasMore: false,
+      terminal: true,
+      latestSequence: 0,
+      terminalEnvelope: {
+        schemaVersion: 'moonmind.bridge-session-terminal.v1',
+        status: 'failed',
+        failureClass: 'configuration_error',
+        failureCode: 'profile_missing',
+        summary: 'Provider profile is unavailable.',
+        diagnosticsRef: 'artifact:diagnostics',
+        cleanupState: 'completed',
+      },
+    })).toMatchObject({
+      terminal: true,
+      terminalEnvelope: {
+        status: 'failed',
+        failureClass: 'configuration_error',
+        failureCode: 'profile_missing',
+        diagnosticsRef: 'artifact:diagnostics',
+      },
+    });
+  });
 });
 import {
   taskCompareHref,
@@ -7928,6 +7958,83 @@ describe('Workflow Detail Entrypoint', () => {
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);
+  });
+
+  it('renders bridge terminal failure evidence even without provider deltas', async () => {
+    window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/chat?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default',
+      title: 'Bridge failure', summary: 'Failed before streaming',
+      createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z',
+      status: 'failed', state: 'failed', rawState: 'failed', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-failed', status: 'failed' }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-failed/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-failed',
+          items: [], after: 0, nextCursor: null, hasMore: false, terminal: true, latestSequence: 0,
+          terminalEnvelope: {
+            schemaVersion: 'moonmind.bridge-session-terminal.v1', status: 'failed',
+            failureClass: 'configuration_error', failureCode: 'profile_missing',
+            summary: 'Provider profile is unavailable.', diagnosticsRef: 'artifact:diagnostics',
+            cleanupState: 'completed', evidenceIncompleteReason: null,
+          },
+        }) } as Response);
+      }
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getAllByText(/Provider profile is unavailable/).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/Failure class: configuration_error/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reason: profile_missing/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Cleanup: completed/).length).toBeGreaterThan(0);
+    expect(screen.getByTestId('chat-session-blocks')).toBeTruthy();
+  });
+
+  it('uses advertised bridge capabilities and exposes delivery-unknown messages', async () => {
+    window.history.pushState({}, 'Bridge Controls Test', '/workflows/test-123/chat?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default',
+      title: 'Bridge controls', summary: 'Running', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId: 'brs-controls', status: 'running', providerSessionRef: 'provider-session',
+        capabilities: { sendFollowUp: true, interruptTurn: true },
+      }) } as Response);
+      if (url.includes('/omnigent/bridge-sessions/brs-controls/events')) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-controls', items: [],
+        after: 0, nextCursor: null, hasMore: false, terminal: false, latestSequence: 0,
+      }) } as Response);
+      if (url.includes('/omnigent/v1/sessions/provider-session/events')) return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      const input = await screen.findByLabelText('Follow-up message');
+      fireEvent.change(input, { target: { value: 'Continue with the fix.' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+      await waitFor(() => expect(screen.getByText(/Delivery confirmation pending/)).toBeTruthy());
+      expect(screen.getByRole('button', { name: 'Interrupt turn' })).toBeTruthy();
+      expect(fetchSpy.mock.calls.some(([url, init]) =>
+        String(url).includes('/omnigent/v1/sessions/provider-session/events') &&
+        String((init as RequestInit | undefined)?.body).includes('clientEventKey'))).toBe(true);
+    } finally {
+      window.EventSource = priorEventSource;
+    }
   });
 
   it('renders artifact download link using explicit downloadUrl when present', async () => {

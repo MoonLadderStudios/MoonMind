@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -547,6 +547,7 @@ class BridgeSessionResolution(BaseModel):
     provider_profile_id: str | None = None
     host_binding_ref: str | None = None
     provider_session_ref: str | None = None
+    capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
 class BridgeRetentionGap(BaseModel):
@@ -650,6 +651,18 @@ def _terminal_envelope(row: Any) -> BridgeTerminalEnvelope | None:
             None if has_evidence else "No terminal artifacts were captured."
         ),
     )
+
+
+def _projection_capabilities(row: Any) -> dict[str, bool]:
+    metadata = dict(getattr(row, "metadata_", None) or {})
+    raw = metadata.get("interventionCapabilities", metadata.get("capabilities", {}))
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, bool)
+    }
 
 
 def _bridge_event_kind(event_type: str | None) -> str:
@@ -780,6 +793,7 @@ async def resolve_omnigent_bridge_session_projection(
         provider_profile_id=row.provider_profile_id,
         host_binding_ref=row.host_binding_ref,
         provider_session_ref=row.omnigent_session_id,
+        capabilities=_projection_capabilities(row),
     )
 
 
