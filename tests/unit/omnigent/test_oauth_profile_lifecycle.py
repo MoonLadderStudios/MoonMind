@@ -1200,13 +1200,13 @@ async def _run_coordinator_failure_case(
 
     class Runtime:
         async def prepare_host(self, **_kwargs):
-            if fail_at == "prepare_host":
+            if fail_at.startswith("prepare_host_"):
                 raise error
             return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
 
         async def stop_host(self, **_kwargs):
-            if fail_at == "cleanup":
-                raise _injected_launch_error("host_cleanup_failed")
+            if fail_at in {"host_stop", "host_remove"}:
+                raise _injected_launch_error(code)
             actions.append("host_stopped")
 
     class Store:
@@ -1221,7 +1221,7 @@ async def _run_coordinator_failure_case(
             events.append((event_type, kwargs))
 
     async def execute(_request, **_kwargs):
-        if fail_at == "execute":
+        if fail_at.startswith("execute_"):
             raise error
         return AgentRunResult(summary="done")
 
@@ -1234,7 +1234,7 @@ async def _run_coordinator_failure_case(
         execution_runner=execute,
         artifact_gateway=object(),
     )
-    if fail_at == "profile_resolution":
+    if fail_at in {"profile_missing", "profile_validation"}:
         coordinator._resolve_profile = AsyncMock(side_effect=error)  # type: ignore[method-assign]
     elif fail_at == "profile_readiness":
         coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
@@ -1258,7 +1258,7 @@ async def _run_coordinator_failure_case(
             "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},
         },
     )
-    if fail_at in {"cleanup", "release"}:
+    if fail_at in {"host_stop", "host_remove", "release"}:
         await coordinator.execute(request)
     else:
         with pytest.raises(OmnigentOAuthHostError) as captured:
@@ -1271,7 +1271,8 @@ async def _run_coordinator_failure_case(
 @pytest.mark.parametrize(
     ("fail_at", "code", "failed_stage", "failure_class", "remediation"),
     [
-        ("profile_resolution", "profile_resolution_failed", "profile_resolution", "configuration_error", "select_execution_profile"),
+        ("profile_missing", "profile_resolution_missing", "profile_resolution", "configuration_error", "select_execution_profile"),
+        ("profile_validation", "profile_resolution_validation_failed", "profile_resolution", "configuration_error", "select_execution_profile"),
         ("profile_readiness", "profile_readiness_failed", "profile_readiness", "configuration_error", "validate_codex_oauth"),
         ("lease", "profile_lease_conflict", "profile_lease_wait", "resource_unavailable", "wait_for_profile_lease"),
         ("lease", "profile_lease_timeout", "profile_lease_wait", "resource_unavailable", "wait_for_profile_lease"),
@@ -1279,17 +1280,23 @@ async def _run_coordinator_failure_case(
         ("lease", "profile_cooldown_active", "profile_lease_wait", "integration_error", "retry_transient_upstream"),
         ("binding", "host_binding_mismatch", "host_binding_resolution", "configuration_error", "correct_host_binding"),
         ("host_lease", "container_allocation_failed", "host_lease_created", "configuration_error", "repair_host_image"),
-        ("prepare_host", "image_pull_failed", "container_start", "configuration_error", "repair_host_image"),
-        ("prepare_host", "network_unavailable", "container_start", "integration_error", "repair_server_endpoint"),
-        ("prepare_host", "credential_volume_missing", "credential_mount", "configuration_error", "validate_codex_oauth"),
-        ("prepare_host", "oauth_login_preflight_failed", "credential_preflight", "configuration_error", "validate_codex_oauth"),
-        ("prepare_host", "host_registration_failed", "host_registration", "integration_error", "retry_transient_upstream"),
-        ("prepare_host", "harness_incompatible", "harness_readiness", "configuration_error", "correct_host_binding"),
-        ("prepare_host", "bridge_auth_failed", "bridge_authentication", "configuration_error", "repair_bridge_authentication"),
-        ("prepare_host", "server_endpoint_invalid", "bridge_authentication", "integration_error", "repair_server_endpoint"),
-        ("execute", "session_create_failed", "session_creation", "integration_error", "retry_transient_upstream"),
-        ("execute", "first_message_reconcile_failed", "first_message_prepare", "integration_error", "retry_transient_upstream"),
-        ("execute", "resource_harvest_failed", "resource_harvest", "integration_error", "retry_transient_upstream"),
+        ("prepare_host_container_start", "container_start_failed", "container_start", "configuration_error", "repair_host_image"),
+        ("prepare_host_image_pull", "image_pull_failed", "container_start", "configuration_error", "repair_host_image"),
+        ("prepare_host_network", "network_unavailable", "container_start", "integration_error", "repair_server_endpoint"),
+        ("prepare_host_volume_missing", "credential_volume_missing", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("prepare_host_volume_wrong_owner", "credential_owner_mismatch", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("prepare_host_volume_stale_generation", "credential_generation_stale", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("prepare_host_oauth_preflight", "oauth_login_preflight_failed", "credential_preflight", "configuration_error", "validate_codex_oauth"),
+        ("prepare_host_registration", "host_registration_failed", "host_registration", "integration_error", "retry_transient_upstream"),
+        ("prepare_host_registration_timeout", "host_registration_timeout", "host_registration", "integration_error", "retry_transient_upstream"),
+        ("prepare_host_capability", "codex_native_capability_missing", "harness_readiness", "configuration_error", "correct_host_binding"),
+        ("prepare_host_harness", "harness_incompatible", "harness_readiness", "configuration_error", "correct_host_binding"),
+        ("prepare_host_bridge_401", "bridge_auth_401", "bridge_authentication", "configuration_error", "repair_bridge_authentication"),
+        ("prepare_host_server_endpoint", "server_endpoint_invalid", "bridge_authentication", "integration_error", "repair_server_endpoint"),
+        ("execute_session_create", "session_create_failed", "session_creation", "integration_error", "retry_transient_upstream"),
+        ("execute_digest_mismatch", "first_message_digest_mismatch", "first_message_prepare", "integration_error", "retry_transient_upstream"),
+        ("execute_ambiguous_post", "ambiguous_posting_reconciliation", "first_message_prepare", "integration_error", "retry_transient_upstream"),
+        ("execute_resource_harvest", "resource_harvest_failed", "resource_harvest", "integration_error", "retry_transient_upstream"),
     ],
 )
 async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence(
@@ -1335,14 +1342,20 @@ async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence
     assert terminal["cleanupCompleted"] is True
     assert terminal["leaseReleased"] is True
     assert "github_pat_secret_value_must_not_persist" not in json.dumps(events)
-    if fail_at in {"prepare_host", "execute"}:
+    if fail_at.startswith(("prepare_host_", "execute_")):
         assert actions.index("host_stopped") < actions.index("provider_released")
 
 
 @pytest.mark.asyncio
-async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_janitor() -> None:
+@pytest.mark.parametrize(
+    ("fail_at", "code"),
+    [("host_stop", "host_stop_failed"), ("host_remove", "host_remove_failed")],
+)
+async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_janitor(
+    fail_at: str, code: str
+) -> None:
     events, actions = await _run_coordinator_failure_case(
-        fail_at="cleanup", code="host_cleanup_failed"
+        fail_at=fail_at, code=code
     )
     cleanup = next(
         kwargs
