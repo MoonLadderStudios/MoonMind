@@ -14,6 +14,7 @@ import os
 import platform
 import subprocess
 import sys
+import shlex
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Sequence
@@ -108,10 +109,11 @@ class LiveRunner:
         stdout. This keeps credentials and deployment-specific API mechanics out
         of this repository while making the runner own ordering and conclusions.
         """
-        executable = self.env.get("MOONMIND_OMNIGENT_ACTION_COMMAND", "").strip()
-        if not executable:
-            raise ConformanceContractError("MOONMIND_OMNIGENT_ACTION_COMMAND is required")
-        command = [executable, scenario, action, json.dumps(inputs, separators=(",", ":"))]
+        configured = self.env.get("MOONMIND_OMNIGENT_ACTION_COMMAND", "").strip()
+        command = shlex.split(configured) if configured else [
+            sys.executable, str(REPO_ROOT / "tools/omnigent_live_action.py")
+        ]
+        command.extend([scenario, action, json.dumps(inputs, separators=(",", ":"))])
         result = subprocess.run(
             command, cwd=REPO_ROOT, env=self.env, capture_output=True,
             text=True, check=False,
@@ -127,6 +129,13 @@ class LiveRunner:
             raise ConformanceContractError(f"{scenario}/{action} returned invalid JSON") from exc
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             raise ConformanceContractError(f"{scenario}/{action} did not report observed success")
+        evidence = payload.get("evidenceRefs")
+        if not isinstance(evidence, list) or not evidence or not all(
+            isinstance(ref, str) and ref.strip() for ref in evidence
+        ):
+            raise ConformanceContractError(
+                f"{scenario}/{action} did not return durable evidence refs"
+            )
         return payload
 
     def write_evidence(self, mode: str, payload: dict[str, object]) -> Path:
@@ -211,25 +220,41 @@ class LiveRunner:
     def ondemand(self) -> None:
         events: list[str] = []
         results: dict[str, dict[str, object]] = {}
+        state: dict[str, object] = {}
         for action in ONDEMAND_ACTIONS:
-            results[action] = self.action("ondemand", action)
+            results[action] = self.action("ondemand", action, **state)
+            returned_state = results[action].get("state")
+            if not isinstance(returned_state, dict):
+                raise ConformanceContractError(
+                    f"ondemand/{action} did not return lifecycle state"
+                )
+            state.update(returned_state)
             events.append(action)
+        required = ("leaseId", "hostId", "workflowId", "agentRunId", "sessionId")
+        if not all(state.get(name) for name in required):
+            raise ConformanceContractError("on-demand lifecycle did not propagate durable identifiers")
         self.write_evidence("ondemand", {"events": events, "assertions": {
             "exact_profile_host": bool(results["host_launched"].get("exactProfileHost")),
-            "partial_start_retry": True, "janitor_recovery": True,
+            "partial_start_retry": bool(results["partial_start_retry"].get("retryRecovered")),
+            "janitor_recovery": bool(results["janitor_recovery"].get("orphanRecovered")),
             "state_removed_per_policy": bool(results["host_removed"].get("stateRemoved")),
             "unrelated_resources_survived": bool(results["host_removed"].get("unrelatedResourcesSurvived")),
             "credential_volume_preserved": bool(results["host_removed"].get("credentialVolumePreserved")),
             "workflow_detail_available_after_removal": bool(results["workflow_detail_reloaded"].get("available")),
-        }})
+        }, "identifiers": {name: state[name] for name in required},
+            "evidenceRefs": [ref for result in results.values() for ref in result["evidenceRefs"]]})
         self.scenario("ondemand")
 
     def failures(self) -> None:
         cases = {}
         for case in FAILURE_CASES:
             result = self.action("failures", case)
-            cases[case] = {key: bool(result.get(key)) for key in (
+            durable = result.get("durableEvidence")
+            if not isinstance(durable, dict):
+                raise ConformanceContractError(f"failure {case} lacks durable evidence")
+            cases[case] = {key: bool(durable.get(key)) for key in (
                 "injected", "lifecycleProjected", "terminalProjected", "redacted")}
+            cases[case]["evidenceRefs"] = result["evidenceRefs"]
         self.write_evidence("failures", {"failureCases": cases})
         self.scenario("failures")
 

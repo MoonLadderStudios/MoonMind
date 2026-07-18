@@ -43,6 +43,7 @@ def test_static_restart_precedes_replay_and_cleanup_is_explicit(tmp_path, monkey
         "one_first_message": True, "live_events": True, "final_snapshot": True,
         "resources": True, "workflow_detail": True, "secret_free": True,
         "durable_replay": True,
+        "evidenceRefs": ["artifact://observed"],
     })
     runner.static()
     runner.cleanup("static")
@@ -72,6 +73,12 @@ def test_ondemand_release_is_last_and_all_actions_execute(tmp_path, monkeypatch)
         "ok": True, "exactProfileHost": True, "stateRemoved": True,
         "unrelatedResourcesSurvived": True, "credentialVolumePreserved": True,
         "available": True,
+        "retryRecovered": True, "orphanRecovered": True,
+        "state": {
+            "leaseId": "l", "hostId": "h", "workflowId": "w",
+            "agentRunId": "a", "sessionId": "s",
+        },
+        "evidenceRefs": [f"artifact://{action}"],
     })
     monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
     runner.ondemand()
@@ -84,8 +91,9 @@ def test_failure_matrix_executes_exact_issue_cases(tmp_path, monkeypatch):
     runner = module.LiveRunner(output_dir=tmp_path, env={})
     actions = []
     monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: actions.append(action) or {
-        "ok": True, "injected": True, "lifecycleProjected": True,
-        "terminalProjected": True, "redacted": True,
+        "ok": True, "durableEvidence": {"injected": True, "lifecycleProjected": True,
+        "terminalProjected": True, "redacted": True},
+        "evidenceRefs": [f"artifact://{action}"],
     })
     monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
     runner.failures()
@@ -135,3 +143,37 @@ def test_scan_requires_each_evidence_channel(tmp_path):
         assert "evidence was not collected" in str(exc)
     else:
         raise AssertionError("missing evidence channels were accepted")
+
+
+def test_action_rejects_boolean_attestation_without_evidence(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stdout = '{"ok":true,"retryRecovered":true}'
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        runner.action("ondemand", "partial_start_retry")
+    except module.ConformanceContractError as exc:
+        assert "durable evidence refs" in str(exc)
+    else:
+        raise AssertionError("bare boolean attestation was accepted")
+
+
+def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    seen = []
+    state = {"leaseId": "l", "hostId": "h", "workflowId": "w", "agentRunId": "a", "sessionId": "s"}
+    def action(scenario, name, **inputs):
+        seen.append(dict(inputs))
+        return {"ok": True, "state": state, "evidenceRefs": [f"artifact://{name}"],
+                "exactProfileHost": True, "retryRecovered": True, "orphanRecovered": True,
+                "stateRemoved": True, "unrelatedResourcesSurvived": True,
+                "credentialVolumePreserved": True, "available": True}
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+    runner.ondemand()
+    assert seen[0] == {}
+    assert all(call == state for call in seen[1:])

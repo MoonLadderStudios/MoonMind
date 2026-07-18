@@ -72,6 +72,13 @@ python tools/run_omnigent_live_conformance.py --mode all \
   --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
 ```
 
+By default the runner uses the repository-owned
+`tools/omnigent_live_action.py` client. The provisioned test environment sets
+`MOONMIND_OMNIGENT_HARNESS_URL` and `MOONMIND_OMNIGENT_HARNESS_TOKEN`; the
+harness action responses must include durable `evidenceRefs`. A custom portable
+client may be selected with `MOONMIND_OMNIGENT_ACTION_COMMAND`. Bare success
+booleans are rejected as evidence.
+
 Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
 removes that project's containers and networks only; it intentionally never
 passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
