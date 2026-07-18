@@ -67,13 +67,33 @@ def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
         return code, "resource_unavailable", "wait_for_profile_lease"
     if "auth" in lowered:
         return code, "configuration_error", "repair_bridge_authentication"
-    if "binding" in lowered or "harness" in lowered:
+    if "binding" in lowered or "harness" in lowered or "capability" in lowered:
         return code, "configuration_error", "correct_host_binding"
     if "image" in lowered or "container" in lowered:
         return code, "configuration_error", "repair_host_image"
     if "network" in lowered or "endpoint" in lowered:
         return code, "integration_error", "repair_server_endpoint"
     return code, "integration_error", "retry_transient_upstream"
+
+
+def _prepare_host_failure_stage(exc: Exception) -> str | None:
+    """Map a prepare-host failure to the boundary that actually reported it."""
+
+    code = str(getattr(exc, "code", None) or "").lower()
+    if any(
+        marker in code
+        for marker in ("credential_volume", "credential_owner", "credential_generation")
+    ):
+        return "credential_mount"
+    if "oauth" in code or "credential" in code or "github_auth" in code:
+        return "credential_preflight"
+    if "host_registration" in code:
+        return "host_registration"
+    if "capability" in code or "harness" in code:
+        return "harness_readiness"
+    if "bridge_auth" in code or "server_endpoint" in code:
+        return "bridge_authentication"
+    return None
 
 
 def _diagnostics_ref(value: object) -> str | None:
@@ -221,6 +241,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         binding = None
         terminal_status = "completed"
         try:
+            await emit("request_validated", "started")
             if not profile_id:
                 raise OmnigentOAuthHostError(
                     "OAuth-backed Omnigent execution requires executionProfileRef",
@@ -269,8 +290,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "ownerIsWorkflow": False,
                 },
             )
+            await emit(current_stage, "completed")
+            current_stage = "profile_lease_acquired"
+            await emit(current_stage, "started")
             await emit(
-                "profile_lease_acquired",
+                current_stage,
                 "completed",
                 metadata={
                     "providerProfileId": profile_id,
@@ -326,9 +350,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                     expected_status="allocating",
                     new_status="starting",
                 )
+            github_token = await self._github_token(request)
             current_stage = "container_start"
             await emit(current_stage, "started")
-            await emit("credential_mount", "started")
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
@@ -342,10 +366,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     (request.parameters or {}).get("repository") or ""
                 ).strip(),
                 required_capabilities=self._required_capabilities(request),
-                github_token=await self._github_token(request),
+                github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
             )
             await emit(current_stage, "completed")
+            await emit("credential_mount", "started")
             await emit(
                 "credential_mount",
                 "completed",
@@ -355,12 +380,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             host_id = str(preflight["hostId"])
+            await emit("host_registration", "started")
             await emit(
                 "host_registration", "completed", metadata={"omnigentHostId": host_id}
             )
+            await emit("harness_readiness", "started")
             await emit(
                 "harness_readiness", "ready", metadata={"omnigentHostId": host_id}
             )
+            await emit("bridge_authentication", "started")
             await emit("bridge_authentication", "completed")
             if binding.static_host_id is None and not binding.host_launch_profile_ref:
                 binding = await self._hosts.create_or_update_static_binding(
@@ -385,6 +413,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=host_id,
             )
+            await emit("credential_preflight", "started")
             await emit(
                 "credential_preflight",
                 "ready",
@@ -410,6 +439,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             current_stage = "session_creation"
             await emit(current_stage, "started", metadata={"omnigentHostId": host_id})
             await emit("first_message_prepare", "started")
+            await emit("first_message_post", "started")
+            await emit("session_running", "started")
+            await emit("resource_harvest", "started")
             result = await self._execute(
                 _bind_exact_host(
                     request,
@@ -479,6 +511,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         summary=str(exc),
                         metadata=exc.evidence,
                     )
+                prepare_failure_stage = _prepare_host_failure_stage(exc)
+                if prepare_failure_stage and prepare_failure_stage not in active_stages:
+                    await emit(prepare_failure_stage, "started", ignore_errors=True)
                 for stage in list(active_stages) or [current_stage]:
                     await emit(
                         stage,
@@ -555,6 +590,12 @@ class OmnigentProfileBoundExecutionCoordinator:
             lease_released = provider_lease is None
             if provider_lease is not None:
                 if safe_to_release_provider:
+                    await emit(
+                        "profile_lease_release",
+                        "started",
+                        metadata={"leaseReleased": False},
+                        ignore_errors=True,
+                    )
                     release_exc: Exception | None = None
                     for release_attempt in range(3):
                         try:

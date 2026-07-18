@@ -2967,7 +2967,7 @@ export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['row
   if (OPERATOR_ATTENTION_EVENT_KINDS.has(kind)) {
     return 'approval';
   }
-  if (event.stream === 'system') {
+  if (event.stream === 'system' || kind.startsWith('lifecycle_')) {
     return 'system';
   }
   if (event.stream === 'session') {
@@ -3014,7 +3014,15 @@ function mapEventsToTimelineRows(
 
 function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityEventRow[] {
   return rows
-    .filter((row) => row.rowType !== 'fallback' && row.rowType !== 'output' && row.rowType !== 'system')
+    .filter((row) => (
+      row.rowType !== 'fallback'
+      && row.rowType !== 'output'
+      && (
+        row.rowType !== 'system'
+        || row.kind?.startsWith('lifecycle.')
+        || row.kind?.startsWith('lifecycle_')
+      )
+    ))
     .map((row) => ({
       id: row.id,
       runId: null,
@@ -3023,7 +3031,9 @@ function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityE
       timestamp: row.timestamp,
       stream: row.stream,
       text: row.text,
-      kind: row.kind,
+      kind: row.kind?.startsWith('lifecycle_')
+        ? `lifecycle.${row.kind.slice('lifecycle_'.length)}`
+        : row.kind,
       sessionId: row.sessionId,
       sessionEpoch: row.sessionEpoch,
       turnId: row.turnId,
@@ -3696,6 +3706,9 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
       'Open reset boundary artifact',
       metadata.resetBoundaryRef ?? (sourceKind === 'session_reset_boundary' ? metadata.artifactRef : null),
     );
+  }
+  if (sourceKind?.startsWith('lifecycle.')) {
+    addLink('Open diagnostics', metadata.diagnosticsRef);
   }
   if (metadata.terminalStatus) {
     addLink('Open diagnostics', metadata.diagnosticsRef);

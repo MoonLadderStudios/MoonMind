@@ -68,6 +68,31 @@ describe('chat session observability projection for MM-1013', () => {
     ]);
   });
 
+  it('projects failed-launch lifecycle evidence into concise operator status blocks', () => {
+    const state = projectChatSessionBlocks([
+      row(1, 'lifecycle.profile_readiness', '', { status: 'ready' }),
+      row(2, 'lifecycle.credential_preflight', '', {
+        status: 'failed',
+        code: 'oauth_generation_mismatch',
+        summary: 'Credential generation did not match the mounted volume.',
+        remediationAction: 'validate_codex_oauth',
+        diagnosticsRef: 'artifact://launch/diagnostics',
+        metadata: { providerProfileId: 'codex', hostLeaseRef: 'host-lease-1' },
+      }),
+      row(3, 'lifecycle.terminal', '', {
+        status: 'failed',
+        metadata: { cleanupCompleted: true, leaseReleased: true, workflowId: 'workflow-1' },
+      }),
+    ]);
+
+    expect(state.blocks.map((block) => [block.kind, block.text])).toEqual([
+      ['system', 'profile readiness: ready'],
+      ['error', 'credential preflight: failed · Reason: oauth_generation_mismatch · Credential generation did not match the mounted volume. · Profile: codex · Host lease: host-lease-1 · Recommended action: validate codex oauth'],
+      ['error', 'terminal: failed · Workflow: workflow-1 · Cleanup: completed · Profile lease: released'],
+    ]);
+    expect(state.blocks[1]?.metadata?.diagnosticsRef).toBe('artifact://launch/diagnostics');
+  });
+
   it('maps runtime-neutral resource, diagnostics, control, and terminal vocabulary', () => {
     const cases: Array<[string, string]> = [
       ['resource_available', 'resource'],
