@@ -62,3 +62,19 @@ Failure cases archive bounded redacted diagnostics and lifecycle events. Before
 publication, the report gate scans the aggregate evidence; runners must also
 scan their raw logs, Temporal history export, screenshots, and archive manifest,
 and reference those scan results from `failures.lifecycle-and-redaction`.
+
+The credentialed entrypoint is `tools/run_omnigent_live_conformance.py`. It
+requires immutable image references and an already-enrolled OAuth profile:
+
+```bash
+python tools/run_omnigent_live_conformance.py --mode all \
+  --server-image ghcr.io/omnigent-ai/omnigent-server@sha256:<digest> \
+  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+```
+
+Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
+removes that project's containers and networks only; it intentionally never
+passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
+runner always attempts cleanup and evidence scanning, including after a failed
+startup or journey. `--mode static` covers restart and replay; `stock`,
+`ondemand`, and `failures` can be gated independently in provider environments.
