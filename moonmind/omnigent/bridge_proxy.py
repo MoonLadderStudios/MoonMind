@@ -301,14 +301,26 @@ class OmnigentBridgeSessionProxy:
         # before the journal write landed, a retry finds the session already
         # attached; re-emitting here (the store append is idempotent) prevents the
         # session.created event from being permanently lost on partial failure.
+        snapshot = await self._best_effort_snapshot(session_id)
+        raw_capabilities = snapshot.get("interventionCapabilities")
+        if not isinstance(raw_capabilities, dict):
+            raw_capabilities = snapshot.get("capabilities")
+        capabilities = (
+            {
+                key: value
+                for key, value in raw_capabilities.items()
+                if isinstance(key, str) and isinstance(value, bool)
+            }
+            if isinstance(raw_capabilities, dict)
+            else None
+        )
         await self._run_store.record_session_created(
             exec_request.idempotency_key,
             session_id=session_id,
             agent_id=target.agent_id,
             endpoint_ref=endpoint_ref,
+            capabilities=capabilities,
         )
-
-        snapshot = await self._best_effort_snapshot(session_id)
         return self._session_response(
             snapshot=snapshot,
             session_id=session_id,
@@ -335,13 +347,26 @@ class OmnigentBridgeSessionProxy:
 
         endpoint_ref = str(getattr(row, "omnigent_endpoint_ref", None) or "default")
         agent_id = getattr(row, "omnigent_agent_id", None)
+        snapshot = await self._best_effort_snapshot(session_id)
+        raw_capabilities = snapshot.get("interventionCapabilities")
+        if not isinstance(raw_capabilities, dict):
+            raw_capabilities = snapshot.get("capabilities")
+        capabilities = (
+            {
+                key: value
+                for key, value in raw_capabilities.items()
+                if isinstance(key, str) and isinstance(value, bool)
+            }
+            if isinstance(raw_capabilities, dict)
+            else None
+        )
         await self._run_store.record_session_created(
             exec_request.idempotency_key,
             session_id=session_id,
             agent_id=agent_id,
             endpoint_ref=endpoint_ref,
+            capabilities=capabilities,
         )
-        snapshot = await self._best_effort_snapshot(session_id)
         return self._session_response(
             snapshot=snapshot,
             session_id=session_id,

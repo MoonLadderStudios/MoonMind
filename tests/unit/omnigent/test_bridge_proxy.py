@@ -119,19 +119,26 @@ class _FakeStore:
         return self.rows[key]
 
     async def record_session_created(
-        self, key: str, *, session_id: str, agent_id=None, endpoint_ref=None
+        self,
+        key: str,
+        *,
+        session_id: str,
+        agent_id=None,
+        endpoint_ref=None,
+        capabilities=None,
     ) -> _FakeRow:
         # Mirror the real store: session.created is recorded once per session
         # (idempotent), so create/reuse retries never duplicate the event.
         if not any(evt["key"] == key for evt in self.created_events):
-            self.created_events.append(
-                {
+            event = {
                     "key": key,
                     "session_id": session_id,
                     "agent_id": agent_id,
                     "endpoint_ref": endpoint_ref,
                 }
-            )
+            if capabilities is not None:
+                event["capabilities"] = capabilities
+            self.created_events.append(event)
         return self.rows.get(key)
 
 

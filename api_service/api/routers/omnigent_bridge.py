@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -547,6 +547,7 @@ class BridgeSessionResolution(BaseModel):
     provider_profile_id: str | None = None
     host_binding_ref: str | None = None
     provider_session_ref: str | None = None
+    capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
 class BridgeRetentionGap(BaseModel):
@@ -650,6 +651,22 @@ def _terminal_envelope(row: Any) -> BridgeTerminalEnvelope | None:
             None if has_evidence else "No terminal artifacts were captured."
         ),
     )
+
+
+def _projection_capabilities(row: Any) -> dict[str, bool]:
+    metadata = getattr(row, "metadata_", None)
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("interventionCapabilities")
+    if not isinstance(raw, dict):
+        raw = metadata.get("capabilities")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, bool)
+    }
 
 
 def _bridge_event_kind(event_type: str | None) -> str:
@@ -780,6 +797,7 @@ async def resolve_omnigent_bridge_session_projection(
         provider_profile_id=row.provider_profile_id,
         host_binding_ref=row.host_binding_ref,
         provider_session_ref=row.omnigent_session_id,
+        capabilities=_projection_capabilities(row),
     )
 
 
@@ -834,6 +852,41 @@ async def list_omnigent_bridge_session_events(
         retention_gap=gap,
         terminal_envelope=envelope if terminal else None,
     )
+
+
+@router.get("/bridge-sessions/{bridge_session_id}/resources", response_model=dict)
+async def get_omnigent_bridge_session_resources(
+    bridge_session_id: str,
+    _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    user: User = Depends(get_current_user()),
+    service: Any = Depends(_get_execution_service),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> dict[str, Any]:
+    """Return owner-authorized artifact evidence for one bridge session."""
+
+    await _authorize_bridge_session_projection(
+        bridge_session_id=bridge_session_id,
+        user=user,
+        service=service,
+        store=store,
+    )
+    row = await store.get_bridge_session(bridge_session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    projection = dict((row.terminal_refs or {}).get("resourceProjection") or {})
+    if projection:
+        return projection
+    return {
+        "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+        "completeness": (
+            "pending" if row.status not in _BRIDGE_TERMINAL_STATUSES else "degraded"
+        ),
+        "unavailableReasons": (
+            {} if row.status not in _BRIDGE_TERMINAL_STATUSES else
+            {"resourceProjection": "Terminal resource evidence was not published."}
+        ),
+        "groups": [],
+    }
 
 
 @router.get("/bridge-sessions/{bridge_session_id}/stream")

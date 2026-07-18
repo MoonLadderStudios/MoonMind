@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -25,6 +26,23 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
+_MAX_OMNIGENT_CONTENT_BYTES = 10 * 1024 * 1024
+
+
+def _content_limit_reason(content: bytes) -> str | None:
+    if len(content) <= _MAX_OMNIGENT_CONTENT_BYTES:
+        return None
+    return (
+        f"content exceeds the {_MAX_OMNIGENT_CONTENT_BYTES}-byte harvest limit "
+        f"({len(content)} bytes)"
+    )
+
+
+_MAX_OMNIGENT_PREVIEW_BYTES = 256 * 1024
+_OMNIGENT_HARVEST_TIMEOUT_SECONDS = 30
+_OMNIGENT_HARVEST_MAX_ATTEMPTS = 3
+_CAPTURE_MANIFEST_SCHEMA_VERSION = "moonmind.omnigent.capture_manifest.v1"
+_RESOURCE_PROJECTION_SCHEMA_VERSION = "moonmind.omnigent.resource_projection.v1"
 
 
 class OmnigentContractError(RuntimeError):
@@ -46,6 +64,7 @@ class OmnigentCaptureBundle:
     metadata_refs: dict[str, str] = field(default_factory=dict)
     optional_harvest_failed: bool = False
     resource_harvest_failure_class: str | None = None
+    resource_projection: dict[str, Any] = field(default_factory=dict)
 
 
 class OmnigentArtifactGateway:
@@ -415,14 +434,32 @@ def build_omnigent_terminal_refs(
             else "Omnigent session failed"
         ),
     )
+    required_evidence_failed = (
+        terminal_status == "completed"
+        and capture_bundle.resource_harvest_failure_class is not None
+    )
     return {
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
-        "failureClass": failure_class_for_terminal_status(terminal_status),
-        "failureCode": final_snapshot.get("providerErrorCode")
-        or final_snapshot.get("failureCode"),
-        "summary": summary,
+        "resourceProjection": dict(capture_bundle.resource_projection),
+        "failureClass": (
+            capture_bundle.resource_harvest_failure_class
+            if required_evidence_failed
+            else failure_class_for_terminal_status(terminal_status)
+        ),
+        "failureCode": (
+            "omnigent_required_resource_evidence_missing"
+            if required_evidence_failed
+            else final_snapshot.get("providerErrorCode")
+            or final_snapshot.get("failureCode")
+        ),
+        "summary": (
+            "Required Omnigent resource evidence was missing after session "
+            "completion"
+            if required_evidence_failed
+            else summary
+        ),
     }
 
 
@@ -522,6 +559,7 @@ class BridgeResourceHarvester:
         await self.harvest_workspace_diffs(changed_items=changed_items)
         if _capture_enabled(capture_policy, "sessionFiles"):
             await self.harvest_session_files()
+        _reconcile_changed_file_evidence(self._manifest)
 
     async def harvest_changed_files(self) -> list[dict[str, Any]]:
         try:
@@ -566,6 +604,9 @@ class BridgeResourceHarvester:
                         ),
                     }
                 )
+                continue
+            if unavailable := _content_limit_reason(content):
+                harvested.append({"path": path, "unavailable": unavailable})
                 continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
@@ -622,6 +663,9 @@ class BridgeResourceHarvester:
                     }
                 )
                 continue
+            if unavailable := _content_limit_reason(content):
+                harvested.append({"path": path, "unavailable": unavailable})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.workspace_files/{path}",
@@ -656,6 +700,9 @@ class BridgeResourceHarvester:
                 )
                 self._manifest["patchUnavailable"] = True
                 return
+            if unavailable := _content_limit_reason(diff):
+                harvested.append({"path": path, "unavailable": unavailable})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.workspace_diffs/{path}.diff",
@@ -708,6 +755,15 @@ class BridgeResourceHarvester:
                             exc,
                             fallback="session file content unavailable",
                         ),
+                    }
+                )
+                continue
+            if unavailable := _content_limit_reason(content):
+                harvested.append(
+                    {
+                        "fileId": file_id,
+                        "filename": filename,
+                        "unavailable": unavailable,
                     }
                 )
                 continue
@@ -795,13 +851,16 @@ async def _harvest_changed_files(
                 }
             )
             continue
+        if unavailable := _content_limit_reason(content):
+            harvested.append({"path": path, "unavailable": unavailable})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.changed_files/{path}",
             payload=content,
             link_type="output.omnigent.changed_file",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append(_harvested_resource(path, ref, content))
     manifest["changedFiles"] = harvested
     manifest.setdefault("patchUnavailable", True)
     return file_items
@@ -859,13 +918,16 @@ async def _harvest_workspace_files(
                 }
             )
             continue
+        if unavailable := _content_limit_reason(content):
+            harvested.append({"path": path, "unavailable": unavailable})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.workspace_files/{path}",
             payload=content,
             link_type="output.omnigent.workspace_file",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append(_harvested_resource(path, ref, content))
     manifest["workspaceFiles"] = harvested
 
 
@@ -899,6 +961,9 @@ async def _harvest_workspace_diffs(
             )
             manifest["patchUnavailable"] = True
             return
+        if unavailable := _content_limit_reason(diff):
+            harvested.append({"path": path, "unavailable": unavailable})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.workspace_diffs/{path}.diff",
@@ -906,7 +971,7 @@ async def _harvest_workspace_diffs(
             link_type="output.omnigent.workspace_diff",
             content_type="text/x-diff",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append(_harvested_resource(path, ref, diff, content_type="text/x-diff"))
     manifest["workspaceDiffs"] = harvested
     manifest["patchUnavailable"] = not bool(harvested)
 
@@ -958,6 +1023,15 @@ async def _harvest_session_files(
                 }
             )
             continue
+        if unavailable := _content_limit_reason(content):
+            harvested.append(
+                {
+                    "fileId": file_id,
+                    "filename": filename,
+                    "unavailable": unavailable,
+                }
+            )
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.session_files/{file_id}/{filename}",
@@ -979,9 +1053,30 @@ async def _harvest_session_files(
                 "filename": filename,
                 "artifactRef": ref,
                 "metadataRef": metadata_ref,
+                "contentType": _resource_content_type(filename),
+                "sizeBytes": len(content),
             }
         )
     manifest["sessionFiles"] = harvested
+
+
+def _resource_content_type(path: str) -> str:
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+
+def _harvested_resource(
+    path: str,
+    artifact_ref: str,
+    content: bytes,
+    *,
+    content_type: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "path": path,
+        "artifactRef": artifact_ref,
+        "contentType": content_type or _resource_content_type(path),
+        "sizeBytes": len(content),
+    }
 
 
 def _resource_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1126,6 +1221,175 @@ def _patch_evidence(manifest: dict[str, Any]) -> dict[str, Any]:
     return evidence
 
 
+def _reconcile_changed_file_evidence(manifest: dict[str, Any]) -> None:
+    """Durably associate each changed file with its harvested diff outcome."""
+
+    diffs_by_path = {
+        str(item.get("path") or ""): str(item.get("artifactRef") or "")
+        for item in (manifest.get("workspaceDiffs") or [])
+        if isinstance(item, dict) and item.get("path") and item.get("artifactRef")
+    }
+    unavailable = str(
+        manifest.get("workspaceDiffsUnavailable")
+        or "No diff artifact was published for this changed file."
+    )
+    for changed_file in (manifest.get("changedFiles") or []):
+        if not isinstance(changed_file, dict) or not changed_file.get("path"):
+            continue
+        diff_ref = diffs_by_path.get(str(changed_file["path"]))
+        if diff_ref:
+            changed_file["diffArtifactRef"] = diff_ref
+            changed_file.pop("diffUnavailable", None)
+        else:
+            changed_file["diffUnavailable"] = unavailable
+
+
+def _associate_resource_events(
+    manifest: dict[str, Any], normalized_events: list[dict[str, Any]]
+) -> None:
+    """Attach harvested changed files to the durable announcing event sequence."""
+
+    sequence_by_path: dict[tuple[str, str], int] = {}
+    for event in normalized_events:
+        event_type = str(event.get("type") or event.get("eventType") or "")
+        if event_type not in {"resource.changed_file", "resource.session_file"}:
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else event
+        path = _resource_path(data)
+        sequence = event.get("sequence")
+        if path and isinstance(sequence, int):
+            sequence_by_path.setdefault((event_type, path), sequence)
+    for changed_file in (manifest.get("changedFiles") or []):
+        if not isinstance(changed_file, dict):
+            continue
+        sequence = sequence_by_path.get(
+            ("resource.changed_file", str(changed_file.get("path") or ""))
+        )
+        if sequence is not None:
+            changed_file["sourceEventSequence"] = sequence
+    for session_file in (manifest.get("sessionFiles") or []):
+        if not isinstance(session_file, dict):
+            continue
+        sequence = sequence_by_path.get(
+            ("resource.session_file", str(session_file.get("filename") or ""))
+        )
+        if sequence is not None:
+            session_file["sourceEventSequence"] = sequence
+
+
+def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project the manifest into stable UI-oriented evidence groups."""
+
+    definitions = (
+        ("changed_files", "Changed files", "changedFiles"),
+        ("diffs", "Diffs", "workspaceDiffs"),
+        ("workspace_files", "Workspace files", "workspaceFiles"),
+        ("session_files", "Session files", "sessionFiles"),
+        ("snapshots", "Snapshots", "snapshotEvidence"),
+        ("logs_and_journals", "Logs and event journals", "journalEvidence"),
+        ("diagnostics", "Diagnostics", "diagnosticEvidence"),
+        ("manifests", "Capture and checkpoint manifests", "manifestEvidence"),
+    )
+    index_items = [
+        {"label": label, "artifactRef": manifest[ref_key], "contentType": "application/json"}
+        for label, ref_key in (
+            ("Changed-file index", "changedFilesIndexRef"),
+            ("Workspace-file index", "workspaceFilesIndexRef"),
+            ("Session-file index", "sessionFilesIndexRef"),
+        )
+        if manifest.get(ref_key)
+    ]
+    unavailable_by_group = {
+        "changed_files": "changedFilesUnavailable",
+        "diffs": "workspaceDiffsUnavailable",
+        "workspace_files": "workspaceFilesUnavailable",
+        "session_files": "sessionFilesUnavailable",
+    }
+    groups: list[dict[str, Any]] = []
+    for key, title, manifest_key in definitions:
+        raw_items = manifest.get(manifest_key, [])
+        items = list(raw_items) if isinstance(raw_items, list) else []
+        if key == "manifests":
+            items.extend(index_items)
+        unavailable_key = unavailable_by_group.get(key)
+        if unavailable_key and manifest.get(unavailable_key):
+            items.append(
+                {
+                    "label": f"{title} unavailable",
+                    "unavailable": str(manifest[unavailable_key]),
+                }
+            )
+        groups.append({"groupKey": key, "title": title, "items": items})
+    return groups
+
+
+def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Build the bounded, artifact-ref-only projection consumed by Workflow Detail."""
+
+    groups: list[dict[str, Any]] = []
+    for group in _capture_resource_groups(manifest):
+        resources: list[dict[str, Any]] = []
+        for item in group["items"][:_MAX_OMNIGENT_HARVEST_ITEMS]:
+            if not isinstance(item, dict):
+                continue
+            artifact_ref = str(
+                item.get("artifactRef") or item.get("snapshotRef") or ""
+            ).strip()
+            path = str(item.get("path") or item.get("filename") or "").strip()
+            label = str(item.get("label") or path or group["title"]).strip()
+            unavailable_reason = str(
+                item.get("unavailable")
+                or item.get("skipped")
+                or item.get("diffUnavailable")
+                or ""
+            ).strip()
+            resource: dict[str, Any] = {
+                "label": label[:512],
+                "status": (
+                    "available"
+                    if artifact_ref
+                    else "unavailable"
+                    if unavailable_reason
+                    else "pending"
+                ),
+                "previewAvailable": bool(artifact_ref)
+                and not artifact_ref.startswith("artifact://"),
+                "downloadAvailable": bool(artifact_ref)
+                and not artifact_ref.startswith("artifact://"),
+            }
+            for key in ("contentType", "sizeBytes", "sourceEventSequence"):
+                if item.get(key) is not None:
+                    resource[key] = item[key]
+            if artifact_ref:
+                resource["artifactRef"] = artifact_ref
+            if path:
+                resource["path"] = path[:512]
+            if unavailable_reason:
+                resource["unavailableReason"] = unavailable_reason[:512]
+            related = [
+                str(item[key])
+                for key in ("metadataRef", "diffArtifactRef")
+                if item.get(key)
+            ]
+            if related:
+                resource["relatedArtifactRefs"] = related
+            resources.append(resource)
+        groups.append(
+            {
+                "groupKey": group["groupKey"],
+                "title": group["title"],
+                "resources": resources,
+            }
+        )
+    completeness = dict(manifest.get("evidenceCompleteness") or {})
+    return {
+        "schemaVersion": _RESOURCE_PROJECTION_SCHEMA_VERSION,
+        "completeness": completeness.get("status", "complete"),
+        "unavailableReasons": dict(completeness.get("unavailableReasons") or {}),
+        "groups": groups,
+    }
+
+
 async def _build_capture_bundle(
     *,
     client: OmnigentHttpClient | None,
@@ -1206,12 +1470,30 @@ async def _build_capture_bundle(
         link_type="output.omnigent.snapshot.final",
     )
     manifest: dict[str, Any] = {
+        "schemaVersion": _CAPTURE_MANIFEST_SCHEMA_VERSION,
+        "sourceIssue": "MoonLadderStudios/MoonMind#3365",
         "provider": "omnigent",
         "omnigentSessionId": session_id,
         "omnigentAgentId": agent_id,
         "terminalStatus": terminal_status,
         "artifactRefs": refs,
         "patchUnavailable": True,
+        "capturePolicy": {
+            "requested": dict(capture_policy or {}),
+            "limits": {
+                "maxListEntries": _MAX_OMNIGENT_HARVEST_ITEMS,
+                "maxHarvestedFiles": _MAX_OMNIGENT_HARVEST_ITEMS,
+                "maxContentBytes": _MAX_OMNIGENT_CONTENT_BYTES,
+                "maxPreviewBytes": _MAX_OMNIGENT_PREVIEW_BYTES,
+            },
+            "supportedContentTypes": ["text/*", "application/json", "application/octet-stream"],
+            "binaryHandling": "metadata_and_authorized_download; preview_when_supported",
+            "timeoutSeconds": _OMNIGENT_HARVEST_TIMEOUT_SECONDS,
+            "retry": {"maxAttempts": _OMNIGENT_HARVEST_MAX_ATTEMPTS},
+            "optionalEvidenceFailureIsFatal": _capture_requires_full_evidence(
+                capture_policy
+            ),
+        },
     }
     child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
     manifest["childSessions"] = len(child_session_ids)
@@ -1300,6 +1582,8 @@ async def _build_capture_bundle(
                 manifest=manifest,
                 refs=refs,
             )
+    _associate_resource_events(manifest, normalized_events)
+    _reconcile_changed_file_evidence(manifest)
     optional_harvest_failed = _optional_resource_harvest_failed(manifest)
     require_full_evidence = _capture_requires_full_evidence(capture_policy)
     resource_harvest_failure_class: str | None = None
@@ -1318,6 +1602,21 @@ async def _build_capture_bundle(
             ),
             "failureClass": resource_harvest_failure_class,
         }
+    unavailable_reasons = {
+        key: value
+        for key, value in manifest.items()
+        if key.endswith("Unavailable") and value
+    }
+    manifest["evidenceCompleteness"] = {
+        "status": (
+            "required_missing"
+            if resource_harvest_failure_class
+            else "degraded"
+            if optional_harvest_failed
+            else "complete"
+        ),
+        "unavailableReasons": unavailable_reasons,
+    }
     diagnostics_payload = {
         "provider": "omnigent",
         "omnigentSessionId": session_id,
@@ -1334,6 +1633,26 @@ async def _build_capture_bundle(
         payload=diagnostics_payload,
         link_type="diagnostics.omnigent",
     )
+    manifest["snapshotEvidence"] = [
+        {"label": label, "artifactRef": refs[ref_key]}
+        for label, ref_key in (
+            ("Initial session snapshot", "initialSnapshotRef"),
+            ("Final session snapshot", "finalSnapshotRef"),
+        )
+        if ref_key in refs
+    ] + list(manifest.get("childSessionEvidence", []))
+    manifest["journalEvidence"] = [
+        {"label": label, "artifactRef": refs[ref_key]}
+        for label, ref_key in (
+            ("Raw event journal", "rawSseStreamRef"),
+            ("Normalized event journal", "normalizedEventStreamRef"),
+            ("Child-session journal", "childSessionsRef"),
+        )
+        if ref_key in refs
+    ]
+    manifest["diagnosticEvidence"] = [
+        {"label": "Capture diagnostics", "artifactRef": diagnostics_ref}
+    ]
     if external_state is not None:
         first_message_state = dict(external_state.get("firstMessage", {}))
         first_message_state.setdefault("requestRef", refs.get("firstMessageRequestRef"))
@@ -1428,6 +1747,15 @@ async def _build_capture_bundle(
             link_type="checkpoint.omnigent.external_state_ref",
         )
         manifest["externalStateRef"] = external_state_ref
+    manifest["manifestEvidence"] = [
+        {
+            "label": "External-state checkpoint",
+            "artifactRef": refs["externalStateRef"],
+        }
+        for _ in (0,)
+        if "externalStateRef" in refs
+    ]
+    manifest["resourceGroups"] = _capture_resource_groups(manifest)
     manifest_ref = await _capture_artifact_json(
         artifact_gateway,
         request,
@@ -1436,6 +1764,21 @@ async def _build_capture_bundle(
         name="output.omnigent.capture_manifest.json",
         payload=manifest,
         link_type="output.omnigent.capture_manifest",
+    )
+    resource_projection = _capture_resource_projection(manifest)
+    manifest_group = next(
+        group
+        for group in resource_projection["groups"]
+        if group["groupKey"] == "manifests"
+    )
+    manifest_group["resources"].append(
+        {
+            "label": "Capture manifest",
+            "artifactRef": manifest_ref,
+            "status": "available",
+            "previewAvailable": True,
+            "downloadAvailable": True,
+        }
     )
     metadata_refs = {
         "captureManifestRef": manifest_ref,
@@ -1467,6 +1810,7 @@ async def _build_capture_bundle(
         metadata_refs=metadata_refs,
         optional_harvest_failed=optional_harvest_failed,
         resource_harvest_failure_class=resource_harvest_failure_class,
+        resource_projection=resource_projection,
     )
 
 

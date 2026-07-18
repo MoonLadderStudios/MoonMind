@@ -2843,6 +2843,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/bridge-sessions/{bridge_session_id}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Omnigent Bridge Session Resources
+         * @description Return owner-authorized artifact evidence for one bridge session.
+         */
+        get: operations["get_omnigent_bridge_session_resources_api_omnigent_bridge_sessions__bridge_session_id__resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/bridge-sessions/{bridge_session_id}/stream": {
         parameters: {
             query?: never;
@@ -4905,6 +4925,10 @@ export interface components {
             hostBindingRef?: string | null;
             /** Providersessionref */
             providerSessionRef?: string | null;
+            /** Capabilities */
+            capabilities?: {
+                [key: string]: boolean;
+            };
         };
         /** BridgeTerminalEnvelope */
         BridgeTerminalEnvelope: {
@@ -10600,6 +10624,28 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
+            /**
+             * Preview Available
+             * @default false
+             */
+            preview_available: boolean;
+            /**
+             * Download Available
+             * @default true
+             */
+            download_available: boolean;
+            /**
+             * Completeness Status
+             * @default complete
+             * @enum {string}
+             */
+            completeness_status: "complete" | "degraded" | "pending";
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+            /** Source Event Sequence */
+            source_event_sequence?: number | null;
+            /** Related Resource Ids */
+            related_resource_ids?: string[];
             /** Content Url */
             content_url: string;
             /** Download Url */
@@ -17974,6 +18020,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BridgeEventPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_omnigent_bridge_session_resources_api_omnigent_bridge_sessions__bridge_session_id__resources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bridge_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -622,6 +622,7 @@ class OmnigentBridgeSessionStore:
         session_id: str,
         agent_id: str | None = None,
         endpoint_ref: str | None = None,
+        capabilities: dict[str, bool] | None = None,
     ) -> OmnigentBridgeSession:
         """Emit ``session.created`` into the durable bridge event journal.
 
@@ -643,6 +644,10 @@ class OmnigentBridgeSessionStore:
             already_recorded = any(
                 entry.get("type") == SESSION_CREATED_EVENT_TYPE for entry in journal
             )
+            changed = False
+            if capabilities is not None:
+                metadata["interventionCapabilities"] = capabilities
+                changed = True
             if not already_recorded:
                 journal.append(
                     {
@@ -655,6 +660,8 @@ class OmnigentBridgeSessionStore:
                     }
                 )
                 metadata[BRIDGE_EVENT_JOURNAL_KEY] = journal
+                changed = True
+            if changed:
                 row.metadata_ = metadata
                 await session.commit()
                 await session.refresh(row)

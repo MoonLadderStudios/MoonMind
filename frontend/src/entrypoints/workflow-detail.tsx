@@ -1255,6 +1255,14 @@ const SessionResourceSchema = z
     contentUrl: z.string().optional(),
     download_url: z.string().optional(),
     downloadUrl: z.string().optional(),
+    preview_available: z.boolean().optional(),
+    previewAvailable: z.boolean().optional(),
+    download_available: z.boolean().optional(),
+    downloadAvailable: z.boolean().optional(),
+    completeness_status: z.enum(['complete', 'degraded', 'pending']).optional(),
+    completenessStatus: z.enum(['complete', 'degraded', 'pending']).optional(),
+    unavailable_reason: z.string().nullable().optional(),
+    unavailableReason: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
   })
   .passthrough()
@@ -1268,6 +1276,10 @@ const SessionResourceSchema = z
     sizeBytes: resource.sizeBytes ?? resource.size_bytes ?? null,
     contentUrl: resource.contentUrl ?? resource.content_url ?? null,
     downloadUrl: resource.downloadUrl ?? resource.download_url ?? null,
+    previewAvailable: resource.previewAvailable ?? resource.preview_available ?? false,
+    downloadAvailable: resource.downloadAvailable ?? resource.download_available ?? true,
+    completenessStatus: resource.completenessStatus ?? resource.completeness_status ?? 'complete',
+    unavailableReason: resource.unavailableReason ?? resource.unavailable_reason ?? null,
     metadata: resource.metadata ?? {},
   }));
 
@@ -1300,7 +1312,7 @@ type ChatSessionMessageEvent = {
 };
 
 type OptimisticChatSessionMessage = ChatSessionMessageEvent & {
-  status: 'pending' | 'failed';
+  status: 'pending' | 'delivery_unknown' | 'failed';
   error?: string;
 };
 
@@ -1412,6 +1424,19 @@ const BridgeSessionEventsPageSchema = z
       .object({
         schemaVersion: z.literal('moonmind.bridge-session-terminal.v1'),
         status: z.enum(['completed', 'failed', 'canceled', 'timed_out']),
+        failureClass: z.string().nullable().optional(),
+        failureCode: z.string().nullable().optional(),
+        summary: z.string().nullable().optional(),
+        diagnosticsRef: z.string().nullable().optional(),
+        captureManifestRef: z.string().nullable().optional(),
+        initialSnapshotRef: z.string().nullable().optional(),
+        finalSnapshotRef: z.string().nullable().optional(),
+        rawEventsRef: z.string().nullable().optional(),
+        normalizedEventsRef: z.string().nullable().optional(),
+        externalStateRef: z.string().nullable().optional(),
+        cleanupState: z.string().nullable().optional(),
+        leaseReleaseState: z.string().nullable().optional(),
+        evidenceIncompleteReason: z.string().nullable().optional(),
       })
       .passthrough()
       .nullable()
@@ -1423,6 +1448,8 @@ const BridgeSessionEventsPageSchema = z
     sessionSnapshot: undefined,
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
+    terminal: page.terminal,
+    terminalEnvelope: page.terminalEnvelope ?? null,
   }));
 
 const ObservabilityEventsResponseSchema = z.union([
@@ -2471,13 +2498,116 @@ type BridgeSessionProjection = {
   agentRunId?: string | undefined;
   idempotencyKey?: string | undefined;
   status?: string | undefined;
+  providerSessionRef?: string | undefined;
+  capabilities: Record<string, boolean>;
 };
 
-function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream'): string {
+function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream' | 'resources'): string {
   return joinApiBasePath(
     apiBase,
     `/omnigent/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/${suffix}`,
   );
+}
+
+type BridgeResourceProjection = {
+  completeness: string;
+  groups: Array<{ groupKey: string; title: string; resources: Array<{
+    label: string;
+    artifactRef?: string;
+    relatedArtifactRefs?: string[];
+    path?: string;
+    status: string;
+    unavailableReason?: string;
+    sourceEventSequence?: number;
+    previewAvailable?: boolean;
+    downloadAvailable?: boolean;
+  }> }>;
+};
+
+type BridgeResource = BridgeResourceProjection['groups'][number]['resources'][number];
+
+function chatBlockEventSequences(block: ProjectedChatBlock): Set<number> {
+  const sequences = new Set<number>();
+  for (const eventId of block.sourceEventIds) {
+    const match = eventId.match(/^(\d+)-|(?::seq:|:)(\d+)(?::|$)/);
+    const sequence = match?.[1] ?? match?.[2];
+    if (sequence) sequences.add(Number(sequence));
+  }
+  return sequences;
+}
+
+function ContextualBridgeResourceLinks({
+  apiBase,
+  block,
+  resources,
+}: {
+  apiBase: string;
+  block: ProjectedChatBlock;
+  resources: BridgeResource[];
+}) {
+  const sequences = chatBlockEventSequences(block);
+  const contextual = resources.filter((resource) =>
+    resource.sourceEventSequence != null && sequences.has(resource.sourceEventSequence));
+  if (contextual.length === 0) return null;
+  return <div className="timeline-artifact-links" aria-label="Resources announced by this event">
+    {contextual.map((resource, index) => {
+      const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+      return <span key={`${resource.label}-${index}`}>
+        {href && resource.previewAvailable
+          ? <a href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open {resource.label}</a>
+          : <span>{resource.label}: {resource.status === 'pending' ? 'Harvesting…' : resource.unavailableReason || resource.status}</span>}
+      </span>;
+    })}
+  </div>;
+}
+
+type BridgeTerminalEnvelope = {
+  status: 'completed' | 'failed' | 'canceled' | 'timed_out';
+  failureClass?: string | null | undefined;
+  failureCode?: string | null | undefined;
+  summary?: string | null | undefined;
+  diagnosticsRef?: string | null | undefined;
+  captureManifestRef?: string | null | undefined;
+  initialSnapshotRef?: string | null | undefined;
+  finalSnapshotRef?: string | null | undefined;
+  rawEventsRef?: string | null | undefined;
+  normalizedEventsRef?: string | null | undefined;
+  externalStateRef?: string | null | undefined;
+  evidenceIncompleteReason?: string | null | undefined;
+};
+
+function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelope: BridgeTerminalEnvelope }) {
+  const evidence = [
+    ['Final snapshot', envelope.finalSnapshotRef],
+    ['Capture manifest', envelope.captureManifestRef],
+    ['Diagnostics', envelope.diagnosticsRef],
+    ['Raw event journal', envelope.rawEventsRef],
+    ['Normalized event journal', envelope.normalizedEventsRef],
+    ['External-state evidence', envelope.externalStateRef],
+  ] as const;
+  const links = evidence.flatMap(([label, ref]) => {
+    const href = ref ? artifactRefHref(apiBase, ref) : null;
+    return href ? [{ label, href }] : [];
+  });
+  return <section className={`notice ${envelope.status === 'completed' ? '' : 'warning'}`} aria-label="Terminal outcome evidence">
+    <strong>Terminal outcome: {formatStatusLabel(envelope.status)}</strong>
+    {envelope.summary ? <p>{envelope.summary}</p> : null}
+    {links.length > 0 ? <div className="button-group">
+      {links.map(({ label, href }) => <a key={label} className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
+    </div> : null}
+    {envelope.evidenceIncompleteReason ? <p className="small">Evidence incomplete: {envelope.evidenceIncompleteReason}</p> : null}
+    {envelope.failureClass || envelope.failureCode ? <p className="small">Failure: {[envelope.failureClass, envelope.failureCode].filter(Boolean).join(' — ')}</p> : null}
+  </section>;
+}
+
+async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
+  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'resources'), { credentials: 'include' });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+  const body = (await resp.json()) as Partial<BridgeResourceProjection>;
+  return {
+    completeness: body.completeness || 'pending',
+    groups: Array.isArray(body.groups) ? body.groups : [],
+  };
 }
 
 async function resolveBridgeSessionProjection({
@@ -2514,7 +2644,40 @@ async function resolveBridgeSessionProjection({
     agentRunId: typeof body.agentRunId === 'string' ? body.agentRunId : undefined,
     idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined,
     status: typeof body.status === 'string' ? body.status : undefined,
+    providerSessionRef: typeof body.providerSessionRef === 'string' ? body.providerSessionRef : undefined,
+    capabilities: body.capabilities && typeof body.capabilities === 'object'
+      ? Object.fromEntries(Object.entries(body.capabilities).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
+      : {},
   };
+}
+
+async function postBridgeSessionControl(
+  apiBase: string,
+  providerSessionRef: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const resp = await fetch(joinApiBasePath(apiBase, `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}/events`), {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+}
+
+async function resolveBridgeElicitation(
+  apiBase: string,
+  providerSessionRef: string,
+  elicitationId: string,
+  decision: 'approved' | 'rejected',
+): Promise<void> {
+  const resp = await fetch(joinApiBasePath(
+    apiBase,
+    `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}/elicitations/${encodeURIComponent(elicitationId)}/resolve`,
+  ), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
 }
 
 async function fetchBridgeSessionEvents(
@@ -2524,6 +2687,8 @@ async function fetchBridgeSessionEvents(
   const events: z.infer<typeof ObservabilityEventSchema>[] = [];
   let cursor: string | null = null;
   let truncated = false;
+  let terminalEnvelope: z.infer<typeof BridgeSessionEventsPageSchema>['terminalEnvelope'] = null;
+  let terminal = false;
   do {
     const route = bridgeSessionRoute(apiBase, bridgeSessionId, 'events');
     const url = cursor ? `${route}?cursor=${encodeURIComponent(cursor)}` : route;
@@ -2535,12 +2700,14 @@ async function fetchBridgeSessionEvents(
     const page = BridgeSessionEventsPageSchema.parse(await resp.json());
     events.push(...page.events);
     truncated ||= page.truncated;
+    terminal ||= page.terminal;
+    terminalEnvelope = page.terminalEnvelope ?? terminalEnvelope;
     cursor = page.hasMore ? page.nextCursor : null;
     if (page.hasMore && cursor == null) {
       throw new Error('Bridge event page hasMore without nextCursor');
     }
   } while (cursor != null);
-  return { events, truncated, sessionSnapshot: undefined };
+  return { events, truncated, sessionSnapshot: undefined, terminal, terminalEnvelope };
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
@@ -3366,20 +3533,29 @@ function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): Timeline
   };
 
   if (row.kind === 'summary_published') {
-    addLink('Open summary artifact', row.metadata.summaryRef ?? row.metadata.artifactRef);
+    addLink('Open summary artifact', row.metadata?.summaryRef ?? row.metadata?.artifactRef);
   }
   if (row.kind === 'checkpoint_published') {
-    addLink('Open checkpoint artifact', row.metadata.checkpointRef ?? row.metadata.artifactRef);
+    addLink('Open checkpoint artifact', row.metadata?.checkpointRef ?? row.metadata?.artifactRef);
   }
   if (row.kind === 'session_cleared' || row.kind === 'session_reset_boundary') {
     addLink(
       'Open control event artifact',
-      row.metadata.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata.artifactRef : null),
+      row.metadata?.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata?.artifactRef : null),
     );
     addLink(
       'Open reset boundary artifact',
-      row.metadata.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata.artifactRef : null),
+      row.metadata?.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata?.artifactRef : null),
     );
+  }
+  if (row.metadata?.terminalStatus) {
+    addLink('Open diagnostics', row.metadata?.diagnosticsRef);
+    addLink('Open capture manifest', row.metadata?.captureManifestRef);
+    addLink('Open initial snapshot', row.metadata?.initialSnapshotRef);
+    addLink('Open final snapshot', row.metadata?.finalSnapshotRef);
+    addLink('Open raw events', row.metadata?.rawEventsRef);
+    addLink('Open normalized events', row.metadata?.normalizedEventsRef);
+    addLink('Open external state', row.metadata?.externalStateRef);
   }
 
   return links;
@@ -3528,11 +3704,20 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
   if (sourceKind?.startsWith('lifecycle.')) {
     addLink('Open diagnostics', metadata.diagnosticsRef);
   }
+  if (metadata.terminalStatus) {
+    addLink('Open diagnostics', metadata.diagnosticsRef);
+    addLink('Open capture manifest', metadata.captureManifestRef);
+    addLink('Open initial snapshot', metadata.initialSnapshotRef);
+    addLink('Open final snapshot', metadata.finalSnapshotRef);
+    addLink('Open raw events', metadata.rawEventsRef);
+    addLink('Open normalized events', metadata.normalizedEventsRef);
+    addLink('Open external state', metadata.externalStateRef);
+  }
 
   return links;
 }
 
-function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string, resources: BridgeResource[] = []): ReactNode {
   const className = [
     'chat-session-block',
     `chat-session-block-${block.kind}`,
@@ -3564,6 +3749,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
           {block.text || block.toolName || 'Tool call'}
         </div>
         <TimelineArtifactLinks links={artifactLinks} />
+        <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
       </div>
     );
   }
@@ -3605,6 +3791,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
         {block.text}
       </div>
       <TimelineArtifactLinks links={artifactLinks} />
+      <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
     </div>
   );
 }
@@ -3614,15 +3801,20 @@ function ChatSessionView({
   chatBlocks,
   rows,
   wrapLines,
+  resources = [],
+  liveAnnouncement,
 }: {
   apiBase: string;
   chatBlocks: ProjectedChatBlock[];
   rows: TimelineRow[];
   wrapLines: boolean;
+  resources?: BridgeResource[];
+  liveAnnouncement?: string | undefined;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
   return (
     <div className="chat-session-view" aria-label="Chat session projection">
+      {liveAnnouncement ? <div className="sr-only" aria-live="polite" aria-atomic="true">{liveAnnouncement}</div> : null}
       <div className="chat-session-header">
         <div>
           <h3>Chat Session</h3>
@@ -3646,7 +3838,7 @@ function ChatSessionView({
             data={chatBlocks}
             followOutput={(atBottom) => atBottom ? 'smooth' : false}
             computeItemKey={(index, block) => `${block.id}:${index}`}
-            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase)}
+            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase, resources)}
           />
         </div>
       )}
@@ -3966,6 +4158,7 @@ function StepObservabilityGroup({
   workflowId: string;
   routes: AgentRunRouteTemplates;
 }) {
+  const [bridgeOptimisticMessages, setBridgeOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
   const agentRunId = row.refs.agentRunId;
   const explicitBridgeSessionId =
     row.refs.bridgeSessionId ||
@@ -4015,6 +4208,9 @@ function StepObservabilityGroup({
           apiBase={apiBase}
           bridgeSessionId={bridgeSessionId}
           isTerminal={stepTerminal(row.status)}
+          projection={bridgeResolutionQuery.data ?? { bridgeSessionId, capabilities: {} }}
+          optimisticMessages={bridgeOptimisticMessages}
+          setOptimisticMessages={setBridgeOptimisticMessages}
         />
       );
     }
@@ -5571,20 +5767,32 @@ function BridgeSessionLogsPanel({
   apiBase,
   bridgeSessionId,
   isTerminal,
+  projection,
+  optimisticMessages,
+  setOptimisticMessages,
+  actionsEnabled = false,
 }: {
   apiBase: string;
   bridgeSessionId: string;
   isTerminal: boolean;
+  projection: BridgeSessionProjection;
+  optimisticMessages: OptimisticChatSessionMessage[];
+  setOptimisticMessages: Dispatch<SetStateAction<OptimisticChatSessionMessage[]>>;
+  actionsEnabled?: boolean;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
   const [wrapLines, setWrapLines] = useState(true);
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
+  const [message, setMessage] = useState('');
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [controlBusy, setControlBusy] = useState(false);
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const isVisible = usePageVisibility();
   const chatBlocks = useMemo(
-    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId),
-    [bridgeSessionId, logContent],
+    () => reduceTimelineRowsToChatBlocks(logContent, bridgeSessionId, optimisticMessages),
+    [bridgeSessionId, logContent, optimisticMessages],
   );
 
   const eventsQuery = useQuery({
@@ -5594,8 +5802,60 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
+  const resourcesQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-resources', bridgeSessionId],
+    queryFn: () => fetchBridgeSessionResources(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    refetchInterval: (query) => {
+      const completeness = (query.state.data as BridgeResourceProjection | undefined)?.completeness;
+      return isTerminal && completeness && completeness !== 'pending'
+        ? false
+        : SESSION_PROJECTION_POLL_MS;
+    },
+    retry: false,
+  });
   const historyRows = useMemo(() => {
     const rows = mapEventsToTimelineRows(eventsQuery.data);
+    const envelope = eventsQuery.data && 'terminalEnvelope' in eventsQuery.data
+      ? eventsQuery.data.terminalEnvelope
+      : null;
+    if (envelope) {
+      const refs = [
+        envelope.diagnosticsRef,
+        envelope.captureManifestRef,
+        envelope.initialSnapshotRef,
+        envelope.finalSnapshotRef,
+        envelope.rawEventsRef,
+        envelope.normalizedEventsRef,
+        envelope.externalStateRef,
+      ].filter((ref): ref is string => Boolean(ref));
+      const details = [
+        envelope.failureClass ? `Failure class: ${envelope.failureClass}.` : '',
+        envelope.failureCode ? `Reason: ${envelope.failureCode}.` : '',
+        envelope.evidenceIncompleteReason ? `Evidence incomplete: ${envelope.evidenceIncompleteReason}` : '',
+        envelope.cleanupState ? `Cleanup: ${envelope.cleanupState}.` : '',
+        envelope.leaseReleaseState ? `Lease release: ${envelope.leaseReleaseState}.` : '',
+        /configuration|profile|authori[sz]ation/i.test(`${envelope.failureClass ?? ''} ${envelope.failureCode ?? ''}`)
+          ? 'Remediation: verify the provider profile, credentials, and execution authorization, then retry.'
+          : '',
+      ].filter(Boolean).join(' ');
+      rows.push({
+        id: `${bridgeSessionId}-terminal-envelope`,
+        text: [envelope.summary || `Session ${envelope.status}.`, details].filter(Boolean).join(' '),
+        stream: 'system',
+        kind: envelope.status === 'completed' ? 'response_completed' : 'response_failed',
+        sequence: Math.max(0, ...rows.map((row) => row.sequence ?? 0)) + 1,
+        timestamp: null,
+        sessionId: bridgeSessionId,
+        sessionEpoch: null,
+        containerId: null,
+        threadId: null,
+        turnId: null,
+        activeTurnId: null,
+        metadata: { terminalStatus: envelope.status, artifactRefs: refs, ...envelope },
+        rowType: 'boundary',
+      });
+    }
     if (!eventsQuery.data?.truncated) return rows;
     return [{
       id: `${bridgeSessionId}-retention-gap`,
@@ -5658,6 +5918,9 @@ function BridgeSessionLogsPanel({
         const data = ObservabilityEventSchema.parse(JSON.parse(event.data));
         lastSeqRef.current = data.sequence;
         setLogContent((prev) => [...prev, ...eventToTimelineRows(data)]);
+        if (data.kind !== 'assistant_message_delta') {
+          setLiveAnnouncement('New session activity is available.');
+        }
       } catch {
         // Ignore malformed bridge events; the fetched event index remains visible.
       }
@@ -5668,6 +5931,11 @@ function BridgeSessionLogsPanel({
     };
     es.onmessage = handleBridgeEvent;
     es.addEventListener('bridge_event', handleBridgeEvent);
+    es.addEventListener('terminal', () => {
+      if (cancelled) return;
+      setViewerState('ended');
+      void eventsQuery.refetch();
+    });
     es.onerror = () => {
       es.close();
       esRef.current = null;
@@ -5695,6 +5963,71 @@ function BridgeSessionLogsPanel({
     if (logContent.length === 0) return;
     copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
   };
+  const canSend = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.sendFollowUp && !isTerminal);
+  const canInterrupt = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.interruptTurn && !isTerminal);
+  const canClear = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
+  const canCancel = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
+  const canResolveElicitation = Boolean(
+    actionsEnabled && projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
+  );
+  const pendingElicitations = useMemo(() => {
+    if (!canResolveElicitation) return [];
+    const resolvedIds = new Set(logContent
+      .filter((row) => ['approval_resolved', 'approval_granted', 'approval_denied', 'intervention_resolved'].includes(row.kind ?? ''))
+      .map((row) => String(row.metadata?.elicitationId ?? row.metadata?.requestId ?? '').trim())
+      .filter(Boolean));
+    const pending = new Map<string, string>();
+    for (const row of logContent) {
+      if (!['approval_requested', 'intervention_requested'].includes(row.kind ?? '')) continue;
+      const id = String(row.metadata?.elicitationId ?? row.metadata?.requestId ?? '').trim();
+      if (id && !resolvedIds.has(id)) pending.set(id, row.text || 'Operator decision requested.');
+    }
+    return Array.from(pending, ([id, text]) => ({ id, text }));
+  }, [canResolveElicitation, logContent]);
+  const submitMessage = async () => {
+    const text = message.trim();
+    if (!text || !projection.providerSessionRef || !canSend) return;
+    const clientEventKey = crypto.randomUUID();
+    const optimistic: OptimisticChatSessionMessage = {
+      type: 'chat_session.message_submitted', clientEventKey, sessionId: bridgeSessionId,
+      sessionEpoch: 0, message: text, status: 'pending',
+    };
+    setOptimisticMessages((items) => [...items, optimistic]);
+    setMessage(''); setControlError(null); setControlBusy(true);
+    try {
+      await postBridgeSessionControl(apiBase, projection.providerSessionRef, {
+        type: 'message', message: text, clientEventKey,
+      });
+      setOptimisticMessages((items) => items.map((item) => item.clientEventKey === clientEventKey
+        ? { ...item, status: 'delivery_unknown' } : item));
+    } catch (error) {
+      const detail = (error as Error).message;
+      setControlError(detail);
+      setOptimisticMessages((items) => items.map((item) => item.clientEventKey === clientEventKey
+        ? { ...item, status: 'failed', error: detail } : item));
+    } finally { setControlBusy(false); }
+  };
+  const interrupt = async () => {
+    if (!projection.providerSessionRef || !canInterrupt) return;
+    setControlError(null); setControlBusy(true);
+    try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, { type: 'session.interrupt' }); }
+    catch (error) { setControlError((error as Error).message); }
+    finally { setControlBusy(false); }
+  };
+  const runControl = async (payload: Record<string, unknown>) => {
+    if (!projection.providerSessionRef) return;
+    setControlError(null); setControlBusy(true);
+    try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, payload); }
+    catch (error) { setControlError((error as Error).message); }
+    finally { setControlBusy(false); }
+  };
+  const resolveElicitation = async (elicitationId: string, decision: 'approved' | 'rejected') => {
+    if (!projection.providerSessionRef || !canResolveElicitation) return;
+    setControlError(null); setControlBusy(true);
+    try { await resolveBridgeElicitation(apiBase, projection.providerSessionRef, elicitationId, decision); }
+    catch (error) { setControlError((error as Error).message); }
+    finally { setControlBusy(false); }
+  };
 
   return (
     <div className="stack live-logs-panel">
@@ -5709,12 +6042,59 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
+        ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
+        : null}
+      <details className="card bridge-resource-evidence" open={isTerminal}>
+        <summary>Resource evidence — {resourcesQuery.data?.completeness || 'harvesting'}</summary>
+        {resourcesQuery.isError ? <div className="notice error">{(resourcesQuery.error as Error).message}</div> : null}
+        {resourcesQuery.data?.groups.some((group) => group.resources.length > 0) ? (
+          <div className="stack" style={{ marginTop: '0.75rem' }}>
+            {resourcesQuery.data.groups.filter((group) => group.resources.length > 0).map((group) => (
+              <section key={group.groupKey} aria-label={group.title}>
+                <h4>{group.title}</h4>
+                <ul className="stack gap-1">
+                  {group.resources.slice(0, 25).map((resource, index) => {
+                    const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+                    return (
+                      <li key={`${group.groupKey}-${resource.label}-${index}`}>
+                        <span>{resource.label}</span>
+                        {resource.path ? <code className="text-xs break-all"> — {resource.path}</code> : null}
+                        {resource.sourceEventSequence != null ? <span className="small"> (event {resource.sourceEventSequence})</span> : null}
+                        {href && resource.previewAvailable ? (
+                          <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a>
+                        ) : null}
+                        {href && resource.downloadAvailable ? (
+                          <a className="button secondary small" href={href} download aria-label={`Download ${resource.label}`}>Download</a>
+                        ) : null}
+                        {resource.relatedArtifactRefs?.map((ref, relatedIndex) => {
+                          const relatedHref = artifactRefHref(apiBase, ref);
+                          return relatedHref ? <a key={ref} className="button secondary small" href={relatedHref} target="_blank" rel="noreferrer" aria-label={`Open related evidence ${relatedIndex + 1} for ${resource.label}`}>Related evidence</a> : null;
+                        })}
+                        {resource.unavailableReason ? <div className="small">Unavailable: {resource.unavailableReason}</div> : null}
+                      </li>
+                    );
+                  })}
+                  {group.resources.length > 25 ? <li className="small">Showing 25 of {group.resources.length} resources. Use the capture manifest for the complete bounded index.</li> : null}
+                </ul>
+              </section>
+            ))}
+          </div>
+        ) : <p className="small">{isTerminal ? 'No harvested resource evidence is available.' : 'Harvesting resource evidence…'}</p>}
+      </details>
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
         {logContent.length === 0 ? (
           <div className="live-logs-empty">(waiting for bridge session events...)</div>
         ) : (
           <div data-testid="chat-session-viewer" className="chat-session-viewer">
-            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
+            <ChatSessionView
+              apiBase={apiBase}
+              chatBlocks={chatBlocks}
+              rows={logContent}
+              wrapLines={wrapLines}
+              resources={resourcesQuery.data?.groups.flatMap((group) => group.resources) || []}
+              liveAnnouncement={liveAnnouncement}
+            />
             <details className="raw-timeline-escape-hatch">
               <summary>Raw Timeline</summary>
               <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
@@ -5729,6 +6109,31 @@ function BridgeSessionLogsPanel({
           </div>
         )}
       </div>
+      {(canSend || canInterrupt || canClear || canCancel || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
+        <section className="stack chat-session-controls" aria-label="Bridge session controls">
+          <h3>Session Controls</h3>
+          {controlError ? <div className="notice error">{controlError}</div> : null}
+          {optimisticMessages.map((item) => (
+            <div key={item.clientEventKey} role="status" className={`chat-session-message chat-session-message-${item.status}`}>
+              Operator message · {item.status === 'pending' ? 'Sending' : item.status === 'failed' ? 'Failed' : 'Delivery confirmation pending'}
+              {item.error ? `: ${item.error}` : null}
+            </div>
+          ))}
+          {canSend ? <><label htmlFor="bridge-follow-up">Follow-up message</label><textarea id="bridge-follow-up" value={message} onChange={(event) => setMessage(event.target.value)} disabled={controlBusy} rows={3} /><button type="button" onClick={() => void submitMessage()} disabled={controlBusy || !message.trim()}>Send follow-up</button></> : null}
+          {pendingElicitations.map((elicitation) => (
+            <section key={elicitation.id} className="stack" aria-label={`Pending operator request ${elicitation.id}`}>
+              <p>{elicitation.text}</p>
+              <div className="button-group">
+                <button type="button" onClick={() => void resolveElicitation(elicitation.id, 'approved')} disabled={controlBusy}>Approve</button>
+                <button type="button" className="secondary" onClick={() => void resolveElicitation(elicitation.id, 'rejected')} disabled={controlBusy}>Reject</button>
+              </div>
+            </section>
+          ))}
+          {canInterrupt ? <button type="button" className="secondary" onClick={() => void interrupt()} disabled={controlBusy}>Interrupt turn</button> : null}
+          {canClear ? <button type="button" className="secondary" onClick={() => { if (window.confirm('Clear this bridge session?')) void runControl({ type: 'clear_session' }); }} disabled={controlBusy}>Clear session</button> : null}
+          {canCancel ? <button type="button" className="danger" onClick={() => { if (window.confirm('Cancel this bridge session?')) void runControl({ type: 'session.cancel' }); }} disabled={controlBusy}>Cancel session</button> : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -6305,6 +6710,15 @@ function SessionContinuityPanel({
 
   const projection = projectionQuery.data;
   const sessionResources = resourcesQuery.data?.resources ?? [];
+  const sessionResourceGroups = Array.from(
+    sessionResources.reduce((groups, resource) => {
+      const key = resource.groupKey || 'resources';
+      const existing = groups.get(key) ?? { title: resource.groupTitle, resources: [] as typeof sessionResources };
+      existing.resources.push(resource);
+      groups.set(key, existing);
+      return groups;
+    }, new Map<string, { title: string; resources: typeof sessionResources }>()),
+  );
   const latestBadges = [
     ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
     ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
@@ -6483,8 +6897,11 @@ function SessionContinuityPanel({
       {!compact && sessionResources.length > 0 ? (
         <div className="stack">
           <h4>Resource Evidence</h4>
-          <div className="grid-2">
-            {sessionResources.map((resource) => {
+          {sessionResourceGroups.map(([groupKey, group]) => (
+          <details key={groupKey} className="card" open={group.resources.length <= 8}>
+            <summary>{group.title} ({group.resources.length})</summary>
+            <div className="grid-2" style={{ marginTop: '0.5rem' }}>
+            {group.resources.map((resource) => {
               const label = resource.label || resource.artifactId;
               const contentHref = resource.contentUrl
                 ? resolveApiBaseTemplate(apiBase, resource.contentUrl)
@@ -6495,20 +6912,23 @@ function SessionContinuityPanel({
               return (
                 <div key={resource.resourceId || resource.artifactId} className="card">
                   <strong>{label}</strong>
-                  <div className="small">{resource.groupTitle}</div>
+                  <div className="small">{resource.completenessStatus === 'pending' ? 'Harvesting…' : resource.completenessStatus}</div>
                   <code className="text-xs break-all">{resource.artifactId}</code>
+                  {resource.unavailableReason ? <p className="small notice warning">{resource.unavailableReason}</p> : null}
                   <div className="actions" style={{ marginTop: '0.5rem' }}>
-                    <a className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
+                    {resource.previewAvailable ? <a aria-label={`Open ${label}`} className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
                       Open
-                    </a>
-                    <a className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
+                    </a> : null}
+                    {resource.downloadAvailable ? <a aria-label={`Download ${label}`} className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
                       Download
-                    </a>
+                    </a> : null}
                   </div>
                 </div>
               );
             })}
-          </div>
+            </div>
+          </details>
+          ))}
         </div>
       ) : null}
 
@@ -7455,6 +7875,15 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   });
   const resolvedBridgeSessionId =
     explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
+  const resolvedBridgeProjection: BridgeSessionProjection = (
+    bridgeResolutionQuery.data?.bridgeSessionId === resolvedBridgeSessionId
+      ? bridgeResolutionQuery.data
+      : undefined
+  ) ?? {
+    bridgeSessionId: resolvedBridgeSessionId,
+    status: execution?.status ?? undefined,
+    capabilities: {},
+  };
   const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
@@ -8504,6 +8933,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     apiBase={payload.apiBase}
                     bridgeSessionId={resolvedBridgeSessionId}
                     isTerminal={isTerminalExecution}
+                    projection={resolvedBridgeProjection}
+                    optimisticMessages={chatOptimisticMessages}
+                    setOptimisticMessages={setChatOptimisticMessages}
+                    actionsEnabled={actionsOn}
                   />
                 ) : bridgeResolutionQuery.isLoading ? (
                   <p className="small">Checking bridge session evidence.</p>
