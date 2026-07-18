@@ -1153,6 +1153,36 @@ async def _run_coordinator_failure_case(
     )
     error = _injected_launch_error(code)
 
+    class FailureOwners:
+        """Deterministic fakes for the concrete launch/cleanup owners.
+
+        Keep these entry points separate: the coordinator test must prove which
+        boundary produced an error, rather than merely assigning several labels
+        to one shared ``prepare_host`` or execution-runner exception branch.
+        """
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def fail(self, owner: str) -> None:
+            self.calls.append(owner)
+            if fail_at == owner:
+                raise error
+
+        async def stop_static_host(self) -> None:
+            self.calls.append("host_stop")
+            if fail_at == "host_stop":
+                raise error
+            actions.append("host_stopped")
+
+        async def remove_on_demand_host(self) -> None:
+            self.calls.append("host_remove")
+            if fail_at == "host_remove":
+                raise error
+            actions.append("host_removed")
+
+    owners = FailureOwners()
+
     class LeaseClient:
         remaining_release_failures = release_failures
 
@@ -1200,14 +1230,32 @@ async def _run_coordinator_failure_case(
 
     class Runtime:
         async def prepare_host(self, **_kwargs):
-            if fail_at.startswith("prepare_host_"):
-                raise error
+            # These mirror the ordered owners inside
+            # OmnigentOAuthHostRuntime.prepare_host instead of collapsing all
+            # launch failures into one caller-level mock branch.
+            for owner in (
+                "container_start",
+                "image_pull",
+                "network_start",
+                "credential_volume_missing",
+                "credential_volume_owner",
+                "credential_generation",
+                "credential_login",
+                "host_registration",
+                "host_registration_timeout",
+                "host_capability",
+                "harness_readiness",
+                "bridge_authentication",
+                "server_endpoint",
+            ):
+                await owners.fail(owner)
             return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
 
-        async def stop_host(self, **_kwargs):
-            if fail_at in {"host_stop", "host_remove"}:
-                raise _injected_launch_error(code)
-            actions.append("host_stopped")
+        async def stop_host(self, *, binding, **_kwargs):
+            if binding.host_launch_profile_ref:
+                await owners.remove_on_demand_host()
+            else:
+                await owners.stop_static_host()
 
     class Store:
         async def get_or_create(self, **_kwargs):
@@ -1221,8 +1269,13 @@ async def _run_coordinator_failure_case(
             events.append((event_type, kwargs))
 
     async def execute(_request, **_kwargs):
-        if fail_at.startswith("execute_"):
-            raise error
+        for owner in (
+            "session_create",
+            "first_message_digest",
+            "first_message_reconcile",
+            "resource_harvest",
+        ):
+            await owners.fail(owner)
         return AgentRunResult(summary="done")
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
@@ -1258,13 +1311,20 @@ async def _run_coordinator_failure_case(
             "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},
         },
     )
+    if fail_at == "host_remove":
+        coordinator._hosts.get_binding_for_profile = AsyncMock(  # type: ignore[attr-defined]
+            return_value=_binding().model_copy(
+                update={"static_host_id": None, "host_launch_profile_ref": "codex"}
+            )
+        )
+
     if fail_at in {"host_stop", "host_remove", "release"}:
         await coordinator.execute(request)
     else:
         with pytest.raises(OmnigentOAuthHostError) as captured:
             await coordinator.execute(request)
         assert captured.value.code == code
-    return events, actions
+    return events, actions, owners.calls
 
 
 @pytest.mark.asyncio
@@ -1280,23 +1340,23 @@ async def _run_coordinator_failure_case(
         ("lease", "profile_cooldown_active", "profile_lease_wait", "integration_error", "retry_transient_upstream"),
         ("binding", "host_binding_mismatch", "host_binding_resolution", "configuration_error", "correct_host_binding"),
         ("host_lease", "container_allocation_failed", "host_lease_created", "configuration_error", "repair_host_image"),
-        ("prepare_host_container_start", "container_start_failed", "container_start", "configuration_error", "repair_host_image"),
-        ("prepare_host_image_pull", "image_pull_failed", "container_start", "configuration_error", "repair_host_image"),
-        ("prepare_host_network", "network_unavailable", "container_start", "integration_error", "repair_server_endpoint"),
-        ("prepare_host_volume_missing", "credential_volume_missing", "credential_mount", "configuration_error", "validate_codex_oauth"),
-        ("prepare_host_volume_wrong_owner", "credential_owner_mismatch", "credential_mount", "configuration_error", "validate_codex_oauth"),
-        ("prepare_host_volume_stale_generation", "credential_generation_stale", "credential_mount", "configuration_error", "validate_codex_oauth"),
-        ("prepare_host_oauth_preflight", "oauth_login_preflight_failed", "credential_preflight", "configuration_error", "validate_codex_oauth"),
-        ("prepare_host_registration", "host_registration_failed", "host_registration", "integration_error", "retry_transient_upstream"),
-        ("prepare_host_registration_timeout", "host_registration_timeout", "host_registration", "integration_error", "retry_transient_upstream"),
-        ("prepare_host_capability", "codex_native_capability_missing", "harness_readiness", "configuration_error", "correct_host_binding"),
-        ("prepare_host_harness", "harness_incompatible", "harness_readiness", "configuration_error", "correct_host_binding"),
-        ("prepare_host_bridge_401", "bridge_auth_401", "bridge_authentication", "configuration_error", "repair_bridge_authentication"),
-        ("prepare_host_server_endpoint", "server_endpoint_invalid", "bridge_authentication", "integration_error", "repair_server_endpoint"),
-        ("execute_session_create", "session_create_failed", "session_creation", "integration_error", "retry_transient_upstream"),
-        ("execute_digest_mismatch", "first_message_digest_mismatch", "first_message_prepare", "integration_error", "retry_transient_upstream"),
-        ("execute_ambiguous_post", "ambiguous_posting_reconciliation", "first_message_prepare", "integration_error", "retry_transient_upstream"),
-        ("execute_resource_harvest", "resource_harvest_failed", "resource_harvest", "integration_error", "retry_transient_upstream"),
+        ("container_start", "container_start_failed", "container_start", "configuration_error", "repair_host_image"),
+        ("image_pull", "image_pull_failed", "container_start", "configuration_error", "repair_host_image"),
+        ("network_start", "network_unavailable", "container_start", "integration_error", "repair_server_endpoint"),
+        ("credential_volume_missing", "credential_volume_missing", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("credential_volume_owner", "credential_owner_mismatch", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("credential_generation", "credential_generation_stale", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("credential_login", "oauth_login_preflight_failed", "credential_preflight", "configuration_error", "validate_codex_oauth"),
+        ("host_registration", "host_registration_failed", "host_registration", "integration_error", "retry_transient_upstream"),
+        ("host_registration_timeout", "host_registration_timeout", "host_registration", "integration_error", "retry_transient_upstream"),
+        ("host_capability", "codex_native_capability_missing", "harness_readiness", "configuration_error", "correct_host_binding"),
+        ("harness_readiness", "harness_incompatible", "harness_readiness", "configuration_error", "correct_host_binding"),
+        ("bridge_authentication", "bridge_auth_401", "bridge_authentication", "configuration_error", "repair_bridge_authentication"),
+        ("server_endpoint", "server_endpoint_invalid", "bridge_authentication", "integration_error", "repair_server_endpoint"),
+        ("session_create", "session_create_failed", "session_creation", "integration_error", "retry_transient_upstream"),
+        ("first_message_digest", "first_message_digest_mismatch", "first_message_prepare", "integration_error", "retry_transient_upstream"),
+        ("first_message_reconcile", "ambiguous_posting_reconciliation", "first_message_prepare", "integration_error", "retry_transient_upstream"),
+        ("resource_harvest", "resource_harvest_failed", "resource_harvest", "integration_error", "retry_transient_upstream"),
     ],
 )
 async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence(
@@ -1306,7 +1366,9 @@ async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence
     failure_class: str,
     remediation: str,
 ) -> None:
-    events, actions = await _run_coordinator_failure_case(fail_at=fail_at, code=code)
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at=fail_at, code=code
+    )
 
     assert actions[0] == "envelope_created"
     failed = [
@@ -1342,7 +1404,16 @@ async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence
     assert terminal["cleanupCompleted"] is True
     assert terminal["leaseReleased"] is True
     assert "github_pat_secret_value_must_not_persist" not in json.dumps(events)
-    if fail_at.startswith(("prepare_host_", "execute_")):
+    if fail_at in owner_calls:
+        assert owner_calls.count(fail_at) == 1
+    if fail_at in {
+        "container_start", "image_pull", "network_start", "credential_volume_missing",
+        "credential_volume_owner", "credential_generation", "credential_login",
+        "host_registration", "host_registration_timeout", "host_capability",
+        "harness_readiness", "bridge_authentication", "server_endpoint",
+        "session_create", "first_message_digest", "first_message_reconcile",
+        "resource_harvest",
+    }:
         assert actions.index("host_stopped") < actions.index("provider_released")
 
 
@@ -1354,9 +1425,10 @@ async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence
 async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_janitor(
     fail_at: str, code: str
 ) -> None:
-    events, actions = await _run_coordinator_failure_case(
+    events, actions, owner_calls = await _run_coordinator_failure_case(
         fail_at=fail_at, code=code
     )
+    assert owner_calls[-1] == fail_at
     cleanup = next(
         kwargs
         for stage, kwargs in events
@@ -1394,7 +1466,7 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
     monkeypatch.setattr(
         "moonmind.omnigent.profile_bound_execution.asyncio.sleep", sleep
     )
-    events, actions = await _run_coordinator_failure_case(
+    events, actions, _owner_calls = await _run_coordinator_failure_case(
         fail_at="release",
         code="profile_lease_release_failed",
         release_failures=release_failures,
