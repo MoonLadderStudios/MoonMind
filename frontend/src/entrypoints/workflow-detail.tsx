@@ -5849,6 +5849,7 @@ function BridgeSessionLogsPanel({
         : null}
       <details className="card bridge-resource-evidence" open={isTerminal}>
         <summary>Resource evidence — {resourcesQuery.data?.completeness || 'harvesting'}</summary>
+        {resourcesQuery.isError ? <div className="notice error">{(resourcesQuery.error as Error).message}</div> : null}
         {resourcesQuery.data?.groups.some((group) => group.resources.length > 0) ? (
           <div className="stack" style={{ marginTop: '0.75rem' }}>
             {resourcesQuery.data.groups.filter((group) => group.resources.length > 0).map((group) => (

@@ -10,6 +10,7 @@ import pytest
 from moonmind.omnigent.bridge_artifacts import (
     BridgeResourceHarvester,
     LocalOmnigentArtifactGateway,
+    _redacted_endpoint_url,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -22,6 +23,16 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted() -> None:
+    assert (
+        _redacted_endpoint_url(
+            "https://provider-user:provider-password@omnigent.example:8443/v1/?token=secret#session"
+        )
+        == "https://omnigent.example:8443/v1"
+    )
+    assert _redacted_endpoint_url("provider-native-session-id") == "redacted"
 
 
 class FakeHarvestClient:

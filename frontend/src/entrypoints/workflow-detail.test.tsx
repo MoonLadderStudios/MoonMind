@@ -7924,14 +7924,14 @@ describe('Workflow Detail Entrypoint', () => {
             groups: [{
               groupKey: 'changed_files',
               title: 'Changed files',
-              resources: [{
-                label: 'src/app.py',
-                artifactRef: '0198f0f0-1111-7222-8333-abcdefabcdef',
+              resources: Array.from({ length: 30 }, (_, index) => ({
+                label: index === 0 ? 'src/app.py' : `src/file-${index}.py`,
+                artifactRef: `0198f0f0-1111-7222-8333-${String(index).padStart(12, '0')}`,
                 status: 'available',
-                sourceEventSequence: 1,
+                sourceEventSequence: index + 1,
                 previewAvailable: true,
                 downloadAvailable: true,
-              }],
+              })),
             }],
           }),
         } as Response);
@@ -7953,9 +7953,52 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByLabelText('Terminal outcome evidence')).toBeTruthy();
     expect(screen.getByLabelText('Open terminal final snapshot')).toBeTruthy();
     expect(screen.getByLabelText('Open terminal capture manifest')).toBeTruthy();
+    expect(screen.getByText('Showing 25 of 30 resources. Use the capture manifest for the complete bounded index.')).toBeTruthy();
+    const firstResourceAction = screen.getByLabelText('Open src/app.py');
+    firstResourceAction.focus();
+    expect(document.activeElement).toBe(firstResourceAction);
+    expect(screen.queryByLabelText('Open src/file-25.py')).toBeNull();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);
+  });
+
+  it('shows an authorization error instead of resource preview or download actions', async () => {
+    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/chat?source=temporal');
+    const execution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
+      temporalRunId: 'auth-run', runId: 'auth-run', source: 'temporal',
+      title: 'Protected bridge task', summary: 'Protected evidence',
+      status: 'completed', state: 'completed', rawState: 'completed',
+      closedAt: '2026-07-09T00:00:30Z', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-auth', workflowId: 'test-123', status: 'completed' }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-auth/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-auth',
+          items: [], after: 0, nextCursor: null, hasMore: false, terminal: true,
+          latestSequence: 0, retentionGap: null, terminalEnvelope: null,
+        }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-auth/resources')) {
+        return Promise.resolve({ ok: false, status: 403 } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    expect(await screen.findByText('You do not have permission to view observability for this run.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /^Open .*\.py$/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /^Download .*\.py$/ })).toBeNull();
   });
 
   it('renders artifact download link using explicit downloadUrl when present', async () => {
