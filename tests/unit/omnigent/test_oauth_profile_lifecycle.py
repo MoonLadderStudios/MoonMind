@@ -810,6 +810,7 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
 @pytest.mark.asyncio
 async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     actions: list[str] = []
+    lifecycle: list[tuple[str, str | None]] = []
     provider_lease = SimpleNamespace(
         profile_id="codex",
         runtime_id="codex_cli",
@@ -877,8 +878,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("bridge_bound")
             return SimpleNamespace(bridge_session_id="bridge-1")
 
-        async def record_lifecycle_event(self, _key, *, event_type, **_kwargs):
+        async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             actions.append(event_type)
+            lifecycle.append((event_type, kwargs.get("status")))
 
     async def execute(request, **_kwargs):
         assert request.parameters["omnigent"]["session"] == {
@@ -931,6 +933,32 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
     assert actions.index("provider_released") < actions.index("profile_lease_release")
+    for stage, success_status in (
+        ("request_validated", "completed"),
+        ("profile_resolution", "completed"),
+        ("profile_readiness", "ready"),
+        ("profile_lease_acquired", "completed"),
+        ("host_binding_resolution", "completed"),
+        ("host_lease_created", "completed"),
+        ("container_start", "completed"),
+        ("credential_mount", "completed"),
+        ("credential_preflight", "ready"),
+        ("host_registration", "completed"),
+        ("harness_readiness", "ready"),
+        ("bridge_authentication", "completed"),
+        ("session_creation", "completed"),
+        ("first_message_prepare", "completed"),
+        ("first_message_post", "completed"),
+        ("session_running", "completed"),
+        ("resource_harvest", "completed"),
+        ("host_cleanup", "completed"),
+        ("profile_lease_release", "completed"),
+    ):
+        assert (stage, "started") in lifecycle
+        assert (stage, success_status) in lifecycle
+        assert lifecycle.index((stage, "started")) < lifecycle.index(
+            (stage, success_status)
+        )
 
 
 @pytest.mark.asyncio
@@ -1061,3 +1089,17 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         "phase": "authentication",
         "probes": [{"boundary": "runner", "status": "failed"}],
     }
+    transitions = [(name, kwargs.get("status")) for name, kwargs in events]
+    for stage in (
+        "container_start",
+        "credential_mount",
+        "credential_preflight",
+        "host_registration",
+        "harness_readiness",
+        "bridge_authentication",
+    ):
+        assert (stage, "started") in transitions
+        assert (stage, "failed") in transitions
+    assert ("host_cleanup", "completed") in transitions
+    assert ("profile_lease_release", "completed") in transitions
+    assert transitions[-1] == ("terminal", "failed")

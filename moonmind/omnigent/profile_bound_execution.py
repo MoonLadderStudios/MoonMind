@@ -221,6 +221,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         binding = None
         terminal_status = "completed"
         try:
+            await emit("request_validated", "started")
             if not profile_id:
                 raise OmnigentOAuthHostError(
                     "OAuth-backed Omnigent execution requires executionProfileRef",
@@ -269,8 +270,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "ownerIsWorkflow": False,
                 },
             )
+            await emit(current_stage, "completed")
+            current_stage = "profile_lease_acquired"
+            await emit(current_stage, "started")
             await emit(
-                "profile_lease_acquired",
+                current_stage,
                 "completed",
                 metadata={
                     "providerProfileId": profile_id,
@@ -329,6 +333,10 @@ class OmnigentProfileBoundExecutionCoordinator:
             current_stage = "container_start"
             await emit(current_stage, "started")
             await emit("credential_mount", "started")
+            await emit("credential_preflight", "started")
+            await emit("host_registration", "started")
+            await emit("harness_readiness", "started")
+            await emit("bridge_authentication", "started")
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
@@ -410,6 +418,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             current_stage = "session_creation"
             await emit(current_stage, "started", metadata={"omnigentHostId": host_id})
             await emit("first_message_prepare", "started")
+            await emit("first_message_post", "started")
+            await emit("session_running", "started")
+            await emit("resource_harvest", "started")
             result = await self._execute(
                 _bind_exact_host(
                     request,
@@ -555,6 +566,12 @@ class OmnigentProfileBoundExecutionCoordinator:
             lease_released = provider_lease is None
             if provider_lease is not None:
                 if safe_to_release_provider:
+                    await emit(
+                        "profile_lease_release",
+                        "started",
+                        metadata={"leaseReleased": False},
+                        ignore_errors=True,
+                    )
                     release_exc: Exception | None = None
                     for release_attempt in range(3):
                         try:
