@@ -843,3 +843,55 @@ def test_create_session_available_in_embedded_mode() -> None:
     assert resp.json()["moonmind"]["bridgeLocal"] is True
     assert len(facade.created) == 1
     assert facade.created[0]["binding"].workflow_id == "mm:w1"
+
+
+def test_create_embedded_facade_uses_resolved_credential_generation(monkeypatch) -> None:
+    embedded_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_RUNNER_TOKEN_REF", "env://OMNIGENT_TEST_HOST_TOKEN"
+    )
+    monkeypatch.setenv("OMNIGENT_TEST_HOST_TOKEN", "host-only-secret")
+    monkeypatch.setenv("OMNIGENT_HOST_RUNNER_CREDENTIAL_GENERATION", "4")
+
+    facade = _get_create_embedded_facade(embedded_config)
+
+    assert facade is not None
+    assert facade._current_credential_generation == 4
+
+
+def test_host_credential_does_not_authorize_user_session_api() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    embedded_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    client = TestClient(app)
+
+    response = client.post(
+        _CREATE_PATH,
+        json=_create_body(host_type="external", host_id="host-1", workspace="/repo"),
+        headers={"X-Omnigent-Runner-Tunnel-Token": "valid-host-credential"},
+    )
+
+    assert response.status_code == 401

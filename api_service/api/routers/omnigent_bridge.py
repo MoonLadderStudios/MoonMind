@@ -230,9 +230,11 @@ def _get_create_embedded_facade(
 ) -> OmnigentEmbeddedHostProtocolFacade | None:
     if _config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         return None
+    credential = _get_embedded_host_credential()
     return OmnigentEmbeddedHostProtocolFacade(
         run_store=OmnigentBridgeSessionStore(async_session_maker),
         config=_config,
+        current_credential_generation=credential.generation,
     )
 
 
