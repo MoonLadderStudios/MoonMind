@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from moonmind.omnigent.settings import (
     build_omnigent_gate,
+    resolved_host_runner_credential_refs,
     resolved_host_runner_token,
     resolved_server_url,
 )
@@ -51,6 +52,21 @@ def test_host_runner_token_resolves_service_side_secret() -> None:
             env={"OMNIGENT_HOST_RUNNER_TOKEN": " embedded-host-token "}
         )
         == "embedded-host-token"
+    )
+
+
+def test_host_runner_credential_refs_require_explicit_overlap() -> None:
+    env = {
+        "OMNIGENT_HOST_RUNNER_SECRET_REF": "db://host-current",
+        "OMNIGENT_HOST_RUNNER_GENERATION": "4",
+        "OMNIGENT_HOST_RUNNER_PREVIOUS_SECRET_REF": "db://host-previous",
+        "OMNIGENT_HOST_RUNNER_PREVIOUS_GENERATION": "3",
+    }
+    assert resolved_host_runner_credential_refs(env=env) == (("db://host-current", 4),)
+    env["OMNIGENT_HOST_RUNNER_ALLOW_PREVIOUS"] = "true"
+    assert resolved_host_runner_credential_refs(env=env) == (
+        ("db://host-current", 4),
+        ("db://host-previous", 3),
     )
 
 

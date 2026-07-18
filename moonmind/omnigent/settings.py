@@ -101,6 +101,35 @@ def resolved_host_runner_token(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_HOST_RUNNER_TOKEN"))
 
 
+def resolved_host_runner_credential_refs(
+    *, env: Mapping[str, Any] | None = None
+) -> tuple[tuple[str, int], ...]:
+    """Return current and explicitly-overlapped credential refs, never values."""
+
+    source = env if env is not None else os.environ
+    current_ref = _clean(source.get("OMNIGENT_HOST_RUNNER_SECRET_REF")) or (
+        "env://OMNIGENT_HOST_RUNNER_TOKEN"
+    )
+    try:
+        current_generation = int(_clean(source.get("OMNIGENT_HOST_RUNNER_GENERATION")) or "1")
+    except ValueError as exc:
+        raise ValueError("OMNIGENT_HOST_RUNNER_GENERATION must be a positive integer") from exc
+    if current_generation < 1:
+        raise ValueError("OMNIGENT_HOST_RUNNER_GENERATION must be a positive integer")
+    refs = [(current_ref, current_generation)]
+    previous_ref = _clean(source.get("OMNIGENT_HOST_RUNNER_PREVIOUS_SECRET_REF"))
+    overlap = _clean(source.get("OMNIGENT_HOST_RUNNER_ALLOW_PREVIOUS")) in _TRUE_VALUES
+    if previous_ref and overlap:
+        previous_generation = int(
+            _clean(source.get("OMNIGENT_HOST_RUNNER_PREVIOUS_GENERATION"))
+            or str(current_generation - 1)
+        )
+        if previous_generation < 1 or previous_generation >= current_generation:
+            raise ValueError("previous host credential generation must precede current")
+        refs.append((previous_ref, previous_generation))
+    return tuple(refs)
+
+
 def resolved_proxy_forward_headers(
     *, env: Mapping[str, Any] | None = None
 ) -> frozenset[str]:
@@ -128,6 +157,7 @@ __all__ = [
     "resolved_api_token",
     "resolved_default_agent_name",
     "resolved_host_runner_token",
+    "resolved_host_runner_credential_refs",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

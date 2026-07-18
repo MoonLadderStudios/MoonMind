@@ -28,6 +28,7 @@ from moonmind.omnigent.bridge_proxy import (
     validate_bridge_host_fields,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.host_auth_adapter import (
     HostCredentialGeneration,
     OmnigentHostAuthAdapter,
@@ -80,6 +81,7 @@ def verify_embedded_host_auth(
     configured_token: str,
     credential_generation: int = 1,
     credential_secret_ref: str = "env://OMNIGENT_HOST_RUNNER_TOKEN",
+    credentials: tuple[HostCredentialGeneration, ...] | None = None,
 ) -> EmbeddedHostAuthContext:
     """Verify the embedded host/runner auth profile (§16 rule 8).
 
@@ -96,7 +98,7 @@ def verify_embedded_host_auth(
         )
     try:
         identity = OmnigentHostAuthAdapter(
-            credentials=(
+            credentials=credentials if credentials is not None else (
                 HostCredentialGeneration(
                     secret_ref=credential_secret_ref,
                     generation=credential_generation,
@@ -271,7 +273,8 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=404,
             )
-        payload = request.model_dump(by_alias=True)
+        self._authorize_session_row(row=row, host_id=host_id, auth=auth)
+        payload = redact_raw_events([request.model_dump(by_alias=True)])[0]
         payload.setdefault("direction", "host_to_moonmind")
         payload.setdefault("data", {})
         if isinstance(payload["data"], dict):
@@ -309,6 +312,40 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "protocolProfile": auth.protocol_profile,
             },
         }
+
+    @staticmethod
+    def _authorize_session_row(
+        *, row: Any, host_id: str, auth: EmbeddedHostAuthContext
+    ) -> None:
+        """Enforce the durable host/session/generation authorization binding."""
+
+        durable_host = _clean(getattr(row, "omnigent_host_id", None)) or _clean(
+            (getattr(row, "metadata_", None) or {}).get("hostId")
+        )
+        durable_generation = getattr(row, "credential_generation", None)
+        if durable_host != _clean(host_id) or durable_host != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner identity does not match durable session binding",
+                failure_class="user_error",
+                status_code=403,
+                code="host_binding_mismatch",
+            )
+        if durable_generation is None or int(durable_generation) != auth.credential_generation:
+            raise OmnigentBridgeError(
+                "Credential generation does not match durable session binding",
+                failure_class="user_error",
+                status_code=401,
+                code="host_credential_stale",
+            )
+        if not _clean(getattr(row, "host_binding_ref", None)) or not _clean(
+            getattr(row, "host_lease_ref", None)
+        ):
+            raise OmnigentBridgeError(
+                "Durable host lease binding is unavailable",
+                failure_class="system_error",
+                status_code=503,
+                code="host_lease_unavailable",
+            )
 
     def _require_embedded_mode(self) -> None:
         if self._config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:

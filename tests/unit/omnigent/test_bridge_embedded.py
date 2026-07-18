@@ -266,14 +266,15 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
 
 @pytest.mark.asyncio
 async def test_embedded_session_events_append_to_same_bridge_event_model(store) -> None:
-    row = await store.get_or_create(
+    row = await store.bind_profile_authorization(
         request=_request(),
         endpoint_ref="embedded",
-        agent_id="agent-1",
-        agent_name="Codex",
-        target_metadata={"hostType": "external", "workspace": "/workspace/repo"},
-        workflow_id="mm:wf-embedded",
-        agent_run_id="run-embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
     facade = OmnigentEmbeddedHostProtocolFacade(
@@ -343,14 +344,15 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
 async def test_embedded_session_events_preserve_full_payload_and_errors(
     store,
 ) -> None:
-    row = await store.get_or_create(
+    row = await store.bind_profile_authorization(
         request=_request(),
         endpoint_ref="embedded",
-        agent_id="agent-1",
-        agent_name="Codex",
-        target_metadata={"hostType": "external", "workspace": "/workspace/repo"},
-        workflow_id="mm:wf-embedded",
-        agent_run_id="run-embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
     facade = OmnigentEmbeddedHostProtocolFacade(
@@ -392,3 +394,40 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         )
     assert excinfo.value.status_code == 502
     assert excinfo.value.failure_class == "integration_error"
+
+
+@pytest.mark.asyncio
+async def test_embedded_session_event_rejects_stale_generation_and_redacts(store) -> None:
+    row = await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded", provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1", credential_generation=2,
+        host_binding_ref="binding-1", host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_embedded_config())
+    stale = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel", protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="host-1", credential_generation=1,
+    )
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.ingest_session_event(
+            host_id="host-1", session_id="sess-embedded",
+            request=EmbeddedHostSessionEventRequest(type="response.delta", data={"text": "ignored"}),
+            auth=stale,
+        )
+    assert excinfo.value.code == "host_credential_stale"
+
+    current = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel", protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="host-1", credential_generation=2,
+    )
+    sentinel = "sentinel-host-credential"
+    await facade.ingest_session_event(
+        host_id="host-1", session_id="sess-embedded",
+        request=EmbeddedHostSessionEventRequest(
+            type="response.delta", data={"authorization": f"Bearer {sentinel}", "cookie": sentinel}
+        ), auth=current,
+    )
+    events = await store.list_events(row.bridge_session_id)
+    assert sentinel not in repr(events)

@@ -59,9 +59,13 @@ from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_default_agent_name,
     resolved_host_runner_token,
+    resolved_host_runner_credential_refs,
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
+from moonmind.auth.secret_refs import SecretBackend, parse_secret_ref, SecretReferenceError
+from moonmind.omnigent.host_auth_adapter import HostCredentialGeneration
+from api_service.services.secrets import SecretsService
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
@@ -233,7 +237,27 @@ def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     )
 
 
-def _embedded_auth_context(
+async def _resolved_host_credentials() -> tuple[HostCredentialGeneration, ...]:
+    credentials: list[HostCredentialGeneration] = []
+    async with async_session_maker() as db:
+        for secret_ref, generation in resolved_host_runner_credential_refs():
+            try:
+                parsed = parse_secret_ref(secret_ref)
+                if parsed.backend == SecretBackend.ENV:
+                    token = resolved_host_runner_token() if parsed.locator == "OMNIGENT_HOST_RUNNER_TOKEN" else __import__("os").environ.get(parsed.locator, "")
+                elif parsed.backend == SecretBackend.DB_ENCRYPTED:
+                    token = await SecretsService.get_secret(db, parsed.locator) or ""
+                else:
+                    raise SecretReferenceError("unsupported host credential secret backend")
+                if not str(token).strip():
+                    raise SecretReferenceError("host credential secret is unavailable")
+                credentials.append(HostCredentialGeneration(secret_ref=parsed.normalized_ref, generation=generation, token=str(token).strip()))
+            except (SecretReferenceError, ValueError) as exc:
+                raise OmnigentBridgeError("embedded host credential could not be resolved", failure_class="system_error", status_code=503, code="host_auth_not_configured") from exc
+    return tuple(credentials)
+
+
+async def _embedded_auth_context(
     *,
     request: Request,
     config: OmnigentBridgeConfig,
@@ -242,7 +266,8 @@ def _embedded_auth_context(
         return verify_embedded_host_auth(
             headers=request.headers,
             config=config,
-            configured_token=resolved_host_runner_token(),
+            configured_token="unused-service-boundary-value",
+            credentials=await _resolved_host_credentials(),
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -1236,7 +1261,7 @@ async def register_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Register an unchanged host against MoonMind's embedded host facade."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.register_host(request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -1253,7 +1278,7 @@ async def heartbeat_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Accept a host heartbeat through the embedded host facade."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.heartbeat(host_id=host_id, request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -1271,7 +1296,7 @@ async def ingest_embedded_omnigent_host_event(
 ) -> dict[str, Any]:
     """Ingest host/session events into the canonical bridge projection."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.ingest_session_event(
             host_id=host_id,

@@ -27,12 +27,14 @@ The pinned upstream allow-list rejects missing, empty, and unauthorized tokens.
 The token-derived runner identifier prevents one credential from claiming a
 runner bound to another credential. The adapter accepts ephemeral credential
 generations resolved at a service boundary; auth contexts retain the runner id,
-profile, and matched positive generation, never the ref or value. The current API
-service resolves generation 1 from `env://OMNIGENT_HOST_RUNNER_TOKEN`; managed
-database secret-ref selection remains unavailable and therefore embedded mode
-must remain experimental. Reconnect with the same generation produces the same
-identity. A future service resolver may temporarily present the upstream
-allow-list with the current and immediately previous resolved generations.
+profile, and matched positive generation, never the ref or value. The API service
+resolves the current generation from `OMNIGENT_HOST_RUNNER_SECRET_REF`
+(`env://OMNIGENT_HOST_RUNNER_TOKEN` by default) and
+`OMNIGENT_HOST_RUNNER_GENERATION`. Both `env://` and encrypted managed `db://`
+references resolve only at the request boundary. An immediately previous
+generation is accepted only when its ref and generation are configured and
+`OMNIGENT_HOST_RUNNER_ALLOW_PREVIOUS=true`; removing that flag ends the overlap.
+Reconnect with the same generation produces the same identity.
 Removing or marking a generation revoked prevents new connections with it.
 Existing accepted websocket connections are not re-authenticated by this adapter
 and must be disconnected by the connection owner when deterministic immediate
