@@ -477,6 +477,46 @@ class OmnigentBridgeSessionStore:
                 return None
             return _detached(session, row)
 
+    async def bind_embedded_host(
+        self, idempotency_key: str, *, host_id: str, credential_generation: int
+    ) -> OmnigentBridgeSession:
+        """Durably bind an embedded session to its authenticated host identity."""
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_host_id and row.omnigent_host_id != host_id:
+                raise OmnigentIdempotencyError("embedded session is already bound to another host")
+            if (
+                row.credential_generation is not None
+                and credential_generation < row.credential_generation
+            ):
+                raise OmnigentIdempotencyError(
+                    "embedded session cannot return to a stale credential generation"
+                )
+            row.omnigent_host_id = host_id
+            row.omnigent_runner_id = host_id
+            row.credential_generation = credential_generation
+            row.host_binding_ref = f"embedded-host:{host_id}"
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def has_embedded_host_binding(
+        self, *, host_id: str, credential_generation: int
+    ) -> bool:
+        """Return whether a durable session authorizes this host generation."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(OmnigentBridgeSession)
+                .where(
+                    OmnigentBridgeSession.omnigent_host_id == host_id,
+                    OmnigentBridgeSession.omnigent_runner_id == host_id,
+                    OmnigentBridgeSession.credential_generation == credential_generation,
+                    OmnigentBridgeSession.host_binding_ref == f"embedded-host:{host_id}",
+                )
+            )
+            return bool(result.scalar_one())
+
     async def get_bridge_session_owner(
         self, bridge_session_id: str
     ) -> BridgeSessionBinding | None:

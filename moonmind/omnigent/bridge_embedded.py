@@ -103,7 +103,9 @@ def verify_embedded_host_auth(
         raise OmnigentBridgeError(
             str(exc),
             failure_class="system_error" if unavailable else "user_error",
-            status_code=503 if unavailable else 401,
+            status_code=503 if unavailable else 403,
+            retryable=unavailable,
+            websocket_close_code=1011 if unavailable else 4403,
         ) from exc
     return EmbeddedHostAuthContext(
         auth_mode=auth_mode,
@@ -156,6 +158,13 @@ class OmnigentEmbeddedHostProtocolFacade:
             agent_run_id=binding.agent_run_id,
         )
         _assert_row_owner(row, binding)
+        host_id = _clean(request.host_id)
+        if host_id:
+            row = await self._run_store.bind_embedded_host(
+                binding.idempotency_key,
+                host_id=host_id,
+                credential_generation=self._current_credential_generation,
+            )
         session_id = str(getattr(row, "omnigent_session_id", None) or "").strip()
         reused = bool(session_id)
         if not session_id:
@@ -202,6 +211,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        await self._require_durable_host_binding(auth)
         return {
             "hostId": host_id,
             "runnerId": runner_id,
@@ -229,6 +239,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        await self._require_durable_host_binding(auth)
         return {
             "hostId": _clean(host_id),
             "status": request.status,
@@ -262,6 +273,19 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "No Omnigent bridge session is bound to the requested session id.",
                 failure_class="user_error",
                 status_code=404,
+            )
+        if (
+            _clean(getattr(row, "omnigent_host_id", None)) != auth.runner_id
+            or _clean(getattr(row, "omnigent_runner_id", None)) != auth.runner_id
+            or getattr(row, "credential_generation", None)
+            != auth.credential_generation
+            or _clean(getattr(row, "host_binding_ref", None))
+            != f"embedded-host:{auth.runner_id}"
+        ):
+            raise OmnigentBridgeError(
+                "Authenticated runner is not authorized for the requested session",
+                failure_class="user_error",
+                status_code=403,
             )
         payload = request.model_dump(by_alias=True)
         payload.setdefault("direction", "host_to_moonmind")
@@ -315,6 +339,19 @@ class OmnigentEmbeddedHostProtocolFacade:
         if auth.credential_generation != self._current_credential_generation:
             raise OmnigentBridgeError(
                 "Embedded host credential generation is stale or revoked",
+                failure_class="user_error",
+                status_code=403,
+            )
+
+    async def _require_durable_host_binding(
+        self, auth: EmbeddedHostAuthContext
+    ) -> None:
+        if not await self._run_store.has_embedded_host_binding(
+            host_id=auth.runner_id,
+            credential_generation=auth.credential_generation,
+        ):
+            raise OmnigentBridgeError(
+                "Authenticated runner has no durable embedded host binding",
                 failure_class="user_error",
                 status_code=403,
             )

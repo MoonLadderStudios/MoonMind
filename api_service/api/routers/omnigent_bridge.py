@@ -246,6 +246,8 @@ def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
             "code": exc.code,
             "failureClass": exc.failure_class,
             "message": str(exc),
+            "retryable": exc.retryable,
+            "websocketCloseCode": exc.websocket_close_code,
         },
     )
 

@@ -76,11 +76,15 @@ class OmnigentBridgeError(RuntimeError):
         failure_class: str = "integration_error",
         status_code: int | None = None,
         code: str | None = None,
+        retryable: bool = False,
+        websocket_close_code: int | None = None,
     ) -> None:
         super().__init__(message)
         self.failure_class = failure_class
         self.status_code = status_code
         self.code = code or _stable_error_code(failure_class, status_code)
+        self.retryable = retryable
+        self.websocket_close_code = websocket_close_code
 
 
 class BridgeSessionCreateRequest(BaseModel):

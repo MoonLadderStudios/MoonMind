@@ -27,8 +27,9 @@ runner bound to another credential. Reconnect with the same generation produces
 the same identity. Revoking a token from the server-side allow-list prevents new
 connections; existing websocket behavior remains owned by the upstream tunnel
 implementation. Upstream HTTP rejection is 403 before websocket acceptance for
-an invalid binding and protocol failures close the accepted socket according to
-the upstream tunnel route.
+an invalid binding. MoonMind preserves that permanent rejection and exposes
+websocket close code 4403; missing configuration or verifier drift is retryable
+HTTP 503 with websocket close code 1011.
 
 MoonMind resolves the allow-list credential only at the API service boundary.
 `OMNIGENT_HOST_RUNNER_TOKEN_REF` must identify an `env://` secret and

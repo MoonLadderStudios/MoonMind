@@ -80,6 +80,23 @@ def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
     assert context.protocol_profile == "omnigent.runner_tunnel.b95e41ec"
     assert context.runner_id.startswith("runner_token_")
     assert context.credential_generation == 4
+    reconnected = verify_embedded_host_auth(
+        headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
+        config=_embedded_config(),
+        configured_token="runner-token",
+        credential_generation=4,
+    )
+    assert reconnected == context
+
+
+def test_missing_host_credential_is_retryable_service_failure() -> None:
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        verify_embedded_host_auth(
+            headers={}, config=_embedded_config(), configured_token=""
+        )
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.retryable is True
+    assert excinfo.value.websocket_close_code == 1011
 
 
 @pytest.mark.asyncio
@@ -115,8 +132,12 @@ def test_embedded_host_auth_rejects_missing_or_wrong_token() -> None:
             configured_token="runner-token",
         )
 
-    assert excinfo.value.status_code == 401
+    assert excinfo.value.status_code == 403
     assert excinfo.value.failure_class == "user_error"
+    assert excinfo.value.retryable is False
+    assert excinfo.value.websocket_close_code == 4403
+    assert "runner-token" not in str(excinfo.value)
+    assert "wrong" not in str(excinfo.value)
 
 
 def test_embedded_host_auth_rejects_user_bearer_and_cookie_domains() -> None:
@@ -131,7 +152,7 @@ def test_embedded_host_auth_rejects_user_bearer_and_cookie_domains() -> None:
             configured_token="runner-token",
         )
 
-    assert excinfo.value.status_code == 401
+    assert excinfo.value.status_code == 403
 
 
 def test_pinned_source_verifier_executes_without_importable_package() -> None:
@@ -200,6 +221,16 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
         runner_id="runner-1",
         credential_generation=1,
     )
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={"hostType": "external", "hostId": "runner-1"},
+    )
+    await store.bind_embedded_host(
+        "idem-embedded", host_id="runner-1", credential_generation=1
+    )
 
     registered = await facade.register_host(
         request=EmbeddedHostRegisterRequest(hostId="runner-1", runnerId="runner-1"),
@@ -227,6 +258,9 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
         agent_run_id="run-embedded",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_host(
+        "idem-embedded", host_id="host-1", credential_generation=1
+    )
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -304,6 +338,9 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         agent_run_id="run-embedded",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_host(
+        "idem-embedded", host_id="host-1", credential_generation=1
+    )
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -343,3 +380,69 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         )
     assert excinfo.value.status_code == 502
     assert excinfo.value.failure_class == "integration_error"
+
+
+@pytest.mark.asyncio
+async def test_host_actions_require_durable_binding_and_current_generation(store) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"hostType": "external"},
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), current_credential_generation=2
+    )
+    current = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="host-1",
+        credential_generation=2,
+    )
+    with pytest.raises(OmnigentBridgeError, match="no durable"):
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(hostId="host-1", runnerId="host-1"),
+            auth=current,
+        )
+
+    await store.bind_embedded_host(
+        "idem-embedded", host_id="host-1", credential_generation=2
+    )
+    assert (await facade.register_host(
+        request=EmbeddedHostRegisterRequest(hostId="host-1", runnerId="host-1"),
+        auth=current,
+    ))["status"] == "registered"
+    assert (await facade.heartbeat(
+        host_id="host-1", request=EmbeddedHostHeartbeatRequest(), auth=current,
+    ))["hostId"] == "host-1"
+
+    await store.bind_embedded_host(
+        "idem-embedded", host_id="host-1", credential_generation=3
+    )
+    with pytest.raises(OmnigentBridgeError, match="no durable"):
+        await facade.heartbeat(
+            host_id="host-1", request=EmbeddedHostHeartbeatRequest(), auth=current,
+        )
+
+
+@pytest.mark.asyncio
+async def test_session_event_rejects_cross_host_binding(store) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"hostType": "external"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_host(
+        "idem-embedded", host_id="host-owner", credential_generation=1
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_embedded_config())
+    attacker = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="host-attacker",
+        credential_generation=1,
+    )
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.ingest_session_event(
+            host_id="host-attacker", session_id="sess-embedded",
+            request=EmbeddedHostSessionEventRequest(type="response.delta"), auth=attacker,
+        )
+    assert excinfo.value.status_code == 403
