@@ -135,6 +135,26 @@ def test_pinned_source_verifier_executes_without_importable_package() -> None:
     assert identity.runner_id == "runner-1"
 
 
+def test_padded_token_uses_upstream_normalization_and_selects_generation() -> None:
+    adapter = OmnigentHostAuthAdapter(
+        credentials=(
+            HostCredentialGeneration(
+                secret_ref="db://omnigent-host-current",
+                generation=7,
+                token="runner-token",
+            ),
+        )
+    )
+
+    identity = adapter.verify(
+        {"X-Omnigent-Runner-Tunnel-Token": "  runner-token\t"},
+        runner_id="runner-1",
+    )
+
+    assert identity.runner_id == "runner-1"
+    assert identity.credential_generation == 7
+
+
 def test_embedded_host_auth_rejects_duplicate_tunnel_token_headers() -> None:
     headers = Headers(
         raw=[

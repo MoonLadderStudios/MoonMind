@@ -121,9 +121,23 @@ class OmnigentHostAuthAdapter:
                 "runner tunnel credential was rejected",
                 code="host_credential_rejected",
             ) from exc
-        generation = next(
-            item.generation for item in self._credentials if item.token == values[0]
-        )
+        # The pinned verifier normalizes the presented header with ``strip``
+        # before allow-list comparison. Use that identical value when mapping
+        # the accepted credential back to its service-side generation.
+        verified_token = values[0].strip()
+        try:
+            generation = next(
+                item.generation
+                for item in self._credentials
+                if item.token == verified_token
+            )
+        except StopIteration as exc:
+            # Keep any unexpected verifier/selection drift credential-free and
+            # deterministic instead of leaking an internal exception.
+            raise UpstreamHostAuthError(
+                "runner tunnel credential generation could not be selected",
+                code="host_auth_protocol_drift",
+            ) from exc
         return UpstreamHostIdentity(
             runner_id=claimed_runner_id,
             credential_generation=generation,
