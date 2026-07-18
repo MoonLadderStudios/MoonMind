@@ -2847,7 +2847,11 @@ function mapEventsToTimelineRows(
 
 function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityEventRow[] {
   return rows
-    .filter((row) => row.rowType !== 'fallback' && row.rowType !== 'output' && row.rowType !== 'system')
+    .filter((row) => (
+      row.rowType !== 'fallback'
+      && row.rowType !== 'output'
+      && (row.rowType !== 'system' || row.kind?.startsWith('lifecycle.'))
+    ))
     .map((row) => ({
       id: row.id,
       runId: null,
@@ -3520,6 +3524,9 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
       'Open reset boundary artifact',
       metadata.resetBoundaryRef ?? (sourceKind === 'session_reset_boundary' ? metadata.artifactRef : null),
     );
+  }
+  if (sourceKind?.startsWith('lifecycle.')) {
+    addLink('Open diagnostics', metadata.diagnosticsRef);
   }
 
   return links;

@@ -216,7 +216,10 @@ export function mapObservabilityEventToChatSessionEvent(
   const itemId = firstString(metadata.itemId, metadata.item_id, metadata.itemID);
   const callId = firstString(metadata.callId, metadata.call_id, metadata.callID, itemId);
   const sourceKind = kind || 'unknown';
-  const text = stringOrUndefined(row.text) || firstString(metadata.text, metadata.message, metadata.summary) || '';
+  const text = lifecycleEventText(kind, metadata)
+    || stringOrUndefined(row.text)
+    || firstString(metadata.text, metadata.message, metadata.summary)
+    || '';
   const event: ChatSessionEvent = {
     id: eventId({
       row,
@@ -250,6 +253,41 @@ export function mapObservabilityEventToChatSessionEvent(
     optimisticKey: firstString(metadata.optimisticKey, metadata.clientMessageId, metadata.client_message_id),
   };
   return stripUndefined(event);
+}
+
+function lifecycleEventText(
+  kind: string | undefined,
+  metadata: Record<string, unknown>,
+): string | undefined {
+  if (!kind?.startsWith('lifecycle.')) return undefined;
+  const stage = kind.slice('lifecycle.'.length).replaceAll('_', ' ');
+  const status = firstString(metadata.status) || 'updated';
+  const details = asRecord(metadata.metadata);
+  const parts = [`${stage}: ${status}`];
+  const code = firstString(metadata.code);
+  const summary = firstString(metadata.summary);
+  const remediation = firstString(metadata.remediationAction);
+  if (code) parts.push(`Reason: ${code}`);
+  if (summary) parts.push(summary);
+  for (const [label, value] of [
+    ['Profile', details.providerProfileId],
+    ['Host', details.omnigentHostId],
+    ['Host lease', details.hostLeaseRef],
+    ['Workflow', details.workflowId],
+    ['Step', details.stepExecutionId],
+  ] as const) {
+    const safeValue = firstString(value);
+    if (safeValue) parts.push(`${label}: ${safeValue}`);
+  }
+  if (typeof details.cleanupCompleted === 'boolean') {
+    parts.push(`Cleanup: ${details.cleanupCompleted ? 'completed' : 'incomplete'}`);
+  }
+  if (typeof details.leaseReleased === 'boolean') {
+    parts.push(`Profile lease: ${details.leaseReleased ? 'released' : 'held'}`);
+  }
+  if (details.janitorRequired === true) parts.push('Janitor reconciliation required');
+  if (remediation) parts.push(`Recommended action: ${remediation.replaceAll('_', ' ')}`);
+  return parts.join(' · ');
 }
 
 export function reduceChatSessionEvents(
@@ -486,6 +524,9 @@ function eventTypeForKind(
   stream: string | null | undefined,
   metadata: Record<string, unknown>,
 ): ChatSessionEventType {
+  if (kind.startsWith('lifecycle.')) {
+    return metadata.status === 'failed' ? 'failure' : 'system_status';
+  }
   if (isCriticalSchemaIncompatible(kind, metadata)) return 'incompatible_schema';
   if (USER_MESSAGE_KINDS.has(kind)) return 'user_message';
   if (RESPONSE_STARTED_KINDS.has(kind)) return 'response_started';

@@ -70,6 +70,17 @@ from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
             "configuration_error",
             "validate_codex_oauth",
         ),
+        ("credential_owner_mismatch", "configuration_error", "validate_codex_oauth"),
+        ("profile_lease_conflict", "resource_unavailable", "wait_for_profile_lease"),
+        ("bridge_auth_failed", "configuration_error", "repair_bridge_authentication"),
+        ("host_binding_mismatch", "configuration_error", "correct_host_binding"),
+        ("harness_incompatible", "configuration_error", "correct_host_binding"),
+        ("container_start_failed", "configuration_error", "repair_host_image"),
+        ("image_pull_failed", "configuration_error", "repair_host_image"),
+        ("network_unavailable", "integration_error", "repair_server_endpoint"),
+        ("server_endpoint_invalid", "integration_error", "repair_server_endpoint"),
+        ("session_create_failed", "integration_error", "retry_transient_upstream"),
+        ("first_message_reconcile_failed", "integration_error", "retry_transient_upstream"),
     ],
 )
 def test_failure_evidence_classifies_operator_action(

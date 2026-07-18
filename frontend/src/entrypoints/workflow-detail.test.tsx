@@ -7930,6 +7930,89 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
+  it('renders an understandable failed-before-stream lifecycle with zero provider events', async () => {
+    window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/chat?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
+      temporalRunId: 'failed-launch-run', runId: 'failed-launch-run', source: 'temporal',
+      title: 'Failed launch', summary: 'Launch stopped before provider streaming.',
+      status: 'failed', state: 'failed', rawState: 'failed',
+      closedAt: '2026-07-09T00:00:30Z', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', actions: {},
+    };
+    const lifecycleItem = (
+      sequence: number,
+      stage: string,
+      status: string,
+      metadata: Record<string, unknown> = {},
+    ) => ({
+      sequence,
+      timestamp: `2026-07-09T00:00:${String(sequence).padStart(2, '0')}Z`,
+      stream: 'system',
+      text: '',
+      kind: `lifecycle.${stage}`,
+      sessionId: 'brs-failed-launch',
+      metadata: { status, ...metadata },
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          bridgeSessionId: 'brs-failed-launch', workflowId: 'test-123', status: 'failed',
+        }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-failed-launch/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1',
+          bridgeSessionId: 'brs-failed-launch',
+          items: [
+            lifecycleItem(1, 'profile_readiness', 'ready'),
+            lifecycleItem(2, 'credential_preflight', 'failed', {
+              code: 'oauth_generation_mismatch',
+              summary: 'Credential generation did not match the mounted volume.',
+              failureClass: 'configuration_error',
+              remediationAction: 'validate_codex_oauth',
+              diagnosticsRef: 'artifact://launch/diagnostics',
+              metadata: {
+                providerProfileId: 'codex', hostLeaseRef: 'host-lease-1',
+                workflowId: 'test-123', stepExecutionId: 'step-1',
+              },
+            }),
+            lifecycleItem(3, 'host_cleanup', 'completed', {
+              metadata: { cleanupCompleted: true, hostLeaseReleased: true },
+            }),
+            lifecycleItem(4, 'terminal', 'failed', {
+              metadata: { cleanupCompleted: true, leaseReleased: true, workflowId: 'test-123' },
+            }),
+          ],
+          after: 0, nextCursor: '4', hasMore: false, terminal: true,
+          latestSequence: 4, retentionGap: null,
+          terminalEnvelope: { schemaVersion: 'moonmind.bridge-session-terminal.v1', status: 'failed' },
+        }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getAllByText(/credential preflight: failed/i).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/profile readiness: ready/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reason: oauth_generation_mismatch/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Profile: codex/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Host lease: host-lease-1/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Cleanup: completed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Profile lease: released/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Recommended action: validate codex oauth/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/terminal: failed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Open diagnostics').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(screen.queryByText('Bridge assistant output')).toBeNull();
+  });
+
   it('renders artifact download link using explicit downloadUrl when present', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
