@@ -2507,6 +2507,42 @@ type BridgeResourceProjection = {
   }> }>;
 };
 
+type BridgeResource = BridgeResourceProjection['groups'][number]['resources'][number];
+
+function chatBlockEventSequences(block: ProjectedChatBlock): Set<number> {
+  const sequences = new Set<number>();
+  for (const eventId of block.sourceEventIds) {
+    const match = eventId.match(/(?::seq:|:)(\d+)(?::|$)/);
+    if (match?.[1]) sequences.add(Number(match[1]));
+  }
+  return sequences;
+}
+
+function ContextualBridgeResourceLinks({
+  apiBase,
+  block,
+  resources,
+}: {
+  apiBase: string;
+  block: ProjectedChatBlock;
+  resources: BridgeResource[];
+}) {
+  const sequences = chatBlockEventSequences(block);
+  const contextual = resources.filter((resource) =>
+    resource.sourceEventSequence != null && sequences.has(resource.sourceEventSequence));
+  if (contextual.length === 0) return null;
+  return <div className="timeline-artifact-links" aria-label="Resources announced by this event">
+    {contextual.map((resource, index) => {
+      const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+      return <span key={`${resource.label}-${index}`}>
+        {href && resource.previewAvailable
+          ? <a href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open {resource.label}</a>
+          : <span>{resource.label}: {resource.status === 'pending' ? 'Harvesting…' : resource.unavailableReason || resource.status}</span>}
+      </span>;
+    })}
+  </div>;
+}
+
 async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
   const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'resources'), { credentials: 'include' });
   if (!resp.ok) throw buildObservabilityRequestError(resp.status);
@@ -3562,7 +3598,7 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
   return links;
 }
 
-function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string, resources: BridgeResource[] = []): ReactNode {
   const className = [
     'chat-session-block',
     `chat-session-block-${block.kind}`,
@@ -3594,6 +3630,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
           {block.text || block.toolName || 'Tool call'}
         </div>
         <TimelineArtifactLinks links={artifactLinks} />
+        <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
       </div>
     );
   }
@@ -3635,6 +3672,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
         {block.text}
       </div>
       <TimelineArtifactLinks links={artifactLinks} />
+      <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
     </div>
   );
 }
@@ -3644,11 +3682,13 @@ function ChatSessionView({
   chatBlocks,
   rows,
   wrapLines,
+  resources = [],
 }: {
   apiBase: string;
   chatBlocks: ProjectedChatBlock[];
   rows: TimelineRow[];
   wrapLines: boolean;
+  resources?: BridgeResource[];
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
   return (
@@ -3676,7 +3716,7 @@ function ChatSessionView({
             data={chatBlocks}
             followOutput={(atBottom) => atBottom ? 'smooth' : false}
             computeItemKey={(index, block) => `${block.id}:${index}`}
-            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase)}
+            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase, resources)}
           />
         </div>
       )}
@@ -5628,7 +5668,12 @@ function BridgeSessionLogsPanel({
     queryKey: ['omnigent-bridge-session-resources', bridgeSessionId],
     queryFn: () => fetchBridgeSessionResources(apiBase, bridgeSessionId),
     enabled: Boolean(bridgeSessionId),
-    refetchInterval: isTerminal ? false : SESSION_PROJECTION_POLL_MS,
+    refetchInterval: (query) => {
+      const completeness = (query.state.data as BridgeResourceProjection | undefined)?.completeness;
+      return isTerminal && completeness && completeness !== 'pending'
+        ? false
+        : SESSION_PROJECTION_POLL_MS;
+    },
     retry: false,
   });
   const historyRows = useMemo(() => {
@@ -5754,7 +5799,7 @@ function BridgeSessionLogsPanel({
               <section key={group.groupKey} aria-label={group.title}>
                 <h4>{group.title}</h4>
                 <ul className="stack gap-1">
-                  {group.resources.map((resource, index) => {
+                  {group.resources.slice(0, 25).map((resource, index) => {
                     const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
                     return (
                       <li key={`${group.groupKey}-${resource.label}-${index}`}>
@@ -5764,6 +5809,9 @@ function BridgeSessionLogsPanel({
                         {href && resource.previewAvailable ? (
                           <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a>
                         ) : null}
+                        {href && resource.downloadAvailable ? (
+                          <a className="button secondary small" href={href} download aria-label={`Download ${resource.label}`}>Download</a>
+                        ) : null}
                         {resource.relatedArtifactRefs?.map((ref, relatedIndex) => {
                           const relatedHref = artifactRefHref(apiBase, ref);
                           return relatedHref ? <a key={ref} className="button secondary small" href={relatedHref} target="_blank" rel="noreferrer" aria-label={`Open related evidence ${relatedIndex + 1} for ${resource.label}`}>Related evidence</a> : null;
@@ -5772,6 +5820,7 @@ function BridgeSessionLogsPanel({
                       </li>
                     );
                   })}
+                  {group.resources.length > 25 ? <li className="small">Showing 25 of {group.resources.length} resources. Use the capture manifest for the complete bounded index.</li> : null}
                 </ul>
               </section>
             ))}
@@ -5783,7 +5832,13 @@ function BridgeSessionLogsPanel({
           <div className="live-logs-empty">(waiting for bridge session events...)</div>
         ) : (
           <div data-testid="chat-session-viewer" className="chat-session-viewer">
-            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
+            <ChatSessionView
+              apiBase={apiBase}
+              chatBlocks={chatBlocks}
+              rows={logContent}
+              wrapLines={wrapLines}
+              resources={resourcesQuery.data?.groups.flatMap((group) => group.resources) || []}
+            />
             <details className="raw-timeline-escape-hatch">
               <summary>Raw Timeline</summary>
               <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">

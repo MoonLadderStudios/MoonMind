@@ -861,9 +861,12 @@ async def get_omnigent_bridge_session_resources(
     return {
         "schemaVersion": "moonmind.omnigent.resource_projection.v1",
         "completeness": (
-            "pending" if row.status not in _BRIDGE_TERMINAL_STATUSES else "unavailable"
+            "pending" if row.status not in _BRIDGE_TERMINAL_STATUSES else "degraded"
         ),
-        "unavailableReasons": {},
+        "unavailableReasons": (
+            {} if row.status not in _BRIDGE_TERMINAL_STATUSES else
+            {"resourceProjection": "Terminal resource evidence was not published."}
+        ),
         "groups": [],
     }
 

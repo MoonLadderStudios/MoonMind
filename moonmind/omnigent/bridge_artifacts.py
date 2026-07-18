@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -25,6 +26,10 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
+_MAX_OMNIGENT_CONTENT_BYTES = 10 * 1024 * 1024
+_MAX_OMNIGENT_PREVIEW_BYTES = 256 * 1024
+_OMNIGENT_HARVEST_TIMEOUT_SECONDS = 30
+_OMNIGENT_HARVEST_MAX_ATTEMPTS = 3
 _CAPTURE_MANIFEST_SCHEMA_VERSION = "moonmind.omnigent.capture_manifest.v1"
 _RESOURCE_PROJECTION_SCHEMA_VERSION = "moonmind.omnigent.resource_projection.v1"
 
@@ -806,7 +811,7 @@ async def _harvest_changed_files(
             payload=content,
             link_type="output.omnigent.changed_file",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append(_harvested_resource(path, ref, content))
     manifest["changedFiles"] = harvested
     manifest.setdefault("patchUnavailable", True)
     return file_items
@@ -870,7 +875,7 @@ async def _harvest_workspace_files(
             payload=content,
             link_type="output.omnigent.workspace_file",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append(_harvested_resource(path, ref, content))
     manifest["workspaceFiles"] = harvested
 
 
@@ -911,7 +916,7 @@ async def _harvest_workspace_diffs(
             link_type="output.omnigent.workspace_diff",
             content_type="text/x-diff",
         )
-        harvested.append({"path": path, "artifactRef": ref})
+        harvested.append(_harvested_resource(path, ref, diff, content_type="text/x-diff"))
     manifest["workspaceDiffs"] = harvested
     manifest["patchUnavailable"] = not bool(harvested)
 
@@ -984,9 +989,30 @@ async def _harvest_session_files(
                 "filename": filename,
                 "artifactRef": ref,
                 "metadataRef": metadata_ref,
+                "contentType": _resource_content_type(filename),
+                "sizeBytes": len(content),
             }
         )
     manifest["sessionFiles"] = harvested
+
+
+def _resource_content_type(path: str) -> str:
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+
+def _harvested_resource(
+    path: str,
+    artifact_ref: str,
+    content: bytes,
+    *,
+    content_type: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "path": path,
+        "artifactRef": artifact_ref,
+        "contentType": content_type or _resource_content_type(path),
+        "sizeBytes": len(content),
+    }
 
 
 def _resource_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1200,10 +1226,35 @@ def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         ("diagnostics", "Diagnostics", "diagnosticEvidence"),
         ("manifests", "Capture and checkpoint manifests", "manifestEvidence"),
     )
+    index_items = [
+        {"label": label, "artifactRef": manifest[ref_key], "contentType": "application/json"}
+        for label, ref_key in (
+            ("Changed-file index", "changedFilesIndexRef"),
+            ("Workspace-file index", "workspaceFilesIndexRef"),
+            ("Session-file index", "sessionFilesIndexRef"),
+        )
+        if manifest.get(ref_key)
+    ]
+    unavailable_by_group = {
+        "changed_files": "changedFilesUnavailable",
+        "diffs": "workspaceDiffsUnavailable",
+        "workspace_files": "workspaceFilesUnavailable",
+        "session_files": "sessionFilesUnavailable",
+    }
     groups: list[dict[str, Any]] = []
     for key, title, manifest_key in definitions:
         raw_items = manifest.get(manifest_key, [])
-        items = raw_items if isinstance(raw_items, list) else []
+        items = list(raw_items) if isinstance(raw_items, list) else []
+        if key == "manifests":
+            items.extend(index_items)
+        unavailable_key = unavailable_by_group.get(key)
+        if unavailable_key and manifest.get(unavailable_key):
+            items.append(
+                {
+                    "label": f"{title} unavailable",
+                    "unavailable": str(manifest[unavailable_key]),
+                }
+            )
         groups.append({"groupKey": key, "title": title, "items": items})
     return groups
 
@@ -1217,7 +1268,9 @@ def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
         for item in group["items"][:_MAX_OMNIGENT_HARVEST_ITEMS]:
             if not isinstance(item, dict):
                 continue
-            artifact_ref = str(item.get("artifactRef") or "").strip()
+            artifact_ref = str(
+                item.get("artifactRef") or item.get("snapshotRef") or ""
+            ).strip()
             path = str(item.get("path") or item.get("filename") or "").strip()
             label = str(item.get("label") or path or group["title"]).strip()
             unavailable_reason = str(
@@ -1364,7 +1417,13 @@ async def _build_capture_bundle(
             "limits": {
                 "maxListEntries": _MAX_OMNIGENT_HARVEST_ITEMS,
                 "maxHarvestedFiles": _MAX_OMNIGENT_HARVEST_ITEMS,
+                "maxContentBytes": _MAX_OMNIGENT_CONTENT_BYTES,
+                "maxPreviewBytes": _MAX_OMNIGENT_PREVIEW_BYTES,
             },
+            "supportedContentTypes": ["text/*", "application/json", "application/octet-stream"],
+            "binaryHandling": "metadata_and_authorized_download; preview_when_supported",
+            "timeoutSeconds": _OMNIGENT_HARVEST_TIMEOUT_SECONDS,
+            "retry": {"maxAttempts": _OMNIGENT_HARVEST_MAX_ATTEMPTS},
             "optionalEvidenceFailureIsFatal": _capture_requires_full_evidence(
                 capture_policy
             ),

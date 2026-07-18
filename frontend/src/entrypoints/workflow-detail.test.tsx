@@ -7913,6 +7913,26 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/omnigent/bridge-sessions/brs-1/resources')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            completeness: 'complete',
+            groups: [{
+              groupKey: 'changed_files',
+              title: 'Changed files',
+              resources: [{
+                label: 'src/app.py',
+                artifactRef: '0198f0f0-1111-7222-8333-abcdefabcdef',
+                status: 'available',
+                sourceEventSequence: 1,
+                previewAvailable: true,
+                downloadAvailable: true,
+              }],
+            }],
+          }),
+        } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -7925,6 +7945,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Bridge assistant output').length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
+    expect(await screen.findByLabelText('Open src/app.py')).toBeTruthy();
+    expect(screen.getByLabelText('Download src/app.py')).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);
