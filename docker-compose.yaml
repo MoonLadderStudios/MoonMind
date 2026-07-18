@@ -817,7 +817,7 @@ services:
 
   omnigent-host:
     profiles: ["omnigent-host"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     entrypoint: ["/opt/moonmind/start-host-with-projections.sh"]
     environment:
       PATH: /opt/moonmind-tools/bin:${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
@@ -850,7 +850,7 @@ services:
 
   omnigent-host-claude:
     profiles: ["omnigent-host-claude"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
@@ -899,7 +899,7 @@ services:
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
     entrypoint: ["/opt/moonmind/init-codex-oauth-host.sh"]
     environment:
@@ -916,7 +916,7 @@ services:
 
   omnigent-host-codex:
     profiles: ["omnigent-host-codex"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     hostname: omnigent-host-codex
     user: "1000:1000"
     working_dir: /home/app
@@ -1035,7 +1035,7 @@ services:
     restart: "no"
 
   omnigent:
-    image: ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
     env_file:
       - path: .env
         required: false
