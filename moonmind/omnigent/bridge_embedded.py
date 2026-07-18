@@ -33,6 +33,11 @@ from moonmind.omnigent.host_auth_adapter import (
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
 )
+from moonmind.omnigent.embedded_host_channel import (
+    EmbeddedHostChannelError,
+    EmbeddedHostChannelRegistry,
+    embedded_host_channels,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 MAX_EMBEDDED_CAPABILITIES = 128
@@ -170,9 +175,45 @@ class OmnigentEmbeddedHostProtocolFacade:
         *,
         run_store: OmnigentBridgeSessionStore,
         config: OmnigentBridgeConfig,
+        host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
     ) -> None:
         self._run_store = run_store
         self._config = config
+        self._host_channels = host_channels
+
+    async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
+        """Dispatch and durably bind a runner to an authorized embedded session."""
+
+        self._require_embedded_mode()
+        row = await self._run_store.get_existing(idempotency_key)
+        if row is None or not row.omnigent_session_id or not row.omnigent_host_id:
+            raise OmnigentBridgeError(
+                "Embedded runner dispatch requires an assigned session and host",
+                failure_class="system_error", status_code=409,
+            )
+        if row.omnigent_runner_id:
+            return {"runnerId": row.omnigent_runner_id, "reused": True}
+        workspace = _clean(row.workspace)
+        if not workspace:
+            raise OmnigentBridgeError(
+                "Embedded runner dispatch requires a workspace",
+                failure_class="user_error", status_code=422,
+            )
+        try:
+            runner_id = await self._host_channels.launch_runner(
+                host_id=row.omnigent_host_id,
+                workspace=workspace,
+                session_id=row.omnigent_session_id,
+                harness="codex-native",
+            )
+            await self._run_store.bind_embedded_runner(
+                idempotency_key, host_id=row.omnigent_host_id, runner_id=runner_id
+            )
+        except EmbeddedHostChannelError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        return {"runnerId": runner_id, "reused": False}
 
     async def create_session(
         self,

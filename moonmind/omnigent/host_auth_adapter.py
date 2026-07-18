@@ -62,6 +62,13 @@ class OmnigentHostAuthAdapter:
             raise UpstreamHostAuthError("runner tunnel credential was rejected") from exc
         return UpstreamHostIdentity(runner_id=runner_id)
 
+    def runner_id_for_binding_token(self, token: str) -> str:
+        """Derive a runner identity with the pinned upstream algorithm."""
+
+        if not str(token or "").strip():
+            raise UpstreamHostAuthError("runner binding credential is required")
+        return str(self._token_bound_runner_id(token))
+
 
 def assert_pinned_omnigent_auth_contract() -> None:
     """Fail preflight if the expected upstream verifier surface has drifted."""

@@ -73,3 +73,30 @@ async def test_reconnect_fails_pending_request_and_replaces_channel() -> None:
         await pending
     second.accept_host_frame(_hello())
     assert registry.get_ready("host-1") is second
+
+
+@pytest.mark.asyncio
+async def test_launch_runner_uses_exact_host_and_rejects_identity_substitution() -> None:
+    registry = EmbeddedHostChannelRegistry()
+    sent: list[dict[str, object]] = []
+
+    async def send(text: str) -> None:
+        payload = json.loads(text)
+        sent.append(payload)
+        registry.get_ready("host-1").accept_host_frame(json.dumps({
+            "kind": "host.launch_runner_result",
+            "request_id": payload["request_id"],
+            "status": "launched",
+            "runner_id": "runner_attacker",
+        }))
+
+    channel = registry.connect(host_id="host-1", send_text=send)
+    channel.accept_host_frame(_hello())
+    with pytest.raises(EmbeddedHostChannelError, match="invalid runner identity"):
+        await registry.launch_runner(
+            host_id="host-1", workspace="/work/repo",
+            session_id="session-1", harness="codex-native",
+        )
+    assert sent[0]["workspace"] == "/work/repo"
+    assert sent[0]["session_id"] == "session-1"
+    assert sent[0]["harness"] == "codex-native"

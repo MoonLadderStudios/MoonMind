@@ -270,6 +270,31 @@ class OmnigentBridgeSessionStore:
             await session.refresh(stored)
             return _detached(session, stored)
 
+    async def bind_embedded_runner(
+        self, idempotency_key: str, *, host_id: str, runner_id: str
+    ) -> OmnigentBridgeSession:
+        """Persist the exact launched runner without permitting rebinding.
+
+        This write is the durable handoff between the process-local host tunnel
+        and first-message delivery. Retried launch responses may repeat the same
+        identity, but can never redirect an existing session.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_host_id != host_id:
+                raise OmnigentIdempotencyError(
+                    "embedded runner host does not match durable host assignment"
+                )
+            if row.omnigent_runner_id and row.omnigent_runner_id != runner_id:
+                raise OmnigentIdempotencyError(
+                    "embedded session is already bound to another runner"
+                )
+            row.omnigent_runner_id = runner_id
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
     async def record_lifecycle_event(
         self,
         idempotency_key: str,

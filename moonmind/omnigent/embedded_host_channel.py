@@ -8,6 +8,7 @@ authenticated host, while request correlation is bounded to the connection.
 from __future__ import annotations
 
 import asyncio
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -15,6 +16,7 @@ from moonmind.omnigent.host_protocol_adapter import (
     OmnigentHostProtocolAdapter,
     UpstreamHostProtocolError,
 )
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 
 
 SendText = Callable[[str], Awaitable[None]]
@@ -100,6 +102,30 @@ class EmbeddedHostChannelRegistry:
         if channel is None or channel.hello is None:
             raise EmbeddedHostChannelError("assigned host is not connected and ready")
         return channel
+
+    async def launch_runner(
+        self, *, host_id: str, workspace: str, session_id: str, harness: str
+    ) -> str:
+        """Launch on the exact authenticated host and verify its bound identity."""
+
+        channel = self.get_ready(host_id)
+        binding_token = secrets.token_urlsafe(32)
+        identity = OmnigentHostAuthAdapter(
+            allowed_tokens=frozenset({binding_token})
+        ).runner_id_for_binding_token(binding_token)
+        frame = channel.adapter.frames.HostLaunchRunnerFrame(
+            request_id=f"launch_{secrets.token_hex(16)}",
+            binding_token=binding_token,
+            workspace=workspace,
+            session_id=session_id,
+            harness=harness,
+        )
+        result = await channel.request(frame)
+        if result.status != "launched":
+            raise EmbeddedHostChannelError("host rejected runner launch")
+        if result.runner_id != identity:
+            raise EmbeddedHostChannelError("host returned an invalid runner identity")
+        return identity
 
 
 embedded_host_channels = EmbeddedHostChannelRegistry()
