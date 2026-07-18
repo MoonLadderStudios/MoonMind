@@ -7981,7 +7981,9 @@ describe('Workflow Detail Entrypoint', () => {
             schemaVersion: 'moonmind.bridge-session-terminal.v1', status: 'failed',
             failureClass: 'configuration_error', failureCode: 'profile_missing',
             summary: 'Provider profile is unavailable.', diagnosticsRef: 'artifact:diagnostics',
-            cleanupState: 'completed', evidenceIncompleteReason: null,
+            initialSnapshotRef: 'artifact:initial', rawEventsRef: 'artifact:raw',
+            externalStateRef: 'artifact:external', cleanupState: 'completed',
+            leaseReleaseState: 'released', evidenceIncompleteReason: null,
           },
         }) } as Response);
       }
@@ -7995,6 +7997,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText(/Failure class: configuration_error/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Reason: profile_missing/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Cleanup: completed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Lease release: released/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/verify the provider profile, credentials, and execution authorization/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Open initial snapshot' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Open raw events' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Open external state' }).length).toBeGreaterThan(0);
     expect(screen.getByTestId('chat-session-blocks')).toBeTruthy();
   });
 
@@ -8032,6 +8039,31 @@ describe('Workflow Detail Entrypoint', () => {
       expect(fetchSpy.mock.calls.some(([url, init]) =>
         String(url).includes('/omnigent/v1/sessions/provider-session/events') &&
         String((init as RequestInit | undefined)?.body).includes('clientEventKey'))).toBe(true);
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
+  it('shows failed bridge delivery and denies controls not advertised by the server', async () => {
+    window.history.pushState({}, 'Bridge Failed Controls Test', '/workflows/test-123/chat?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge controls', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-fail', status: 'running', providerSessionRef: 'provider-session', capabilities: { sendFollowUp: true, interruptTurn: false } }) } as Response);
+      if (url.includes('/bridge-sessions/brs-fail/events')) return Promise.resolve({ ok: true, json: async () => ({ schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-fail', items: [], after: 0, nextCursor: null, hasMore: false, terminal: false, latestSequence: 0 }) } as Response);
+      if (url.includes('/omnigent/v1/sessions/provider-session/events')) return Promise.resolve({ ok: false, status: 403, json: async () => ({ detail: 'not authorized' }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      fireEvent.change(await screen.findByLabelText('Follow-up message'), { target: { value: 'Continue.' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+      await waitFor(() => expect(screen.getByText(/Operator message · Failed/)).toBeTruthy());
+      expect(screen.queryByRole('button', { name: 'Interrupt turn' })).toBeNull();
+      expect(screen.getByRole('region', { name: 'Bridge session controls' })).toBeTruthy();
     } finally {
       window.EventSource = priorEventSource;
     }

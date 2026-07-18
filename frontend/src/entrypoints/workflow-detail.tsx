@@ -3416,8 +3416,11 @@ function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): Timeline
   if (row.metadata.terminalStatus) {
     addLink('Open diagnostics', row.metadata.diagnosticsRef);
     addLink('Open capture manifest', row.metadata.captureManifestRef);
+    addLink('Open initial snapshot', row.metadata.initialSnapshotRef);
     addLink('Open final snapshot', row.metadata.finalSnapshotRef);
+    addLink('Open raw events', row.metadata.rawEventsRef);
     addLink('Open normalized events', row.metadata.normalizedEventsRef);
+    addLink('Open external state', row.metadata.externalStateRef);
   }
 
   return links;
@@ -3566,8 +3569,11 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
   if (metadata.terminalStatus) {
     addLink('Open diagnostics', metadata.diagnosticsRef);
     addLink('Open capture manifest', metadata.captureManifestRef);
+    addLink('Open initial snapshot', metadata.initialSnapshotRef);
     addLink('Open final snapshot', metadata.finalSnapshotRef);
+    addLink('Open raw events', metadata.rawEventsRef);
     addLink('Open normalized events', metadata.normalizedEventsRef);
+    addLink('Open external state', metadata.externalStateRef);
   }
 
   return links;
@@ -5672,6 +5678,10 @@ function BridgeSessionLogsPanel({
         envelope.failureCode ? `Reason: ${envelope.failureCode}.` : '',
         envelope.evidenceIncompleteReason ? `Evidence incomplete: ${envelope.evidenceIncompleteReason}` : '',
         envelope.cleanupState ? `Cleanup: ${envelope.cleanupState}.` : '',
+        envelope.leaseReleaseState ? `Lease release: ${envelope.leaseReleaseState}.` : '',
+        /configuration|profile|authori[sz]ation/i.test(`${envelope.failureClass ?? ''} ${envelope.failureCode ?? ''}`)
+          ? 'Remediation: verify the provider profile, credentials, and execution authorization, then retry.'
+          : '',
       ].filter(Boolean).join(' ');
       rows.push({
         id: `${bridgeSessionId}-terminal-envelope`,
