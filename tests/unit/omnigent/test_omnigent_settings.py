@@ -5,6 +5,7 @@ from __future__ import annotations
 from moonmind.omnigent.settings import (
     build_omnigent_gate,
     resolved_host_runner_token,
+    resolve_host_runner_credential,
     resolved_server_url,
 )
 
@@ -46,12 +47,17 @@ def test_omnigent_gate_enabled_with_flag_and_server_url() -> None:
 
 
 def test_host_runner_token_resolves_service_side_secret() -> None:
-    assert (
-        resolved_host_runner_token(
-            env={"OMNIGENT_HOST_RUNNER_TOKEN": " embedded-host-token "}
-        )
-        == "embedded-host-token"
-    )
+    env = {
+        "OMNIGENT_HOST_RUNNER_TOKEN_REF": "env://EMBEDDED_TOKEN",
+        "EMBEDDED_TOKEN": " embedded-host-token ",
+        "OMNIGENT_HOST_RUNNER_CREDENTIAL_GENERATION": "4",
+    }
+    credential = resolve_host_runner_credential(env=env)
+
+    assert resolved_host_runner_token(env=env) == "embedded-host-token"
+    assert credential.secret_ref == "env://EMBEDDED_TOKEN"
+    assert credential.generation == 4
+    assert "embedded-host-token" not in repr(credential.secret_ref)
 
 
 def test_proxy_forward_headers_empty_by_default() -> None:

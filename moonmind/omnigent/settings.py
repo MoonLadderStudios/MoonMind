@@ -6,6 +6,12 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from moonmind.auth.secret_refs import (
+    SecretBackend,
+    SecretReferenceError,
+    parse_secret_ref,
+)
+
 OMNIGENT_DISABLED_MESSAGE = (
     "agentId=omnigent requires OMNIGENT_ENABLED=true with "
     "OMNIGENT_SERVER_URL configured"
@@ -22,6 +28,15 @@ class OmnigentRuntimeGate:
     enabled: bool
     missing: tuple[str, ...]
     error_message: str
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddedHostCredential:
+    """Ephemeral embedded-host credential resolved at the service boundary."""
+
+    value: str
+    secret_ref: str
+    generation: int
 
 
 def _clean(value: object | None) -> str:
@@ -95,10 +110,59 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
 
 
 def resolved_host_runner_token(*, env: Mapping[str, Any] | None = None) -> str:
-    """Return the embedded host/runner auth token configured service-side."""
+    """Resolve the embedded token from its required service-side secret ref."""
+
+    return resolve_host_runner_credential(env=env).value
+
+
+def resolved_host_runner_token_ref(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return the service-side secret ref for embedded host authentication."""
 
     source = env if env is not None else os.environ
-    return _clean(source.get("OMNIGENT_HOST_RUNNER_TOKEN"))
+    return _clean(source.get("OMNIGENT_HOST_RUNNER_TOKEN_REF"))
+
+
+def resolved_host_runner_credential_generation(
+    *, env: Mapping[str, Any] | None = None
+) -> int:
+    """Return the declared embedded credential generation (never secret data)."""
+
+    source = env if env is not None else os.environ
+    raw = _clean(source.get("OMNIGENT_HOST_RUNNER_CREDENTIAL_GENERATION")) or "1"
+    try:
+        generation = int(raw)
+    except ValueError as exc:
+        raise ValueError("embedded host credential generation must be an integer") from exc
+    if generation < 1:
+        raise ValueError("embedded host credential generation must be at least 1")
+    return generation
+
+
+def resolve_host_runner_credential(
+    *, env: Mapping[str, Any] | None = None
+) -> EmbeddedHostCredential:
+    """Resolve an embedded host credential without exposing it durably.
+
+    The API service currently supports the portable ``env://`` backend here.
+    Other backends fail visibly instead of silently falling back to a raw token.
+    """
+
+    source = env if env is not None else os.environ
+    ref = resolved_host_runner_token_ref(env=source)
+    try:
+        parsed = parse_secret_ref(ref)
+    except SecretReferenceError as exc:
+        raise ValueError("embedded host credential secret ref is invalid") from exc
+    if parsed.backend != SecretBackend.ENV:
+        raise ValueError("embedded host credential secret ref backend is unsupported")
+    value = _clean(source.get(parsed.locator))
+    if not value:
+        raise ValueError("embedded host credential secret ref is unresolved")
+    return EmbeddedHostCredential(
+        value=value,
+        secret_ref=parsed.normalized_ref,
+        generation=resolved_host_runner_credential_generation(env=source),
+    )
 
 
 def resolved_proxy_forward_headers(
@@ -123,11 +187,15 @@ def resolved_proxy_forward_headers(
 __all__ = [
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",
+    "EmbeddedHostCredential",
     "build_omnigent_gate",
     "is_omnigent_enabled",
     "resolved_api_token",
     "resolved_default_agent_name",
     "resolved_host_runner_token",
+    "resolved_host_runner_token_ref",
+    "resolved_host_runner_credential_generation",
+    "resolve_host_runner_credential",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
 ]

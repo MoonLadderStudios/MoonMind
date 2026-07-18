@@ -30,6 +30,17 @@ implementation. Upstream HTTP rejection is 403 before websocket acceptance for
 an invalid binding and protocol failures close the accepted socket according to
 the upstream tunnel route.
 
+MoonMind resolves the allow-list credential only at the API service boundary.
+`OMNIGENT_HOST_RUNNER_TOKEN_REF` must identify an `env://` secret and
+`OMNIGENT_HOST_RUNNER_CREDENTIAL_GENERATION` declares its positive integer
+generation. Raw-token configuration is not accepted. Rotation is an atomic
+secret-ref target update plus generation increment; there is no dual-generation
+overlap because the pinned verifier defines no such overlap. Requests verified
+under an older generation are rejected before registration, heartbeat, or
+session-event mutation. Removing or making the referenced secret unavailable
+rejects new connections with a stable service-unavailable diagnostic; changing
+the token revokes reconnects using the previous value.
+
 Embedded mode remains experimental and must not be presented as production
 ready until the configured proxy-conformance evidence for issue #3368 and live
 host-auth conformance evidence are both present. Proxy mode remains the supported

@@ -77,6 +77,7 @@ def verify_embedded_host_auth(
     headers: Mapping[str, Any],
     config: OmnigentBridgeConfig,
     configured_token: str,
+    credential_generation: int = 1,
 ) -> EmbeddedHostAuthContext:
     """Verify the embedded host/runner auth profile (§16 rule 8).
 
@@ -108,7 +109,7 @@ def verify_embedded_host_auth(
         auth_mode=auth_mode,
         protocol_profile=identity.protocol_profile,
         runner_id=identity.runner_id,
-        credential_generation=1,
+        credential_generation=credential_generation,
     )
 
 
@@ -120,9 +121,11 @@ class OmnigentEmbeddedHostProtocolFacade:
         *,
         run_store: OmnigentBridgeSessionStore,
         config: OmnigentBridgeConfig,
+        current_credential_generation: int = 1,
     ) -> None:
         self._run_store = run_store
         self._config = config
+        self._current_credential_generation = current_credential_generation
 
     async def create_session(
         self,
@@ -190,6 +193,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        self._require_current_credential(auth)
         host_id = _clean(request.host_id) or auth.runner_id
         runner_id = _clean(request.runner_id) or auth.runner_id
         if runner_id != auth.runner_id or host_id != auth.runner_id:
@@ -218,6 +222,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        self._require_current_credential(auth)
         if _clean(host_id) != auth.runner_id:
             raise OmnigentBridgeError(
                 "Authenticated runner identity does not match host binding",
@@ -244,6 +249,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         auth: EmbeddedHostAuthContext,
     ) -> dict[str, Any]:
         self._require_embedded_mode()
+        self._require_current_credential(auth)
         if _clean(host_id) != auth.runner_id:
             raise OmnigentBridgeError(
                 "Authenticated runner identity does not match session binding",
@@ -303,6 +309,14 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "embedded_omnigent_compatible_server mode.",
                 failure_class="system_error",
                 status_code=501,
+            )
+
+    def _require_current_credential(self, auth: EmbeddedHostAuthContext) -> None:
+        if auth.credential_generation != self._current_credential_generation:
+            raise OmnigentBridgeError(
+                "Embedded host credential generation is stale or revoked",
+                failure_class="user_error",
+                status_code=403,
             )
 
 

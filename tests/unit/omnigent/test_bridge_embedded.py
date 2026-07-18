@@ -73,11 +73,38 @@ def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
         headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
         config=_embedded_config(),
         configured_token="runner-token",
+        credential_generation=4,
     )
 
     assert context.auth_mode == "upstream_runner_tunnel"
     assert context.protocol_profile == "omnigent.runner_tunnel.b95e41ec"
     assert context.runner_id.startswith("runner_token_")
+    assert context.credential_generation == 4
+
+
+@pytest.mark.asyncio
+async def test_embedded_actions_reject_stale_credential_generation(store) -> None:
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+        current_credential_generation=2,
+    )
+    stale = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="runner-1",
+        credential_generation=1,
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.heartbeat(
+            host_id="runner-1",
+            request=EmbeddedHostHeartbeatRequest(),
+            auth=stale,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert "stale or revoked" in str(excinfo.value)
 
 
 def test_embedded_host_auth_rejects_missing_or_wrong_token() -> None:
