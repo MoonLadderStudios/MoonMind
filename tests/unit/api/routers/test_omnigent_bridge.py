@@ -521,6 +521,27 @@ def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
     assert resp.json()["workflowId"] == "mm:w1"
 
 
+def test_resolve_bridge_session_projection_filters_capabilities_to_booleans() -> None:
+    store = _FakeStore(session_overrides={"metadata_": {"interventionCapabilities": {
+        "sendFollowUp": True, "interruptTurn": False, "malformed": "yes", 7: True,
+    }}})
+    client, _, _ = _build(store=store)
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/resolve?workflowId=mm%3Aw1"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["capabilities"] == {"sendFollowUp": True, "interruptTurn": False}
+
+
+def test_resolve_bridge_session_projection_denies_absent_capabilities() -> None:
+    client, _, _ = _build(store=_FakeStore(session_overrides={"metadata_": {}}))
+    resp = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/resolve?workflowId=mm%3Aw1"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["capabilities"] == {}
+
+
 def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     client, _, _ = _build()
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
