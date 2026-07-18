@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from api_service.api.routers import omnigent_bridge
 
-from api_service.db.models import Base
+from api_service.db.models import Base, OmnigentOAuthHostLeaseRecord
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     parse_bridge_config,
@@ -382,6 +383,27 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
 
 @pytest.mark.asyncio
 async def test_pinned_auth_and_durable_lease_authorize_without_boundary_mocks(store) -> None:
+    now = datetime.now(UTC)
+    async with store._session_factory() as session:
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__.insert().values(
+                lease_id="host-lease-1",
+                provider_profile_id="profile-1",
+                provider_lease_id="provider-lease-1",
+                binding_ref="binding-1",
+                credential_generation=1,
+                holder_workflow_id="wf-embedded",
+                agent_run_id=None,
+                idempotency_key="lease-idem-embedded",
+                lease_purpose="execution_omnigent",
+                omnigent_host_id="runner-1",
+                status="ready",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                expires_at=now + timedelta(minutes=5),
+            )
+        )
+        await session.commit()
     await store.bind_profile_authorization(
         request=_request(),
         endpoint_ref="embedded",
