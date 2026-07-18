@@ -12,6 +12,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import urllib.parse
 
 
 def main() -> int:
@@ -43,6 +44,16 @@ def main() -> int:
     refs = payload.get("evidenceRefs")
     if not isinstance(refs, list) or not refs:
         print("live harness returned no durable evidence refs", file=sys.stderr)
+        return 1
+    # The action service is repository-owned and its evidence endpoint is part
+    # of the contract.  Opaque artifact identifiers cannot be independently
+    # inspected by the live runner and are therefore not accepted here.
+    if not all(
+        isinstance(ref, str)
+        and urllib.parse.urlparse(ref).scheme in {"http", "https", "file"}
+        for ref in refs
+    ):
+        print("live harness returned an unsupported evidence reference", file=sys.stderr)
         return 1
     print(json.dumps(payload, separators=(",", ":")))
     return 0

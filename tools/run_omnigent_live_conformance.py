@@ -16,6 +16,8 @@ import subprocess
 import sys
 import shlex
 import xml.etree.ElementTree as ET
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Sequence
 
@@ -136,6 +138,53 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} did not return durable evidence refs"
             )
+        observations = [self._resolve_evidence_ref(ref) for ref in evidence]
+        if not any(
+            item.get("scenario") == scenario
+            and item.get("action") == action
+            and item.get("observed") is True
+            for item in observations
+        ):
+            raise ConformanceContractError(
+                f"{scenario}/{action} evidence did not describe the observed action"
+            )
+        returned_ids = {
+            key: value for key, value in payload.items()
+            if key in {"leaseId", "hostId", "workflowId", "agentRunId", "sessionId"}
+            and value
+        }
+        for item in observations:
+            evidence_ids = item.get("identifiers", {})
+            if evidence_ids and (
+                not isinstance(evidence_ids, dict)
+                or any(evidence_ids.get(key) != value for key, value in returned_ids.items())
+            ):
+                raise ConformanceContractError(
+                    f"{scenario}/{action} evidence identifiers do not match the response"
+                )
+        return payload
+
+    def _resolve_evidence_ref(self, ref: str) -> dict[str, object]:
+        """Resolve durable evidence and reject opaque or unreachable attestations."""
+        parsed = urllib.parse.urlparse(ref)
+        try:
+            if parsed.scheme == "file":
+                path = Path(urllib.request.url2pathname(parsed.path)).resolve()
+                allowed = self.output_dir.resolve()
+                if path != allowed and allowed not in path.parents:
+                    raise ConformanceContractError("file evidence is outside the run output directory")
+                raw = path.read_text(encoding="utf-8")
+            elif parsed.scheme in {"http", "https"}:
+                with urllib.request.urlopen(ref, timeout=30) as response:
+                    raw = response.read().decode("utf-8")
+            else:
+                raise ConformanceContractError(f"unsupported evidence ref scheme: {parsed.scheme or 'none'}")
+            payload = json.loads(raw)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            raise ConformanceContractError(f"unreachable or malformed evidence ref: {ref}") from exc
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != "moonmind.omnigent.action-evidence/v1":
+            raise ConformanceContractError(f"invalid action evidence document: {ref}")
+        assert_secret_free(raw)
         return payload
 
     def write_evidence(self, mode: str, payload: dict[str, object]) -> Path:

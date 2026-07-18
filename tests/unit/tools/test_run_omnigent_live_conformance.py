@@ -161,6 +161,52 @@ def test_action_rejects_boolean_attestation_without_evidence(tmp_path, monkeypat
         raise AssertionError("bare boolean attestation was accepted")
 
 
+def _action_evidence(tmp_path, scenario, action, identifiers=None):
+    path = tmp_path / f"{scenario}-{action}.json"
+    path.write_text(json.dumps({
+        "schemaVersion": "moonmind.omnigent.action-evidence/v1",
+        "scenario": scenario, "action": action, "observed": True,
+        "identifiers": identifiers or {},
+    }))
+    return path.as_uri()
+
+
+def test_action_resolves_and_validates_evidence_content(tmp_path, monkeypatch):
+    module = _module()
+    ref = _action_evidence(tmp_path, "static", "execute", {"workflowId": "w"})
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "workflowId": "w", "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    assert runner.action("static", "execute")["workflowId"] == "w"
+
+
+def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch):
+    module = _module()
+    bad_ref = _action_evidence(tmp_path, "static", "replay", {"workflowId": "other"})
+    responses = [
+        {"ok": True, "workflowId": "w", "evidenceRefs": [bad_ref]},
+        {"ok": True, "evidenceRefs": [(tmp_path / "missing.json").as_uri()]},
+    ]
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stderr = ""
+        @property
+        def stdout(self):
+            return json.dumps(responses.pop(0))
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    for action in ("execute", "replay"):
+        try:
+            runner.action("static", action)
+        except module.ConformanceContractError:
+            pass
+        else:
+            raise AssertionError("invalid durable evidence was accepted")
+
+
 def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})

@@ -75,7 +75,12 @@ python tools/run_omnigent_live_conformance.py --mode all \
 By default the runner uses the repository-owned
 `tools/omnigent_live_action.py` client. The provisioned test environment sets
 `MOONMIND_OMNIGENT_HARNESS_URL` and `MOONMIND_OMNIGENT_HARNESS_TOKEN`; the
-harness action responses must include durable `evidenceRefs`. A custom portable
+harness action responses must include durable `evidenceRefs` using `https` or
+run-output-scoped `file` URLs. Each referenced JSON document uses
+`moonmind.omnigent.action-evidence/v1`, names the scenario and action, records
+`observed: true`, and repeats any returned durable identifiers. The runner
+resolves and secret-scans every document and rejects missing, malformed,
+mismatched, or opaque references. A custom portable
 client may be selected with `MOONMIND_OMNIGENT_ACTION_COMMAND`. Bare success
 booleans are rejected as evidence.
 
