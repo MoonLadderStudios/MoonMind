@@ -7,7 +7,9 @@ Source issue traceability: MM-981 -> MM-995.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -34,6 +36,42 @@ pytestmark = [
 _SUCCESS_STATUSES = {"completed", "succeeded"}
 _TERMINAL_STATUSES = _SUCCESS_STATUSES | {"failed", "canceled", "timed_out"}
 _SMOKE_PROMPT = "Reply with: MM-995 live bridge smoke complete"
+_REQUIRED_STOCK_ROUTES = {
+    "agents", "hosts", "session.create", "session.get", "event.post",
+    "events.stream", "elicitation.resolve", "interrupt", "stop",
+    "changed-files", "workspace.files", "workspace.content",
+    "workspace.diff", "session.files", "session.content", "terminal.snapshot",
+}
+_REQUIRED_FAILURES = {
+    "invalid_oauth", "host_start_failure", "harness_mismatch",
+    "session_create_failure", "first_message_failure", "stream_disconnect",
+    "malformed_event", "resource_harvest_failure", "cleanup_failure",
+    "lease_release_failure",
+}
+_ONDEMAND_ORDER = (
+    "lease_acquired", "host_launched", "preflight_ready", "session_bound",
+    "executed", "resources_harvested", "host_removed",
+    "workflow_detail_reloaded", "lease_released",
+)
+
+
+def _scenario_evidence(env_name: str) -> dict[str, object]:
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        pytest.fail(f"required scenario evidence is unset: {env_name}")
+    path = Path(raw)
+    if not path.is_file():
+        pytest.fail(f"scenario evidence does not exist: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload.get("schemaVersion") == "moonmind.omnigent.live-evidence/v1"
+    return payload
+
+
+def _assert_passed(payload: dict[str, object], names: set[str]) -> None:
+    assertions = payload.get("assertions")
+    assert isinstance(assertions, dict)
+    missing = sorted(name for name in names if assertions.get(name) is not True)
+    assert not missing, f"scenario assertions not proved: {missing}"
 
 
 def _live_env() -> dict[str, str]:
@@ -159,23 +197,58 @@ async def test_live_omnigent_bridge_smoke_disposable_managed_session(
 
 async def test_live_stock_proxy_compatibility_profile(bridge_store) -> None:
     _require_mode("stock")
-    # The stock journey is intentionally a distinct node: the runner records
-    # its pinned images while this exercises the published proxy surface.
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_STOCK_EVIDENCE")
+    _assert_passed(evidence, _REQUIRED_STOCK_ROUTES)
+    images = evidence.get("images")
+    assert isinstance(images, dict)
+    assert all("@sha256:" in str(images.get(name, "")) for name in ("server", "host"))
+    assert evidence.get("hostSource") == "published-stock-image"
+    assert evidence.get("moonmindHostPatch") is False
+    assert evidence.get("protocolVersion") and evidence.get("hostArchitecture")
+    assert evidence.get("advertisedAgents") and evidence.get("advertisedCapabilities")
     await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
 
 
 async def test_live_static_workflow_detail_restart_replay(bridge_store) -> None:
     _require_mode("static")
-    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
-    # Deployment-specific workflow/detail and replay assertions must export
-    # their independently collected evidence for the runner's mandatory scan.
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_STATIC_EVIDENCE")
+    phase = os.environ.get("MOONMIND_OMNIGENT_STATIC_PHASE")
+    assert phase in {"execute", "replay"}
+    _assert_passed(evidence, {
+        "one_first_message", "live_events", "final_snapshot", "resources",
+        "workflow_detail", "secret_free",
+    })
+    assert evidence.get("workflowId") and evidence.get("agentRunId") and evidence.get("sessionId")
+    if phase == "execute":
+        _assert_passed(evidence, {"workflow_created_through_static_profile"})
+    else:
+        _assert_passed(evidence, {"services_restarted", "same_identifiers_reloaded", "durable_replay"})
 
 
 async def test_live_ondemand_oauth_lifecycle_and_cleanup(bridge_store) -> None:
     _require_mode("ondemand")
-    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE")
+    events = evidence.get("events")
+    assert isinstance(events, list)
+    positions = [events.index(name) for name in _ONDEMAND_ORDER]
+    assert positions == sorted(positions)
+    assert positions[-1] == len(events) - 1, "lease release must be the final owned side effect"
+    _assert_passed(evidence, {
+        "exact_profile_host", "partial_start_retry", "janitor_recovery",
+        "state_removed_per_policy", "unrelated_resources_survived",
+        "credential_volume_preserved", "workflow_detail_available_after_removal",
+    })
 
 
 async def test_live_failure_matrix_and_durable_evidence(bridge_store) -> None:
     _require_mode("failures")
-    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_FAILURE_EVIDENCE")
+    cases = evidence.get("failureCases")
+    assert isinstance(cases, dict)
+    assert set(cases) == _REQUIRED_FAILURES
+    for name, result in cases.items():
+        assert isinstance(result, dict), name
+        assert result.get("injected") is True, name
+        assert result.get("lifecycleProjected") is True, name
+        assert result.get("terminalProjected") is True, name
+        assert result.get("redacted") is True, name

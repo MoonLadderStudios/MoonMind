@@ -35,10 +35,10 @@ def test_static_restart_precedes_replay_and_cleanup_is_explicit(tmp_path, monkey
     names = []
     runner = module.LiveRunner(output_dir=tmp_path, env={})
     monkeypatch.setattr(runner, "run", lambda name, command: names.append(name))
-    monkeypatch.setattr(runner, "scenario", lambda mode: names.append(f"{mode}-journey"))
+    monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: names.append(f"{mode}-{phase}"))
     runner.static()
     runner.cleanup("static")
-    assert names == ["static-up", "static-journey", "static-restart", "static-replay", "static-cleanup"]
+    assert names == ["static-up", "static-execute", "static-restart", "static-replay", "static-cleanup"]
 
 
 def test_scan_rejects_secret_like_live_evidence(tmp_path):
@@ -59,6 +59,18 @@ def test_each_mode_selects_a_distinct_provider_node():
     module = _module()
     assert set(module.SCENARIOS) == set(module.LIVE_CASES)
     assert len(set(module.SCENARIOS.values())) == len(module.SCENARIOS)
+
+
+def test_static_replay_is_not_pytest_collection_placeholder():
+    module = _module()
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "--collect-only" not in source
+
+
+def test_every_mode_has_dedicated_scenario_evidence_channel():
+    module = _module()
+    assert set(module.SCENARIO_EVIDENCE_ENV) == set(module.LIVE_CASES)
+    assert len(set(module.SCENARIO_EVIDENCE_ENV.values())) == len(module.LIVE_CASES)
 
 
 def test_scan_requires_each_evidence_channel(tmp_path):

@@ -52,6 +52,12 @@ EVIDENCE_ENV = {
     "screenshots": "MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE",
     "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
 }
+SCENARIO_EVIDENCE_ENV = {
+    "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
+    "static": "MOONMIND_OMNIGENT_STATIC_EVIDENCE",
+    "ondemand": "MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE",
+    "failures": "MOONMIND_OMNIGENT_FAILURE_EVIDENCE",
+}
 
 
 class LiveRunner:
@@ -84,13 +90,16 @@ class LiveRunner:
             "--profile", "omnigent-host-codex", *args,
         ]
 
-    def scenario(self, mode: str) -> None:
+    def scenario(self, mode: str, *, phase: str | None = None) -> None:
         """Run exactly one strict provider scenario and reject skips/no collection."""
         self.env["MOONMIND_OMNIGENT_LIVE_MODE"] = mode
         self.env["MOONMIND_OMNIGENT_STRICT_LIVE"] = "1"
-        junit = self.output_dir / f"{mode}-junit.xml"
+        if phase is not None:
+            self.env["MOONMIND_OMNIGENT_STATIC_PHASE"] = phase
+        evidence_name = f"{mode}-{phase}" if phase else mode
+        junit = self.output_dir / f"{evidence_name}-junit.xml"
         self.run(
-            f"{mode}-journey",
+            f"{evidence_name}-journey",
             [sys.executable, "-m", "pytest", SCENARIOS[mode], "-q", "-s", f"--junitxml={junit}"],
         )
         if not junit.is_file():
@@ -106,11 +115,12 @@ class LiveRunner:
             "static-up",
             self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
         )
-        self.scenario("static")
+        self.scenario("static", phase="execute")
         self.run("static-restart", self.compose("restart", "omnigent", "omnigent-host-codex"))
-        # The scenario owns the workflow id and verifies the same durable run
-        # after restart; running a second fresh smoke would not prove replay.
-        self.run("static-replay", [sys.executable, "-m", "pytest", SCENARIOS["static"], "-q", "-s", "--collect-only"])
+        # Reload the persisted identifiers and assert the same workflow after
+        # restart.  This is deliberately a real second provider invocation,
+        # never collection-only evidence.
+        self.scenario("static", phase="replay")
 
     def cleanup(self, mode: str) -> None:
         # No --volumes: OAuth and unrelated state must survive this runner.
