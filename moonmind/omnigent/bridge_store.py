@@ -25,7 +25,11 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
+from api_service.db.models import (
+    OmnigentBridgeSession,
+    OmnigentBridgeSessionEvent,
+    OmnigentOAuthHostLeaseRecord,
+)
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -476,6 +480,36 @@ class OmnigentBridgeSessionStore:
             if row is None:
                 return None
             return _detached(session, row)
+
+    async def list_sessions_for_embedded_host(
+        self, host_id: str
+    ) -> list[OmnigentBridgeSession]:
+        """Return durable bridge bindings owned by one embedded host."""
+
+        key = str(host_id or "").strip()
+        if not key:
+            return []
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .join(
+                    OmnigentOAuthHostLeaseRecord,
+                    OmnigentOAuthHostLeaseRecord.lease_id
+                    == OmnigentBridgeSession.host_lease_ref,
+                )
+                .where(
+                    OmnigentBridgeSession.omnigent_host_id == key,
+                    OmnigentOAuthHostLeaseRecord.status.in_(
+                        ("allocating", "starting", "ready", "assigned", "draining")
+                    ),
+                    OmnigentOAuthHostLeaseRecord.expires_at > datetime.now(UTC),
+                    OmnigentOAuthHostLeaseRecord.credential_generation
+                    == OmnigentBridgeSession.credential_generation,
+                    OmnigentOAuthHostLeaseRecord.binding_ref
+                    == OmnigentBridgeSession.host_binding_ref,
+                )
+            )
+            return [_detached(session, row) for row in result.scalars().all()]
 
     async def get_bridge_session_owner(
         self, bridge_session_id: str

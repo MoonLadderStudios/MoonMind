@@ -214,6 +214,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        await self.authorize_host(host_id=host_id, auth=auth)
         return {
             "hostId": host_id,
             "runnerId": runner_id,
@@ -240,6 +241,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        await self.authorize_host(host_id=host_id, auth=auth)
         return {
             "hostId": _clean(host_id),
             "status": request.status,
@@ -250,6 +252,38 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "protocolProfile": auth.protocol_profile,
             },
         }
+
+    async def authorize_host(
+        self, *, host_id: str, auth: EmbeddedHostAuthContext
+    ) -> Any:
+        """Require a current durable lease binding for a host-level action."""
+
+        rows = await self._run_store.list_sessions_for_embedded_host(host_id)
+        if not rows:
+            raise OmnigentBridgeError(
+                "No durable host lease binding is available",
+                failure_class="user_error",
+                status_code=403,
+                code="host_binding_mismatch",
+            )
+        generation_mismatch = False
+        for row in rows:
+            try:
+                self._authorize_session_row(row=row, host_id=host_id, auth=auth)
+            except OmnigentBridgeError as exc:
+                generation_mismatch = (
+                    generation_mismatch or exc.code == "host_credential_stale"
+                )
+                continue
+            return row
+        raise OmnigentBridgeError(
+            "Credential generation does not authorize the durable host lease"
+            if generation_mismatch
+            else "Durable host lease binding is unavailable",
+            failure_class="user_error",
+            status_code=401 if generation_mismatch else 403,
+            code="host_credential_stale" if generation_mismatch else "host_binding_mismatch",
+        )
 
     async def ingest_session_event(
         self,

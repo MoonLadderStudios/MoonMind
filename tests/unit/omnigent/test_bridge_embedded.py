@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers
+from starlette.websockets import WebSocketDisconnect
+
+from api_service.api.routers import omnigent_bridge
 
 from api_service.db.models import Base
 from moonmind.omnigent.bridge_config import (
@@ -195,6 +200,80 @@ def test_host_auth_revocation_prevents_new_connections() -> None:
     assert "revoked-token" not in str(excinfo.value)
 
 
+class _TunnelWebSocket:
+    def __init__(self, frames, headers=None):
+        self.frames = iter(frames)
+        self.headers = Headers(headers or {})
+        self.accepted = False
+        self.closed = []
+        self.sent = []
+
+    async def accept(self):
+        self.accepted = True
+
+    async def close(self, code=1000, reason=""):
+        self.closed.append((code, reason))
+
+    async def receive_text(self):
+        try:
+            return next(self.frames)
+        except StopIteration as exc:
+            raise WebSocketDisconnect() from exc
+
+    async def send_text(self, value):
+        self.sent.append(value)
+
+
+@pytest.mark.asyncio
+async def test_stock_runner_tunnel_hello_keepalive_and_reconnect(monkeypatch) -> None:
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="runner-1",
+        credential_generation=2,
+    )
+
+    async def authenticate(**_kwargs):
+        return auth
+
+    async def authorize(self, **_kwargs):
+        return object()
+
+    monkeypatch.setattr(omnigent_bridge, "_embedded_websocket_auth_context", authenticate)
+    monkeypatch.setattr(omnigent_bridge, "_require_bridge_enabled", _embedded_config)
+    monkeypatch.setattr(
+        OmnigentEmbeddedHostProtocolFacade, "authorize_host", authorize
+    )
+    for _ in range(2):
+        websocket = _TunnelWebSocket([
+            '{"kind":"hello","runner_version":"0.4.0","frame_protocol_version":1}',
+            '{"kind":"ping","ts":42}',
+        ])
+        await omnigent_bridge.embedded_omnigent_runner_tunnel(websocket, "runner-1")
+        assert websocket.accepted is True
+        assert websocket.closed == []
+        assert websocket.sent == ['{"kind": "pong", "ts": 42}']
+
+
+@pytest.mark.asyncio
+async def test_stock_runner_tunnel_rejection_is_stable_and_secret_free(monkeypatch) -> None:
+    secret = "credential-sentinel-never-emit"
+
+    async def reject(**_kwargs):
+        raise OmnigentBridgeError(
+            secret, failure_class="user_error", status_code=401,
+            code="host_credential_rejected",
+        )
+
+    monkeypatch.setattr(omnigent_bridge, "_embedded_websocket_auth_context", reject)
+    monkeypatch.setattr(omnigent_bridge, "_require_bridge_enabled", _embedded_config)
+    websocket = _TunnelWebSocket([])
+    await omnigent_bridge.embedded_omnigent_runner_tunnel(websocket, "runner-1")
+    assert websocket.accepted is False
+    assert websocket.closed == [(4004, "runner tunnel authentication failed")]
+    assert secret not in repr(websocket.__dict__)
+
+
 def test_embedded_auth_context_uses_service_side_generation() -> None:
     context = verify_embedded_host_auth(
         headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
@@ -239,6 +318,14 @@ async def test_registration_rejects_runner_identity_substitution(store) -> None:
 
 @pytest.mark.asyncio
 async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> None:
+    async def authorized(_host_id):
+        return [SimpleNamespace(
+            omnigent_host_id="runner-1", credential_generation=1,
+            host_binding_ref="binding-1", host_lease_ref="host-lease-1",
+            metadata_={},
+        )]
+
+    store.list_sessions_for_embedded_host = authorized
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -262,6 +349,35 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
 
     assert registered["status"] == "registered"
     assert heartbeat["moonmind"]["hostProtocolMode"] == HOST_PROTOCOL_MODE_EMBEDDED
+
+
+@pytest.mark.asyncio
+async def test_host_level_actions_require_durable_binding_and_current_generation(store) -> None:
+    facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_embedded_config())
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        runner_id="runner-1",
+        credential_generation=1,
+    )
+    with pytest.raises(OmnigentBridgeError) as missing:
+        await facade.heartbeat(
+            host_id="runner-1", request=EmbeddedHostHeartbeatRequest(), auth=auth
+        )
+    assert missing.value.code == "host_binding_mismatch"
+
+    async def stale_binding(_host_id):
+        return [SimpleNamespace(
+            omnigent_host_id="runner-1", credential_generation=2,
+            host_binding_ref="binding-1", host_lease_ref="lease-1", metadata_={},
+        )]
+
+    store.list_sessions_for_embedded_host = stale_binding
+    with pytest.raises(OmnigentBridgeError) as stale:
+        await facade.heartbeat(
+            host_id="runner-1", request=EmbeddedHostHeartbeatRequest(), auth=auth
+        )
+    assert stale.value.code == "host_credential_stale"
 
 
 @pytest.mark.asyncio

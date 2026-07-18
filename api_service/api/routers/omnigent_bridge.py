@@ -17,7 +17,17 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -271,6 +281,19 @@ async def _embedded_auth_context(
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+async def _embedded_websocket_auth_context(
+    *, websocket: WebSocket, config: OmnigentBridgeConfig
+):
+    """Authenticate a stock tunnel handshake without exposing credential data."""
+
+    return verify_embedded_host_auth(
+        headers=websocket.headers,
+        config=config,
+        configured_token="unused-service-boundary-value",
+        credentials=await _resolved_host_credentials(),
+    )
 
 
 async def _resolve_bridge_binding(
@@ -1306,6 +1329,57 @@ async def ingest_embedded_omnigent_host_event(
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+@router.websocket("/v1/runners/{runner_id}/tunnel")
+async def embedded_omnigent_runner_tunnel(
+    websocket: WebSocket,
+    runner_id: str,
+) -> None:
+    """Accept the pinned stock runner hello/keepalive tunnel contract.
+
+    MoonMind does not invent a second websocket credential: the handshake is
+    verified by the same pinned adapter as HTTP host traffic and is authorized
+    against the durable host lease before the upgrade is accepted.
+    """
+
+    try:
+        config = _require_embedded_mode(_require_bridge_enabled())
+        auth = await _embedded_websocket_auth_context(
+            websocket=websocket, config=config
+        )
+        if runner_id != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner identity does not match tunnel path",
+                failure_class="user_error",
+                status_code=403,
+                code="host_binding_mismatch",
+            )
+        facade = OmnigentEmbeddedHostProtocolFacade(
+            run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
+        )
+        await facade.authorize_host(host_id=runner_id, auth=auth)
+    except (HTTPException, OmnigentBridgeError):
+        await websocket.close(code=4004, reason="runner tunnel authentication failed")
+        return
+
+    await websocket.accept()
+    try:
+        hello = json.loads(await websocket.receive_text())
+        if hello.get("kind") != "hello":
+            await websocket.close(code=4001, reason="expected hello frame")
+            return
+        if hello.get("frame_protocol_version") != 1:
+            await websocket.close(code=4002, reason="frame_protocol_version mismatch")
+            return
+        while True:
+            frame = json.loads(await websocket.receive_text())
+            if frame.get("kind") == "ping" and isinstance(frame.get("ts"), int):
+                await websocket.send_text(
+                    json.dumps({"kind": "pong", "ts": frame["ts"]})
+                )
+    except (WebSocketDisconnect, ValueError, TypeError, json.JSONDecodeError):
+        return
 
 
 __all__ = [
