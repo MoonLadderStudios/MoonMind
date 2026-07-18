@@ -1,0 +1,140 @@
+name: Provider / Omnigent Live Conformance
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      server_image:
+        description: "Optional digest-pinned stock Omnigent server image override"
+        required: false
+        type: string
+      host_image:
+        description: "Optional digest-pinned stock Omnigent host image override"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-live-conformance
+  cancel-in-progress: false
+
+jobs:
+  live-matrix:
+    name: Live ${{ matrix.mode }} conformance
+    runs-on: [self-hosted, linux, omnigent-provider-verification]
+    environment: omnigent-provider-verification
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [stock, static, ondemand, failures]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -e .[tests]
+      - name: Resolve pinned image inputs
+        id: images
+        shell: bash
+        env:
+          DISPATCH_SERVER_IMAGE: ${{ inputs.server_image }}
+          DISPATCH_HOST_IMAGE: ${{ inputs.host_image }}
+          DEFAULT_SERVER_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_SERVER_IMAGE }}
+          DEFAULT_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_HOST_IMAGE }}
+        run: |
+          server_image="${DISPATCH_SERVER_IMAGE:-$DEFAULT_SERVER_IMAGE}"
+          host_image="${DISPATCH_HOST_IMAGE:-$DEFAULT_HOST_IMAGE}"
+          if [[ ! "$server_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The Omnigent server image must be configured by immutable digest"
+            exit 1
+          fi
+          if [[ ! "$host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The Omnigent host image must be configured by immutable digest"
+            exit 1
+          fi
+          echo "server=$server_image" >> "$GITHUB_OUTPUT"
+          echo "host=$host_image" >> "$GITHUB_OUTPUT"
+      - name: Run credentialed live matrix case
+        env:
+          MOONMIND_OMNIGENT_ACTION_COMMAND: ${{ secrets.MOONMIND_OMNIGENT_ACTION_COMMAND }}
+          MOONMIND_OMNIGENT_LOG_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_LOG_EVIDENCE }}
+          MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE }}
+          MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE }}
+          MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE: ${{ vars.MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE }}
+        run: |
+          python tools/run_omnigent_live_conformance.py \
+            --mode "${{ matrix.mode }}" \
+            --server-image "${{ steps.images.outputs.server }}" \
+            --host-image "${{ steps.images.outputs.host }}" \
+            --output-dir "artifacts/omnigent-conformance/live/${{ matrix.mode }}"
+      - name: Upload case evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-live-${{ matrix.mode }}-${{ github.run_id }}
+          path: artifacts/omnigent-conformance/live/${{ matrix.mode }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-matrix:
+    name: Publish passing matrix evidence
+    needs: live-matrix
+    if: ${{ needs.live-matrix.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download passing case evidence
+        uses: actions/download-artifact@v8
+        with:
+          pattern: omnigent-live-*-${{ github.run_id }}
+          path: artifacts/omnigent-conformance/published
+      - name: Write publication manifest
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path("artifacts/omnigent-conformance/published")
+          reports = sorted(root.glob("*/report.json"))
+          if len(reports) != 4:
+              raise SystemExit(f"expected four passing reports, found {len(reports)}")
+          manifest = {
+              "schemaVersion": "moonmind.omnigent.published-matrix/v1",
+              "issue": "MoonLadderStudios/MoonMind#3368",
+              "runId": os.environ["GITHUB_RUN_ID"],
+              "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "reports": [str(path) for path in reports],
+              "modes": ["stock", "static", "ondemand", "failures"],
+              "status": "passed",
+          }
+          (root / "published-matrix.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+      - name: Upload published matrix
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-live-published-matrix-${{ github.run_id }}
+          path: artifacts/omnigent-conformance/published
+          if-no-files-found: error
+          retention-days: 90
+      - name: Write publication summary
+        shell: bash
+        run: |
+          {
+            echo "### Omnigent credentialed conformance matrix"
+            echo ""
+            echo "- Issue: \`MoonLadderStudios/MoonMind#3368\`"
+            echo "- Result: all stock, static, on-demand, and failure cases passed"
+            echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
