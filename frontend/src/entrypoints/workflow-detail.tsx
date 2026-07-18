@@ -1255,6 +1255,14 @@ const SessionResourceSchema = z
     contentUrl: z.string().optional(),
     download_url: z.string().optional(),
     downloadUrl: z.string().optional(),
+    preview_available: z.boolean().optional(),
+    previewAvailable: z.boolean().optional(),
+    download_available: z.boolean().optional(),
+    downloadAvailable: z.boolean().optional(),
+    completeness_status: z.enum(['complete', 'degraded', 'pending']).optional(),
+    completenessStatus: z.enum(['complete', 'degraded', 'pending']).optional(),
+    unavailable_reason: z.string().nullable().optional(),
+    unavailableReason: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
   })
   .passthrough()
@@ -1268,6 +1276,10 @@ const SessionResourceSchema = z
     sizeBytes: resource.sizeBytes ?? resource.size_bytes ?? null,
     contentUrl: resource.contentUrl ?? resource.content_url ?? null,
     downloadUrl: resource.downloadUrl ?? resource.download_url ?? null,
+    previewAvailable: resource.previewAvailable ?? resource.preview_available ?? false,
+    downloadAvailable: resource.downloadAvailable ?? resource.download_available ?? true,
+    completenessStatus: resource.completenessStatus ?? resource.completeness_status ?? 'complete',
+    unavailableReason: resource.unavailableReason ?? resource.unavailable_reason ?? null,
     metadata: resource.metadata ?? {},
   }));
 
@@ -2490,11 +2502,112 @@ type BridgeSessionProjection = {
   capabilities: Record<string, boolean>;
 };
 
-function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream'): string {
+function bridgeSessionRoute(apiBase: string, bridgeSessionId: string, suffix: 'events' | 'stream' | 'resources'): string {
   return joinApiBasePath(
     apiBase,
     `/omnigent/bridge-sessions/${encodeURIComponent(bridgeSessionId)}/${suffix}`,
   );
+}
+
+type BridgeResourceProjection = {
+  completeness: string;
+  groups: Array<{ groupKey: string; title: string; resources: Array<{
+    label: string;
+    artifactRef?: string;
+    relatedArtifactRefs?: string[];
+    path?: string;
+    status: string;
+    unavailableReason?: string;
+    sourceEventSequence?: number;
+    previewAvailable?: boolean;
+    downloadAvailable?: boolean;
+  }> }>;
+};
+
+type BridgeResource = BridgeResourceProjection['groups'][number]['resources'][number];
+
+function chatBlockEventSequences(block: ProjectedChatBlock): Set<number> {
+  const sequences = new Set<number>();
+  for (const eventId of block.sourceEventIds) {
+    const match = eventId.match(/^(\d+)-|(?::seq:|:)(\d+)(?::|$)/);
+    const sequence = match?.[1] ?? match?.[2];
+    if (sequence) sequences.add(Number(sequence));
+  }
+  return sequences;
+}
+
+function ContextualBridgeResourceLinks({
+  apiBase,
+  block,
+  resources,
+}: {
+  apiBase: string;
+  block: ProjectedChatBlock;
+  resources: BridgeResource[];
+}) {
+  const sequences = chatBlockEventSequences(block);
+  const contextual = resources.filter((resource) =>
+    resource.sourceEventSequence != null && sequences.has(resource.sourceEventSequence));
+  if (contextual.length === 0) return null;
+  return <div className="timeline-artifact-links" aria-label="Resources announced by this event">
+    {contextual.map((resource, index) => {
+      const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+      return <span key={`${resource.label}-${index}`}>
+        {href && resource.previewAvailable
+          ? <a href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open {resource.label}</a>
+          : <span>{resource.label}: {resource.status === 'pending' ? 'Harvesting…' : resource.unavailableReason || resource.status}</span>}
+      </span>;
+    })}
+  </div>;
+}
+
+type BridgeTerminalEnvelope = {
+  status: 'completed' | 'failed' | 'canceled' | 'timed_out';
+  failureClass?: string | null | undefined;
+  failureCode?: string | null | undefined;
+  summary?: string | null | undefined;
+  diagnosticsRef?: string | null | undefined;
+  captureManifestRef?: string | null | undefined;
+  initialSnapshotRef?: string | null | undefined;
+  finalSnapshotRef?: string | null | undefined;
+  rawEventsRef?: string | null | undefined;
+  normalizedEventsRef?: string | null | undefined;
+  externalStateRef?: string | null | undefined;
+  evidenceIncompleteReason?: string | null | undefined;
+};
+
+function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelope: BridgeTerminalEnvelope }) {
+  const evidence = [
+    ['Final snapshot', envelope.finalSnapshotRef],
+    ['Capture manifest', envelope.captureManifestRef],
+    ['Diagnostics', envelope.diagnosticsRef],
+    ['Raw event journal', envelope.rawEventsRef],
+    ['Normalized event journal', envelope.normalizedEventsRef],
+    ['External-state evidence', envelope.externalStateRef],
+  ] as const;
+  const links = evidence.flatMap(([label, ref]) => {
+    const href = ref ? artifactRefHref(apiBase, ref) : null;
+    return href ? [{ label, href }] : [];
+  });
+  return <section className={`notice ${envelope.status === 'completed' ? '' : 'warning'}`} aria-label="Terminal outcome evidence">
+    <strong>Terminal outcome: {formatStatusLabel(envelope.status)}</strong>
+    {envelope.summary ? <p>{envelope.summary}</p> : null}
+    {links.length > 0 ? <div className="button-group">
+      {links.map(({ label, href }) => <a key={label} className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
+    </div> : null}
+    {envelope.evidenceIncompleteReason ? <p className="small">Evidence incomplete: {envelope.evidenceIncompleteReason}</p> : null}
+    {envelope.failureClass || envelope.failureCode ? <p className="small">Failure: {[envelope.failureClass, envelope.failureCode].filter(Boolean).join(' — ')}</p> : null}
+  </section>;
+}
+
+async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
+  const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'resources'), { credentials: 'include' });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+  const body = (await resp.json()) as Partial<BridgeResourceProjection>;
+  return {
+    completeness: body.completeness || 'pending',
+    groups: Array.isArray(body.groups) ? body.groups : [],
+  };
 }
 
 async function resolveBridgeSessionProjection({
@@ -3597,7 +3710,7 @@ function chatBlockArtifactLinks(block: ProjectedChatBlock, apiBase: string): Tim
   return links;
 }
 
-function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase: string, resources: BridgeResource[] = []): ReactNode {
   const className = [
     'chat-session-block',
     `chat-session-block-${block.kind}`,
@@ -3629,6 +3742,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
           {block.text || block.toolName || 'Tool call'}
         </div>
         <TimelineArtifactLinks links={artifactLinks} />
+        <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
       </div>
     );
   }
@@ -3670,6 +3784,7 @@ function renderChatBlock(block: ProjectedChatBlock, wrapLines: boolean, apiBase:
         {block.text}
       </div>
       <TimelineArtifactLinks links={artifactLinks} />
+      <ContextualBridgeResourceLinks apiBase={apiBase} block={block} resources={resources} />
     </div>
   );
 }
@@ -3679,12 +3794,14 @@ function ChatSessionView({
   chatBlocks,
   rows,
   wrapLines,
+  resources = [],
   liveAnnouncement,
 }: {
   apiBase: string;
   chatBlocks: ProjectedChatBlock[];
   rows: TimelineRow[];
   wrapLines: boolean;
+  resources?: BridgeResource[];
   liveAnnouncement?: string | undefined;
 }) {
   const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
@@ -3714,7 +3831,7 @@ function ChatSessionView({
             data={chatBlocks}
             followOutput={(atBottom) => atBottom ? 'smooth' : false}
             computeItemKey={(index, block) => `${block.id}:${index}`}
-            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase)}
+            itemContent={(index, block) => renderChatBlock({ ...block, id: `${block.id}:${index}` }, wrapLines, apiBase, resources)}
           />
         </div>
       )}
@@ -5678,6 +5795,18 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
+  const resourcesQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-resources', bridgeSessionId],
+    queryFn: () => fetchBridgeSessionResources(apiBase, bridgeSessionId),
+    enabled: Boolean(bridgeSessionId),
+    refetchInterval: (query) => {
+      const completeness = (query.state.data as BridgeResourceProjection | undefined)?.completeness;
+      return isTerminal && completeness && completeness !== 'pending'
+        ? false
+        : SESSION_PROJECTION_POLL_MS;
+    },
+    retry: false,
+  });
   const historyRows = useMemo(() => {
     const rows = mapEventsToTimelineRows(eventsQuery.data);
     const envelope = eventsQuery.data && 'terminalEnvelope' in eventsQuery.data
@@ -5906,12 +6035,59 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
+        ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
+        : null}
+      <details className="card bridge-resource-evidence" open={isTerminal}>
+        <summary>Resource evidence — {resourcesQuery.data?.completeness || 'harvesting'}</summary>
+        {resourcesQuery.isError ? <div className="notice error">{(resourcesQuery.error as Error).message}</div> : null}
+        {resourcesQuery.data?.groups.some((group) => group.resources.length > 0) ? (
+          <div className="stack" style={{ marginTop: '0.75rem' }}>
+            {resourcesQuery.data.groups.filter((group) => group.resources.length > 0).map((group) => (
+              <section key={group.groupKey} aria-label={group.title}>
+                <h4>{group.title}</h4>
+                <ul className="stack gap-1">
+                  {group.resources.slice(0, 25).map((resource, index) => {
+                    const href = resource.artifactRef ? artifactRefHref(apiBase, resource.artifactRef) : null;
+                    return (
+                      <li key={`${group.groupKey}-${resource.label}-${index}`}>
+                        <span>{resource.label}</span>
+                        {resource.path ? <code className="text-xs break-all"> — {resource.path}</code> : null}
+                        {resource.sourceEventSequence != null ? <span className="small"> (event {resource.sourceEventSequence})</span> : null}
+                        {href && resource.previewAvailable ? (
+                          <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a>
+                        ) : null}
+                        {href && resource.downloadAvailable ? (
+                          <a className="button secondary small" href={href} download aria-label={`Download ${resource.label}`}>Download</a>
+                        ) : null}
+                        {resource.relatedArtifactRefs?.map((ref, relatedIndex) => {
+                          const relatedHref = artifactRefHref(apiBase, ref);
+                          return relatedHref ? <a key={ref} className="button secondary small" href={relatedHref} target="_blank" rel="noreferrer" aria-label={`Open related evidence ${relatedIndex + 1} for ${resource.label}`}>Related evidence</a> : null;
+                        })}
+                        {resource.unavailableReason ? <div className="small">Unavailable: {resource.unavailableReason}</div> : null}
+                      </li>
+                    );
+                  })}
+                  {group.resources.length > 25 ? <li className="small">Showing 25 of {group.resources.length} resources. Use the capture manifest for the complete bounded index.</li> : null}
+                </ul>
+              </section>
+            ))}
+          </div>
+        ) : <p className="small">{isTerminal ? 'No harvested resource evidence is available.' : 'Harvesting resource evidence…'}</p>}
+      </details>
       <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
         {logContent.length === 0 ? (
           <div className="live-logs-empty">(waiting for bridge session events...)</div>
         ) : (
           <div data-testid="chat-session-viewer" className="chat-session-viewer">
-            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} liveAnnouncement={liveAnnouncement} />
+            <ChatSessionView
+              apiBase={apiBase}
+              chatBlocks={chatBlocks}
+              rows={logContent}
+              wrapLines={wrapLines}
+              resources={resourcesQuery.data?.groups.flatMap((group) => group.resources) || []}
+              liveAnnouncement={liveAnnouncement}
+            />
             <details className="raw-timeline-escape-hatch">
               <summary>Raw Timeline</summary>
               <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
@@ -6527,6 +6703,15 @@ function SessionContinuityPanel({
 
   const projection = projectionQuery.data;
   const sessionResources = resourcesQuery.data?.resources ?? [];
+  const sessionResourceGroups = Array.from(
+    sessionResources.reduce((groups, resource) => {
+      const key = resource.groupKey || 'resources';
+      const existing = groups.get(key) ?? { title: resource.groupTitle, resources: [] as typeof sessionResources };
+      existing.resources.push(resource);
+      groups.set(key, existing);
+      return groups;
+    }, new Map<string, { title: string; resources: typeof sessionResources }>()),
+  );
   const latestBadges = [
     ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
     ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
@@ -6705,8 +6890,11 @@ function SessionContinuityPanel({
       {!compact && sessionResources.length > 0 ? (
         <div className="stack">
           <h4>Resource Evidence</h4>
-          <div className="grid-2">
-            {sessionResources.map((resource) => {
+          {sessionResourceGroups.map(([groupKey, group]) => (
+          <details key={groupKey} className="card" open={group.resources.length <= 8}>
+            <summary>{group.title} ({group.resources.length})</summary>
+            <div className="grid-2" style={{ marginTop: '0.5rem' }}>
+            {group.resources.map((resource) => {
               const label = resource.label || resource.artifactId;
               const contentHref = resource.contentUrl
                 ? resolveApiBaseTemplate(apiBase, resource.contentUrl)
@@ -6717,20 +6905,23 @@ function SessionContinuityPanel({
               return (
                 <div key={resource.resourceId || resource.artifactId} className="card">
                   <strong>{label}</strong>
-                  <div className="small">{resource.groupTitle}</div>
+                  <div className="small">{resource.completenessStatus === 'pending' ? 'Harvesting…' : resource.completenessStatus}</div>
                   <code className="text-xs break-all">{resource.artifactId}</code>
+                  {resource.unavailableReason ? <p className="small notice warning">{resource.unavailableReason}</p> : null}
                   <div className="actions" style={{ marginTop: '0.5rem' }}>
-                    <a className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
+                    {resource.previewAvailable ? <a aria-label={`Open ${label}`} className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
                       Open
-                    </a>
-                    <a className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
+                    </a> : null}
+                    {resource.downloadAvailable ? <a aria-label={`Download ${label}`} className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
                       Download
-                    </a>
+                    </a> : null}
                   </div>
                 </div>
               );
             })}
-          </div>
+            </div>
+          </details>
+          ))}
         </div>
       ) : null}
 

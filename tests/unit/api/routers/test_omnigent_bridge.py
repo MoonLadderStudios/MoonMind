@@ -559,6 +559,27 @@ def test_list_bridge_session_events_returns_chat_projection_shape() -> None:
     assert event["metadata"]["source"] == "omnigent_bridge"
 
 
+def test_get_bridge_session_resources_returns_authorized_terminal_projection() -> None:
+    projection = {
+        "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+        "completeness": "complete",
+        "groups": [
+            {"groupKey": "changed_files", "title": "Changed files", "resources": []}
+        ],
+    }
+    client, _, _ = _build(
+        store=_FakeStore(
+            session_overrides={
+                "status": "completed",
+                "terminal_refs": {"resourceProjection": projection},
+            }
+        )
+    )
+    resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/resources")
+    assert resp.status_code == 200
+    assert resp.json() == projection
+
+
 def test_list_bridge_session_events_handles_nullable_event_type() -> None:
     rows = [
         SimpleNamespace(

@@ -742,8 +742,26 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     )
     manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schemaVersion"] == "moonmind.omnigent.capture_manifest.v1"
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
+    assert manifest["evidenceCompleteness"]["status"] == "complete"
+    assert manifest["capturePolicy"]["limits"]["maxListEntries"] == 100
+    assert manifest["capturePolicy"]["limits"]["maxContentBytes"] == 10 * 1024 * 1024
+    assert manifest["capturePolicy"]["limits"]["maxPreviewBytes"] == 256 * 1024
+    assert manifest["capturePolicy"]["binaryHandling"].startswith("metadata_")
+    assert manifest["capturePolicy"]["timeoutSeconds"] == 30
+    assert manifest["capturePolicy"]["retry"] == {"maxAttempts": 3}
+    assert [group["groupKey"] for group in manifest["resourceGroups"]] == [
+        "changed_files",
+        "diffs",
+        "workspace_files",
+        "session_files",
+        "snapshots",
+        "logs_and_journals",
+        "diagnostics",
+        "manifests",
+    ]
     external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
     external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
     assert external_state["endpointRef"] == "omnigent:endpoint:retry"
@@ -1549,8 +1567,17 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
     manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["workspaceFiles"][0]["path"] == "README.md"
+    assert manifest["workspaceFiles"][0]["contentType"] == "text/markdown"
+    assert manifest["workspaceFiles"][0]["sizeBytes"] == len(b"# Project\n")
     assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
     assert manifest["patchUnavailable"] is False
+    manifest_resources = next(
+        group["items"] for group in manifest["resourceGroups"]
+        if group["groupKey"] == "manifests"
+    )
+    assert {resource["label"] for resource in manifest_resources} >= {
+        "Changed-file index", "Workspace-file index", "Session-file index"
+    }
     external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
     external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
     assert external_state["patchEvidence"] == {

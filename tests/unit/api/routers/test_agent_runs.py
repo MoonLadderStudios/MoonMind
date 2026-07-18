@@ -3075,6 +3075,8 @@ def test_list_session_resources_returns_authorized_redacted_artifact_projection(
     assert summary["metadata"] == {"label": "summary", "filename": "summary.json"}
     assert summary["content_url"].endswith("/art_summary/content")
     assert summary["download_url"].endswith("/art_summary/download")
+    assert summary["completeness_status"] == "complete"
+    assert summary["download_available"] is True
     assert "secret-token" not in json.dumps(body)
     assert "secret-password" not in json.dumps(body)
 

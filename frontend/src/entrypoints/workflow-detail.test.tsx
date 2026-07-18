@@ -7960,6 +7960,44 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
+  it('shows an authorization error instead of resource preview or download actions', async () => {
+    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/chat?source=temporal');
+    const execution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
+      temporalRunId: 'auth-run', runId: 'auth-run', source: 'temporal',
+      title: 'Protected bridge task', summary: 'Protected evidence',
+      status: 'completed', state: 'completed', rawState: 'completed',
+      closedAt: '2026-07-09T00:00:30Z', createdAt: '2026-07-09T00:00:00Z',
+      updatedAt: '2026-07-09T00:00:30Z', actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-auth', workflowId: 'test-123', status: 'completed' }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-auth/events')) {
+        return Promise.resolve({ ok: true, json: async () => ({
+          schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-auth',
+          items: [], after: 0, nextCursor: null, hasMore: false, terminal: true,
+          latestSequence: 0, retentionGap: null, terminalEnvelope: null,
+        }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/brs-auth/resources')) {
+        return Promise.resolve({ ok: false, status: 403 } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    expect(await screen.findByText('You do not have permission to view observability for this run.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /^Open .*\.py$/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /^Download .*\.py$/ })).toBeNull();
+  });
+
   it('renders bridge terminal failure evidence even without provider deltas', async () => {
     window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/chat?source=temporal');
     const mockExecution = {
