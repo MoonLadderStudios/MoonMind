@@ -189,6 +189,29 @@ class OmnigentEmbeddedHostProtocolFacade:
             workspace=request.workspace,
         )
         exec_request = _request_for_create(request=request, binding=binding)
+        authorized = await self._run_store.get_existing(binding.idempotency_key)
+        if authorized is None or not all(
+            (
+                authorized.provider_profile_id,
+                authorized.provider_lease_id,
+                authorized.host_binding_ref,
+                authorized.host_lease_ref,
+                authorized.omnigent_host_id,
+            )
+        ):
+            raise OmnigentBridgeError(
+                "Embedded session creation requires a durable profile lease-bound "
+                "host assignment",
+                failure_class="system_error",
+                status_code=409,
+            )
+        requested_host_id = _clean(request.host_id)
+        if requested_host_id and requested_host_id != authorized.omnigent_host_id:
+            raise OmnigentBridgeError(
+                "Caller-provided host does not match the profile lease-bound host",
+                failure_class="user_error",
+                status_code=403,
+            )
         row = await self._run_store.get_or_create(
             request=exec_request,
             endpoint_ref=(request.endpoint_ref or "").strip() or "embedded",
@@ -196,7 +219,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             agent_name=None,
             target_metadata={
                 "hostType": request.host_type,
-                "hostId": (request.host_id or "").strip() or None,
+                "hostId": authorized.omnigent_host_id,
                 "workspace": (request.workspace or "").strip() or None,
             },
             workflow_id=binding.workflow_id,
@@ -306,6 +329,12 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "No Omnigent bridge session is bound to the requested session id.",
                 failure_class="user_error",
                 status_code=404,
+            )
+        if not row.omnigent_host_id or row.omnigent_host_id != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated host is not the durable host assigned to this session",
+                failure_class="user_error",
+                status_code=403,
             )
         payload = request.model_dump(by_alias=True)
         payload.setdefault("direction", "host_to_moonmind")

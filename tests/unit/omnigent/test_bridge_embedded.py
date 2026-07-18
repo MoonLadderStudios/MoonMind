@@ -222,6 +222,12 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
         agent_run_id="run-embedded",
     )
     await store.attach_session("idem-embedded", "sess-embedded")
+    async with store._session_factory() as session:
+        from api_service.db.models import OmnigentBridgeSession
+
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        persisted.omnigent_host_id = "host-1"
+        await session.commit()
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -258,6 +264,22 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
         config=_embedded_config(),
     )
 
+    await store.bind_profile_authorization(
+        request=AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-create",
+            idempotencyKey="idem-create",
+        ),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
+
     response = await facade.create_session(
         request=BridgeSessionCreateRequest(
             agent_id="agent-1",
@@ -282,6 +304,78 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
     assert response["moonmind"]["reused"] is False
     row = await store.get_session_by_provider_session_id(response["id"])
     assert row is not None
+    assert row.omnigent_host_id == "host-1"
+
+
+@pytest.mark.asyncio
+async def test_embedded_create_rejects_caller_host_bypass(store) -> None:
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-bypass",
+        idempotencyKey="idem-bypass",
+    )
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-assigned",
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_embedded_config())
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.create_session(
+            request=BridgeSessionCreateRequest(
+                host_type="external",
+                host_id="host-attacker",
+                workspace="/workspace/repo",
+            ),
+            binding=BridgePrincipalBinding(
+                workflow_id="corr-bypass",
+                correlation_id="corr-bypass",
+                idempotency_key="idem-bypass",
+            ),
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_embedded_event_rejects_cross_host_binding(store) -> None:
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.attach_session("idem-embedded", "sess-cross-host")
+    async with store._session_factory() as session:
+        from api_service.db.models import OmnigentBridgeSession
+
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        persisted.omnigent_host_id = "host-assigned"
+        await session.commit()
+    facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_embedded_config())
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.ingest_session_event(
+            host_id="host-attacker",
+            session_id="sess-cross-host",
+            request=EmbeddedHostSessionEventRequest(type="response.delta"),
+            auth=EmbeddedHostAuthContext(
+                auth_mode="upstream_runner_tunnel",
+                protocol_profile="omnigent.runner_tunnel.b95e41ec",
+                runner_id="host-attacker",
+                credential_generation=1,
+            ),
+        )
+
+    assert excinfo.value.status_code == 403
     assert row.moonmind_workflow_id == "mm:wf-embedded"
 
 
