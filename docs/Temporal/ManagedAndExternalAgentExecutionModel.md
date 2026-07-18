@@ -1,1006 +1,551 @@
 # Managed and External Agent Execution Model
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
+**Document Class:** Canonical declarative  
+**Status:** Current  
+**Owners:** MoonMind Platform  
+**Last updated:** 2026-07-18  
+**Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
-Status: **Implemented** (runtime live; contract hardening in progress)
-Last updated: 2026-04-09
-Related:
-- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
+Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
+
+## Related documents
+
+- [`docs/Temporal/WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
+- [`docs/Temporal/WorkflowArtifactSystemDesign.md`](./WorkflowArtifactSystemDesign.md)
+- [`docs/Temporal/ErrorTaxonomy.md`](./ErrorTaxonomy.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
-- [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
-- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md) — Codex CLI binding for the workflow-scoped managed session plane
-- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](../ManagedAgents/ClaudeCodeManagedSessions.md) — Claude Code binding for the workflow-scoped managed session plane
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
+- [`docs/Workflows/WorkspaceLocators.md`](../Workflows/WorkspaceLocators.md)
+- [`docs/Workflows/CheckpointBranchSystem.md`](../Workflows/CheckpointBranchSystem.md)
+- [`docs/Omnigent/OmnigentAdapter.md`](../Omnigent/OmnigentAdapter.md)
+- [`docs/Omnigent/OmnigentHostOAuth.md`](../Omnigent/OmnigentHostOAuth.md)
+- [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md)
+- [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](../ManagedAgents/ClaudeCodeManagedSessions.md)
 
 ---
 
-## 1. Objective and document boundary
+## 1. Objective and boundary
 
-Define MoonMind’s unified Temporal execution model for **true agent runtimes**.
+MoonMind treats a true agent runtime as a first-class durable execution lifecycle rather than a long-blocking model call. This document defines:
 
-This document covers:
+- the `MoonMind.AgentRun` child-workflow boundary;
+- canonical agent request, handle, status, and result contracts;
+- ownership shared by workflows, adapters, activities, runtime supervisors, and provider systems;
+- the distinctions among external delegation, direct managed execution, and the profile-bound Omnigent hybrid lane;
+- Provider Profile capacity and cooldown authority;
+- workspace, Skill, artifact, event, checkpoint, cancellation, and cleanup behavior;
+- deterministic and credentialed conformance evidence.
 
-- the lifecycle of one true agent execution
-- the workflow and activity boundaries used for that execution
-- the shared runtime contracts used by managed and external agents
-- the difference between adapter responsibilities and workflow responsibilities
-- how provider-profile sloting and managed runtime supervision fit into the model
-- how resolved agent skill snapshots are delivered to runtimes
+This document does not define the storage model or source precedence for Skills, generic one-shot Container Jobs, ordinary `mm.activity.llm` calls, or provider-specific API schemas.
 
-Use this document for:
-
-- `MoonMind.AgentRun`
-- `AgentExecutionRequest`
-- `AgentRunHandle`
-- `AgentRunStatus`
-- `AgentRunResult`
-- adapter responsibilities
-- runtime preparation and supervision boundaries
-
-Use [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md) for:
-
-- `AgentSkillDefinition`
-- `SkillSet`
-- `ResolvedSkillSet`
-- `.agents/skills` path policy
-- source precedence
-- versioning and snapshot rules
-
-This document does **not** define:
-
-- the storage model for agent skills
-- source precedence rules across built-in, deployment, repo, and local skills
-- ordinary one-shot LLM activity behavior (`mm.activity.llm`)
-- generic executable tool contracts outside true agent runtime execution
-
-Docker-backed workload tools are ordinary executable tools. They stay on the `tool.type = "skill"` path described by [`docs/Workflows/SkillAndPlanContracts.md`](../Workflows/SkillAndPlanContracts.md) and are not new `MoonMind.AgentRun` instances unless the launched runtime is itself a true managed agent runtime. [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) defines that workload-container boundary.
-
-MoonMind explicitly separates long-lived, stateful agent execution from plain one-shot model calls. True agent execution is treated as a first-class orchestration concept built around:
-
-- child workflows
-- asynchronous supervision
-- structured provider profiles
-- artifact-based input and output exchange
-- canonical runtime contracts
+A Docker-backed executable tool remains on the generic workload path unless the launched process is a true agent runtime represented by `MoonMind.AgentRun`.
 
 ---
 
-## 2. Core design: `MoonMind.AgentRun`
+## 2. Product and Temporal hierarchy
 
-`MoonMind.UserWorkflow` is the product name for the root user Workflow Execution. The current live implementation may still appear as `MoonMind.UserWorkflow` in code and workflow registration. It represents a Workflow Execution: the top-level unit of work. Each Workflow Execution contains a plan consisting of one or more ordered Steps. When a Step requires a true agent runtime, the root user workflow starts a dedicated child workflow: `MoonMind.AgentRun`.
-
-Parent/child ownership rule:
-
-- the root user workflow owns Workflow Execution orchestration, Step ordering, compact Step status, checks, and refs
-- `MoonMind.AgentRun` owns the true runtime/provider lifecycle, detailed observability, and runtime result artifacts
+`MoonMind.UserWorkflow` is the root Workflow Execution. It owns product orchestration, Step ordering, compact Step status, cancellation propagation, and post-run handling. A Step that requires a true agent runtime starts one `MoonMind.AgentRun` child workflow.
 
 ```text
-Workflow Execution (root user workflow)
- └─ Plan (generated or provided)
- ├─ Step 1: sandbox.run_command (activity)
- ├─ Step 2: MoonMind.AgentRun (child workflow) → e.g. Claude Code
- ├─ Step 3: MoonMind.AgentRun (child workflow) → e.g. Jules
- └─ Step 4: sandbox.run_tests (activity)
-````
+Workflow Execution: MoonMind.UserWorkflow
+  -> ordinary Step activity
+  -> MoonMind.AgentRun child workflow
+       -> external provider, direct managed runtime, or Omnigent hybrid lane
+  -> validation / publishing Step
+```
 
-This hierarchy allows a single Workflow Execution to mix:
+Ownership is deliberate:
 
-* ordinary activities
-* managed agent steps
-* external delegated agent steps
-* post-run validation or publishing work
+- the root workflow owns the Workflow Execution envelope and ordered Step ledger;
+- `MoonMind.AgentRun` owns exactly one true agent execution lifecycle;
+- adapters translate canonical contracts to provider/runtime operations;
+- activities own side effects;
+- Provider Profile Manager owns provider account capacity and cooldown;
+- runtime stores and bridge stores own retry-safe external/process identity;
+- the artifact system owns large inputs, outputs, logs, diagnostics, and evidence.
 
-The root user workflow owns the Workflow Execution envelope: planning, execution ordering, workflow state, dashboard visibility, cancellation propagation, and post-run handling.
-
-`MoonMind.AgentRun` owns exactly one true agent execution lifecycle.
-
-A terminal contract may request a typed durable continuation owned by the
-actual Temporal parent. Such a handoff completes the current AgentRun without
-claiming final task success and bypasses runtime same-session continuation.
-Authority is injected internally only after the UserWorkflow validates its
-actual parent topology; user parameters are never sufficient proof. Once the
-managed CLI exits, detached descendants are not ongoing managed work and must
-not be used as completion evidence.
-
-An accepted handoff clears only the synthetic
-`PR_RESOLVER_REENTER_GATE` classification introduced by terminal-contract
-evaluation. An explicitly typed handoff-compatible process exit may be added to
-the contract in the future, but generic nonzero exits are not sufficient.
-Provider, authentication, rate-limit, infrastructure, timeout, cancellation,
-stale-evidence, and malformed-evidence failures remain terminal. Handoffs expose
-their outcome, owner tuple, reason, timing source, and requested/accepted or
-rejected counters in compact AgentRun metadata and metrics.
-
-### 2.1 Unified lifecycle
-
-Both managed and external agents follow the same lifecycle shape:
-
-1. **Prepare context**
- Materialize execution inputs, workspace context, runtime parameters, and any resolved skill snapshot references needed for the run.
-
-2. **Start run**
- Launch the agent asynchronously and receive an `AgentRunHandle`.
-
-3. **Wait**
- Suspend workflow progress while waiting for completion, approval, intervention, timeout, or cancellation. Waiting is modeled with Signals, Updates, and durable timers rather than long-blocking activities.
-
-4. **Read status**
- Poll or consume callback-driven state transitions using canonical `AgentRunStatus` payloads.
-
-5. **Fetch result**
- Retrieve final outputs, diagnostics, and logs as a canonical `AgentRunResult`.
-
-6. **Publish outputs**
- Persist output artifacts and register any enriched artifact references without placing large payloads into workflow history.
-
-7. **Cancel or intervene**
- On cancellation or operator intervention, invoke the adapter/runtime cancel surface and allow best-effort cleanup.
-
-### 2.2 Design intent
-
-`MoonMind.AgentRun` exists so that MoonMind can treat agent execution as a durable orchestration concern without embedding provider-specific runtime logic into the root workflow.
-
-The split is intentional:
-
-* the **child workflow** owns lifecycle orchestration
-* the **adapter** owns provider/runtime translation
-* the **activities** own side effects
-* the **artifact system** owns large data
-* the **provider-profile manager** owns slot and cooldown coordination for managed runtimes
-
-### 2.3 Dispatch from `MoonMind.UserWorkflow`
-
-Agent dispatch happens **per step**, not per workflow execution.
-
-The plan execution loop in `MoonMind.UserWorkflow._run_execution_stage()` iterates ordered plan nodes and chooses one of two paths:
-
-* **Agent step**
- `MoonMind.UserWorkflow` starts `MoonMind.AgentRun` as a child workflow, constructing an `AgentExecutionRequest` from the node inputs.
-
-* **Activity step**
- `MoonMind.UserWorkflow` executes a standard Temporal activity directly.
-
-This preserves one consistent workflow model while allowing each step to use the correct execution primitive.
-
-### 2.4 Cancellation propagation
-
-Cancellation propagates naturally through Temporal child workflows.
-
-When `MoonMind.UserWorkflow` is canceled, any in-flight `MoonMind.AgentRun` receives a `CancelledError`. `MoonMind.AgentRun` must still make a best-effort attempt to:
-
-* cancel the underlying managed runtime or external run
-* release any held provider-profile slot
-* avoid leaving orphaned external work behind
-
-### 2.5 Retry and rerun boundary
-
-Source precedence and resolved agent instruction snapshot construction belong to upstream resolution activities or control-plane preparation. `MoonMind.AgentRun` consumes immutable refs and does not re-resolve them ad hoc.
-
-Rules:
-
-* Temporal activity retries reuse the same execution request
-* agent-run retry loops reuse the same logical request unless explicitly rebuilt
-* reruns reuse the original snapshot by default
-* explicit re-resolution is a separate action, not an implicit side effect of retry
-
-Replay compatibility is part of the retry boundary. A failed or timed-out
-activity can be retried only if the workflow can replay to the same activity
-command. If workflow code changes add, remove, or reorder activities in
-`MoonMind.AgentRun`, the change must use Temporal patch/version markers or Worker
-Versioning so in-flight histories continue on their recorded command path. For
-session-backed Codex runs this includes the relative order of
-`agent_runtime.prepare_turn_instructions`, session launch/status activities, and
-`agent_runtime.send_turn`.
-
-Automatic step recovery therefore has two layers:
-
-* activity-level retry for idempotent side-effecting work, controlled by the
-  activity catalog and durable idempotency keys;
-* workflow-level replay recovery for command-order changes, controlled by
-  Temporal versioning or a reset/resume operation from a safe parent/child
-  boundary.
-
-### 2.6 Checkpoint capability layers
-
-Runtime descriptors and conformance reports use distinct checkpoint capabilities:
-
-* `session_state_checkpoint` publishes and retrieves durable session, thread,
-  epoch, or external-provider state refs. It proves session continuity only.
-* `step_workspace_checkpoint_capture` captures the workspace owned by a completed
-  Step Execution. Its descriptor names the request type, activity/adapter owner,
-  workspace locator authority, supported checkpoint kinds, evidence, retry and
-  idempotency behavior, security boundary, and boundary test.
-* `step_workspace_checkpoint_restore` restores or materializes a declared
-  workspace checkpoint kind for explicitly compatible workspace policies. It is
-  a separate invocation and claim from capture.
-
-A session-state checkpoint ref is never evidence of local workspace capture or
-restore. An `external_state_ref` can preserve provider continuity without being
-locally restorable. Policy decides whether a workspace capability gap blocks the
-requested execution or only reduces recoverability; the gap is not itself a
-generic runtime failure.
-
-Codex currently conforms for `session_state_checkpoint`. Until the managed
-runtime workspace lane has its own real capture and restore invocations and
-boundary tests, its `step_workspace_checkpoint_capture` and
-`step_workspace_checkpoint_restore` decisions remain explicit capability gaps.
-
-Serialized managed-session conformance reports use `reportSchemaVersion: 2`.
-Readers of an unversioned/v1 report must migrate the former generic `checkpoint`
-decision to `session_state_checkpoint` only and add workspace capture and restore
-as capability gaps. They must never promote `latestCheckpointRef` or
-`latestResetBoundaryRef` into workspace claims. Producers write v2; external
-consumers should accept v1 during their read migration window and persist or
-forward only v2 after conversion. Unknown future report versions fail closed.
+A runtime-specific process, container, session, or host id is never the product workflow identity.
 
 ---
 
 ## 3. Canonical contract rule
 
-This document adopts a strict rule:
+All agent-facing activities and adapters return canonical MoonMind contracts directly. Workflow code does not consume provider-shaped alternatives or reconstruct canonical objects from partial dictionaries.
 
-> **All agent-facing runtime activities must return canonical agent runtime contracts directly.**
-> Workflow code must not depend on provider-shaped or runtime-shaped payload variants.
+The schema source of truth is `moonmind/schemas/agent_runtime_models.py`.
 
-That means:
+### 3.1 `AgentExecutionRequest`
 
-* `integration.<provider>.start` returns `AgentRunHandle`
-* `integration.<provider>.status` returns `AgentRunStatus`
-* `integration.<provider>.fetch_result` returns `AgentRunResult`
-* `integration.<provider>.cancel` returns `AgentRunStatus`
-* `agent_runtime.status` returns `AgentRunStatus`
-* `agent_runtime.fetch_result` returns `AgentRunResult`
+Canonical fields include:
 
-Provider-specific or runtime-specific details belong in canonical `metadata` fields, not in alternate top-level response shapes.
+```text
+agentKind
+agentId
+executionProfileRef
+correlationId
+idempotencyKey
+instructionRef
+inputRefs[]
+expectedOutputSchema
+workspaceSpec / workspaceLocator-bearing context
+resolvedSkillsetRef
+parameters
+approvalPolicy
+retryPolicy
+timeoutPolicy
+callbackPolicy
+```
 
-### 3.1 Why this rule exists
+Large content is represented by artifact references. Credentials, raw provider tokens, daemon-visible paths, and mutable provider state do not belong in the request.
 
-This rule keeps normalization at the correct boundary.
+### 3.2 `AgentRunHandle`
 
-Normalization belongs in:
+A start-like operation returns the stable identity required for subsequent status, result, cancellation, or callback correlation. Provider-specific ids remain inside canonical metadata.
 
-* provider adapters
-* managed runtime adapter layers
-* activity handlers that bridge those adapters into Temporal
-
-Normalization does **not** belong in:
-
-* `MoonMind.AgentRun`
-* `MoonMind.UserWorkflow`
-* parent-to-child orchestration glue
-* ad hoc workflow coercion helpers
-
-### 3.2 Skill semantics are not adapter normalization
-
-Provider/runtime normalization must not be used to move resolved Skill behavior
-into an adapter. When a Skill already defines how to retrieve and interpret
-provider data, select remediation, order work, or decide completion, the adapter
-may only expose the credentials, transport, workspace, process, and artifact
-capabilities needed to execute that Skill implementation. It must not perform a
-parallel provider query and return a MoonMind-authored semantic conclusion.
-
-For example, a Skill that retrieves GitHub review comments must retrieve and
-classify those comments through its resolved portable implementation in both a
-direct Codex run and a MoonMind-managed run. A MoonMind GitHub adapter may supply
-authenticated transport or execute that portable entrypoint in a controlled
-Activity, but it must not maintain a second comment-readiness algorithm.
-
-### 3.3 Compatibility direction
-
-Older compatibility code may continue to exist temporarily for replay safety or migration windows, but the target state is:
-
-* no workflow-side contract coercion
-* no provider-specific top-level return payloads
-* no workflow logic that reconstructs canonical contracts from partial dicts
-
----
-
-## 4. Shared contracts
-
-A unified contract family represents all true agent executions regardless of whether the target is managed or external.
-
-The canonical schema source of truth is `moonmind/schemas/agent_runtime_models.py`.
-
-## 4.1 `AgentExecutionRequest`
-
-Represents the canonical request to execute one true agent runtime.
-
-Canonical fields:
-
-* `agent_kind`: `external` | `managed`
-* `agent_id`
-* `execution_profile_ref`
-* `correlation_id`
-* `idempotency_key`
-* `instruction_ref`
-* `input_refs[]`
-* `expected_output_schema`
-* `workspace_spec`
-* `parameters`
-* `timeout_policy`
-* `retry_policy`
-* `approval_policy`
-* `callback_policy`
-* `profile_selector`
-
-Notes:
-
-* `execution_profile_ref` may be omitted or resolved dynamically
-* raw credentials must never be embedded in this payload
-* large instruction bundles belong in artifacts referenced by `instruction_ref` or `input_refs[]`
-
-### Skill snapshot extension fields
-
-MoonMind may extend the request with runtime-preparation refs such as:
-
-* `resolved_skillset_ref`
-* `skill_materialization_mode`
-* `skill_prompt_index_ref`
-* `skill_manifest_ref`
-* `skill_policy_summary`
-
-These fields belong to the same architectural boundary, but they do not change the core rule that the request remains small, structured, and artifact-reference oriented.
-
-## 4.2 `AgentRunHandle`
-
-Returned by `start(...)`.
-
-Canonical fields:
-
-* `run_id`
-* `agent_kind`
-* `agent_id`
-* `status`
-* `started_at`
-* `poll_hint_seconds`
-* `metadata`
-
-This contract represents successful launch and the minimum durable tracking information needed by the workflow.
-
-## 4.3 `AgentRunStatus`
-
-Returned by `status(...)` and `cancel(...)`.
-
-Canonical fields:
-
-* `run_id`
-* `agent_kind`
-* `agent_id`
-* `status`
-* `observed_at`
-* `poll_hint_seconds`
-* `metadata`
+### 3.3 `AgentRunStatus`
 
 Canonical states are:
 
-* `queued`
-* `awaiting_slot`
-* `launching`
-* `running`
-* `awaiting_callback`
-* `awaiting_feedback`
-* `awaiting_approval`
-* `intervention_requested`
-* `collecting_results`
-* `completed`
-* `failed`
-* `canceled`
-* `timed_out`
-
-Terminal states are:
-
-* `completed`
-* `failed`
-* `canceled`
-* `timed_out`
-
-### `awaiting_slot`
-
-`awaiting_slot` is the canonical state for “execution is blocked on a prerequisite execution resource before launch,” primarily a provider-profile slot for managed runtimes.
-
-This replaces vague terms like `awaiting` at the contract level.
-
-Metadata may include values such as:
-
-```json
-{
- "awaitingReason": "provider_profile_slot",
- "profileManager": "provider-profile-manager:claude_code"
-}
+```text
+queued
+awaiting_slot
+launching
+running
+awaiting_callback
+awaiting_feedback
+awaiting_approval
+intervention_requested
+collecting_results
+completed
+failed
+canceled
+timed_out
 ```
 
-## 4.4 `AgentRunResult`
+`awaiting_slot` means a required execution resource, commonly Provider Profile capacity or machine capacity, has not yet been acquired. Metadata states the exact reason and authority rather than using a vague waiting state.
 
-Returned by `fetch_result(...)`.
+### 3.4 `AgentRunResult`
 
-Canonical fields:
+A terminal result contains compact fields such as:
 
-* `output_refs[]`
-* `summary`
-* `metrics`
-* `diagnostics_ref`
-* `failure_class`
-* `provider_error_code`
-* `retry_recommendation`
-* `metadata`
+```text
+outputRefs[]
+summary
+metrics
+diagnosticsRef
+failureClass
+providerErrorCode
+retryRecommendation
+metadata
+```
 
-This result is the canonical terminal output surface for an agent run. Large data stays in artifacts referenced by `output_refs[]` or `diagnostics_ref`.
+Large streams, snapshots, files, reports, and diagnostics remain in artifacts. Rate-limit evidence preserves a stable classification, bounded attempt summaries, retry usefulness, and Provider Profile cooldown effects.
 
-For model-provider rate limits, terminal results should preserve bounded retry
-metadata:
+### 3.5 Idempotency
 
-* `failure_class = "integration_error"` when retry exhaustion caused failure
-* `provider_error_code` should preserve the stable provider code when known,
-  and may use `RATE_LIMITED` when only the normalized classification is known
-* `retry_recommendation` should indicate whether retrying later is useful
-* `metadata.hitRateLimit = true` if any attempt hit a provider rate limit
-* `metadata.exhaustedRateLimitRetries = true` if backoff retries were exhausted
-* `metadata.attempts[]` may contain bounded attempt summaries, not raw logs
-
-## 4.5 Idempotency requirements
-
-Any start-like side effect must be idempotent with respect to a stable key such as:
-
-* explicit `idempotency_key`, or
-* a deterministic execution tuple like `(workflow_id, step_id, attempt)`
-* parent-step refs such as `childWorkflowId`, `childRunId`, and `agentRunId`
-
-This is required so activity retries do not create duplicate external jobs or duplicate managed launches.
+Every start-like side effect uses `idempotencyKey` or a deterministic execution tuple. Repeated activities for one logical request reuse durable provider/process/session/host identity rather than creating duplicate work.
 
 ---
 
-## 5. Activity contract mapping
+## 4. Execution lanes
 
-The following activity families participate in true agent runtime execution.
+MoonMind supports three true-agent ownership patterns behind the same canonical contracts.
 
-### 5.1 External provider activities
+| Lane | Canonical identity | Who owns the live runtime | Who owns materialization and durable evidence |
+| --- | --- | --- | --- |
+| External delegation | `agentKind=external` | External provider | Provider adapter plus MoonMind artifacts/mappings |
+| Direct managed runtime/session | `agentKind=managed` | MoonMind-supervised CLI/runtime | Managed adapter, supervisor, session store, artifacts |
+| Profile-bound Omnigent hybrid | `agentKind=external`, `agentId=omnigent` | Stock Omnigent host/runner | MoonMind profile-bound host coordinator, bridge, artifacts |
 
-For one provider `<provider>`:
-
-* `integration.<provider>.start(request: AgentExecutionRequest) -> AgentRunHandle`
-* `integration.<provider>.status({ run_id or external mapping input }) -> AgentRunStatus`
-* `integration.<provider>.fetch_result({ run_id or external mapping input }) -> AgentRunResult`
-* `integration.<provider>.cancel({ run_id or external mapping input }) -> AgentRunStatus`
-
-These activities may talk to provider APIs, transform provider state names, and enrich metadata, but they must return canonical contracts.
-
-### 5.2 Managed runtime activities
-
-* `agent_runtime.launch(...)` launches the underlying managed process/runtime envelope
-* `agent_runtime.status(...) -> AgentRunStatus`
-* `agent_runtime.fetch_result(...) -> AgentRunResult`
-* `agent_runtime.cancel(...) -> AgentRunStatus`
-* `agent_runtime.publish_artifacts(...) -> AgentRunResult` or an enriched canonical result payload compatible with `AgentRunResult`
-
-The important rule is that **status** and **fetch_result** must already be canonical before they reach `MoonMind.AgentRun`.
-
-### 5.3 Workflow helper activities
-
-Activities such as adapter metadata resolution or manager bootstrap helpers may still exist for determinism or startup reasons, but they are not part of the canonical agent execution contract surface.
+The hybrid lane is intentionally not represented by a second `managed` Omnigent alias. Omnigent remains the live session provider, while MoonMind directly manages the host container and credential authority used by that external session.
 
 ---
 
-## 6. Two adapters, one interface
+## 5. External delegation lane
 
-MoonMind uses a shared `AgentAdapter` interface for true agent runtimes.
-
-## 6.1 `AgentAdapter`
-
-Common responsibilities:
-
-* `start(request) -> AgentRunHandle`
-* `status(run_id) -> AgentRunStatus`
-* `fetch_result(run_id) -> AgentRunResult`
-* `cancel(run_id) -> AgentRunStatus`
-
-Common rules:
-
-* consume `AgentExecutionRequest`
-* return canonical contracts only
-* hide provider-specific response shapes from workflow code
-* preserve retry safety and idempotency behavior
-* keep large content in artifacts, not runtime payloads
-
-Additional optional behavior may exist for logs, intervention, or resume semantics, but those do not change the canonical core.
-
-## 6.2 `ExternalAgentAdapter`
-
-Used when MoonMind delegates execution to a system it does not run.
-
-Examples:
-
-* `jules`
-* future BYOA integrations
-
-Responsibilities:
-
-* translate `AgentExecutionRequest` into provider-specific REST/RPC payloads
-* provision external-access artifact exchange mechanisms such as presigned URLs
-* translate resolved skill snapshots into provider-compatible bundles when needed
-* interpret provider statuses and normalize them into `AgentRunStatus`
-* fetch final outputs and diagnostics as `AgentRunResult`
-* cancel remote work when supported
-* keep provider-specific details in canonical `metadata`
-
-## 6.3 `ManagedAgentAdapter`
-
-Used for MoonMind-managed runtimes.
-
-Examples:
-
-* `claude_code`
-* `codex_cli`
-
-Responsibilities:
-
-* resolve runtime profile and provider profile
-* prepare local workspace/runtime context
-* materialize any active skill snapshot into the managed runtime environment
-* prepend the canonical activation summary (`docs/Steps/SkillSystem.md` §14.5)
-  to the runtime instruction payload before launch
-* launch the runtime asynchronously
-* interpret runtime/supervisor state as canonical `AgentRunStatus`
-* fetch final outputs, logs, and diagnostics as `AgentRunResult`
-* cancel or terminate managed runs when necessary
-
-The managed adapter delegates to lower-level runtime execution components such as:
-
-* `ManagedRuntimeLauncher` — runs the active skill snapshot through
-  `AgentSkillMaterializer` and `ensure_shared_skill_links` per
-  `docs/Steps/SkillSystem.md` §14, then projects at `.agents/skills` and
-  prepends the activation summary to the runtime instruction
-* `ManagedRuntimeProfile`
-* `ManagedAgentProviderProfile`
-* `ManagedRunSupervisor`
-* `ManagedRunStore`
-
----
-
-## 7. External agents
-
-External agents are delegated to through provider-specific adapters, but MoonMind remains the top-level orchestrator.
-
-### 7.1 Skill delivery for external agents
-
-External agents may receive resolved skill context through:
-
-* compact prompt bundles
-* provider-uploaded bundle artifacts
-* presigned URLs to manifests or bundles
-* provider-specific translated representations where filesystem access is unavailable
-
-External adapters must not independently re-resolve skill sources. They consume the immutable resolved snapshot handed to them.
-
-### 7.2 Execution model
-
-The external path is callback-first whenever the provider supports it.
-
-1. `start(...)` submits the request to the external system and returns `AgentRunHandle`
-2. any input artifacts are made accessible through provider-appropriate mechanisms
-3. the external system performs the run out of process
-4. MoonMind receives provider callbacks where supported
-5. `MoonMind.AgentRun` resumes through Signals or durable timer wakeups
-6. `status(...)` returns canonical `AgentRunStatus`
-7. `fetch_result(...)` returns canonical `AgentRunResult`
-
-### 7.3 Callback verification
-
-Webhook callbacks must be authenticated and correlated to the correct run.
-
-Verification rules should include:
-
-* signature verification or equivalent provider authentication
-* correlation to a known run
-* replay protection where practical
-* safe normalization into workflow events
-
-### 7.4 Polling fallback
-
-If a provider cannot reliably issue callbacks, `MoonMind.AgentRun` uses durable timers plus short `status(...)` activities.
-
-Polling must be bounded and must not keep worker capacity occupied through long-blocking activity calls.
-
----
-
-## 8. MoonMind-managed agents
-
-MoonMind-managed agents are true runtimes launched and supervised by MoonMind, but MoonMind still does not own their internal reasoning loops.
-
-Examples:
-
-* Claude Code
-* Codex CLI
-
-Managed runtimes and managed sessions are related but distinct:
-
-* A **managed runtime run** is one supervised CLI/API execution represented by `MoonMind.AgentRun`.
-* A **managed session** is a workflow-scoped runtime container and continuity boundary represented by `MoonMind.AgentSession`.
-
-The session-capable managed runtime set is:
-
-* `codex_cli`
-* `claude_code`
-
-Future managed runtimes can use the same session plane once their adapters expose session-capable bindings.
-
-## 8.1 Key rule
-
-Managed runtimes must **not** be modeled as long-blocking one-shot LLM activities.
-
-They may:
-
-* maintain terminal loops
-* use persistent auth state
-* operate over a workspace for minutes at a time
-* emit logs incrementally
-* require approvals or intervention
-* need provider-specific concurrency and cooldown controls
-
-Because of that, they must be launched asynchronously and supervised durably.
-
-Claude Code and Codex CLI should not self-own MoonMind's provider rate-limit
-policy. Their CLI processes may expose provider errors, but the managed runtime
-runner or supervisor is responsible for classifying model-provider rate limits,
-honoring provider retry hints, coordinating profile cooldowns, enforcing bounded
-retry, and publishing terminal summaries through the canonical `AgentRunResult`
-and step-ledger surfaces.
-
-## 8.2 Managed runtime lifecycle
-
-The managed path follows the same conceptual lifecycle as the external path:
-
-1. acquire any required provider-profile slot
-2. `ManagedAgentAdapter.start(...)` persists or binds a durable managed run
-3. a runtime launcher starts the CLI runtime asynchronously
-4. a supervisor tracks process/container state, logs, and heartbeat-equivalent state
-5. the workflow polls `agent_runtime.status(...)` or receives completion signals
-6. `agent_runtime.fetch_result(...)` returns canonical `AgentRunResult`
-7. any held provider-profile slot is released
-8. artifacts are published
-
-### 8.2.1 Generic managed-agent environment
-
-Every managed agent session receives the same generic, project-agnostic
-environment variables, regardless of project type or runtime. Both managed
-launch paths — the one-shot `ManagedRuntimeLauncher` and the workflow-scoped
-managed-session controller — inject these authoritatively so a managed agent
-behaves like a developer machine with the repository checked out, and behavior
-is identical across project types (no engine- or project-specific values):
-
-| Variable | Value |
-| --- | --- |
-| `MOONMIND_REPO_DIR` | `/work/agent_jobs/<run_id>/repo` (the checked-out repository) |
-| `MOONMIND_RUN_ROOT` | `/work/agent_jobs/<run_id>` (the per-run workspace root) |
-| `MOONMIND_ARTIFACTS_DIR` | `/work/agent_jobs/<run_id>/artifacts/<step_id>` (per-step durable artifact area) |
-| `CI` | `1` |
-
-Paths follow the workspace convention in
-`docs/ManagedAgents/DockerSidecarRuntime.md` §5.2 and are derived from the
-resolved run workspace so they always point at the real directories. The
-`<step_id>` segment is the Step Execution logical step id when present, and is
-run-scoped otherwise. For workflow-scoped managed sessions the values map to
-the session's resolved repo, run root, and durable artifact spool. These
-MoonMind-owned values take precedence over any profile- or passthrough-supplied
-values for the same keys.
-
-## 8.3 Managed runtime supervisor
-
-A dedicated supervisor should own the active lifecycle of managed runs.
+An external provider adapter is used when MoonMind delegates execution to a system it does not run.
 
 Responsibilities include:
 
-* persist run metadata before launch
-* spawn runtime processes or containers
-* track identifiers and workspace paths
-* stream stdout/stderr to artifact-backed storage (durability comes first)
-* emit live log records for active subscribers via the shared cross-process observability transport (secondary; must not break artifact persistence or run completion if live publish fails)
-* update `last_log_at` and `last_log_offset` metadata after each captured chunk, for use by the observability summary API
-* generate `system` event annotations where needed (e.g. run start, truncation notices, timeout classification)
-* hand off live log chunks to the shared live-stream transport boundary as they are captured
-* record state transitions
-* classify exit states
-* support cancellation and restart reconciliation
+- translating `AgentExecutionRequest` to provider transport;
+- supplying artifact exchange through references, presigned access, or provider bundles;
+- delivering an immutable resolved Skill snapshot without re-resolving sources;
+- correlating callbacks and protecting against replay;
+- normalizing provider status into `AgentRunStatus`;
+- fetching output and diagnostics into `AgentRunResult`;
+- canceling remote work when supported;
+- retaining provider-specific details only in canonical metadata and durable mapping rows.
 
-**Priority rule:** artifact persistence is authoritative. Live stream emission is a secondary concern. If live publication fails, the supervisor must continue capturing artifacts and completing the run normally.
-
-## 8.4 Cross-process observability transport boundary
-
-**Critical architectural constraint:** Managed runtime supervision may run in a different process or container from the API service.
-
-Therefore:
-
-* live log publication must target a shared MoonMind observability transport (e.g. Redis pub/sub, shared append-only spool, DB-backed tailing), not an API-local memory singleton
-* the runtime model does not assume same-process UI/API delivery of live events
-* a process-local replay buffer may exist as a performance optimization, but it is not the architecture boundary
-* the shared transport mechanism must be documented and agreed before the live-emit path is implemented (see `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` Phase 3 pre-step)
-
-This is the key constraint for live log delivery. An API-local in-memory publisher is not sufficient.
-
-## 8.5 Recovery and reconciliation
-
-Supervisor recovery must not assume a prior PID can always be reattached after restart.
-
-On worker or container restart, the system should:
-
-* reattach if the runtime is still valid and reachable
-* mark the run as lost or unrecoverable if not
-* trigger cancellation or degraded completion behavior where appropriate
-
-## 8.6 Wait-phase safety
-
-`MoonMind.AgentRun` must not wait indefinitely on callback paths alone.
-
-Even for managed callback-first behavior, the workflow should maintain a durable timer or bounded status-read fallback so it can wake up and inspect current state.
-
-## 8.7 Polling and status reads
-
-For managed runtimes, `status(...)` should remain a short activity that reads durable supervisor state.
-
-The detached runtime itself should not be represented as one giant heartbeating Temporal activity.
-
-## 8.8 Failure-mode rule
-
-If live streaming is unavailable or degraded:
-
-* managed run execution continues normally
-* artifacts and final diagnostics still define the authoritative run record
-* The dashboard must be able to observe completed runs without ever having had a live stream connection
-* live streaming failure is never a root cause of run failure
+The preferred lifecycle is callback-first. Providers without reliable callbacks use durable timers and short bounded status activities. A polling activity does not occupy a worker for the entire remote execution.
 
 ---
 
-## 9. First-class provider profiles
+## 6. Direct managed lane
 
-MoonMind-managed runtimes require formalized provider-profile handling. See [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md).
+A direct managed adapter is used when MoonMind launches and supervises the runtime process or workflow-scoped runtime session itself.
 
-### 9.1 `ManagedAgentProviderProfile`
+Responsibilities include:
 
-Represents a named provider, credential, and execution policy binding for a managed runtime.
+- resolving managed runtime and Provider Profiles;
+- acquiring provider capacity;
+- resolving the canonical workspace;
+- materializing the immutable resolved Skill snapshot;
+- launching and supervising the CLI/runtime process;
+- recording logs and lifecycle state durably;
+- supporting intervention, cancellation, timeout, and cleanup;
+- returning canonical status and result contracts;
+- releasing provider capacity only after the credential consumer is stopped.
 
-Key fields include:
+Managed runtimes may maintain terminal loops, use persistent auth state, operate over a workspace for extended periods, emit incremental logs, and require approvals. They are launched asynchronously and supervised durably rather than modeled as one long model-call activity.
 
-* `profile_id`
-* `runtime_id`
-* `provider_id`
-* `volume_ref`
-* `account_label`
-* `max_parallel_runs`
-* `cooldown_after_429_seconds`
-* `rate_limit_policy`
-* `enabled`
-
-### 9.2 Rules
-
-* raw credentials must never be placed in workflow payloads, artifacts, or logs
-* execution requests reference profiles indirectly through `execution_profile_ref`
-* OAuth-based auth state should live in durable runtime-specific volumes or homes
-* runtime-specific environment shaping is allowed, but raw secrets must not leak into durable workflow state
-
-### 9.3 Concurrency enforcement
-
-Concurrency and cooldown are enforced **per provider profile**, not merely per runtime family.
-
-Examples:
-
-* `codex_openai_oauth_user_a` may allow only one parallel run
-* `claude_code_team_profile` may allow two parallel runs
-* one profile may enter cooldown after repeated `429` responses while another remains usable
+Direct Codex managed sessions remain compatibility substrate during the Codex-through-Omnigent cutover. They emit bridge-compatible evidence where required so Workflow Detail and downstream recovery do not depend on a permanent runtime-specific UI model.
 
 ---
 
-## 10. Artifact and log discipline
+## 7. Profile-bound Omnigent hybrid lane
 
-Large data must remain out of workflow history.
+### 7.1 Identity and topology
 
-The following belong in artifacts or artifact-backed blobs rather than workflow payloads:
+The canonical request remains:
 
-* prompts and instruction bundles
-* resolved skill manifests
-* prompt indexes
-* runtime materialization bundles
-* hydrated context bundles
-* stdout/stderr streams
-* transcripts
-* patches and diffs
-* generated files
-* diagnostics bundles
+```text
+agentKind = external
+agentId   = omnigent
+executionProfileRef = <selected Codex OAuth Provider Profile>
+```
 
-Workflow payloads should contain only compact metadata and refs such as:
+The live session belongs to Omnigent, but MoonMind owns profile authorization and host lifecycle:
 
-* artifact refs
-* run IDs
-* statuses
-* summaries
-* small metrics
-* compact metadata dictionaries
+```text
+MoonMind.AgentRun
+  -> integration.omnigent.execute through profile-bound coordinator
+      -> shared Provider Profile lease
+      -> durable Omnigent host binding and host lease
+      -> static Compose or deterministic on-demand host
+      -> exact stock host registration and codex-native readiness
+      -> bridge-authorized Omnigent session
+      -> artifact/evidence harvest
+      -> host cleanup
+      -> Provider Profile release last
+```
 
-This rule applies equally to managed and external agent runs.
+### 7.2 Why the identity stays external
 
-## 10.1 `AgentRunResult` vs observability APIs
+The top-level identity describes the session and interaction provider, not only who issued `docker run`. Keeping `external/omnigent`:
 
-`AgentRunResult` is the terminal workflow contract: it represents the final outcome of an agent run as seen by `MoonMind.AgentRun` and the workflow history.
+- preserves one bridge, checkpoint, policy, metric, and UI identity;
+- avoids aliases for static versus on-demand hosts;
+- keeps the stock Omnigent session/resource protocol visible at the adapter boundary;
+- lets host materialization evolve without changing workflow identity;
+- distinguishes the Omnigent lane from direct Codex managed sessions.
 
-**Live logs and tailed observation are not delivered through `AgentRunResult`.** They belong to the observability API surface.
+### 7.3 Profile-bound coordinator responsibilities
 
-Specifically:
+The coordinator:
 
-* `AgentRunResult.output_refs[]` contains durable output artifact refs for the workflow result
-* `AgentRunResult.diagnostics_ref` is the final diagnostics artifact for the run
-* live log events, artifact-backed tails, and per-stream retrieval are served through observability APIs, not through workflow payloads or `AgentRunResult`
-* The dashboard uses the observability APIs for workflow detail live/tailed observation, not the workflow result surface
-* the parent step ledger should carry only bounded refs back to that observability surface, not duplicate managed-run log state
+1. reserves or loads the durable bridge attempt envelope;
+2. requires and validates `executionProfileRef`;
+3. acquires the purpose-aware Provider Profile lease;
+4. resolves the profile-bound host binding;
+5. creates or reattaches the deterministic host lease;
+6. persists profile authorization before host/session side effects become ambiguous;
+7. prepares the static or on-demand host;
+8. validates the exact credential generation and mount;
+9. verifies Codex login state inside the exact host environment;
+10. resolves exactly one online host advertising `codex-native`;
+11. updates bridge authorization with the host identity;
+12. creates or reattaches the session on that host;
+13. persists session and first-message evidence before posting;
+14. streams events and harvests terminal resources;
+15. stops or drains the session and host;
+16. releases Provider Profile capacity only after cleanup.
 
-## 10.2 Observability metadata expectations for managed runs
+A caller cannot supply an arbitrary profile-bound host id, Docker volume, or credential. The coordinator injects the exact host and safe authorization envelope immediately before session creation.
 
-The following fields are operational observability metadata, not the authoritative data itself. They enable efficient discovery without requiring artifact downloads.
+### 7.4 Launch modes
 
-Expected fields on the managed run record or observability summary:
+The hybrid lane supports:
 
-| Field | Purpose |
-| --- | --- |
-| `stdout_artifact_ref` | Ref to the durable stdout artifact |
-| `stderr_artifact_ref` | Ref to the durable stderr artifact |
-| `merged_log_artifact_ref` | Optional; ref to a pre-merged log artifact |
-| `diagnostics_ref` | Ref to the diagnostics artifact |
-| `last_log_at` | Timestamp of the most recently captured log chunk |
-| `last_log_offset` | Byte offset of the most recently captured log chunk |
-| `live_stream_id` | Identifier for the live stream session, if active |
-| `live_stream_status` | Current stream status (`available`, `ended`, `unavailable`) |
-| `supports_live_streaming` | Whether a live stream can be connected for this run |
+- **static Compose bootstrap**, using canonical `docker-compose.yaml` and the `omnigent-host-codex` profile; and
+- **deterministic on-demand Docker**, using one lease-owned, run-dedicated stock host container.
 
-These fields are metadata only. The artifact refs and the observability APIs are the actual data access paths.
+Both modes share the binding, profile lease, host lease, exact registration, readiness, bridge, artifact, checkpoint, and cleanup contracts.
 
----
+The desired product authority is a versioned host-mode selection compiled from the selected Omnigent agent profile and policy. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` may seed a bootstrap default until that product surface is complete, but it is not workflow-authored authority and must not require manual `hostId` editing.
 
-## 11. Worker fleet topology
+### 7.5 Image authority
 
-MoonMind keeps execution responsibilities separated by capability and latency boundary.
-
-### 11.1 Relevant fleets
-
-* `mm.workflow`
- Workflow code
-
-* `mm.activity.integrations`
- External provider communication and provider adapters
-
-* `mm.activity.agent_runtime`
- Managed runtime supervision, status, result collection, artifact publication, and cancellation
-
-### 11.2 Why `agent_runtime` is separate
-
-The dedicated `agent_runtime` fleet exists because managed runtimes have distinct requirements:
-
-* persistent auth volume mounts
-* provider-specific concurrency controls
-* runtime supervision
-* longer-lived execution
-* richer logging and intervention flows
-* stronger isolation boundaries
-* runtime preparation responsibilities
-
-### 11.3 Helper-activity note
-
-Some lightweight helper activities may still be placed on the workflow fleet for determinism-safe metadata resolution or startup coordination. Those helpers are not part of the agent contract surface and should remain small exceptions rather than grow into a second activity plane.
+Production policy and credentialed conformance prefer complete immutable `OMNIGENT_IMAGE_REF` and `OMNIGENT_HOST_IMAGE_REF` values. Legacy repository/tag pairs remain bootstrap-compatible, but a profile that requires digest-pinned published stock images fails closed when only mutable tags are available.
 
 ---
 
-## 12. Human-in-the-loop and runtime events
+## 8. Provider Profile capacity and cooldown
 
-Both external and managed agent runs must integrate with workflow-native HITL handling.
+Provider Profile Manager is authoritative for provider account capacity. Adapters, host repositories, Docker workers, and sessions may apply narrower limits, but they cannot create additional provider capacity.
 
-### 12.1 Supported event types
+For a mutable OAuth profile:
 
-Examples include:
+```text
+direct runtime consumers
++ Omnigent host consumers
++ OAuth enrollment, repair, validation, reconnect, and disconnect consumers
+<= max_parallel_runs
+```
 
-* approval required
-* intervention requested
-* clarification required
-* escalation requested
-* cancellation requested
-* completion reported
-* failure reported
+The first-party Codex and Claude OAuth contract fixes `max_parallel_runs = 1`.
 
-### 12.2 Temporal mapping
+Capacity rules:
 
-These runtime events should be translated into Temporal-native mechanisms such as:
-
-* **Signals** for asynchronous state transitions
-* **Updates** where synchronous acknowledgement or validation is needed
-* **Timers** for bounded waiting and polling fallback
-
-`MoonMind.AgentRun` remains the durable authority for state progression. Adapters and supervisors translate runtime events into workflow events; they do not own orchestration truth.
-
-### 12.3 Cancellation cleanup
-
-When `MoonMind.AgentRun` is canceled, the workflow must still make a best-effort attempt to cancel the underlying external or managed work, even while cancellation is in progress.
+- selection never silently changes the chosen profile;
+- retry retains the same profile unless an explicit reroute policy authorizes a different selection before credential use;
+- profile lease ownership is deterministic and purpose-aware;
+- a host lease or machine-capacity token does not replace the profile lease;
+- provider-attributed 429/quota evidence updates the selected profile's cooldown policy;
+- profile capacity is released only after every credential consumer is stopped or safely reconciled.
 
 ---
 
-## 13. Implemented components and current hardening work
+## 9. Machine, host, session, and policy capacity
 
-### 13.1 Implemented components
+Execution may be constrained by several independent layers:
 
-**Contracts and workflow**
+1. Provider Profile account capacity;
+2. profile-bound host count;
+3. sessions per host;
+4. worker or Docker machine capacity;
+5. image and runtime resource policy;
+6. network and egress policy;
+7. workspace and mount availability;
+8. approval policy.
 
-* `AgentExecutionRequest`
-* `AgentRunHandle`
-* `AgentRunStatus`
-* `AgentRunResult`
-* `FailureClass`
-* `MoonMind.AgentRun`
+The status projection identifies the blocking layer. Counters are not conflated, and success at one layer does not bypass another.
 
-**Adapters**
-
-* `JulesAgentAdapter`
-* `ManagedAgentAdapter`
-
-**Managed runtime layer**
-
-* `ManagedRuntimeLauncher`
-* `ManagedRunStore`
-* `ManagedRunSupervisor`
-* runtime log streaming and result publication support
-
-**Auth and fleet**
-
-* `MoonMindProviderProfileManagerWorkflow`
-* dedicated `agent_runtime` activity family
-
-**Root workflow**
-
-* `MoonMind.UserWorkflow` dispatches `tool.type == "agent_runtime"` plan nodes to `MoonMind.AgentRun`
-
-### 13.2 Hardening direction
-
-The current contract-hardening direction is:
-
-* require all agent-facing activities to emit canonical contracts directly
-* remove workflow-side coercion glue over time
-* keep provider-specific fields inside canonical `metadata`
-* reject unknown or non-canonical runtime/provider statuses at the adapter or activity boundary
-* keep replay-compatibility shims only where needed for history safety
-
-### 13.3 Remaining work
-
-Ongoing or pending work includes:
-
-* normalized metrics and dashboard surfaces
-* callback verification hardening
-* richer intervention/operator tooling
-* failure classification refinement
-* resolved skill snapshot propagation and materialization work
-* elimination of legacy contract-shape compatibility glue where replay-safe
-* live log stream producer-to-API plumbing (supervisor must emit into shared cross-process transport)
-* Dashboard observability panel implementation (artifact-backed tail + live-follow)
-
-### 13.4 Legacy session-based observability
-
-Legacy terminal/session metadata from migration-era runs is historical only. The active managed-run model uses artifact-backed stdout/stderr logs and MoonMind-native log streaming rather than terminal-relay rows or attach URLs.
-
-Migration rules:
-
-* legacy session metadata is not the target model for managed-run observability
-* new managed runs must be modeled through observability metadata and artifacts (`stdout_artifact_ref`, `stderr_artifact_ref`, `live_stream_id`, etc.)
-* code paths that use terminal-session fields for managed-run log viewing are migration targets, not supported architecture paths
-* historical runs that only have legacy session data should degrade gracefully in the new UI
+For profile-bound Codex Omnigent execution, the initial safe topology is one profile lease, one host lease, one active host, and one active session.
 
 ---
 
-## 14. Summary
+## 10. Workspace authority
 
-MoonMind treats true agent execution as a first-class orchestration concept distinct from ordinary one-shot LLM activities.
+Durable workflow payloads use the canonical `WorkspaceLocator` discriminated union. Locators are compact identities, never raw host filesystem paths.
 
-The unifying model is:
+Only the owning worker resolves a locator. Resolution validates runtime and run identity, canonicalizes the path, performs root containment and symlink checks, and translates the approved path to the Docker daemon's namespace when required.
 
-* `MoonMind.UserWorkflow` remains the current live root workflow implementation for user Workflow Executions
-* `MoonMind.AgentRun` is the child workflow for one true agent execution
-* `AgentAdapter` defines the shared lifecycle interface
-* `ExternalAgentAdapter` handles delegated external agents
-* `ManagedAgentAdapter` handles MoonMind-managed runtimes
-* both paths share the same lifecycle shape: start, wait, read status, fetch result, publish outputs, cancel or intervene
-* managed runtimes rely on asynchronous supervision, durable run tracking, structured provider profiles, and artifact-backed logs
-* all agent-facing runtime activities return canonical contracts directly
-* workflow code should not depend on provider-shaped response payloads
+Rules:
 
-This gives MoonMind a consistent Temporal-native execution model for both BYOA integrations and MoonMind-managed CLI runtimes without collapsing true agent execution into oversimplified plain model-call abstractions.
+- an external-state locator is artifact authority, not a local path;
+- a managed-runtime locator must match the current runtime and AgentRun store identity;
+- legacy `workspacePath` fields are compatibility inputs during the replay window and cannot create new authority;
+- a provider/session workspace string is derived from the trusted resolution result;
+- arbitrary absolute paths from workflow parameters are rejected;
+- cleanup removes only state owned by the matching run or lease.
+
+The generic Container Jobs plane owns reusable workspace-resolution and daemon-translation primitives. Long-lived Omnigent hosts reuse them where compatible while retaining separate host/session lease semantics.
+
+---
+
+## 11. Runtime filesystem and network policy
+
+### 11.1 Direct managed runtimes
+
+Direct managed runtimes receive a workflow-scoped workspace and artifact area, runtime-specific credential materialization, immutable Skill projection, and bounded temporary state. Runtime-owned environment values take precedence over untrusted passthrough values.
+
+### 11.2 Profile-bound Omnigent hosts
+
+The Codex host filesystem separates:
+
+| State | Target | Rule |
+| --- | --- | --- |
+| Codex OAuth home | `/home/app/.codex` | Exclusive profile-bound read/write mount, generation-checked |
+| Omnigent state | `/home/app/.omnigent` | Separate static-host or lease-owned state |
+| Workflow workspace | `/workspaces/run` for on-demand | Resolved from canonical workspace authority |
+| Resolved Skills | `/opt/moonmind-skills` | Immutable and read-only |
+| Versioned tools | `/opt/moonmind-tools` | Pinned and read-only |
+| Temporary storage | `/tmp` | Bounded and non-authoritative |
+| Artifacts and caches | Explicit policy/gateway | Never conflated with credentials or host state |
+
+On-demand hosts run as UID/GID `1000:1000` from `/home/app`, use a read-only root filesystem, bounded temporary storage, deterministic labels, and the policy-selected network.
+
+A Docker network name is not proof of restricted egress. Any restricted-egress claim requires an enforced network, proxy, or firewall boundary. A policy that cannot be realized fails closed rather than selecting a broader network or different host mode.
+
+---
+
+## 12. Resolved Skill delivery
+
+Skill source resolution and precedence occur before `MoonMind.AgentRun`. The child workflow and adapters consume an immutable `resolvedSkillsetRef`; they do not re-resolve repository, deployment, user, or built-in sources during retry.
+
+Delivery patterns include:
+
+- direct managed materialization into the runtime workspace or canonical Skill path;
+- read-only projection into static or on-demand Omnigent hosts;
+- compact bundles or provider-accessible artifacts for remote external systems.
+
+Adapters provide transport and capability boundaries. They do not duplicate the semantic logic already defined by a resolved Skill.
+
+Required host tools are capability-gated. A required CLI projection, authentication, repository access, or mutation authority is preflighted in both the selected host and the authoritative runner environment before the run claims that capability.
+
+---
+
+## 13. Artifact and evidence authority
+
+The artifact system is authoritative for large and durable evidence. Runtime-local files, provider resources, and live streams are observations until copied or referenced through an approved artifact contract.
+
+Every lane publishes as applicable:
+
+- normalized and raw bounded event/log journals;
+- initial and terminal snapshots;
+- output and declared-output manifests;
+- changed-file, workspace-file, diff, and session-file evidence;
+- diagnostics with redaction and truncation metadata;
+- provider/runtime ids as safe refs;
+- policy, profile, workspace, Skill, and approval refs;
+- checkpoint and external-state refs;
+- cleanup and lease-release evidence.
+
+Artifact persistence is authoritative. Live publication is secondary and must not prevent terminal completion or durable capture when a subscriber transport fails.
+
+---
+
+## 14. Observability and UI projection
+
+`MoonMind.AgentRun` and its side-effecting boundaries emit durable lifecycle state suitable for Workflow Detail. The UI does not require a provider-specific dashboard to answer:
+
+```text
+Which agent and profile were selected?
+Why is execution waiting?
+Which runtime, host, or session was created?
+Which policy and workspace authority applied?
+Did credential, host, and harness readiness pass?
+What events, tools, resources, and artifacts were produced?
+Was cancellation or intervention accepted?
+Were runtime resources cleaned and capacity released?
+```
+
+For Omnigent, the bridge attempt envelope exists before profile/host/session side effects so failed launches remain visible even when no upstream stream starts. Each lifecycle boundary records an explicit start followed by completed or failed evidence. Workflow Detail projects failure class, stable code, safe profile/host/lease ids, diagnostics links, cleanup result, Provider Profile release state, and recommended action even when the provider emitted zero events.
+
+Direct Codex compatibility producers emit equivalent bridge-facing evidence during migration. Process-local live buffers may optimize delivery, but they are not the cross-process durability boundary.
+
+---
+
+## 15. Cancellation and intervention
+
+Cancellation propagates from `MoonMind.UserWorkflow` to the active `MoonMind.AgentRun`. The child workflow makes a bounded best-effort call to the lane-specific control surface and records the outcome.
+
+Control rules:
+
+- external providers use supported remote cancel/stop operations;
+- direct managed runtimes interrupt or terminate the supervised process/session;
+- Omnigent uses typed interrupt/stop/terminate/harvest/host-cleanup operations authorized against the durable bridge and host lease;
+- intervention and approval remain separate from passive log viewing;
+- changing instructions, runtime, profile, or publish mode uses an explicit continuation or branch contract rather than mutating original input;
+- cleanup continues after cancellation and provider capacity is released only when credential consumers are stopped.
+
+A detached process or provider job is not considered ongoing MoonMind-managed work unless durable ownership and supervision explicitly continue.
+
+---
+
+## 16. Retry, replay, and reconciliation
+
+### 16.1 Activity retry
+
+An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
+
+### 16.2 Workflow replay
+
+Changes that add, remove, or reorder workflow commands use Temporal patch/version markers or Worker Versioning so in-flight histories replay to the recorded command path.
+
+### 16.3 Rerun and re-resolution
+
+A rerun reuses the original immutable Skill and policy/profile snapshots by default. Explicit re-resolution is a distinct operator or workflow action.
+
+### 16.4 Runtime reconciliation
+
+Each lane reconciles its own side effects:
+
+- external providers reconcile remote ids and callback state;
+- direct managed runtimes reconcile process/container/session records and supervisors;
+- Omnigent reconciles bridge attempts, first-message markers, profile bindings, host leases, deterministic containers, registered hosts, sessions, credential generations, and janitor work.
+
+No lane silently creates replacement authority while the original may still be active.
+
+---
+
+## 17. Checkpoint capability layers
+
+Checkpoint capabilities remain distinct:
+
+- `session_state_checkpoint` preserves a provider/runtime session, thread, epoch, or external-state ref;
+- `step_workspace_checkpoint_capture` captures the workspace owned by a completed Step Execution;
+- `step_workspace_checkpoint_restore` materializes a declared compatible workspace checkpoint kind.
+
+A session-state ref is not evidence of workspace capture or restore. `external_state_ref` can preserve Omnigent/provider continuity without being locally restorable.
+
+For Omnigent, checkpoint identity may include profile, provider-lease, credential-generation, binding, host-lease, host, bridge-session, Omnigent-session, idempotency, first-message, workspace-locator, diagnostics, terminal, and artifact refs. Credentials and daemon paths are forbidden.
+
+Recovery chooses:
+
+- **live reattach** only when the original authority, generation, host, session, and first-message evidence remain valid; or
+- **cold restore** by reacquiring the selected profile, creating new host/session authority, and materializing validated artifact-backed state.
+
+A branch receives independent authority and never concurrently reuses the original mutable OAuth lease.
+
+---
+
+## 18. Error and rate-limit behavior
+
+Failures are normalized into stable classes and bounded diagnostics. The responsible boundary records whether retry, reroute, reconnect, cleanup, janitor, or operator correction is useful.
+
+Rules:
+
+- profile selection and credential failures fail closed;
+- missing host registration or required harness capability is configuration/integration failure, not a reason to select another host silently;
+- provider 429/quota evidence updates the selected Provider Profile cooldown;
+- cleanup failure remains visible and may keep capacity held until reconciliation;
+- malformed or ambiguous first-message/session state blocks duplicate side effects;
+- policy denial records the selected policy version and rationale;
+- raw provider responses and command output are redacted before persistence.
+
+---
+
+## 19. Conformance evidence
+
+Deterministic CI and credentialed live evidence are separate gates.
+
+Deterministic CI proves schema, idempotency, lifecycle ordering, fake-server protocol behavior, artifact structure, cleanup selection, redaction, and replay behavior without claiming provider credentials were exercised.
+
+Credentialed live conformance uses `tools/run_omnigent_live_conformance.py` with:
+
+- digest-pinned `OMNIGENT_IMAGE_REF` and `OMNIGENT_HOST_IMAGE_REF` values;
+- an already-enrolled OAuth profile;
+- an operator-provisioned `MOONMIND_OMNIGENT_ACTION_COMMAND` that performs real provider actions;
+- durable, scenario-bound, schema-versioned evidence refs;
+- independent evidence resolution and secret scanning;
+- exact workflow, run, profile, lease, host, session, image, architecture, capability, lifecycle, artifact, and cleanup identifiers;
+- an isolated Compose project whose cleanup removes its containers and networks but never enrolled OAuth or unrelated volumes.
+
+The repository semantic action backend is test infrastructure, not implicit live proof. Missing, malformed, opaque, mismatched, or bare-boolean evidence fails the live gate. Published stock-image proxy compatibility, static restart/replay, on-demand lifecycle, and failure-path scenarios are independently gateable.
+
+---
+
+## 20. Security invariants
+
+- Workflow payloads carry refs and policy choices, not credentials or daemon authority.
+- Provider Profile Manager remains authoritative for account capacity and credential ownership.
+- Mutable OAuth profiles have one active consumer across every substrate and maintenance operation.
+- Workspaces are resolved from `WorkspaceLocator` at the owning worker and containment-checked.
+- Runtime credentials, host registration credentials, artifact access credentials, and provider OAuth are distinct authorities.
+- No adapter silently substitutes profiles, credentials, models, networks, host modes, images, or less-constrained runtime policy.
+- Required capabilities are preflighted before execution claims them.
+- Large evidence is artifact-backed, bounded, and redacted.
+- Cleanup is idempotent and removes only matching run/lease-owned resources.
+- Provider capacity is released only after the credential consumer is stopped or safely reconciled.
+
+---
+
+## 21. Acceptance contract
+
+A Step can start one `MoonMind.AgentRun` using any supported lane and receive the same canonical status, result, artifact, cancellation, retry, and checkpoint semantics without provider-specific workflow logic.
+
+For profile-bound Codex Omnigent execution, a workflow selects `external/omnigent` plus a Codex OAuth Provider Profile; MoonMind compiles the host-mode and runtime policy, acquires all capacity, resolves a canonical workspace, materializes or validates exactly one stock compatible host, proves credential and `codex-native` readiness, authorizes one bridge session, posts the first message once, projects durable conversation and lifecycle evidence, harvests artifacts, cleans owned runtime state, and releases Provider Profile capacity last.
+
+Static and on-demand Omnigent host modes remain interchangeable at the workflow contract boundary while preserving explicit policy, readiness, evidence, and cleanup differences. Direct Codex remains compatibility substrate until the Omnigent lane passes its deterministic and credentialed live cutover gates.
