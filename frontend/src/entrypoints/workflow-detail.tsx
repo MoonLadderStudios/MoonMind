@@ -2563,17 +2563,17 @@ function ContextualBridgeResourceLinks({
 
 type BridgeTerminalEnvelope = {
   status: 'completed' | 'failed' | 'canceled' | 'timed_out';
-  failureClass?: string | null;
-  failureCode?: string | null;
-  summary?: string | null;
-  diagnosticsRef?: string | null;
-  captureManifestRef?: string | null;
-  initialSnapshotRef?: string | null;
-  finalSnapshotRef?: string | null;
-  rawEventsRef?: string | null;
-  normalizedEventsRef?: string | null;
-  externalStateRef?: string | null;
-  evidenceIncompleteReason?: string | null;
+  failureClass?: string | null | undefined;
+  failureCode?: string | null | undefined;
+  summary?: string | null | undefined;
+  diagnosticsRef?: string | null | undefined;
+  captureManifestRef?: string | null | undefined;
+  initialSnapshotRef?: string | null | undefined;
+  finalSnapshotRef?: string | null | undefined;
+  rawEventsRef?: string | null | undefined;
+  normalizedEventsRef?: string | null | undefined;
+  externalStateRef?: string | null | undefined;
+  evidenceIncompleteReason?: string | null | undefined;
 };
 
 function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelope: BridgeTerminalEnvelope }) {
