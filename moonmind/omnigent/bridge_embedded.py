@@ -29,6 +29,7 @@ from moonmind.omnigent.bridge_proxy import (
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.host_auth_adapter import (
+    HostCredentialGeneration,
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
 )
@@ -77,6 +78,8 @@ def verify_embedded_host_auth(
     headers: Mapping[str, Any],
     config: OmnigentBridgeConfig,
     configured_token: str,
+    credential_generation: int = 1,
+    credential_secret_ref: str = "env://OMNIGENT_HOST_RUNNER_TOKEN",
 ) -> EmbeddedHostAuthContext:
     """Verify the embedded host/runner auth profile (§16 rule 8).
 
@@ -93,22 +96,33 @@ def verify_embedded_host_auth(
         )
     try:
         identity = OmnigentHostAuthAdapter(
-            allowed_tokens=frozenset({str(configured_token or "").strip()})
+            credentials=(
+                HostCredentialGeneration(
+                    secret_ref=credential_secret_ref,
+                    generation=credential_generation,
+                    token=str(configured_token or "").strip(),
+                ),
+            )
             if str(configured_token or "").strip()
-            else frozenset()
+            else ()
         ).verify(headers)
     except UpstreamHostAuthError as exc:
-        unavailable = "configured" in str(exc) or "entrypoint" in str(exc)
+        unavailable = exc.code in {
+            "host_auth_not_configured",
+            "host_auth_configuration_invalid",
+            "host_auth_protocol_drift",
+        }
         raise OmnigentBridgeError(
             str(exc),
             failure_class="system_error" if unavailable else "user_error",
             status_code=503 if unavailable else 401,
+            code=exc.code,
         ) from exc
     return EmbeddedHostAuthContext(
         auth_mode=auth_mode,
         protocol_profile=identity.protocol_profile,
         runner_id=identity.runner_id,
-        credential_generation=1,
+        credential_generation=identity.credential_generation,
     )
 
 

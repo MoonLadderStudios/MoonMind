@@ -20,20 +20,65 @@ PINNED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.b95e41ec"
 class UpstreamHostAuthError(RuntimeError):
     """Stable, credential-free failure raised by the upstream adapter."""
 
+    def __init__(self, message: str, *, code: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+@dataclass(frozen=True, slots=True)
+class HostCredentialGeneration:
+    """Resolved, service-side credential material for one generation.
+
+    Instances are deliberately ephemeral. Durable configuration carries the
+    secret reference and generation; resolution supplies ``token`` only at the
+    request boundary.
+    """
+
+    secret_ref: str
+    generation: int
+    token: str
+    revoked: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.secret_ref or "://" not in self.secret_ref:
+            raise ValueError("host credential secret_ref is required")
+        if self.generation < 1:
+            raise ValueError("host credential generation must be positive")
+        if not self.token:
+            raise ValueError("resolved host credential is empty")
+
 
 @dataclass(frozen=True, slots=True)
 class UpstreamHostIdentity:
     runner_id: str
+    credential_generation: int
     protocol_profile: str = PINNED_PROTOCOL_PROFILE
 
 
 class OmnigentHostAuthAdapter:
     """Execute the pinned upstream runner tunnel verifier."""
 
-    def __init__(self, *, allowed_tokens: frozenset[str]) -> None:
-        if not allowed_tokens:
-            raise UpstreamHostAuthError("embedded host credential is not configured")
-        self._allowed_tokens = allowed_tokens
+    def __init__(self, *, credentials: tuple[HostCredentialGeneration, ...]) -> None:
+        if not credentials:
+            raise UpstreamHostAuthError(
+                "embedded host credential is not configured",
+                code="host_auth_not_configured",
+            )
+        active = tuple(item for item in credentials if not item.revoked)
+        if not active:
+            raise UpstreamHostAuthError(
+                "embedded host credential is revoked",
+                code="host_credential_revoked",
+            )
+        generations = [item.generation for item in credentials]
+        if len(generations) != len(set(generations)):
+            raise UpstreamHostAuthError(
+                "embedded host credential generations are ambiguous",
+                code="host_auth_configuration_invalid",
+            )
+        self._credentials = active
+        self._allowed_tokens = frozenset(item.token for item in active)
         # Load only from the repository-pinned bundle. An arbitrary installed
         # ``omnigent`` distribution must never supply authorization semantics
         # while this adapter advertises PINNED_PROTOCOL_PROFILE.
@@ -48,7 +93,10 @@ class OmnigentHostAuthAdapter:
         entries = [(str(k), str(v)) for k, v in headers.items()]
         values = [v for k, v in entries if k.lower() == self.token_header.lower()]
         if len(values) != 1:
-            raise UpstreamHostAuthError("runner tunnel credential is required exactly once")
+            raise UpstreamHostAuthError(
+                "runner tunnel credential is required exactly once",
+                code="host_credential_malformed",
+            )
         normalized = {
             (self.token_header if k.lower() == self.token_header.lower() else k): v
             for k, v in entries
@@ -59,14 +107,31 @@ class OmnigentHostAuthAdapter:
             self._verify(normalized, allowed_tunnel_tokens=self._allowed_tokens)
             runner_id = self._token_bound_runner_id(values[0])
         except (RuntimeError, ValueError) as exc:
-            raise UpstreamHostAuthError("runner tunnel credential was rejected") from exc
-        return UpstreamHostIdentity(runner_id=runner_id)
+            raise UpstreamHostAuthError(
+                "runner tunnel credential was rejected",
+                code="host_credential_rejected",
+            ) from exc
+        generation = next(
+            item.generation for item in self._credentials if item.token == values[0]
+        )
+        return UpstreamHostIdentity(
+            runner_id=runner_id,
+            credential_generation=generation,
+        )
 
 
 def assert_pinned_omnigent_auth_contract() -> None:
     """Fail preflight if the expected upstream verifier surface has drifted."""
 
-    OmnigentHostAuthAdapter(allowed_tokens=frozenset({"preflight-only"}))
+    OmnigentHostAuthAdapter(
+        credentials=(
+            HostCredentialGeneration(
+                secret_ref="env://OMNIGENT_HOST_RUNNER_TOKEN",
+                generation=1,
+                token="preflight-only",
+            ),
+        )
+    )
 
 
 def _load_pinned_source_entrypoints() -> tuple[Any, Any]:
@@ -105,12 +170,14 @@ def _load_pinned_source_entrypoints() -> tuple[Any, Any]:
         return namespace["_expected_runner_id_from_headers"], identity
     except (AttributeError, ImportError, OSError, StopIteration, SyntaxError) as exc:
         raise UpstreamHostAuthError(
-            "pinned Omnigent runner auth entrypoint is unavailable"
+            "pinned Omnigent runner auth entrypoint is unavailable",
+            code="host_auth_protocol_drift",
         ) from exc
 
 
 __all__ = [
     "OmnigentHostAuthAdapter",
+    "HostCredentialGeneration",
     "PINNED_OMNIGENT_COMMIT",
     "PINNED_PROTOCOL_PROFILE",
     "UpstreamHostAuthError",

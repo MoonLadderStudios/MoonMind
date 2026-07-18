@@ -22,6 +22,7 @@ from moonmind.omnigent.bridge_embedded import (
     verify_embedded_host_auth,
 )
 from moonmind.omnigent.host_auth_adapter import (
+    HostCredentialGeneration,
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
 )
@@ -108,7 +109,15 @@ def test_embedded_host_auth_rejects_user_bearer_and_cookie_domains() -> None:
 
 
 def test_pinned_source_verifier_executes_without_importable_package() -> None:
-    adapter = OmnigentHostAuthAdapter(allowed_tokens=frozenset({"runner-token"}))
+    adapter = OmnigentHostAuthAdapter(
+        credentials=(
+            HostCredentialGeneration(
+                secret_ref="env://OMNIGENT_HOST_RUNNER_TOKEN",
+                generation=1,
+                token="runner-token",
+            ),
+        )
+    )
 
     identity = adapter.verify(
         Headers(raw=[(b"x-omnigent-runner-tunnel-token", b"runner-token")])
@@ -127,8 +136,75 @@ def test_embedded_host_auth_rejects_duplicate_tunnel_token_headers() -> None:
 
     with pytest.raises(UpstreamHostAuthError, match="exactly once"):
         OmnigentHostAuthAdapter(
-            allowed_tokens=frozenset({"runner-token"})
+            credentials=(
+                HostCredentialGeneration(
+                    secret_ref="env://OMNIGENT_HOST_RUNNER_TOKEN",
+                    generation=1,
+                    token="runner-token",
+                ),
+            )
         ).verify(headers)
+
+
+def test_host_auth_rotation_selects_generation_without_exposing_token() -> None:
+    adapter = OmnigentHostAuthAdapter(
+        credentials=(
+            HostCredentialGeneration(
+                secret_ref="db://omnigent-host-current",
+                generation=3,
+                token="current-token",
+            ),
+            HostCredentialGeneration(
+                secret_ref="db://omnigent-host-previous",
+                generation=2,
+                token="previous-token",
+            ),
+        )
+    )
+
+    identity = adapter.verify(
+        {"X-Omnigent-Runner-Tunnel-Token": "previous-token"}
+    )
+
+    assert identity.credential_generation == 2
+    assert "previous-token" not in repr(identity)
+
+
+def test_host_auth_revocation_prevents_new_connections() -> None:
+    adapter = OmnigentHostAuthAdapter(
+        credentials=(
+            HostCredentialGeneration(
+                secret_ref="db://omnigent-host-revoked",
+                generation=1,
+                token="revoked-token",
+                revoked=True,
+            ),
+            HostCredentialGeneration(
+                secret_ref="db://omnigent-host-current",
+                generation=2,
+                token="current-token",
+            ),
+        )
+    )
+
+    with pytest.raises(UpstreamHostAuthError) as excinfo:
+        adapter.verify({"X-Omnigent-Runner-Tunnel-Token": "revoked-token"})
+
+    assert excinfo.value.code == "host_credential_rejected"
+    assert excinfo.value.retryable is False
+    assert "revoked-token" not in str(excinfo.value)
+
+
+def test_embedded_auth_context_uses_service_side_generation() -> None:
+    context = verify_embedded_host_auth(
+        headers={"X-Omnigent-Runner-Tunnel-Token": "runner-token"},
+        config=_embedded_config(),
+        configured_token="runner-token",
+        credential_generation=7,
+        credential_secret_ref="db://omnigent-host-token",
+    )
+
+    assert context.credential_generation == 7
 
 
 @pytest.mark.asyncio
