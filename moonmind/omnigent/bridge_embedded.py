@@ -28,7 +28,10 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     validate_bridge_host_fields,
 )
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
+)
 from moonmind.omnigent.host_auth_adapter import (
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
@@ -200,6 +203,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error", status_code=422,
             )
         try:
+            await self._run_store.begin_embedded_runner_launch(
+                idempotency_key, host_id=row.omnigent_host_id
+            )
             runner_id = await self._host_channels.launch_runner(
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
@@ -209,7 +215,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             await self._run_store.bind_embedded_runner(
                 idempotency_key, host_id=row.omnigent_host_id, runner_id=runner_id
             )
-        except EmbeddedHostChannelError as exc:
+        except (EmbeddedHostChannelError, OmnigentIdempotencyError) as exc:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc

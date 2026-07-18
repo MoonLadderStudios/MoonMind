@@ -351,9 +351,14 @@ async def create_omnigent_session(
                     failure_class="system_error",
                     status_code=501,
                 )
-            return await embedded_facade.create_session(
+            response = await embedded_facade.create_session(
                 request=payload, binding=binding
             )
+            dispatch = await embedded_facade.dispatch_runner(
+                idempotency_key=binding.idempotency_key
+            )
+            response.setdefault("moonmind", {})["runner"] = dispatch
+            return response
         if proxy is None:
             raise OmnigentBridgeError(
                 "Omnigent proxy is unavailable for the configured bridge mode",

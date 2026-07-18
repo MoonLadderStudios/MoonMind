@@ -432,3 +432,73 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         )
     assert excinfo.value.status_code == 502
     assert excinfo.value.failure_class == "integration_error"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_persists_launch_intent_before_host_side_effect(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id="agent-1",
+        agent_name="Codex",
+        target_metadata={"hostType": "external", "workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+
+    class Channels:
+        async def launch_runner(self, **kwargs):
+            row = await store.get_existing("idem-embedded")
+            assert row.metadata_["embedded_runner_launch"]["state"] == "pending"
+            assert kwargs["host_id"] == "host-1"
+            return "runner-1"
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels()
+    )
+    result = await facade.dispatch_runner(idempotency_key="idem-embedded")
+    row = await store.get_existing("idem-embedded")
+
+    assert result == {"runnerId": "runner-1", "reused": False}
+    assert row.omnigent_runner_id == "runner-1"
+    assert row.metadata_["embedded_runner_launch"]["state"] == "launched"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_does_not_repeat_ambiguous_pending_launch(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    with pytest.raises(OmnigentBridgeError, match="durable reconciliation") as excinfo:
+        await facade.dispatch_runner(idempotency_key="idem-embedded")
+
+    assert excinfo.value.status_code == 503
