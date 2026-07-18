@@ -62,3 +62,32 @@ Failure cases archive bounded redacted diagnostics and lifecycle events. Before
 publication, the report gate scans the aggregate evidence; runners must also
 scan their raw logs, Temporal history export, screenshots, and archive manifest,
 and reference those scan results from `failures.lifecycle-and-redaction`.
+
+The credentialed entrypoint is `tools/run_omnigent_live_conformance.py`. It
+requires immutable image references and an already-enrolled OAuth profile:
+
+```bash
+MOONMIND_OMNIGENT_ACTION_COMMAND=/path/to/live-action-adapter \
+python tools/run_omnigent_live_conformance.py --mode all \
+  --server-image ghcr.io/omnigent-ai/omnigent-server@sha256:<digest> \
+  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+```
+
+The runner requires `MOONMIND_OMNIGENT_ACTION_COMMAND` to name an
+operator-provisioned adapter that performs the real live actions. The
+repository-owned `tools/omnigent_live_action.py` is a semantic test backend and
+is not accepted as an implicit live default. Action responses must include
+durable `evidenceRefs` using `https` or
+run-output-scoped `file` URLs. Each referenced JSON document uses
+`moonmind.omnigent.action-evidence/v1`, names the scenario and action, records
+`observed: true`, and repeats any returned durable identifiers. The runner
+resolves and secret-scans every document and rejects missing, malformed,
+mismatched, or opaque references. Bare success booleans are rejected as
+evidence.
+
+Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
+removes that project's containers and networks only; it intentionally never
+passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
+runner always attempts cleanup and evidence scanning, including after a failed
+startup or journey. `--mode static` covers restart and replay; `stock`,
+`ondemand`, and `failures` can be gated independently in provider environments.

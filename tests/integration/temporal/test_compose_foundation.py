@@ -499,8 +499,8 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     host_service = services["omnigent-host"]
     assert host_service["profiles"] == ["omnigent-host"]
     assert host_service["image"] == (
-        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
     assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
     assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
@@ -536,8 +536,8 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
     assert host_service["profiles"] == ["omnigent-host-claude"]
     assert host_service["hostname"] == "omnigent-host-claude"
     assert host_service["image"] == (
-        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
     assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
     assert host_service["user"] == "1000:1000"
@@ -602,8 +602,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     compose = _load_compose()
     host_service = compose["services"]["omnigent-host-codex"]
     expected_image = (
-        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
-        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+        "${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}}"
     )
 
     assert host_service["profiles"] == ["omnigent-host-codex"]
@@ -787,8 +787,8 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
 
     omnigent_env = _env_map(omnigent_service["environment"])
     assert omnigent_service["image"] == (
-        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
-        "${OMNIGENT_IMAGE_TAG:-latest}"
+        "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
+        "${OMNIGENT_IMAGE_TAG:-latest}}"
     )
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
