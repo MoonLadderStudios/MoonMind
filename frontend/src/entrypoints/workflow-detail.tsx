@@ -2549,6 +2549,24 @@ async function postBridgeSessionControl(
   if (!resp.ok) throw buildObservabilityRequestError(resp.status);
 }
 
+async function resolveBridgeElicitation(
+  apiBase: string,
+  providerSessionRef: string,
+  elicitationId: string,
+  decision: 'approved' | 'rejected',
+): Promise<void> {
+  const resp = await fetch(joinApiBasePath(
+    apiBase,
+    `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}/elicitations/${encodeURIComponent(elicitationId)}/resolve`,
+  ), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+}
+
 async function fetchBridgeSessionEvents(
   apiBase: string,
   bridgeSessionId: string,
@@ -5804,6 +5822,25 @@ function BridgeSessionLogsPanel({
   };
   const canSend = Boolean(projection.providerSessionRef && projection.capabilities.sendFollowUp && !isTerminal);
   const canInterrupt = Boolean(projection.providerSessionRef && projection.capabilities.interruptTurn && !isTerminal);
+  const canClear = Boolean(projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
+  const canCancel = Boolean(projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
+  const canResolveElicitation = Boolean(
+    projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
+  );
+  const pendingElicitations = useMemo(() => {
+    if (!canResolveElicitation) return [];
+    const resolvedIds = new Set(logContent
+      .filter((row) => ['approval_resolved', 'approval_granted', 'approval_denied', 'intervention_resolved'].includes(row.kind ?? ''))
+      .map((row) => String(row.metadata.elicitationId ?? row.metadata.requestId ?? '').trim())
+      .filter(Boolean));
+    const pending = new Map<string, string>();
+    for (const row of logContent) {
+      if (!['approval_requested', 'intervention_requested'].includes(row.kind ?? '')) continue;
+      const id = String(row.metadata.elicitationId ?? row.metadata.requestId ?? '').trim();
+      if (id && !resolvedIds.has(id)) pending.set(id, row.text || 'Operator decision requested.');
+    }
+    return Array.from(pending, ([id, text]) => ({ id, text }));
+  }, [canResolveElicitation, logContent]);
   const submitMessage = async () => {
     const text = message.trim();
     if (!text || !projection.providerSessionRef || !canSend) return;
@@ -5831,6 +5868,20 @@ function BridgeSessionLogsPanel({
     if (!projection.providerSessionRef || !canInterrupt) return;
     setControlError(null); setControlBusy(true);
     try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, { type: 'session.interrupt' }); }
+    catch (error) { setControlError((error as Error).message); }
+    finally { setControlBusy(false); }
+  };
+  const runControl = async (payload: Record<string, unknown>) => {
+    if (!projection.providerSessionRef) return;
+    setControlError(null); setControlBusy(true);
+    try { await postBridgeSessionControl(apiBase, projection.providerSessionRef, payload); }
+    catch (error) { setControlError((error as Error).message); }
+    finally { setControlBusy(false); }
+  };
+  const resolveElicitation = async (elicitationId: string, decision: 'approved' | 'rejected') => {
+    if (!projection.providerSessionRef || !canResolveElicitation) return;
+    setControlError(null); setControlBusy(true);
+    try { await resolveBridgeElicitation(apiBase, projection.providerSessionRef, elicitationId, decision); }
     catch (error) { setControlError((error as Error).message); }
     finally { setControlBusy(false); }
   };
@@ -5868,7 +5919,7 @@ function BridgeSessionLogsPanel({
           </div>
         )}
       </div>
-      {(canSend || canInterrupt || optimisticMessages.length > 0) ? (
+      {(canSend || canInterrupt || canClear || canCancel || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
         <section className="stack chat-session-controls" aria-label="Bridge session controls">
           <h3>Session Controls</h3>
           {controlError ? <div className="notice error">{controlError}</div> : null}
@@ -5879,7 +5930,18 @@ function BridgeSessionLogsPanel({
             </div>
           ))}
           {canSend ? <><label htmlFor="bridge-follow-up">Follow-up message</label><textarea id="bridge-follow-up" value={message} onChange={(event) => setMessage(event.target.value)} disabled={controlBusy} rows={3} /><button type="button" onClick={() => void submitMessage()} disabled={controlBusy || !message.trim()}>Send follow-up</button></> : null}
+          {pendingElicitations.map((elicitation) => (
+            <section key={elicitation.id} className="stack" aria-label={`Pending operator request ${elicitation.id}`}>
+              <p>{elicitation.text}</p>
+              <div className="button-group">
+                <button type="button" onClick={() => void resolveElicitation(elicitation.id, 'approved')} disabled={controlBusy}>Approve</button>
+                <button type="button" className="secondary" onClick={() => void resolveElicitation(elicitation.id, 'rejected')} disabled={controlBusy}>Reject</button>
+              </div>
+            </section>
+          ))}
           {canInterrupt ? <button type="button" className="secondary" onClick={() => void interrupt()} disabled={controlBusy}>Interrupt turn</button> : null}
+          {canClear ? <button type="button" className="secondary" onClick={() => void runControl({ type: 'clear_session' })} disabled={controlBusy}>Clear session</button> : null}
+          {canCancel ? <button type="button" className="danger" onClick={() => void runControl({ type: 'session.cancel' })} disabled={controlBusy}>Cancel session</button> : null}
         </section>
       ) : null}
     </div>

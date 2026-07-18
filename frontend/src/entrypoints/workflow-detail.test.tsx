@@ -8069,6 +8069,75 @@ describe('Workflow Detail Entrypoint', () => {
     }
   });
 
+  it('executes advertised bridge elicitation, clear, and cancel controls and preserves durable outcomes', async () => {
+    window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/chat?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId: 'brs-interventions', status: 'running', providerSessionRef: 'provider-session',
+        capabilities: { resolveElicitation: true, clearSession: true, cancelSession: true },
+      }) } as Response);
+      if (url.includes('/bridge-sessions/brs-interventions/events')) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-interventions',
+        items: [
+          { sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'session', kind: 'approval_requested', text: 'Allow the provider action?', metadata: { elicitationId: 'el-pending' } },
+          { sequence: 2, timestamp: '2026-07-09T00:00:02Z', stream: 'session', kind: 'approval_requested', text: 'Previously resolved request.', metadata: { elicitationId: 'el-resolved' } },
+          { sequence: 3, timestamp: '2026-07-09T00:00:03Z', stream: 'session', kind: 'approval_resolved', text: 'Previously approved by operator.', metadata: { elicitationId: 'el-resolved' } },
+        ], after: 0, nextCursor: '3', hasMore: false, terminal: false, latestSequence: 3,
+      }) } as Response);
+      if (url.includes('/omnigent/v1/sessions/provider-session/')) return Promise.resolve({ ok: true, json: async () => ({ ok: true }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      expect(await screen.findByRole('region', { name: 'Pending operator request el-pending' })).toBeTruthy();
+      expect(screen.getAllByText('Previously approved by operator.').length).toBeGreaterThan(0);
+      expect(screen.queryByRole('region', { name: 'Pending operator request el-resolved' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
+        String(url).endsWith('/omnigent/v1/sessions/provider-session/elicitations/el-pending/resolve') &&
+        JSON.parse(String((init as RequestInit).body)).decision === 'approved')).toBe(true));
+      fireEvent.click(screen.getByRole('button', { name: 'Clear session' }));
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
+        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
+        JSON.parse(String((init as RequestInit).body)).type === 'clear_session')).toBe(true));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
+        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
+        JSON.parse(String((init as RequestInit).body)).type === 'session.cancel')).toBe(true));
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
+  it('does not expose bridge elicitation, clear, or cancel actions unless advertised', async () => {
+    window.history.pushState({}, 'Bridge Denied Intervention Test', '/workflows/test-123/chat?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({ bridgeSessionId: 'brs-denied', status: 'running', providerSessionRef: 'provider-session', capabilities: {} }) } as Response);
+      if (url.includes('/bridge-sessions/brs-denied/events')) return Promise.resolve({ ok: true, json: async () => ({ schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-denied', items: [{ sequence: 1, timestamp: '2026-07-09T00:00:01Z', stream: 'session', kind: 'approval_requested', text: 'Request without capability.', metadata: { elicitationId: 'el-denied' } }], after: 0, nextCursor: '1', hasMore: false, terminal: false, latestSequence: 1 }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      expect((await screen.findAllByText('Request without capability.')).length).toBeGreaterThan(0);
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
   it('renders artifact download link using explicit downloadUrl when present', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const mockExecution = {
