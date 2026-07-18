@@ -85,6 +85,7 @@ class LiveRunner:
         self.output_dir = output_dir
         self.env = env
         self.logs: list[Path] = []
+        self.evidence_refs: list[str] = []
         self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_STATE", str(output_dir / "backend-state.json"))
         self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_EVIDENCE_DIR", str(output_dir))
 
@@ -114,21 +115,27 @@ class LiveRunner:
         of this repository while making the runner own ordering and conclusions.
         """
         configured = self.env.get("MOONMIND_OMNIGENT_ACTION_COMMAND", "").strip()
-        command = shlex.split(configured) if configured else [
-            sys.executable, str(REPO_ROOT / "tools/omnigent_live_action.py")
-        ]
+        if not configured:
+            raise ConformanceContractError(
+                "MOONMIND_OMNIGENT_ACTION_COMMAND must name a real live action adapter"
+            )
+        command = shlex.split(configured)
         command.extend([scenario, action, json.dumps(inputs, separators=(",", ":"))])
         result = subprocess.run(
             command, cwd=REPO_ROOT, env=self.env, capture_output=True,
-            text=True, check=False,
+            text=True, encoding="utf-8", check=False,
         )
+        stdout, stderr = result.stdout, result.stderr
         log_path = self.output_dir / f"{scenario}-{action.replace('.', '-')}.log"
-        log_path.write_text(result.stderr, encoding="utf-8")
+        log_path.write_text(
+            f"--- STDOUT ---\n{stdout}\n--- STDERR ---\n{stderr}",
+            encoding="utf-8",
+        )
         self.logs.append(log_path)
         if result.returncode:
             raise RuntimeError(f"{scenario}/{action} failed; see {log_path}")
         try:
-            payload = json.loads(result.stdout)
+            payload = json.loads(stdout)
         except (TypeError, json.JSONDecodeError) as exc:
             raise ConformanceContractError(f"{scenario}/{action} returned invalid JSON") from exc
         if not isinstance(payload, dict) or payload.get("ok") is not True:
@@ -141,6 +148,7 @@ class LiveRunner:
                 f"{scenario}/{action} did not return durable evidence refs"
             )
         observations = [self._resolve_evidence_ref(ref) for ref in evidence]
+        self.evidence_refs.extend(evidence)
         if not any(
             item.get("scenario") == scenario
             and item.get("action") == action
@@ -155,6 +163,13 @@ class LiveRunner:
             if key in {"leaseId", "hostId", "workflowId", "agentRunId", "sessionId"}
             and value
         }
+        state = payload.get("state")
+        if isinstance(state, dict):
+            returned_ids.update({
+                key: value for key, value in state.items()
+                if key in {"leaseId", "hostId", "workflowId", "agentRunId", "sessionId"}
+                and value
+            })
         for item in observations:
             evidence_ids = item.get("identifiers", {})
             if evidence_ids and (
@@ -164,6 +179,13 @@ class LiveRunner:
                 raise ConformanceContractError(
                     f"{scenario}/{action} evidence identifiers do not match the response"
                 )
+        durable = payload.get("durableEvidence")
+        if durable is not None and not any(
+            item.get("durableEvidence") == durable for item in observations
+        ):
+            raise ConformanceContractError(
+                f"{scenario}/{action} durable failure claims are not bound to evidence"
+            )
         return payload
 
     def _resolve_evidence_ref(self, ref: str) -> dict[str, object]:
@@ -176,7 +198,7 @@ class LiveRunner:
                 if path != allowed and allowed not in path.parents:
                     raise ConformanceContractError("file evidence is outside the run output directory")
                 raw = path.read_text(encoding="utf-8")
-            elif parsed.scheme in {"http", "https"}:
+            elif parsed.scheme == "https":
                 with urllib.request.urlopen(ref, timeout=30) as response:
                     raw = response.read().decode("utf-8")
             else:
@@ -197,6 +219,10 @@ class LiveRunner:
         return path
 
     def stock(self, images: dict[str, str]) -> None:
+        self.run(
+            "stock-up",
+            self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
+        )
         observed = {route: self.action("stock", route) for route in STOCK_ROUTES}
         inventory = self.action("stock", "inventory")
         self.write_evidence("stock", {
@@ -231,7 +257,10 @@ class LiveRunner:
         )
         if not junit.is_file():
             raise RuntimeError(f"{mode} did not produce pytest outcome evidence")
-        root = ET.parse(junit).getroot()
+        try:
+            root = ET.parse(junit).getroot()
+        except ET.ParseError as exc:
+            raise RuntimeError(f"failed to parse pytest JUnit XML: {exc}") from exc
         suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
         totals = {key: sum(int(s.get(key, "0")) for s in suites) for key in ("tests", "failures", "errors", "skipped")}
         if totals["tests"] != 1 or any(totals[key] for key in ("failures", "errors", "skipped")):
@@ -342,7 +371,13 @@ def main() -> int:
     output_dir = args.output_dir if args.output_dir.is_absolute() else REPO_ROOT / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    env.update({"OMNIGENT_IMAGE_REF": args.server_image, "OMNIGENT_HOST_IMAGE_REF": args.host_image})
+    env.update({
+        "OMNIGENT_IMAGE_REF": args.server_image,
+        "OMNIGENT_HOST_IMAGE_REF": args.host_image,
+        # The server uses these values when it launches an on-demand host.
+        "OMNIGENT_HOST_IMAGE": args.host_image,
+        "OMNIGENT_HOST_IMAGE_TAG": "",
+    })
     runner = LiveRunner(output_dir=output_dir, env=env)
     selected = tuple(LIVE_CASES) if args.mode == "all" else (args.mode,)
     passed: set[str] = set()
@@ -358,9 +393,9 @@ def main() -> int:
                     runner.ondemand()
                 else:
                     runner.failures()
-                passed.update(LIVE_CASES[mode])
             finally:
                 runner.cleanup(mode)
+            passed.update(LIVE_CASES[mode])
     except (RuntimeError, ConformanceContractError) as exc:
         failure = str(exc)
     finally:
@@ -373,7 +408,18 @@ def main() -> int:
     profile = load_profile(PROFILE)
     requested = set().union(*(LIVE_CASES[item] for item in selected))
     results = []
-    refs = tuple(str(path.relative_to(REPO_ROOT)) for path in runner.logs) or (str(output_dir.relative_to(REPO_ROOT)),)
+    def report_ref(path: Path) -> str:
+        try:
+            return str(path.relative_to(REPO_ROOT))
+        except ValueError:
+            return path.resolve().as_uri()
+
+    refs = tuple(dict.fromkeys(
+        [report_ref(path) for path in runner.logs]
+        + runner.evidence_refs
+        + [report_ref(Path(value)) for env_name in SCENARIO_EVIDENCE_ENV.values()
+           if (value := runner.env.get(env_name))]
+    )) or (report_ref(output_dir),)
     for item in profile["cases"]:
         case_id = item["id"]
         status = "passed" if case_id in passed else "failed" if case_id in requested else "skipped"

@@ -58,6 +58,7 @@ def test_stock_executes_every_route_and_derives_evidence(tmp_path, monkeypatch):
         "ok": True, "protocolVersion": "v1", "hostArchitecture": "amd64",
         "agents": ["codex"], "capabilities": ["events"],
     })
+    monkeypatch.setattr(runner, "run", lambda name, command: tmp_path / f"{name}.log")
     monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
     runner.stock({"server": "s@sha256:x", "host": "h@sha256:y"})
     evidence = json.loads((tmp_path / "stock-evidence.json").read_text())
@@ -110,8 +111,8 @@ def test_scan_rejects_secret_like_live_evidence(tmp_path):
     runner.logs.append(log)
     try:
         runner.scan()
-    except module.ConformanceContractError:
-        pass
+    except module.ConformanceContractError as exc:
+        assert "secret-like material" in str(exc)
     else:
         raise AssertionError("secret-like evidence was accepted")
 
@@ -201,8 +202,11 @@ def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch
     for action in ("execute", "replay"):
         try:
             runner.action("static", action)
-        except module.ConformanceContractError:
-            pass
+        except module.ConformanceContractError as exc:
+            if action == "execute":
+                assert "evidence did not describe the observed action" in str(exc)
+            else:
+                assert "unreachable or malformed" in str(exc)
         else:
             raise AssertionError("invalid durable evidence was accepted")
 
@@ -227,7 +231,9 @@ def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
 
 def test_repository_backend_persists_static_replay_and_rejects_wrong_ids(tmp_path):
     module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    runner = module.LiveRunner(output_dir=tmp_path, env={
+        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
+    })
     executed = runner.action("static", "execute")
     ids = {key: executed[key] for key in ("workflowId", "agentRunId", "sessionId")}
     assert runner.action("static", "replay", **ids)["durable_replay"] is True
@@ -241,7 +247,9 @@ def test_repository_backend_persists_static_replay_and_rejects_wrong_ids(tmp_pat
 
 def test_repository_backend_enforces_lifecycle_and_failure_projection(tmp_path):
     module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    runner = module.LiveRunner(output_dir=tmp_path, env={
+        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
+    })
     try:
         runner.action("ondemand", "host_launched")
     except RuntimeError:

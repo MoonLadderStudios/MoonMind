@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -86,7 +87,7 @@ def execute(scenario: str, action: str, inputs: dict, state_path: Path, evidence
                                      "terminalProjected": True, "redacted": True}
     elif scenario == "stock":
         if action == "inventory":
-            result.update({"protocolVersion": "v1", "hostArchitecture": os.uname().machine,
+            result.update({"protocolVersion": "v1", "hostArchitecture": platform.machine(),
                            "agents": ["codex-native"], "capabilities": ["events", "resources", "control"]})
         # Route success is recorded only after the live runner has brought up
         # its digest-pinned stock services; this backend owns result semantics.
@@ -99,6 +100,8 @@ def execute(scenario: str, action: str, inputs: dict, state_path: Path, evidence
     evidence_payload = {"schemaVersion": "moonmind.omnigent.action-evidence/v1",
                         "scenario": scenario, "action": action, "observed": True,
                         "identifiers": dict(ids), "lifecycleIndex": len(actions) - 1}
+    if "durableEvidence" in result:
+        evidence_payload["durableEvidence"] = result["durableEvidence"]
     evidence.write_text(json.dumps(evidence_payload, indent=2) + "\n", encoding="utf-8")
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")

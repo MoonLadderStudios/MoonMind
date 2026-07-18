@@ -67,22 +67,23 @@ The credentialed entrypoint is `tools/run_omnigent_live_conformance.py`. It
 requires immutable image references and an already-enrolled OAuth profile:
 
 ```bash
+MOONMIND_OMNIGENT_ACTION_COMMAND=/path/to/live-action-adapter \
 python tools/run_omnigent_live_conformance.py --mode all \
   --server-image ghcr.io/omnigent-ai/omnigent-server@sha256:<digest> \
   --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
 ```
 
-By default the runner uses the repository-owned
-`tools/omnigent_live_action.py` client. The provisioned test environment sets
-`MOONMIND_OMNIGENT_HARNESS_URL` and `MOONMIND_OMNIGENT_HARNESS_TOKEN`; the
-harness action responses must include durable `evidenceRefs` using `https` or
+The runner requires `MOONMIND_OMNIGENT_ACTION_COMMAND` to name an
+operator-provisioned adapter that performs the real live actions. The
+repository-owned `tools/omnigent_live_action.py` is a semantic test backend and
+is not accepted as an implicit live default. Action responses must include
+durable `evidenceRefs` using `https` or
 run-output-scoped `file` URLs. Each referenced JSON document uses
 `moonmind.omnigent.action-evidence/v1`, names the scenario and action, records
 `observed: true`, and repeats any returned durable identifiers. The runner
 resolves and secret-scans every document and rejects missing, malformed,
-mismatched, or opaque references. A custom portable
-client may be selected with `MOONMIND_OMNIGENT_ACTION_COMMAND`. Bare success
-booleans are rejected as evidence.
+mismatched, or opaque references. Bare success booleans are rejected as
+evidence.
 
 Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
 removes that project's containers and networks only; it intentionally never

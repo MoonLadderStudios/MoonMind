@@ -50,7 +50,8 @@ _REQUIRED_FAILURES = {
 }
 _ONDEMAND_ORDER = (
     "lease_acquired", "host_launched", "preflight_ready", "session_bound",
-    "executed", "resources_harvested", "host_removed",
+    "executed", "resources_harvested", "partial_start_retry", "janitor_recovery",
+    "host_removed",
     "workflow_detail_reloaded", "lease_released",
 )
 

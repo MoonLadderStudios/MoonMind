@@ -466,8 +466,8 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
 
     omnigent_env = _env_map(omnigent_service.get("environment"))
     assert omnigent_service["image"] == (
-        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
-        "${OMNIGENT_IMAGE_TAG:-latest}"
+        "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
+        "${OMNIGENT_IMAGE_TAG:-latest}}"
     )
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
