@@ -27,6 +27,17 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
 _MAX_OMNIGENT_CONTENT_BYTES = 10 * 1024 * 1024
+
+
+def _content_limit_reason(content: bytes) -> str | None:
+    if len(content) <= _MAX_OMNIGENT_CONTENT_BYTES:
+        return None
+    return (
+        f"content exceeds the {_MAX_OMNIGENT_CONTENT_BYTES}-byte harvest limit "
+        f"({len(content)} bytes)"
+    )
+
+
 _MAX_OMNIGENT_PREVIEW_BYTES = 256 * 1024
 _OMNIGENT_HARVEST_TIMEOUT_SECONDS = 30
 _OMNIGENT_HARVEST_MAX_ATTEMPTS = 3
@@ -423,15 +434,32 @@ def build_omnigent_terminal_refs(
             else "Omnigent session failed"
         ),
     )
+    required_evidence_failed = (
+        terminal_status == "completed"
+        and capture_bundle.resource_harvest_failure_class is not None
+    )
     return {
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
         "resourceProjection": dict(capture_bundle.resource_projection),
-        "failureClass": failure_class_for_terminal_status(terminal_status),
-        "failureCode": final_snapshot.get("providerErrorCode")
-        or final_snapshot.get("failureCode"),
-        "summary": summary,
+        "failureClass": (
+            capture_bundle.resource_harvest_failure_class
+            if required_evidence_failed
+            else failure_class_for_terminal_status(terminal_status)
+        ),
+        "failureCode": (
+            "omnigent_required_resource_evidence_missing"
+            if required_evidence_failed
+            else final_snapshot.get("providerErrorCode")
+            or final_snapshot.get("failureCode")
+        ),
+        "summary": (
+            "Required Omnigent resource evidence was missing after session "
+            "completion"
+            if required_evidence_failed
+            else summary
+        ),
     }
 
 
@@ -577,6 +605,9 @@ class BridgeResourceHarvester:
                     }
                 )
                 continue
+            if unavailable := _content_limit_reason(content):
+                harvested.append({"path": path, "unavailable": unavailable})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.changed_files/{path}",
@@ -632,6 +663,9 @@ class BridgeResourceHarvester:
                     }
                 )
                 continue
+            if unavailable := _content_limit_reason(content):
+                harvested.append({"path": path, "unavailable": unavailable})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.workspace_files/{path}",
@@ -666,6 +700,9 @@ class BridgeResourceHarvester:
                 )
                 self._manifest["patchUnavailable"] = True
                 return
+            if unavailable := _content_limit_reason(diff):
+                harvested.append({"path": path, "unavailable": unavailable})
+                continue
             ref = await self._artifact_gateway.write_bytes(
                 request=self._request,
                 name=f"output.omnigent.workspace_diffs/{path}.diff",
@@ -718,6 +755,15 @@ class BridgeResourceHarvester:
                             exc,
                             fallback="session file content unavailable",
                         ),
+                    }
+                )
+                continue
+            if unavailable := _content_limit_reason(content):
+                harvested.append(
+                    {
+                        "fileId": file_id,
+                        "filename": filename,
+                        "unavailable": unavailable,
                     }
                 )
                 continue
@@ -805,6 +851,9 @@ async def _harvest_changed_files(
                 }
             )
             continue
+        if unavailable := _content_limit_reason(content):
+            harvested.append({"path": path, "unavailable": unavailable})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.changed_files/{path}",
@@ -869,6 +918,9 @@ async def _harvest_workspace_files(
                 }
             )
             continue
+        if unavailable := _content_limit_reason(content):
+            harvested.append({"path": path, "unavailable": unavailable})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.workspace_files/{path}",
@@ -909,6 +961,9 @@ async def _harvest_workspace_diffs(
             )
             manifest["patchUnavailable"] = True
             return
+        if unavailable := _content_limit_reason(diff):
+            harvested.append({"path": path, "unavailable": unavailable})
+            continue
         ref = await artifact_gateway.write_bytes(
             request=request,
             name=f"output.omnigent.workspace_diffs/{path}.diff",
@@ -965,6 +1020,15 @@ async def _harvest_session_files(
                         exc,
                         fallback="session file content unavailable",
                     ),
+                }
+            )
+            continue
+        if unavailable := _content_limit_reason(content):
+            harvested.append(
+                {
+                    "fileId": file_id,
+                    "filename": filename,
+                    "unavailable": unavailable,
                 }
             )
             continue
@@ -1162,14 +1226,14 @@ def _reconcile_changed_file_evidence(manifest: dict[str, Any]) -> None:
 
     diffs_by_path = {
         str(item.get("path") or ""): str(item.get("artifactRef") or "")
-        for item in manifest.get("workspaceDiffs", [])
+        for item in (manifest.get("workspaceDiffs") or [])
         if isinstance(item, dict) and item.get("path") and item.get("artifactRef")
     }
     unavailable = str(
         manifest.get("workspaceDiffsUnavailable")
         or "No diff artifact was published for this changed file."
     )
-    for changed_file in manifest.get("changedFiles", []):
+    for changed_file in (manifest.get("changedFiles") or []):
         if not isinstance(changed_file, dict) or not changed_file.get("path"):
             continue
         diff_ref = diffs_by_path.get(str(changed_file["path"]))
@@ -1195,7 +1259,7 @@ def _associate_resource_events(
         sequence = event.get("sequence")
         if path and isinstance(sequence, int):
             sequence_by_path.setdefault((event_type, path), sequence)
-    for changed_file in manifest.get("changedFiles", []):
+    for changed_file in (manifest.get("changedFiles") or []):
         if not isinstance(changed_file, dict):
             continue
         sequence = sequence_by_path.get(
@@ -1203,7 +1267,7 @@ def _associate_resource_events(
         )
         if sequence is not None:
             changed_file["sourceEventSequence"] = sequence
-    for session_file in manifest.get("sessionFiles", []):
+    for session_file in (manifest.get("sessionFiles") or []):
         if not isinstance(session_file, dict):
             continue
         sequence = sequence_by_path.get(
@@ -1288,8 +1352,10 @@ def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
                     if unavailable_reason
                     else "pending"
                 ),
-                "previewAvailable": bool(artifact_ref),
-                "downloadAvailable": bool(artifact_ref),
+                "previewAvailable": bool(artifact_ref)
+                and not artifact_ref.startswith("artifact://"),
+                "downloadAvailable": bool(artifact_ref)
+                and not artifact_ref.startswith("artifact://"),
             }
             for key in ("contentType", "sizeBytes", "sourceEventSequence"):
                 if item.get(key) is not None:

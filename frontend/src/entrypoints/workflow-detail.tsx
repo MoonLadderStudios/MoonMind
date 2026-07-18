@@ -2529,8 +2529,9 @@ type BridgeResource = BridgeResourceProjection['groups'][number]['resources'][nu
 function chatBlockEventSequences(block: ProjectedChatBlock): Set<number> {
   const sequences = new Set<number>();
   for (const eventId of block.sourceEventIds) {
-    const match = eventId.match(/(?::seq:|:)(\d+)(?::|$)/);
-    if (match?.[1]) sequences.add(Number(match[1]));
+    const match = eventId.match(/^(\d+)-|(?::seq:|:)(\d+)(?::|$)/);
+    const sequence = match?.[1] ?? match?.[2];
+    if (sequence) sequences.add(Number(sequence));
   }
   return sequences;
 }
