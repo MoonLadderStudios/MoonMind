@@ -654,8 +654,12 @@ def _terminal_envelope(row: Any) -> BridgeTerminalEnvelope | None:
 
 
 def _projection_capabilities(row: Any) -> dict[str, bool]:
-    metadata = dict(getattr(row, "metadata_", None) or {})
-    raw = metadata.get("interventionCapabilities", metadata.get("capabilities", {}))
+    metadata = getattr(row, "metadata_", None)
+    if not isinstance(metadata, dict):
+        return {}
+    raw = metadata.get("interventionCapabilities")
+    if not isinstance(raw, dict):
+        raw = metadata.get("capabilities")
     if not isinstance(raw, dict):
         return {}
     return {

@@ -3416,29 +3416,29 @@ function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): Timeline
   };
 
   if (row.kind === 'summary_published') {
-    addLink('Open summary artifact', row.metadata.summaryRef ?? row.metadata.artifactRef);
+    addLink('Open summary artifact', row.metadata?.summaryRef ?? row.metadata?.artifactRef);
   }
   if (row.kind === 'checkpoint_published') {
-    addLink('Open checkpoint artifact', row.metadata.checkpointRef ?? row.metadata.artifactRef);
+    addLink('Open checkpoint artifact', row.metadata?.checkpointRef ?? row.metadata?.artifactRef);
   }
   if (row.kind === 'session_cleared' || row.kind === 'session_reset_boundary') {
     addLink(
       'Open control event artifact',
-      row.metadata.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata.artifactRef : null),
+      row.metadata?.controlEventRef ?? (row.kind === 'session_cleared' ? row.metadata?.artifactRef : null),
     );
     addLink(
       'Open reset boundary artifact',
-      row.metadata.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata.artifactRef : null),
+      row.metadata?.resetBoundaryRef ?? (row.kind === 'session_reset_boundary' ? row.metadata?.artifactRef : null),
     );
   }
-  if (row.metadata.terminalStatus) {
-    addLink('Open diagnostics', row.metadata.diagnosticsRef);
-    addLink('Open capture manifest', row.metadata.captureManifestRef);
-    addLink('Open initial snapshot', row.metadata.initialSnapshotRef);
-    addLink('Open final snapshot', row.metadata.finalSnapshotRef);
-    addLink('Open raw events', row.metadata.rawEventsRef);
-    addLink('Open normalized events', row.metadata.normalizedEventsRef);
-    addLink('Open external state', row.metadata.externalStateRef);
+  if (row.metadata?.terminalStatus) {
+    addLink('Open diagnostics', row.metadata?.diagnosticsRef);
+    addLink('Open capture manifest', row.metadata?.captureManifestRef);
+    addLink('Open initial snapshot', row.metadata?.initialSnapshotRef);
+    addLink('Open final snapshot', row.metadata?.finalSnapshotRef);
+    addLink('Open raw events', row.metadata?.rawEventsRef);
+    addLink('Open normalized events', row.metadata?.normalizedEventsRef);
+    addLink('Open external state', row.metadata?.externalStateRef);
   }
 
   return links;
@@ -5646,6 +5646,7 @@ function BridgeSessionLogsPanel({
   projection,
   optimisticMessages,
   setOptimisticMessages,
+  actionsEnabled = false,
 }: {
   apiBase: string;
   bridgeSessionId: string;
@@ -5653,6 +5654,7 @@ function BridgeSessionLogsPanel({
   projection: BridgeSessionProjection;
   optimisticMessages: OptimisticChatSessionMessage[];
   setOptimisticMessages: Dispatch<SetStateAction<OptimisticChatSessionMessage[]>>;
+  actionsEnabled?: boolean;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
@@ -5793,6 +5795,11 @@ function BridgeSessionLogsPanel({
     };
     es.onmessage = handleBridgeEvent;
     es.addEventListener('bridge_event', handleBridgeEvent);
+    es.addEventListener('terminal', () => {
+      if (cancelled) return;
+      setViewerState('ended');
+      void eventsQuery.refetch();
+    });
     es.onerror = () => {
       es.close();
       esRef.current = null;
@@ -5820,23 +5827,23 @@ function BridgeSessionLogsPanel({
     if (logContent.length === 0) return;
     copyTextToClipboard(logContent.map((line) => getCopyableRowText(line)).join('\n'));
   };
-  const canSend = Boolean(projection.providerSessionRef && projection.capabilities.sendFollowUp && !isTerminal);
-  const canInterrupt = Boolean(projection.providerSessionRef && projection.capabilities.interruptTurn && !isTerminal);
-  const canClear = Boolean(projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
-  const canCancel = Boolean(projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
+  const canSend = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.sendFollowUp && !isTerminal);
+  const canInterrupt = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.interruptTurn && !isTerminal);
+  const canClear = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
+  const canCancel = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
   const canResolveElicitation = Boolean(
-    projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
+    actionsEnabled && projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
   );
   const pendingElicitations = useMemo(() => {
     if (!canResolveElicitation) return [];
     const resolvedIds = new Set(logContent
       .filter((row) => ['approval_resolved', 'approval_granted', 'approval_denied', 'intervention_resolved'].includes(row.kind ?? ''))
-      .map((row) => String(row.metadata.elicitationId ?? row.metadata.requestId ?? '').trim())
+      .map((row) => String(row.metadata?.elicitationId ?? row.metadata?.requestId ?? '').trim())
       .filter(Boolean));
     const pending = new Map<string, string>();
     for (const row of logContent) {
       if (!['approval_requested', 'intervention_requested'].includes(row.kind ?? '')) continue;
-      const id = String(row.metadata.elicitationId ?? row.metadata.requestId ?? '').trim();
+      const id = String(row.metadata?.elicitationId ?? row.metadata?.requestId ?? '').trim();
       if (id && !resolvedIds.has(id)) pending.set(id, row.text || 'Operator decision requested.');
     }
     return Array.from(pending, ([id, text]) => ({ id, text }));
@@ -5853,7 +5860,7 @@ function BridgeSessionLogsPanel({
     setMessage(''); setControlError(null); setControlBusy(true);
     try {
       await postBridgeSessionControl(apiBase, projection.providerSessionRef, {
-        type: 'session.input', message: text, clientEventKey,
+        type: 'message', message: text, clientEventKey,
       });
       setOptimisticMessages((items) => items.map((item) => item.clientEventKey === clientEventKey
         ? { ...item, status: 'delivery_unknown' } : item));
@@ -5940,8 +5947,8 @@ function BridgeSessionLogsPanel({
             </section>
           ))}
           {canInterrupt ? <button type="button" className="secondary" onClick={() => void interrupt()} disabled={controlBusy}>Interrupt turn</button> : null}
-          {canClear ? <button type="button" className="secondary" onClick={() => void runControl({ type: 'clear_session' })} disabled={controlBusy}>Clear session</button> : null}
-          {canCancel ? <button type="button" className="danger" onClick={() => void runControl({ type: 'session.cancel' })} disabled={controlBusy}>Cancel session</button> : null}
+          {canClear ? <button type="button" className="secondary" onClick={() => { if (window.confirm('Clear this bridge session?')) void runControl({ type: 'clear_session' }); }} disabled={controlBusy}>Clear session</button> : null}
+          {canCancel ? <button type="button" className="danger" onClick={() => { if (window.confirm('Cancel this bridge session?')) void runControl({ type: 'session.cancel' }); }} disabled={controlBusy}>Cancel session</button> : null}
         </section>
       ) : null}
     </div>
@@ -7653,6 +7660,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     execution &&
       detailSubroute === 'chat' &&
       !resolvedAgentRunId &&
+      !explicitBridgeSessionId &&
       workflowId,
   );
   const bridgeResolutionQuery = useQuery({
@@ -7669,7 +7677,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   });
   const resolvedBridgeSessionId =
     explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
-  const resolvedBridgeProjection: BridgeSessionProjection = bridgeResolutionQuery.data ?? {
+  const resolvedBridgeProjection: BridgeSessionProjection = (
+    bridgeResolutionQuery.data?.bridgeSessionId === resolvedBridgeSessionId
+      ? bridgeResolutionQuery.data
+      : undefined
+  ) ?? {
     bridgeSessionId: resolvedBridgeSessionId,
     status: execution?.status ?? undefined,
     capabilities: {},
@@ -8726,6 +8738,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     projection={resolvedBridgeProjection}
                     optimisticMessages={chatOptimisticMessages}
                     setOptimisticMessages={setChatOptimisticMessages}
+                    actionsEnabled={actionsOn}
                   />
                 ) : bridgeResolutionQuery.isLoading ? (
                   <p className="small">Checking bridge session evidence.</p>

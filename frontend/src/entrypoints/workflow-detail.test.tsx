@@ -8030,7 +8030,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     try {
-      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
       const input = await screen.findByLabelText('Follow-up message');
       fireEvent.change(input, { target: { value: 'Continue with the fix.' } });
       fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
@@ -8058,7 +8058,7 @@ describe('Workflow Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
     try {
-      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
       fireEvent.change(await screen.findByLabelText('Follow-up message'), { target: { value: 'Continue.' } });
       fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
       await waitFor(() => expect(screen.getByText(/Operator message · Failed/)).toBeTruthy());
@@ -8072,6 +8072,7 @@ describe('Workflow Detail Entrypoint', () => {
   it('executes advertised bridge elicitation, clear, and cancel controls and preserves durable outcomes', async () => {
     window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/chat?source=temporal');
     const priorEventSource = window.EventSource;
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
@@ -8093,7 +8094,7 @@ describe('Workflow Detail Entrypoint', () => {
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
     try {
-      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
       expect(await screen.findByRole('region', { name: 'Pending operator request el-pending' })).toBeTruthy();
       expect(screen.getAllByText('Previously approved by operator.').length).toBeGreaterThan(0);
       expect(screen.queryByRole('region', { name: 'Pending operator request el-resolved' })).toBeNull();
@@ -8111,6 +8112,7 @@ describe('Workflow Detail Entrypoint', () => {
         String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
         JSON.parse(String((init as RequestInit).body)).type === 'session.cancel')).toBe(true));
     } finally {
+      confirmSpy.mockRestore();
       window.EventSource = priorEventSource;
     }
   });
