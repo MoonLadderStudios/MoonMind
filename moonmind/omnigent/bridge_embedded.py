@@ -11,9 +11,10 @@ and persists them into the canonical bridge session store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -34,6 +35,25 @@ from moonmind.omnigent.host_auth_adapter import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
+MAX_EMBEDDED_CAPABILITIES = 128
+MAX_EMBEDDED_CAPABILITY_BYTES = 64 * 1024
+MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
+
+
+def _bounded_mapping(
+    value: dict[str, Any], *, label: str, max_entries: int, max_bytes: int
+) -> dict[str, Any]:
+    if len(value) > max_entries:
+        raise ValueError(f"{label} exceeds the {max_entries}-entry limit")
+    try:
+        encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be JSON serializable") from exc
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{label} exceeds the {max_bytes}-byte limit")
+    return value
+
+
 class EmbeddedHostRegisterRequest(BaseModel):
     """Host registration payload accepted from an unchanged Omnigent host."""
 
@@ -42,6 +62,16 @@ class EmbeddedHostRegisterRequest(BaseModel):
     host_id: str | None = Field(None, alias="hostId")
     runner_id: str | None = Field(None, alias="runnerId")
     capabilities: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_mapping(
+            value,
+            label="Host capabilities",
+            max_entries=MAX_EMBEDDED_CAPABILITIES,
+            max_bytes=MAX_EMBEDDED_CAPABILITY_BYTES,
+        )
 
 
 class EmbeddedHostHeartbeatRequest(BaseModel):
@@ -52,6 +82,16 @@ class EmbeddedHostHeartbeatRequest(BaseModel):
     status: str = "running"
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_mapping(
+            value,
+            label="Host capabilities",
+            max_entries=MAX_EMBEDDED_CAPABILITIES,
+            max_bytes=MAX_EMBEDDED_CAPABILITY_BYTES,
+        )
+
 
 class EmbeddedHostSessionEventRequest(BaseModel):
     """Host-to-MoonMind session event payload."""
@@ -60,6 +100,16 @@ class EmbeddedHostSessionEventRequest(BaseModel):
 
     type: str = Field(..., min_length=1)
     data: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("data")
+    @classmethod
+    def validate_data(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_mapping(
+            value,
+            label="Host event data",
+            max_entries=MAX_EMBEDDED_EVENT_BYTES,
+            max_bytes=MAX_EMBEDDED_EVENT_BYTES,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +418,9 @@ __all__ = [
     "EmbeddedHostHeartbeatRequest",
     "EmbeddedHostRegisterRequest",
     "EmbeddedHostSessionEventRequest",
+    "MAX_EMBEDDED_CAPABILITIES",
+    "MAX_EMBEDDED_CAPABILITY_BYTES",
+    "MAX_EMBEDDED_EVENT_BYTES",
     "OmnigentEmbeddedHostProtocolFacade",
     "verify_embedded_host_auth",
 ]

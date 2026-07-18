@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers
@@ -18,6 +19,9 @@ from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostHeartbeatRequest,
     EmbeddedHostRegisterRequest,
     EmbeddedHostSessionEventRequest,
+    MAX_EMBEDDED_CAPABILITIES,
+    MAX_EMBEDDED_CAPABILITY_BYTES,
+    MAX_EMBEDDED_EVENT_BYTES,
     OmnigentEmbeddedHostProtocolFacade,
     verify_embedded_host_auth,
 )
@@ -129,6 +133,24 @@ def test_embedded_host_auth_rejects_duplicate_tunnel_token_headers() -> None:
         OmnigentHostAuthAdapter(
             allowed_tokens=frozenset({"runner-token"})
         ).verify(headers)
+
+
+def test_embedded_host_payloads_enforce_protocol_bounds() -> None:
+    with pytest.raises(ValidationError, match="entry limit"):
+        EmbeddedHostRegisterRequest(
+            capabilities={str(index): True for index in range(MAX_EMBEDDED_CAPABILITIES + 1)}
+        )
+
+    with pytest.raises(ValidationError, match="byte limit"):
+        EmbeddedHostHeartbeatRequest(
+            capabilities={"oversized": "x" * MAX_EMBEDDED_CAPABILITY_BYTES}
+        )
+
+    with pytest.raises(ValidationError, match="byte limit"):
+        EmbeddedHostSessionEventRequest(
+            type="response.delta",
+            data={"text": "x" * MAX_EMBEDDED_EVENT_BYTES},
+        )
 
 
 @pytest.mark.asyncio
