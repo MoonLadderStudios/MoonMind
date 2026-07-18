@@ -76,6 +76,26 @@ def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
     return code, "integration_error", "retry_transient_upstream"
 
 
+def _prepare_host_failure_stage(exc: Exception) -> str | None:
+    """Map a prepare-host failure to the boundary that actually reported it."""
+
+    code = str(getattr(exc, "code", None) or "").lower()
+    if any(
+        marker in code
+        for marker in ("credential_volume", "credential_owner", "credential_generation")
+    ):
+        return "credential_mount"
+    if "oauth" in code or "credential" in code or "github_auth" in code:
+        return "credential_preflight"
+    if "host_registration" in code:
+        return "host_registration"
+    if "capability" in code or "harness" in code:
+        return "harness_readiness"
+    if "bridge_auth" in code or "server_endpoint" in code:
+        return "bridge_authentication"
+    return None
+
+
 def _diagnostics_ref(value: object) -> str | None:
     """Extract only an already-persisted diagnostics reference from failures/results."""
 
@@ -330,6 +350,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     expected_status="allocating",
                     new_status="starting",
                 )
+            github_token = await self._github_token(request)
             current_stage = "container_start"
             await emit(current_stage, "started")
             preflight = await self._runtime.prepare_host(
@@ -345,7 +366,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     (request.parameters or {}).get("repository") or ""
                 ).strip(),
                 required_capabilities=self._required_capabilities(request),
-                github_token=await self._github_token(request),
+                github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
             )
             await emit(current_stage, "completed")
@@ -490,6 +511,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         summary=str(exc),
                         metadata=exc.evidence,
                     )
+                prepare_failure_stage = _prepare_host_failure_stage(exc)
+                if prepare_failure_stage and prepare_failure_stage not in active_stages:
+                    await emit(prepare_failure_stage, "started", ignore_errors=True)
                 for stage in list(active_stages) or [current_stage]:
                     await emit(
                         stage,

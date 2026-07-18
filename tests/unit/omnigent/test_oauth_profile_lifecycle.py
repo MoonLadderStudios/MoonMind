@@ -1103,16 +1103,17 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         "probes": [{"boundary": "runner", "status": "failed"}],
     }
     transitions = [(name, kwargs.get("status")) for name, kwargs in events]
+    for stage in ("container_start", "credential_preflight"):
+        assert (stage, "started") in transitions
+        assert (stage, "failed") in transitions
     for stage in (
-        "container_start",
         "credential_mount",
-        "credential_preflight",
         "host_registration",
         "harness_readiness",
         "bridge_authentication",
     ):
-        assert (stage, "started") in transitions
-        assert (stage, "failed") in transitions
+        assert (stage, "started") not in transitions
+        assert (stage, "failed") not in transitions
     assert ("host_cleanup", "completed") in transitions
     assert ("profile_lease_release", "completed") in transitions
     assert transitions[-1] == ("terminal", "failed")
