@@ -287,7 +287,13 @@ A profile-bound Codex host receives distinct state classes:
 | Artifact handoff | gateway or declared path | gateway or declared path | Separate from OAuth and host state |
 | Optional caches | explicit policy | explicit policy | Named owner, scope, retention, and invalidation |
 
-On-demand hosts use a read-only root filesystem and bounded temporary storage. Static mode must provide equivalent protection through Compose configuration and must not acquire extra writable mounts simply because the host is long-lived.
+On-demand hosts use a read-only root filesystem and bounded temporary storage.
+The current static Compose host does not provide equivalent filesystem
+containment: its root filesystem is writable and its shared `/workspaces` mount
+is writable. Treat static mode as a less-isolated operator-selected deployment
+until its Compose configuration supplies the same protections; do not use
+static-host evidence to claim conformance with the on-demand containment
+boundary.
 
 The workspace source is resolved from canonical workflow authority. Durable payloads use `WorkspaceLocator`; only the owning worker resolves it and translates it to a daemon-visible bind source after containment and identity validation.
 

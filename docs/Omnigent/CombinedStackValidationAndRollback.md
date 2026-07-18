@@ -60,7 +60,18 @@ OMNIGENT_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-server@sha256:<digest>
 OMNIGENT_HOST_IMAGE_REF=ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
 ```
 
-These take precedence over the bootstrap-compatible `OMNIGENT_IMAGE` / `OMNIGENT_IMAGE_TAG` and `OMNIGENT_HOST_IMAGE` / `OMNIGENT_HOST_IMAGE_TAG` pairs. A selected policy or conformance profile that requires immutable images must fail rather than fall back to mutable tags.
+These `*_IMAGE_REF` values pin the images used by Compose services and take
+precedence over the bootstrap-compatible image/tag pairs. Workflow-requested
+on-demand hosts do not read `OMNIGENT_HOST_IMAGE_REF`; pin those launches by
+setting `OMNIGENT_HOST_IMAGE` itself to the complete digest reference:
+
+```dotenv
+OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@sha256:<digest>
+```
+
+When on-demand hosts are enabled, production and credentialed conformance must
+pin both paths. A selected policy or conformance profile that requires
+immutable images must fail rather than fall back to mutable tags.
 
 ## DOC-REQ-003 Existing-Volume Validation Startup
 

@@ -219,7 +219,7 @@ The live session belongs to Omnigent, but MoonMind owns profile authorization an
 
 ```text
 MoonMind.AgentRun
-  -> integration.omnigent.execute through profile-bound coordinator
+  -> integration.omnigent.profile_bound_execute on the agent-runtime queue
       -> shared Provider Profile lease
       -> durable Omnigent host binding and host lease
       -> static Compose or deterministic on-demand host
