@@ -31,6 +31,7 @@ def test_current_workflows_have_stable_names() -> None:
         "alembic-migration-gate.yml": "CI / Alembic Migration Gate",
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
+        "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
         "pentestgpt-runner.yml": "Security / Build PentestGPT Runner",
         "promote-ghcr-stable.yml": "Release / Promote Stable",
         "pytest-unit-tests.yml": "CI / Test Suite",
