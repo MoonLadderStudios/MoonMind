@@ -7909,6 +7909,9 @@ describe('Workflow Detail Entrypoint', () => {
             terminalEnvelope: {
               schemaVersion: 'moonmind.bridge-session-terminal.v1',
               status: 'completed',
+              summary: 'Terminal capture completed',
+              finalSnapshotRef: '0198f0f0-2222-7333-8444-abcdefabcdef',
+              captureManifestRef: '0198f0f0-3333-7444-8555-abcdefabcdef',
             },
           }),
         } as Response);
@@ -7947,6 +7950,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByText(/managed runtime observability record was created/i)).toBeNull();
     expect(await screen.findByLabelText('Open src/app.py')).toBeTruthy();
     expect(screen.getByLabelText('Download src/app.py')).toBeTruthy();
+    expect(screen.getByLabelText('Terminal outcome evidence')).toBeTruthy();
+    expect(screen.getByLabelText('Open terminal final snapshot')).toBeTruthy();
+    expect(screen.getByLabelText('Open terminal capture manifest')).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/')),
     ).toBe(false);

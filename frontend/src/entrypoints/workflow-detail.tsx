@@ -1424,6 +1424,17 @@ const BridgeSessionEventsPageSchema = z
       .object({
         schemaVersion: z.literal('moonmind.bridge-session-terminal.v1'),
         status: z.enum(['completed', 'failed', 'canceled', 'timed_out']),
+        failureClass: z.string().nullable().optional(),
+        failureCode: z.string().nullable().optional(),
+        summary: z.string().nullable().optional(),
+        diagnosticsRef: z.string().nullable().optional(),
+        captureManifestRef: z.string().nullable().optional(),
+        initialSnapshotRef: z.string().nullable().optional(),
+        finalSnapshotRef: z.string().nullable().optional(),
+        rawEventsRef: z.string().nullable().optional(),
+        normalizedEventsRef: z.string().nullable().optional(),
+        externalStateRef: z.string().nullable().optional(),
+        evidenceIncompleteReason: z.string().nullable().optional(),
       })
       .passthrough()
       .nullable()
@@ -1435,6 +1446,7 @@ const BridgeSessionEventsPageSchema = z
     sessionSnapshot: undefined,
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
+    terminalEnvelope: page.terminalEnvelope ?? null,
   }));
 
 const ObservabilityEventsResponseSchema = z.union([
@@ -2543,6 +2555,45 @@ function ContextualBridgeResourceLinks({
   </div>;
 }
 
+type BridgeTerminalEnvelope = {
+  status: 'completed' | 'failed' | 'canceled' | 'timed_out';
+  failureClass?: string | null;
+  failureCode?: string | null;
+  summary?: string | null;
+  diagnosticsRef?: string | null;
+  captureManifestRef?: string | null;
+  initialSnapshotRef?: string | null;
+  finalSnapshotRef?: string | null;
+  rawEventsRef?: string | null;
+  normalizedEventsRef?: string | null;
+  externalStateRef?: string | null;
+  evidenceIncompleteReason?: string | null;
+};
+
+function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelope: BridgeTerminalEnvelope }) {
+  const evidence = [
+    ['Final snapshot', envelope.finalSnapshotRef],
+    ['Capture manifest', envelope.captureManifestRef],
+    ['Diagnostics', envelope.diagnosticsRef],
+    ['Raw event journal', envelope.rawEventsRef],
+    ['Normalized event journal', envelope.normalizedEventsRef],
+    ['External-state evidence', envelope.externalStateRef],
+  ] as const;
+  const links = evidence.flatMap(([label, ref]) => {
+    const href = ref ? artifactRefHref(apiBase, ref) : null;
+    return href ? [{ label, href }] : [];
+  });
+  return <section className={`notice ${envelope.status === 'completed' ? '' : 'warning'}`} aria-label="Terminal outcome evidence">
+    <strong>Terminal outcome: {formatStatusLabel(envelope.status)}</strong>
+    {envelope.summary ? <p>{envelope.summary}</p> : null}
+    {links.length > 0 ? <div className="button-group">
+      {links.map(({ label, href }) => <a key={label} className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
+    </div> : null}
+    {envelope.evidenceIncompleteReason ? <p className="small">Evidence incomplete: {envelope.evidenceIncompleteReason}</p> : null}
+    {envelope.failureClass || envelope.failureCode ? <p className="small">Failure: {[envelope.failureClass, envelope.failureCode].filter(Boolean).join(' — ')}</p> : null}
+  </section>;
+}
+
 async function fetchBridgeSessionResources(apiBase: string, bridgeSessionId: string): Promise<BridgeResourceProjection> {
   const resp = await fetch(bridgeSessionRoute(apiBase, bridgeSessionId, 'resources'), { credentials: 'include' });
   if (!resp.ok) throw buildObservabilityRequestError(resp.status);
@@ -2597,6 +2648,7 @@ async function fetchBridgeSessionEvents(
   const events: z.infer<typeof ObservabilityEventSchema>[] = [];
   let cursor: string | null = null;
   let truncated = false;
+  let terminalEnvelope: BridgeTerminalEnvelope | null = null;
   do {
     const route = bridgeSessionRoute(apiBase, bridgeSessionId, 'events');
     const url = cursor ? `${route}?cursor=${encodeURIComponent(cursor)}` : route;
@@ -2608,12 +2660,13 @@ async function fetchBridgeSessionEvents(
     const page = BridgeSessionEventsPageSchema.parse(await resp.json());
     events.push(...page.events);
     truncated ||= page.truncated;
+    terminalEnvelope = page.terminalEnvelope ?? terminalEnvelope;
     cursor = page.hasMore ? page.nextCursor : null;
     if (page.hasMore && cursor == null) {
       throw new Error('Bridge event page hasMore without nextCursor');
     }
   } while (cursor != null);
-  return { events, truncated, sessionSnapshot: undefined };
+  return { events, truncated, sessionSnapshot: undefined, terminalEnvelope };
 }
 
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
@@ -5791,6 +5844,9 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
+        ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
+        : null}
       <details className="card bridge-resource-evidence" open={isTerminal}>
         <summary>Resource evidence — {resourcesQuery.data?.completeness || 'harvesting'}</summary>
         {resourcesQuery.data?.groups.some((group) => group.resources.length > 0) ? (
