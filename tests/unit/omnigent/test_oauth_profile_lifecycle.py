@@ -1114,3 +1114,289 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
     assert ("host_cleanup", "completed") in transitions
     assert ("profile_lease_release", "completed") in transitions
     assert transitions[-1] == ("terminal", "failed")
+
+
+def _launch_ready_profile():
+    return SimpleNamespace(
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=900,
+        runtime_id="codex_cli",
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        secret_refs={},
+        command_behavior={},
+    )
+
+
+def _injected_launch_error(code: str) -> OmnigentOAuthHostError:
+    error = OmnigentOAuthHostError("deterministic injected failure", code=code)
+    error.diagnostics_ref = f"artifact://diagnostics/{code}"  # type: ignore[attr-defined]
+    return error
+
+
+async def _run_coordinator_failure_case(
+    *, fail_at: str, code: str, release_failures: int = 0
+):
+    events: list[tuple[str, dict]] = []
+    actions: list[str] = []
+    provider_lease = SimpleNamespace(
+        profile_id="codex",
+        runtime_id="codex_cli",
+        lease_id="provider-lease-1",
+        owner_id="owner-1",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+    )
+    error = _injected_launch_error(code)
+
+    class LeaseClient:
+        remaining_release_failures = release_failures
+
+        async def acquire_execution_lease(self, **_kwargs):
+            if fail_at == "lease":
+                raise error
+            return provider_lease
+
+        async def release_lease(self, _lease):
+            if self.remaining_release_failures:
+                self.remaining_release_failures -= 1
+                raise _injected_launch_error("profile_lease_release_failed")
+            actions.append("provider_released")
+
+    class Hosts:
+        def __init__(self):
+            self.lease = _host_lease().model_copy(
+                update={"status": "allocating", "omnigent_host_id": None}
+            )
+
+        async def get_binding_for_profile(self, _profile_id):
+            if fail_at == "binding":
+                raise error
+            return _binding()
+
+        async def create_or_get_host_lease(self, **_kwargs):
+            if fail_at == "host_lease":
+                raise error
+            return self.lease
+
+        async def transition_host_lease(
+            self, _lease_id, *, expected_status, new_status, fields=None
+        ):
+            self.lease = self.lease.model_copy(
+                update={"status": new_status, **dict(fields or {})}
+            )
+            return self.lease
+
+        async def mark_host_lease_stopped(self, _lease_id):
+            self.lease = self.lease.model_copy(update={"status": "stopped"})
+            return self.lease
+
+        async def mark_host_lease_failed(self, *_args, **_kwargs):
+            return None
+
+    class Runtime:
+        async def prepare_host(self, **_kwargs):
+            if fail_at == "prepare_host":
+                raise error
+            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+
+        async def stop_host(self, **_kwargs):
+            if fail_at == "cleanup":
+                raise _injected_launch_error("host_cleanup_failed")
+            actions.append("host_stopped")
+
+    class Store:
+        async def get_or_create(self, **_kwargs):
+            actions.append("envelope_created")
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_profile_authorization(self, **_kwargs):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
+            events.append((event_type, kwargs))
+
+    async def execute(_request, **_kwargs):
+        if fail_at == "execute":
+            raise error
+        return AgentRunResult(summary="done")
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=LeaseClient(),
+        host_repository=Hosts(),
+        host_runtime=Runtime(),
+        run_store=Store(),
+        execution_runner=execute,
+        artifact_gateway=object(),
+    )
+    if fail_at == "profile_resolution":
+        coordinator._resolve_profile = AsyncMock(side_effect=error)  # type: ignore[method-assign]
+    elif fail_at == "profile_readiness":
+        coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+            return_value=SimpleNamespace(
+                **{**vars(_launch_ready_profile()), "enabled": False}
+            )
+        )
+    else:
+        coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+            return_value=_launch_ready_profile()
+        )
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-failure-matrix",
+        parameters={
+            "untrustedSupportValue": "github_pat_secret_value_must_not_persist",
+            "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},
+        },
+    )
+    if fail_at in {"cleanup", "release"}:
+        await coordinator.execute(request)
+    else:
+        with pytest.raises(OmnigentOAuthHostError) as captured:
+            await coordinator.execute(request)
+        assert captured.value.code == code
+    return events, actions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fail_at", "code", "failed_stage", "failure_class", "remediation"),
+    [
+        ("profile_resolution", "profile_resolution_failed", "profile_resolution", "configuration_error", "select_execution_profile"),
+        ("profile_readiness", "profile_readiness_failed", "profile_readiness", "configuration_error", "validate_codex_oauth"),
+        ("lease", "profile_lease_conflict", "profile_lease_wait", "resource_unavailable", "wait_for_profile_lease"),
+        ("lease", "profile_lease_timeout", "profile_lease_wait", "resource_unavailable", "wait_for_profile_lease"),
+        ("lease", "profile_lease_lost", "profile_lease_wait", "resource_unavailable", "wait_for_profile_lease"),
+        ("lease", "profile_cooldown_active", "profile_lease_wait", "integration_error", "retry_transient_upstream"),
+        ("binding", "host_binding_mismatch", "host_binding_resolution", "configuration_error", "correct_host_binding"),
+        ("host_lease", "container_allocation_failed", "host_lease_created", "configuration_error", "repair_host_image"),
+        ("prepare_host", "image_pull_failed", "container_start", "configuration_error", "repair_host_image"),
+        ("prepare_host", "network_unavailable", "container_start", "integration_error", "repair_server_endpoint"),
+        ("prepare_host", "credential_volume_missing", "credential_mount", "configuration_error", "validate_codex_oauth"),
+        ("prepare_host", "oauth_login_preflight_failed", "credential_preflight", "configuration_error", "validate_codex_oauth"),
+        ("prepare_host", "host_registration_failed", "host_registration", "integration_error", "retry_transient_upstream"),
+        ("prepare_host", "harness_incompatible", "harness_readiness", "configuration_error", "correct_host_binding"),
+        ("prepare_host", "bridge_auth_failed", "bridge_authentication", "configuration_error", "repair_bridge_authentication"),
+        ("prepare_host", "server_endpoint_invalid", "bridge_authentication", "integration_error", "repair_server_endpoint"),
+        ("execute", "session_create_failed", "session_creation", "integration_error", "retry_transient_upstream"),
+        ("execute", "first_message_reconcile_failed", "first_message_prepare", "integration_error", "retry_transient_upstream"),
+        ("execute", "resource_harvest_failed", "resource_harvest", "integration_error", "retry_transient_upstream"),
+    ],
+)
+async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence(
+    fail_at: str,
+    code: str,
+    failed_stage: str,
+    failure_class: str,
+    remediation: str,
+) -> None:
+    events, actions = await _run_coordinator_failure_case(fail_at=fail_at, code=code)
+
+    assert actions[0] == "envelope_created"
+    failed = [
+        kwargs
+        for stage, kwargs in events
+        if stage == failed_stage and kwargs.get("status") == "failed"
+    ]
+    assert failed, [(stage, kwargs.get("status")) for stage, kwargs in events]
+    opening_index = next(
+        index
+        for index, (stage, kwargs) in enumerate(events)
+        if stage == failed_stage and kwargs.get("status") in {"started", "waiting"}
+    )
+    failed_index = next(
+        index
+        for index, (stage, kwargs) in enumerate(events)
+        if stage == failed_stage and kwargs.get("status") == "failed"
+    )
+    assert opening_index < failed_index
+    assert failed[-1]["code"] == code
+    assert failed[-1]["failure_class"] == failure_class
+    assert failed[-1]["remediation_action"] == remediation
+    expected_diagnostics = (
+        None
+        if fail_at == "profile_readiness"
+        else f"artifact://diagnostics/{code}"
+    )
+    assert failed[-1]["diagnostics_ref"] == expected_diagnostics
+    assert failed[-1]["metadata"]["workflowId"] == "workflow-1"
+    assert events[-1][0] == "terminal"
+    assert events[-1][1]["status"] == "failed"
+    terminal = events[-1][1]["metadata"]
+    assert terminal["cleanupCompleted"] is True
+    assert terminal["leaseReleased"] is True
+    assert "github_pat_secret_value_must_not_persist" not in json.dumps(events)
+    if fail_at in {"prepare_host", "execute"}:
+        assert actions.index("host_stopped") < actions.index("provider_released")
+
+
+@pytest.mark.asyncio
+async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_janitor() -> None:
+    events, actions = await _run_coordinator_failure_case(
+        fail_at="cleanup", code="host_cleanup_failed"
+    )
+    cleanup = next(
+        kwargs
+        for stage, kwargs in events
+        if stage == "host_cleanup" and kwargs.get("status") == "failed"
+    )
+    assert cleanup["remediation_action"] == "inspect_cleanup_diagnostics"
+    assert cleanup["metadata"]["cleanupCompleted"] is False
+    assert cleanup["metadata"]["janitorRequired"] is True
+    release = next(
+        kwargs
+        for stage, kwargs in events
+        if stage == "profile_lease_release" and kwargs.get("status") == "waiting"
+    )
+    assert release["code"] == "credential_cleanup_incomplete"
+    assert release["metadata"]["leaseReleased"] is False
+    assert "provider_released" not in actions
+    assert events[-1][1]["metadata"] == {
+        "workflowId": "workflow-1",
+        "stepExecutionId": None,
+        "cleanupCompleted": False,
+        "leaseReleased": False,
+        "janitorRequired": True,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("release_failures", "release_status", "janitor_required"),
+    [(2, "completed", False), (3, "failed", True)],
+)
+async def test_coordinator_provider_release_has_bounded_retry_evidence(
+    monkeypatch, release_failures: int, release_status: str, janitor_required: bool
+) -> None:
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.asyncio.sleep", sleep
+    )
+    events, actions = await _run_coordinator_failure_case(
+        fail_at="release",
+        code="profile_lease_release_failed",
+        release_failures=release_failures,
+    )
+    release = next(
+        kwargs
+        for stage, kwargs in events
+        if stage == "profile_lease_release" and kwargs.get("status") == release_status
+    )
+    assert sleep.await_count == 2
+    assert release["metadata"]["leaseReleased"] is (not janitor_required)
+    if janitor_required:
+        assert release["remediation_action"] == "inspect_cleanup_diagnostics"
+        assert release["metadata"]["janitorRequired"] is True
+        assert "provider_released" not in actions
+    else:
+        assert "provider_released" in actions
+    assert events[-1][1]["metadata"]["janitorRequired"] is janitor_required
