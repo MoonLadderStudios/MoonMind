@@ -17,7 +17,10 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
+    WebSocketDisconnect, status,
+)
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +56,11 @@ from moonmind.omnigent.bridge_store import (
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
 )
+from moonmind.omnigent.embedded_host_channel import (
+    EmbeddedHostChannelError,
+    embedded_host_channels,
+)
+from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -1241,6 +1249,38 @@ async def register_embedded_omnigent_host(
         return await facade.register_host(request=payload, auth=auth)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+@router.websocket("/v1/hosts/tunnel")
+async def embedded_omnigent_host_tunnel(websocket: WebSocket) -> None:
+    """Serve the pinned stock-host frame protocol over one authenticated tunnel."""
+
+    try:
+        config = get_bridge_config()
+        if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+            await websocket.close(code=4404)
+            return
+        auth = verify_embedded_host_auth(
+            headers=websocket.headers,
+            config=config,
+            configured_token=resolved_host_runner_token(),
+        )
+    except OmnigentBridgeError:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    channel = embedded_host_channels.connect(
+        host_id=auth.runner_id, send_text=websocket.send_text
+    )
+    try:
+        while True:
+            channel.accept_host_frame(await websocket.receive_text())
+    except WebSocketDisconnect:
+        pass
+    except (EmbeddedHostChannelError, UpstreamHostProtocolError):
+        await websocket.close(code=4400)
+    finally:
+        embedded_host_channels.disconnect(channel)
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)
