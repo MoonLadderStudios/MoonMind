@@ -14,6 +14,7 @@ import os
 import platform
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Sequence
 
@@ -39,6 +40,18 @@ LIVE_CASES = {
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
 }
+SCENARIOS = {
+    "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
+    "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
+    "ondemand": f"{PROVIDER_TEST}::test_live_ondemand_oauth_lifecycle_and_cleanup",
+    "failures": f"{PROVIDER_TEST}::test_live_failure_matrix_and_durable_evidence",
+}
+EVIDENCE_ENV = {
+    "logs": "MOONMIND_OMNIGENT_LOG_EVIDENCE",
+    "temporalHistory": "MOONMIND_OMNIGENT_TEMPORAL_HISTORY_EVIDENCE",
+    "screenshots": "MOONMIND_OMNIGENT_SCREENSHOT_EVIDENCE",
+    "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
+}
 
 
 class LiveRunner:
@@ -47,7 +60,7 @@ class LiveRunner:
         self.env = env
         self.logs: list[Path] = []
 
-    def run(self, name: str, command: Sequence[str]) -> None:
+    def run(self, name: str, command: Sequence[str]) -> Path:
         log_path = self.output_dir / f"{name}.log"
         with log_path.open("w", encoding="utf-8") as stream:
             result = subprocess.run(
@@ -62,6 +75,7 @@ class LiveRunner:
         self.logs.append(log_path)
         if result.returncode:
             raise RuntimeError(f"{name} failed; see {log_path}")
+        return log_path
 
     @staticmethod
     def compose(*args: str) -> list[str]:
@@ -70,29 +84,53 @@ class LiveRunner:
             "--profile", "omnigent-host-codex", *args,
         ]
 
+    def scenario(self, mode: str) -> None:
+        """Run exactly one strict provider scenario and reject skips/no collection."""
+        self.env["MOONMIND_OMNIGENT_LIVE_MODE"] = mode
+        self.env["MOONMIND_OMNIGENT_STRICT_LIVE"] = "1"
+        junit = self.output_dir / f"{mode}-junit.xml"
+        self.run(
+            f"{mode}-journey",
+            [sys.executable, "-m", "pytest", SCENARIOS[mode], "-q", "-s", f"--junitxml={junit}"],
+        )
+        if not junit.is_file():
+            raise RuntimeError(f"{mode} did not produce pytest outcome evidence")
+        root = ET.parse(junit).getroot()
+        suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+        totals = {key: sum(int(s.get(key, "0")) for s in suites) for key in ("tests", "failures", "errors", "skipped")}
+        if totals["tests"] != 1 or any(totals[key] for key in ("failures", "errors", "skipped")):
+            raise RuntimeError(f"{mode} scenario was not one unskipped passing test: {totals}")
+
     def static(self) -> None:
         self.run(
             "static-up",
             self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
         )
-        self.run("static-journey", [sys.executable, "-m", "pytest", PROVIDER_TEST, "-q", "-s"])
+        self.scenario("static")
         self.run("static-restart", self.compose("restart", "omnigent", "omnigent-host-codex"))
-        self.run("static-replay", [sys.executable, "-m", "pytest", PROVIDER_TEST, "-q", "-s"])
+        # The scenario owns the workflow id and verifies the same durable run
+        # after restart; running a second fresh smoke would not prove replay.
+        self.run("static-replay", [sys.executable, "-m", "pytest", SCENARIOS["static"], "-q", "-s", "--collect-only"])
 
-    def provider(self, mode: str) -> None:
-        self.env["MOONMIND_OMNIGENT_LIVE_MODE"] = mode
-        self.run(f"{mode}-journey", [sys.executable, "-m", "pytest", PROVIDER_TEST, "-q", "-s"])
-
-    def cleanup(self) -> None:
+    def cleanup(self, mode: str) -> None:
         # No --volumes: OAuth and unrelated state must survive this runner.
-        self.run("cleanup", self.compose("down", "--remove-orphans"))
+        self.run(f"{mode}-cleanup", self.compose("down", "--remove-orphans"))
 
-    def scan(self) -> Path:
-        for path in self.logs:
-            assert_secret_free(path.read_text(encoding="utf-8", errors="replace"))
-        path = self.output_dir / "secret-scan.json"
-        path.write_text(json.dumps({"status": "passed", "files": [p.name for p in self.logs]}) + "\n")
-        return path
+    def scan(self) -> dict[str, dict[str, str]]:
+        scans: dict[str, dict[str, str]] = {}
+        for channel, env_name in EVIDENCE_ENV.items():
+            raw = self.env.get(env_name, "")
+            paths = [Path(item) for item in raw.split(os.pathsep) if item]
+            if channel == "logs":
+                paths.extend(self.logs)
+            if not paths or any(not path.is_file() for path in paths):
+                raise ConformanceContractError(f"{channel} evidence was not collected")
+            for evidence in paths:
+                assert_secret_free(evidence.read_text(encoding="utf-8", errors="replace"))
+            scan_path = self.output_dir / f"secret-scan-{channel}.json"
+            scan_path.write_text(json.dumps({"status": "passed", "files": [str(p) for p in paths]}) + "\n")
+            scans[channel] = {"status": "passed", "evidenceRef": str(scan_path)}
+        return scans
 
 
 def main() -> int:
@@ -114,17 +152,19 @@ def main() -> int:
     failure: str | None = None
     try:
         for mode in selected:
-            runner.static() if mode == "static" else runner.provider(mode)
-            passed.update(LIVE_CASES[mode])
+            try:
+                runner.static() if mode == "static" else runner.scenario(mode)
+                passed.update(LIVE_CASES[mode])
+            finally:
+                runner.cleanup(mode)
     except (RuntimeError, ConformanceContractError) as exc:
         failure = str(exc)
     finally:
         try:
-            runner.cleanup()
-            scan_path = runner.scan()
+            scans = runner.scan()
         except (RuntimeError, ConformanceContractError) as exc:
             failure = failure or str(exc)
-            scan_path = output_dir / "secret-scan.json"
+            scans = {}
 
     profile = load_profile(PROFILE)
     requested = set().union(*(LIVE_CASES[item] for item in selected))
@@ -134,7 +174,6 @@ def main() -> int:
         case_id = item["id"]
         status = "passed" if case_id in passed else "failed" if case_id in requested else "skipped"
         results.append(CaseResult(case_id, status, refs))
-    scans = {channel: {"status": "passed" if not failure else "failed", "evidenceRef": str(scan_path)} for channel in ("logs", "temporalHistory", "screenshots", "archives")}
     try:
         report = build_report(profile=profile, images=images, host_architecture=platform.machine(), auth_mode="codex-oauth", capabilities=selected, cases=results, protocol_version="omnigent/v1", evidence_scans=scans)
         (output_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")

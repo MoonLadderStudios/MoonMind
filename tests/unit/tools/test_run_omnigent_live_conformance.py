@@ -22,7 +22,7 @@ def test_compose_is_isolated_and_cleanup_preserves_volumes(tmp_path, monkeypatch
 
     monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: calls.append(command) or Result())
     runner = module.LiveRunner(output_dir=tmp_path, env={})
-    runner.cleanup()
+    runner.cleanup("stock")
     command = calls[0]
     assert command[:4] == ["docker", "compose", "--project-name", module.PROJECT]
     assert "down" in command
@@ -35,9 +35,10 @@ def test_static_restart_precedes_replay_and_cleanup_is_explicit(tmp_path, monkey
     names = []
     runner = module.LiveRunner(output_dir=tmp_path, env={})
     monkeypatch.setattr(runner, "run", lambda name, command: names.append(name))
+    monkeypatch.setattr(runner, "scenario", lambda mode: names.append(f"{mode}-journey"))
     runner.static()
-    runner.cleanup()
-    assert names == ["static-up", "static-journey", "static-restart", "static-replay", "cleanup"]
+    runner.cleanup("static")
+    assert names == ["static-up", "static-journey", "static-restart", "static-replay", "static-cleanup"]
 
 
 def test_scan_rejects_secret_like_live_evidence(tmp_path):
@@ -52,3 +53,20 @@ def test_scan_rejects_secret_like_live_evidence(tmp_path):
         pass
     else:
         raise AssertionError("secret-like evidence was accepted")
+
+
+def test_each_mode_selects_a_distinct_provider_node():
+    module = _module()
+    assert set(module.SCENARIOS) == set(module.LIVE_CASES)
+    assert len(set(module.SCENARIOS.values())) == len(module.SCENARIOS)
+
+
+def test_scan_requires_each_evidence_channel(tmp_path):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    try:
+        runner.scan()
+    except module.ConformanceContractError as exc:
+        assert "evidence was not collected" in str(exc)
+    else:
+        raise AssertionError("missing evidence channels were accepted")

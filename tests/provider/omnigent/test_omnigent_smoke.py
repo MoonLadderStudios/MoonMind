@@ -48,13 +48,24 @@ def _live_env() -> dict[str, str]:
     }
     missing = [key for key, value in required.items() if not value.strip()]
     if missing:
-        pytest.skip(
+        message = (
             "live Omnigent smoke requires provider credentials: "
             + ", ".join(missing)
         )
+        if os.environ.get("MOONMIND_OMNIGENT_STRICT_LIVE") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
     if not is_omnigent_enabled(env=required):
+        if os.environ.get("MOONMIND_OMNIGENT_STRICT_LIVE") == "1":
+            pytest.fail("live Omnigent smoke requires OMNIGENT_ENABLED=true")
         pytest.skip("live Omnigent smoke requires OMNIGENT_ENABLED=true")
     return required
+
+
+def _require_mode(expected: str) -> None:
+    actual = os.environ.get("MOONMIND_OMNIGENT_LIVE_MODE", "")
+    if actual != expected:
+        pytest.fail(f"scenario {expected!r} invoked with live mode {actual!r}")
 
 
 def _message_event(text: str) -> BridgeSessionEventRequest:
@@ -144,3 +155,27 @@ async def test_live_omnigent_bridge_smoke_disposable_managed_session(
     assert "resources" in harvested
     assert reused["id"] == created["id"]
     assert reused["moonmind"]["reused"] is True
+
+
+async def test_live_stock_proxy_compatibility_profile(bridge_store) -> None:
+    _require_mode("stock")
+    # The stock journey is intentionally a distinct node: the runner records
+    # its pinned images while this exercises the published proxy surface.
+    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
+
+
+async def test_live_static_workflow_detail_restart_replay(bridge_store) -> None:
+    _require_mode("static")
+    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
+    # Deployment-specific workflow/detail and replay assertions must export
+    # their independently collected evidence for the runner's mandatory scan.
+
+
+async def test_live_ondemand_oauth_lifecycle_and_cleanup(bridge_store) -> None:
+    _require_mode("ondemand")
+    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
+
+
+async def test_live_failure_matrix_and_durable_evidence(bridge_store) -> None:
+    _require_mode("failures")
+    await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
