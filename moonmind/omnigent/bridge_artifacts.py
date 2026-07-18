@@ -25,7 +25,8 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
-_CAPTURE_MANIFEST_SCHEMA_VERSION = 1
+_CAPTURE_MANIFEST_SCHEMA_VERSION = "moonmind.omnigent.capture_manifest.v1"
+_RESOURCE_PROJECTION_SCHEMA_VERSION = "moonmind.omnigent.resource_projection.v1"
 
 
 class OmnigentContractError(RuntimeError):
@@ -47,6 +48,7 @@ class OmnigentCaptureBundle:
     metadata_refs: dict[str, str] = field(default_factory=dict)
     optional_harvest_failed: bool = False
     resource_harvest_failure_class: str | None = None
+    resource_projection: dict[str, Any] = field(default_factory=dict)
 
 
 class OmnigentArtifactGateway:
@@ -420,6 +422,7 @@ def build_omnigent_terminal_refs(
         "outputRefs": output_refs,
         "diagnosticsRef": diagnostics_ref,
         "metadataRefs": metadata_refs,
+        "resourceProjection": dict(capture_bundle.resource_projection),
         "failureClass": failure_class_for_terminal_status(terminal_status),
         "failureCode": final_snapshot.get("providerErrorCode")
         or final_snapshot.get("failureCode"),
@@ -523,6 +526,7 @@ class BridgeResourceHarvester:
         await self.harvest_workspace_diffs(changed_items=changed_items)
         if _capture_enabled(capture_policy, "sessionFiles"):
             await self.harvest_session_files()
+        _reconcile_changed_file_evidence(self._manifest)
 
     async def harvest_changed_files(self) -> list[dict[str, Any]]:
         try:
@@ -1155,21 +1159,32 @@ def _associate_resource_events(
 ) -> None:
     """Attach harvested changed files to the durable announcing event sequence."""
 
-    sequence_by_path: dict[str, int] = {}
+    sequence_by_path: dict[tuple[str, str], int] = {}
     for event in normalized_events:
         event_type = str(event.get("type") or event.get("eventType") or "")
-        if event_type != "resource.changed_file":
+        if event_type not in {"resource.changed_file", "resource.session_file"}:
             continue
-        path = _resource_path(event)
+        data = event.get("data") if isinstance(event.get("data"), dict) else event
+        path = _resource_path(data)
         sequence = event.get("sequence")
         if path and isinstance(sequence, int):
-            sequence_by_path.setdefault(path, sequence)
+            sequence_by_path.setdefault((event_type, path), sequence)
     for changed_file in manifest.get("changedFiles", []):
         if not isinstance(changed_file, dict):
             continue
-        sequence = sequence_by_path.get(str(changed_file.get("path") or ""))
+        sequence = sequence_by_path.get(
+            ("resource.changed_file", str(changed_file.get("path") or ""))
+        )
         if sequence is not None:
             changed_file["sourceEventSequence"] = sequence
+    for session_file in manifest.get("sessionFiles", []):
+        if not isinstance(session_file, dict):
+            continue
+        sequence = sequence_by_path.get(
+            ("resource.session_file", str(session_file.get("filename") or ""))
+        )
+        if sequence is not None:
+            session_file["sourceEventSequence"] = sequence
 
 
 def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1191,6 +1206,69 @@ def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         items = raw_items if isinstance(raw_items, list) else []
         groups.append({"groupKey": key, "title": title, "items": items})
     return groups
+
+
+def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Build the bounded, artifact-ref-only projection consumed by Workflow Detail."""
+
+    groups: list[dict[str, Any]] = []
+    for group in _capture_resource_groups(manifest):
+        resources: list[dict[str, Any]] = []
+        for item in group["items"][:_MAX_OMNIGENT_HARVEST_ITEMS]:
+            if not isinstance(item, dict):
+                continue
+            artifact_ref = str(item.get("artifactRef") or "").strip()
+            path = str(item.get("path") or item.get("filename") or "").strip()
+            label = str(item.get("label") or path or group["title"]).strip()
+            unavailable_reason = str(
+                item.get("unavailable")
+                or item.get("skipped")
+                or item.get("diffUnavailable")
+                or ""
+            ).strip()
+            resource: dict[str, Any] = {
+                "label": label[:512],
+                "status": (
+                    "available"
+                    if artifact_ref
+                    else "unavailable"
+                    if unavailable_reason
+                    else "pending"
+                ),
+                "previewAvailable": bool(artifact_ref),
+                "downloadAvailable": bool(artifact_ref),
+            }
+            for key in ("contentType", "sizeBytes", "sourceEventSequence"):
+                if item.get(key) is not None:
+                    resource[key] = item[key]
+            if artifact_ref:
+                resource["artifactRef"] = artifact_ref
+            if path:
+                resource["path"] = path[:512]
+            if unavailable_reason:
+                resource["unavailableReason"] = unavailable_reason[:512]
+            related = [
+                str(item[key])
+                for key in ("metadataRef", "diffArtifactRef")
+                if item.get(key)
+            ]
+            if related:
+                resource["relatedArtifactRefs"] = related
+            resources.append(resource)
+        groups.append(
+            {
+                "groupKey": group["groupKey"],
+                "title": group["title"],
+                "resources": resources,
+            }
+        )
+    completeness = dict(manifest.get("evidenceCompleteness") or {})
+    return {
+        "schemaVersion": _RESOURCE_PROJECTION_SCHEMA_VERSION,
+        "completeness": completeness.get("status", "complete"),
+        "unavailableReasons": dict(completeness.get("unavailableReasons") or {}),
+        "groups": groups,
+    }
 
 
 async def _build_capture_bundle(
@@ -1274,6 +1352,7 @@ async def _build_capture_bundle(
     )
     manifest: dict[str, Any] = {
         "schemaVersion": _CAPTURE_MANIFEST_SCHEMA_VERSION,
+        "sourceIssue": "MoonLadderStudios/MoonMind#3365",
         "provider": "omnigent",
         "omnigentSessionId": session_id,
         "omnigentAgentId": agent_id,
@@ -1561,6 +1640,21 @@ async def _build_capture_bundle(
         payload=manifest,
         link_type="output.omnigent.capture_manifest",
     )
+    resource_projection = _capture_resource_projection(manifest)
+    manifest_group = next(
+        group
+        for group in resource_projection["groups"]
+        if group["groupKey"] == "manifests"
+    )
+    manifest_group["resources"].append(
+        {
+            "label": "Capture manifest",
+            "artifactRef": manifest_ref,
+            "status": "available",
+            "previewAvailable": True,
+            "downloadAvailable": True,
+        }
+    )
     metadata_refs = {
         "captureManifestRef": manifest_ref,
         "rawSseStreamRef": raw_ref,
@@ -1591,6 +1685,7 @@ async def _build_capture_bundle(
         metadata_refs=metadata_refs,
         optional_harvest_failed=optional_harvest_failed,
         resource_harvest_failure_class=resource_harvest_failure_class,
+        resource_projection=resource_projection,
     )
 
 

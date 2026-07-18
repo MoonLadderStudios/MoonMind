@@ -742,7 +742,7 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     )
     manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["schemaVersion"] == 1
+    assert manifest["schemaVersion"] == "moonmind.omnigent.capture_manifest.v1"
     assert manifest["terminalStatus"] == "canceled"
     assert manifest["patchUnavailable"] is False
     assert manifest["evidenceCompleteness"]["status"] == "complete"

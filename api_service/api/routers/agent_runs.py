@@ -414,7 +414,7 @@ def _build_session_resource_list(
                     preview_available=bool(
                         artifact.default_read_ref or artifact.preview_artifact_ref
                     ),
-                    download_available=artifact.status == "available",
+                    download_available=artifact.status == "complete",
                     completeness_status=(
                         "degraded" if unavailable_reason else "complete"
                     ),
