@@ -223,3 +223,36 @@ def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
     runner.ondemand()
     assert seen[0] == {}
     assert all(call == state for call in seen[1:])
+
+
+def test_repository_backend_persists_static_replay_and_rejects_wrong_ids(tmp_path):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    executed = runner.action("static", "execute")
+    ids = {key: executed[key] for key in ("workflowId", "agentRunId", "sessionId")}
+    assert runner.action("static", "replay", **ids)["durable_replay"] is True
+    try:
+        runner.action("static", "replay", **{**ids, "workflowId": "wrong"})
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("backend accepted replay for another workflow")
+
+
+def test_repository_backend_enforces_lifecycle_and_failure_projection(tmp_path):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    try:
+        runner.action("ondemand", "host_launched")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("backend accepted host launch before lease")
+    state = {}
+    for action in module.ONDEMAND_ACTIONS:
+        result = runner.action("ondemand", action, **state)
+        state.update(result["state"])
+    assert all(state.get(key) for key in ("leaseId", "hostId", "workflowId", "agentRunId", "sessionId"))
+    for case in module.FAILURE_CASES:
+        durable = runner.action("failures", case)["durableEvidence"]
+        assert all(durable.values())

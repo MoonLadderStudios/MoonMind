@@ -85,6 +85,8 @@ class LiveRunner:
         self.output_dir = output_dir
         self.env = env
         self.logs: list[Path] = []
+        self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_STATE", str(output_dir / "backend-state.json"))
+        self.env.setdefault("MOONMIND_OMNIGENT_BACKEND_EVIDENCE_DIR", str(output_dir))
 
     def run(self, name: str, command: Sequence[str]) -> Path:
         log_path = self.output_dir / f"{name}.log"
