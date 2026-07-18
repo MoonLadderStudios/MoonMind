@@ -1329,6 +1329,77 @@ async def _run_coordinator_failure_case(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("owner_method", "code"),
+    [
+        ("_launch_on_demand", "container_start_failed"),
+        ("_launch_on_demand", "image_pull_failed"),
+        ("_launch_on_demand", "network_unavailable"),
+        ("_launch_on_demand", "credential_volume_missing"),
+        ("_launch_on_demand", "credential_owner_mismatch"),
+        ("_launch_on_demand", "credential_generation_stale"),
+        ("_exec_check", "oauth_login_preflight_failed"),
+        ("_resolve_exact_host", "host_registration_failed"),
+        ("_resolve_exact_host", "host_registration_timeout"),
+        ("_resolve_exact_host", "codex_native_capability_missing"),
+        ("_preflight_mounted_tools", "harness_incompatible"),
+        ("_resolve_exact_host", "bridge_auth_401"),
+        ("_resolve_exact_host", "server_endpoint_invalid"),
+        ("stop_host", "host_remove_failed"),
+        ("stop_static_host", "host_stop_failed"),
+    ],
+)
+async def test_failure_injection_uses_real_oauth_runtime_owner_methods(
+    monkeypatch, owner_method: str, code: str
+) -> None:
+    """Keep the coordinator matrix anchored to production runtime boundaries.
+
+    The larger matrix below checks the durable projection for every stable
+    failure code.  This test separately proves that its host-runtime owner
+    groups are injectable on the actual methods invoked by
+    ``OmnigentOAuthHostRuntime.prepare_host`` and cleanup, rather than only on
+    similarly named test helpers.
+    """
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    injected = _injected_launch_error(code)
+    owner = getattr(runtime, owner_method)
+    monkeypatch.setattr(runtime, owner_method, AsyncMock(side_effect=injected))
+
+    kwargs = {
+        "_launch_on_demand": {
+            "binding": _binding(),
+            "host_lease": _host_lease(),
+            "container_name": "host-1",
+            "workspace_source": Path("/tmp/workspace"),
+            "skill_projection": Path("/tmp/skills"),
+        },
+        "_exec_check": {"container_name": "host-1"},
+        "_resolve_exact_host": {
+            "binding": _binding(),
+            "host_lease": _host_lease(),
+        },
+        "_preflight_mounted_tools": {
+            "binding": _binding(),
+            "host_lease": _host_lease(),
+            "required_capabilities": (),
+            "repository": "",
+            "mutation_required": False,
+        },
+        "stop_host": {"binding": _binding(), "host_lease": _host_lease()},
+        "stop_static_host": {},
+    }[owner_method]
+
+    with pytest.raises(OmnigentOAuthHostError) as captured:
+        await getattr(runtime, owner_method)(**kwargs)
+
+    assert captured.value is injected
+    assert captured.value.code == code
+    getattr(runtime, owner_method).assert_awaited_once()
+    assert getattr(owner, "__self__", None) is runtime
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("fail_at", "code", "failed_stage", "failure_class", "remediation"),
     [
         ("profile_missing", "profile_resolution_missing", "profile_resolution", "configuration_error", "select_execution_profile"),
