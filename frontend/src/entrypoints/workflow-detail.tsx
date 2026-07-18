@@ -2967,7 +2967,7 @@ export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['row
   if (OPERATOR_ATTENTION_EVENT_KINDS.has(kind)) {
     return 'approval';
   }
-  if (event.stream === 'system') {
+  if (event.stream === 'system' || kind.startsWith('lifecycle_')) {
     return 'system';
   }
   if (event.stream === 'session') {
@@ -3017,7 +3017,11 @@ function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityE
     .filter((row) => (
       row.rowType !== 'fallback'
       && row.rowType !== 'output'
-      && (row.rowType !== 'system' || row.kind?.startsWith('lifecycle.'))
+      && (
+        row.rowType !== 'system'
+        || row.kind?.startsWith('lifecycle.')
+        || row.kind?.startsWith('lifecycle_')
+      )
     ))
     .map((row) => ({
       id: row.id,
@@ -3027,7 +3031,9 @@ function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityE
       timestamp: row.timestamp,
       stream: row.stream,
       text: row.text,
-      kind: row.kind,
+      kind: row.kind?.startsWith('lifecycle_')
+        ? `lifecycle.${row.kind.slice('lifecycle_'.length)}`
+        : row.kind,
       sessionId: row.sessionId,
       sessionEpoch: row.sessionEpoch,
       turnId: row.turnId,

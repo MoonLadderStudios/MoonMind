@@ -67,7 +67,7 @@ def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
         return code, "resource_unavailable", "wait_for_profile_lease"
     if "auth" in lowered:
         return code, "configuration_error", "repair_bridge_authentication"
-    if "binding" in lowered or "harness" in lowered:
+    if "binding" in lowered or "harness" in lowered or "capability" in lowered:
         return code, "configuration_error", "correct_host_binding"
     if "image" in lowered or "container" in lowered:
         return code, "configuration_error", "repair_host_image"
@@ -332,11 +332,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             current_stage = "container_start"
             await emit(current_stage, "started")
-            await emit("credential_mount", "started")
-            await emit("credential_preflight", "started")
-            await emit("host_registration", "started")
-            await emit("harness_readiness", "started")
-            await emit("bridge_authentication", "started")
             preflight = await self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
@@ -354,6 +349,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 github_mutation_required=self._github_mutation_required(request),
             )
             await emit(current_stage, "completed")
+            await emit("credential_mount", "started")
             await emit(
                 "credential_mount",
                 "completed",
@@ -363,12 +359,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             host_id = str(preflight["hostId"])
+            await emit("host_registration", "started")
             await emit(
                 "host_registration", "completed", metadata={"omnigentHostId": host_id}
             )
+            await emit("harness_readiness", "started")
             await emit(
                 "harness_readiness", "ready", metadata={"omnigentHostId": host_id}
             )
+            await emit("bridge_authentication", "started")
             await emit("bridge_authentication", "completed")
             if binding.static_host_id is None and not binding.host_launch_profile_ref:
                 binding = await self._hosts.create_or_update_static_binding(
@@ -393,6 +392,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=host_id,
             )
+            await emit("credential_preflight", "started")
             await emit(
                 "credential_preflight",
                 "ready",

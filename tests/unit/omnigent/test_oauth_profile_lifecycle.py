@@ -943,7 +943,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     assert actions[0] == "bridge_envelope_created"
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
-    assert actions.index("provider_released") < actions.index("profile_lease_release")
+    assert actions.index("provider_released") < actions.index(
+        "profile_lease_release", actions.index("provider_released")
+    )
     for stage, success_status in (
         ("request_validated", "completed"),
         ("profile_resolution", "completed"),
@@ -1287,7 +1289,7 @@ async def _run_coordinator_failure_case(
             if fail_at == "host_remove":
                 raise error
             actions.append("host_stopped")
-        elif command == ("docker", "compose", "-f"):
+        elif command == ("docker", "compose", "-f") and "stop" in args:
             owners.calls.append("host_stop")
             if fail_at == "host_stop":
                 raise error

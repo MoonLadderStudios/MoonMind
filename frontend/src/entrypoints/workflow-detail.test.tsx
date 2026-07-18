@@ -7978,9 +7978,9 @@ describe('Workflow Detail Entrypoint', () => {
     ) => ({
       sequence,
       timestamp: `2026-07-09T00:00:${String(sequence).padStart(2, '0')}Z`,
-      stream: 'system',
+      stream: 'stdout',
       text: '',
-      kind: `lifecycle.${stage}`,
+      kind: `lifecycle_${stage}`,
       sessionId: 'brs-failed-launch',
       metadata: { status, ...metadata },
     });
