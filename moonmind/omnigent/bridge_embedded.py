@@ -274,6 +274,11 @@ class OmnigentEmbeddedHostProtocolFacade:
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 
+    async def get_session_owner(self, session_id: str):
+        """Return the durable MoonMind owner for public control authorization."""
+
+        return await self._run_store.get_session_owner(session_id)
+
     async def create_session(
         self,
         *,

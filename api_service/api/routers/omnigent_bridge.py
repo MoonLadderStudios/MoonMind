@@ -991,20 +991,46 @@ async def stream_omnigent_bridge_session_events(
 async def post_omnigent_session_event(
     session_id: str,
     payload: BridgeSessionEventRequest,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Apply Omnigent controls, including bridge-local harvest/clear policy."""
 
+    control_facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if control_facade is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported Omnigent bridge host protocol mode.",
+            },
+        )
     await _authorize_session_control(
         session_id=session_id,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=control_facade,
     )
     try:
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            assert embedded_facade is not None
+            if payload.type not in {"stop", "session.stop"}:
+                raise OmnigentBridgeError(
+                    f"Embedded control {payload.type!r} is not supported.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    code="omnigent_embedded_control_unsupported",
+                )
+            return await embedded_facade.stop_runner(session_id=session_id)
         return await proxy.post_event(session_id=session_id, event=payload)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
