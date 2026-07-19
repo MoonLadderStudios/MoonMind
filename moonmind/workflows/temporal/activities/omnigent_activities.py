@@ -95,6 +95,7 @@ async def omnigent_oauth_host_janitor_activity(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.settings import (
@@ -115,6 +116,7 @@ async def omnigent_oauth_host_janitor_activity(
             repository=OmnigentOAuthHostRepository(async_session_maker),
             runtime=OmnigentOAuthHostRuntime(client=client),
             client=client,
+            run_store=OmnigentBridgeSessionStore(async_session_maker),
         ).run(
             profile_id=str((request or {}).get("profile_id") or "").strip() or None,
             force=bool((request or {}).get("force", False)),

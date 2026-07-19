@@ -342,6 +342,16 @@ async def test_runner_exit_without_terminal_event_creates_terminal_evidence(stor
         target_metadata={"workspace": "/workspace/repo"},
     )
     await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id=None,
+    )
     async with store._session_factory() as session:
         from api_service.db.models import OmnigentBridgeSession
 
@@ -363,6 +373,7 @@ async def test_runner_exit_without_terminal_event_creates_terminal_evidence(stor
     assert "secret-value" not in str(recovered.terminal_refs)
     assert [event.event_type for event in events] == ["lifecycle.terminal"]
     assert events[0].metadata_["metadata"]["janitorRequired"] is True
+    assert await store.cleanup_required_host_lease_refs() == {"host-lease-1"}
 
 
 @pytest.mark.asyncio

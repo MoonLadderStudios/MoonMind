@@ -215,6 +215,37 @@ class OmnigentBridgeSessionStore:
                 modes[key] = modes.get(key, 0) + 1
             return modes
 
+    async def cleanup_required_host_lease_refs(self) -> set[str]:
+        """Return active durable host leases whose terminal evidence needs cleanup.
+
+        This is intentionally derived from the canonical bridge rows on every
+        janitor pass, so an API restart cannot lose the handoff recorded by an
+        authoritative runner-exit frame.
+        """
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession.host_lease_ref).where(
+                    OmnigentBridgeSession.host_lease_ref.is_not(None),
+                    OmnigentBridgeSession.status.in_(_TERMINAL_STATUSES),
+                )
+            )
+            refs: set[str] = set()
+            for (host_lease_ref,) in result.all():
+                if not host_lease_ref:
+                    continue
+                row = await session.execute(
+                    select(OmnigentBridgeSession.terminal_refs).where(
+                        OmnigentBridgeSession.host_lease_ref == host_lease_ref
+                    )
+                )
+                if any(
+                    (terminal_refs or {}).get("cleanupState") == "runner_exited"
+                    for (terminal_refs,) in row.all()
+                ):
+                    refs.add(str(host_lease_ref))
+            return refs
+
     async def get_or_create(
         self,
         *,
