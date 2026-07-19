@@ -222,6 +222,8 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "disabled")
+    monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "disabled")
     _CreateTaskHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CreateTaskHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -366,8 +368,11 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 
 @pytest.mark.asyncio
 async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_target(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "disabled")
+    monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "disabled")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
         agentRunId="task-parent",

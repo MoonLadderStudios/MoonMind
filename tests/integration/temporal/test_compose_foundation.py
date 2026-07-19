@@ -780,7 +780,7 @@ def test_python_test_runtime_is_submodule_free_and_shared_by_compose_paths():
         "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
     )
     assert api_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
-        "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
+        "${MOONMIND_CONTAINER_JOBS_ENABLED:-false}"
     )
     assert compose["volumes"]["agent_workspaces"]["name"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"

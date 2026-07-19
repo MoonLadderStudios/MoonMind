@@ -40,14 +40,19 @@ class ContainerJobMcpClient:
         self,
         *,
         endpoint: str,
+        bearer_token: str | None = None,
         timeout_seconds: float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/") + "/tools/call"
+        headers = {"accept": "application/json"}
+        normalized_token = str(bearer_token or "").strip()
+        if normalized_token:
+            headers["authorization"] = f"Bearer {normalized_token}"
         self._client = httpx.Client(
             timeout=timeout_seconds,
             transport=transport,
-            headers={"accept": "application/json"},
+            headers=headers,
         )
 
     def close(self) -> None:
@@ -64,13 +69,16 @@ class ContainerJobMcpClient:
                 response.raise_for_status()
                 payload = response.json()
                 break
-            except httpx.TransportError as exc:
+            except httpx.RequestError as exc:
                 if attempt == 2:
                     raise ContainerJobCliError(
                         f"MoonMind container tool '{tool}' is unavailable: {exc}"
                     ) from exc
                 time.sleep(0.25 * (2**attempt))
             except httpx.HTTPStatusError as exc:
+                if exc.response.status_code >= 500 and attempt < 2:
+                    time.sleep(0.25 * (2**attempt))
+                    continue
                 detail = ""
                 try:
                     error_payload = exc.response.json()
@@ -86,6 +94,8 @@ class ContainerJobMcpClient:
                             else str(raw_detail or "")
                         )
                 except ValueError:
+                    # Error detail is optional; the HTTP status remains the
+                    # authoritative failure when the response body is not JSON.
                     pass
                 suffix = f": {detail}" if detail else ""
                 raise ContainerJobCliError(
@@ -118,6 +128,13 @@ def _mcp_endpoint(source: Mapping[str, str]) -> str:
     if explicit:
         return explicit
     return _required_env(source, "MOONMIND_URL").rstrip("/") + "/mcp"
+
+
+def _mcp_bearer_token(source: Mapping[str, str]) -> str | None:
+    return (
+        str(source.get("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN") or "").strip()
+        or None
+    )
 
 
 def python_test_submission(
@@ -199,7 +216,10 @@ def run_python_tests(
 
     source = os.environ if env is None else env
     owned_client = client is None
-    active_client = client or ContainerJobMcpClient(endpoint=_mcp_endpoint(source))
+    active_client = client or ContainerJobMcpClient(
+        endpoint=_mcp_endpoint(source),
+        bearer_token=_mcp_bearer_token(source),
+    )
     try:
         accepted = active_client.call(
             "container.submit",

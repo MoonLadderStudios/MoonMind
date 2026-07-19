@@ -54,6 +54,9 @@ class _FakeClient:
             "artifactsRef": "artifact:outputs" if state == "succeeded" else None,
         }
 
+    def close(self) -> None:
+        pass
+
 
 def test_python_test_submission_uses_canonical_managed_workspace_and_safe_argv(
 ) -> None:
@@ -118,6 +121,80 @@ def test_mcp_client_retries_ambiguous_transport_failure_with_same_payload(
     assert result == {"jobId": "job-1"}
     assert len(requests) == 3
     assert len({request.content for request in requests}) == 1
+
+
+def test_mcp_client_retries_transient_server_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+    monkeypatch.setattr("moonmind.container_job_cli.time.sleep", lambda _seconds: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) < 3:
+            return httpx.Response(503, json={"detail": "temporarily unavailable"})
+        return httpx.Response(200, json={"result": {"jobId": "job-1"}})
+
+    client = ContainerJobMcpClient(
+        endpoint="http://api:8000/mcp",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = client.call("container.submit", {"idempotencyKey": "stable-key"})
+    finally:
+        client.close()
+
+    assert result == {"jobId": "job-1"}
+    assert len(requests) == 3
+    assert len({request.content for request in requests}) == 1
+
+
+def test_mcp_client_sends_configured_bearer_token() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"result": {"jobId": "job-1"}})
+
+    client = ContainerJobMcpClient(
+        endpoint="http://api:8000/mcp",
+        bearer_token="scoped-session-token",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        client.call("container.submit", {"idempotencyKey": "stable-key"})
+    finally:
+        client.close()
+
+    assert requests[0].headers["authorization"] == "Bearer scoped-session-token"
+
+
+def test_run_python_tests_passes_scoped_bearer_token_to_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str | None] = {}
+    fake_client = _FakeClient(["succeeded"])
+
+    def client_factory(*, endpoint: str, bearer_token: str | None):
+        captured["endpoint"] = endpoint
+        captured["bearer_token"] = bearer_token
+        return fake_client
+
+    monkeypatch.setattr(
+        "moonmind.container_job_cli.ContainerJobMcpClient", client_factory
+    )
+
+    result = run_python_tests(
+        [],
+        env={**_ENV, "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "scoped-token"},
+        poll_seconds=0.001,
+    )
+
+    assert result.state == "succeeded"
+    assert captured == {
+        "endpoint": "http://api:8000/mcp",
+        "bearer_token": "scoped-token",
+    }
 
 
 def test_run_python_tests_polls_to_authoritative_terminal_evidence() -> None:

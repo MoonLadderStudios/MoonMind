@@ -32,7 +32,7 @@ app.add_typer(container_app, name="container")
     ),
 )
 def container_python_tests(
-    targets: Optional[List[str]] = typer.Argument(
+    targets: list[str] | None = typer.Argument(
         None, help="Optional pytest paths or node ids; defaults to tests/unit."
     ),
     timeout_seconds: int = typer.Option(3600, "--timeout-seconds", min=1, max=86400),

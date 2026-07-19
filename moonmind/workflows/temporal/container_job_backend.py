@@ -139,6 +139,12 @@ _FORBIDDEN_MOUNT_SOURCES = (
     "/run/docker.sock",
     "/var/lib/docker",
 )
+_MIN_VOLUME_SUBPATH_DOCKER_MAJOR = 26
+
+
+def _docker_major_version(server_version: str) -> int | None:
+    match = re.match(r"\s*(\d+)(?:\.\d+)?", str(server_version or ""))
+    return int(match.group(1)) if match is not None else None
 
 
 @runtime_checkable
@@ -482,7 +488,7 @@ class DockerContainerJobBackend:
                 "container-job backend is disabled by deployment configuration"
             )
         self._settings.require_endpoint()
-        code, _stdout, stderr = await self._runner(
+        code, stdout, stderr = await self._runner(
             ("version", "--format", "{{.Server.Version}}")
         )
         if code:
@@ -490,6 +496,19 @@ class DockerContainerJobBackend:
             raise ContainerBackendReadinessError(
                 f"container-job backend endpoint is unreachable: {detail}"
             )
+        if self._workspace_volume_name is not None:
+            server_version = stdout.decode(errors="replace").strip()
+            major_version = _docker_major_version(server_version)
+            if (
+                major_version is None
+                or major_version < _MIN_VOLUME_SUBPATH_DOCKER_MAJOR
+            ):
+                observed = server_version or "unknown"
+                raise ContainerBackendReadinessError(
+                    "container-job backend requires Docker Engine 26 or newer "
+                    "for workspace volume subpath mounts; selected daemon "
+                    f"reported {observed}"
+                )
         return ContainerJobActivityResult()
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
@@ -937,6 +956,24 @@ class DockerContainerJobBackend:
             raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
         volume_name = request.resolved_workspace_volume_name
         volume_subpath = request.resolved_workspace_volume_subpath
+        if (
+            not volume_name
+            and not volume_subpath
+            and self._workspace_volume_name is not None
+        ):
+            # Already-running workflows may carry the pre-volume Activity shape.
+            # Reconstruct only deployment-owned metadata at the trusted launch
+            # boundary so those histories use the same daemon-visible mount.
+            workspace = Path(request.resolved_workspace_ref).resolve()
+            if not workspace.is_relative_to(self._workspace_root):
+                raise RuntimeError("resolved workspace escapes its authority")
+            derived_subpath = workspace.relative_to(self._workspace_root).as_posix()
+            if not derived_subpath or derived_subpath == "." or "," in derived_subpath:
+                raise RuntimeError(
+                    "resolved workspace has an invalid volume subpath"
+                )
+            volume_name = self._workspace_volume_name
+            volume_subpath = derived_subpath
         if bool(volume_name) != bool(volume_subpath):
             raise RuntimeError("resolved workspace volume metadata is incomplete")
         if volume_name and volume_subpath:
