@@ -8,6 +8,8 @@ import pytest
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
     EmbeddedHostChannelRegistry,
+    EmbeddedRunnerChannel,
+    MAX_EMBEDDED_RESPONSE_BYTES,
 )
 
 
@@ -73,6 +75,51 @@ async def test_reconnect_fails_pending_request_and_replaces_channel() -> None:
         await pending
     assert second.accept_host_frame(_hello()) is second.hello
     assert registry.get_ready("host-1") is second
+
+
+def test_runner_response_limit_fails_future_and_clears_correlation() -> None:
+    class _ResponseBodyFrame:
+        def __init__(self, *, id: str, body: str) -> None:
+            self.id = id
+            self.body = body
+            self.encoding = "identity"
+
+    class Frames:
+        class ResponseHeadFrame:
+            pass
+
+        ResponseBodyFrame = _ResponseBodyFrame
+
+        class ResponseEndFrame:
+            pass
+
+        @staticmethod
+        def decode_frame(text: str) -> _ResponseBodyFrame:
+            payload = json.loads(text)
+            return _ResponseBodyFrame(id=payload["id"], body=payload["body"])
+
+        @staticmethod
+        def decode_body(body: str, _encoding: str) -> str:
+            return body
+
+    async def send(_text: str) -> None:
+        pass
+
+    future = asyncio.get_event_loop().create_future()
+    channel = EmbeddedRunnerChannel(
+        runner_id="runner-1", send_text=send, frames=Frames, hello=object()
+    )
+    channel._pending["request-1"] = {
+        "future": future,
+        "status": 200,
+        "body": ["x" * MAX_EMBEDDED_RESPONSE_BYTES],
+    }
+
+    channel.accept_frame(json.dumps({"id": "request-1", "body": "overflow"}))
+
+    with pytest.raises(EmbeddedHostChannelError, match="response exceeds size limit"):
+        future.result()
+    assert "request-1" not in channel._pending
 
 
 @pytest.mark.asyncio
