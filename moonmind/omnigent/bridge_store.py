@@ -146,6 +146,48 @@ class OmnigentBridgeSessionStore:
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
 
+    async def record_embedded_host_lifecycle(
+        self,
+        *,
+        host_id: str,
+        credential_generation: int,
+        capabilities: dict[str, Any] | None = None,
+        readiness: str | None = None,
+        disconnected: bool = False,
+    ) -> None:
+        """Persist embedded connection state on its exact profile host lease.
+
+        A host must already have been selected by the profile/lease coordinator;
+        the embedded protocol is not allowed to create or claim a lease.
+        """
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            lease = (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord).where(
+                        OmnigentOAuthHostLeaseRecord.omnigent_host_id == host_id,
+                        OmnigentOAuthHostLeaseRecord.credential_generation
+                        == credential_generation,
+                        OmnigentOAuthHostLeaseRecord.status.in_(
+                            {"starting", "ready", "assigned", "draining"}
+                        ),
+                    )
+                )
+            ).scalar_one_or_none()
+            if lease is None:
+                raise OmnigentIdempotencyError(
+                    "embedded host is not bound to an active profile lease"
+                )
+            lease.last_heartbeat_at = now
+            lease.disconnected_at = now if disconnected else None
+            if capabilities is not None:
+                lease.host_capabilities_json = dict(capabilities)
+            if readiness is not None:
+                lease.host_readiness = readiness[:32]
+            await session.commit()
+
     async def active_host_protocol_modes(
         self, *, exclude_idempotency_key: str | None = None
     ) -> dict[str, int]:

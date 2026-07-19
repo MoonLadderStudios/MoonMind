@@ -1401,13 +1401,14 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
-        verify_embedded_host_auth(
+        auth = verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
             configured_token=resolved_host_runner_token(),
         )
-        # The shared credential authenticates the stock host; the path value is
-        # its durable lease identity and is intentionally not token-derived.
+        if host_id != auth.runner_id:
+            await websocket.close(code=4403)
+            return
     except OmnigentBridgeError:
         await websocket.close(code=4401)
         return
@@ -1432,6 +1433,12 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         await websocket.close(code=4400)
     finally:
         embedded_host_channels.disconnect(channel)
+        try:
+            await facade.disconnect_host(host_id=host_id, auth=auth)
+        except OmnigentBridgeError:
+            # The durable lease may already have terminalized while the socket
+            # was closing; terminal state remains authoritative.
+            pass
 
 
 @router.websocket("/v1/runners/{runner_id}/tunnel")

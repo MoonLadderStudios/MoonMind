@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers
 
-from api_service.db.models import Base
+from api_service.db.models import Base, OmnigentOAuthHostLeaseRecord
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     parse_bridge_config,
@@ -84,6 +85,29 @@ def _request():
         correlationId="mm:wf-embedded",
         idempotencyKey="idem-embedded",
     )
+
+
+async def _bind_active_host(store, *, host_id: str = "runner-1") -> None:
+    now = datetime.now(UTC)
+    async with store._session_factory() as session:
+        session.add(
+            OmnigentOAuthHostLeaseRecord(
+                lease_id=f"lease-{host_id}",
+                provider_profile_id="profile-1",
+                provider_lease_id=f"provider-{host_id}",
+                binding_ref="binding-1",
+                credential_generation=1,
+                holder_workflow_id="workflow-1",
+                idempotency_key=f"host-{host_id}",
+                lease_purpose="execution_omnigent",
+                omnigent_host_id=host_id,
+                status="ready",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        await session.commit()
 
 
 def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
@@ -235,6 +259,7 @@ async def test_registration_rejects_runner_identity_substitution(store) -> None:
 
 @pytest.mark.asyncio
 async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> None:
+    await _bind_active_host(store)
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -258,6 +283,31 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
 
     assert registered["status"] == "registered"
     assert heartbeat["moonmind"]["hostProtocolMode"] == HOST_PROTOCOL_MODE_EMBEDDED
+    await facade.disconnect_host(host_id="runner-1", auth=auth)
+    async with store._session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "lease-runner-1")
+        assert lease.host_readiness == "disconnected"
+        assert lease.disconnected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_registration_rejects_host_without_profile_bound_lease(store) -> None:
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="unbound-host",
+        credential_generation=1,
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(hostId="unbound-host"), auth=auth
+        )
+
+    assert excinfo.value.status_code == 403
 
 
 @pytest.mark.asyncio

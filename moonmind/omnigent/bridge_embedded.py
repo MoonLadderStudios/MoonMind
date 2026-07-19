@@ -518,6 +518,17 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        try:
+            await self._run_store.record_embedded_host_lifecycle(
+                host_id=host_id,
+                credential_generation=auth.credential_generation,
+                capabilities=request.capabilities,
+                readiness="registered",
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="user_error", status_code=403
+            ) from exc
         return {
             "hostId": host_id,
             "runnerId": runner_id,
@@ -544,6 +555,17 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        try:
+            await self._run_store.record_embedded_host_lifecycle(
+                host_id=_clean(host_id),
+                credential_generation=auth.credential_generation,
+                capabilities=request.capabilities,
+                readiness=request.status,
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="user_error", status_code=403
+            ) from exc
         return {
             "hostId": _clean(host_id),
             "status": request.status,
@@ -554,6 +576,28 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "protocolProfile": auth.protocol_profile,
             },
         }
+
+    async def disconnect_host(
+        self, *, host_id: str, auth: EmbeddedHostAuthContext
+    ) -> None:
+        """Durably mark the exact authenticated host connection disconnected."""
+        if _clean(host_id) != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner identity does not match host binding",
+                failure_class="user_error",
+                status_code=403,
+            )
+        try:
+            await self._run_store.record_embedded_host_lifecycle(
+                host_id=_clean(host_id),
+                credential_generation=auth.credential_generation,
+                readiness="disconnected",
+                disconnected=True,
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="user_error", status_code=403
+            ) from exc
 
     async def ingest_session_event(
         self,
