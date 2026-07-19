@@ -7,6 +7,7 @@ from typing import List, Optional
 
 import typer
 
+from moonmind.container_job_cli import ContainerJobCliError, run_python_tests
 from moonmind.manifest import manifest_cli
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
@@ -16,9 +17,47 @@ app = typer.Typer(help="MoonMind developer utilities.")
 rag_app = typer.Typer(help="Retrieval helpers for Codex workers.")
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
 manifest_app = typer.Typer(help="Manifest schema validation and pipeline commands.")
+container_app = typer.Typer(help="Run work through MoonMind's Docker backend.")
 app.add_typer(rag_app, name="rag")
 app.add_typer(worker_app, name="worker")
 app.add_typer(manifest_app, name="manifest")
+app.add_typer(container_app, name="container")
+
+
+@container_app.command(
+    "python-tests",
+    help=(
+        "Run Python unit tests in the active managed workspace through a durable "
+        "container job."
+    ),
+)
+def container_python_tests(
+    targets: list[str] | None = typer.Argument(
+        None, help="Optional pytest paths or node ids; defaults to tests/unit."
+    ),
+    timeout_seconds: int = typer.Option(3600, "--timeout-seconds", min=1, max=86400),
+) -> None:
+    try:
+        result = run_python_tests(targets or [], timeout_seconds=timeout_seconds)
+    except ContainerJobCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    for line in result.log_tail:
+        typer.echo(line)
+    if result.log_error:
+        typer.secho(
+            f"Warning: terminal logs could not be read: {result.log_error}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    typer.echo(
+        f"container job {result.job_id}: {result.state} "
+        f"(exitCode={result.exit_code}, logsRef={result.logs_ref}, "
+        f"artifactsRef={result.artifacts_ref})"
+    )
+    if result.state != "succeeded" or result.exit_code not in {None, 0}:
+        raise typer.Exit(code=1)
+
 
 @rag_app.command(
     "search", help="Embed a query, query Qdrant, and print a context block."

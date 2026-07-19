@@ -234,7 +234,11 @@ async def test_backend_resolves_sandbox_relative_path(tmp_path) -> None:
 
 def _result_for(name: str) -> ContainerJobActivityResult:
     if name.endswith("resolve_workspace"):
-        return ContainerJobActivityResult(resolvedWorkspaceRef="ws:resolved")
+        return ContainerJobActivityResult(
+            resolvedWorkspaceRef="ws:resolved",
+            resolvedWorkspaceVolumeName="agent_workspaces",
+            resolvedWorkspaceVolumeSubpath="run-1/repo",
+        )
     if name.endswith("acquire_image"):
         return ContainerJobActivityResult(resolvedImageRef="sha256:image")
     if name.endswith("reconcile_container"):
@@ -248,6 +252,28 @@ def _result_for(name: str) -> ContainerJobActivityResult:
             logsRef="art:logs", artifactsRef="art:outputs"
         )
     return ContainerJobActivityResult()
+
+
+@pytest.mark.asyncio
+async def test_workspace_volume_mount_survives_activity_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+    create_request: ContainerJobActivityRequest | None = None
+
+    async def activity(name, request):
+        nonlocal create_request
+        if name == "container_job.create_container":
+            create_request = request.model_copy(deep=True)
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["state"] == "succeeded"
+    assert create_request is not None
+    assert create_request.resolved_workspace_volume_name == "agent_workspaces"
+    assert create_request.resolved_workspace_volume_subpath == "run-1/repo"
 
 
 @pytest.mark.asyncio

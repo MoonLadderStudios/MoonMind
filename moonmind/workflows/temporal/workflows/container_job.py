@@ -147,6 +147,12 @@ class MoonMindContainerJobWorkflow:
                     "container_job.resolve_workspace", request
                 )
                 request.resolved_workspace_ref = resolved.resolved_workspace_ref
+                request.resolved_workspace_volume_name = (
+                    resolved.resolved_workspace_volume_name
+                )
+                request.resolved_workspace_volume_subpath = (
+                    resolved.resolved_workspace_volume_subpath
+                )
                 request.workspace_probe = resolved.workspace_probe
             if not self._cancel_requested:
                 await self._project(request, ContainerJobState.ACQUIRING_IMAGE)

@@ -2723,6 +2723,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 ),
                 secret_resolver=_container_job_secret_resolver(),
                 managed_run_store=run_store,
+                workspace_volume_name=os.environ.get(
+                    "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"
+                ),
                 # Publish bounded live incremental logs to a MoonMind-controlled
                 # spool root that is never mounted into a job container.
                 log_spool_root=os.environ.get(

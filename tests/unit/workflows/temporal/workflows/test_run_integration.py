@@ -1008,6 +1008,7 @@ async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
     workflow._title = "DooD workload"
+    workflow._target_runtime = "codex"
     captured: list[tuple[str, Any, dict[str, Any]]] = []
 
     async def fake_execute_activity(
@@ -1046,7 +1047,6 @@ async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
                             "idempotencyKey": "wf-1:workload-step:1",
                             "spec": {
                                 "image": "python:3.12",
-                                "workspaceRef": {"kind": "sandbox", "workspaceId": "ws-1"},
                                 "command": ["python", "-V"],
                                 "resources": {"cpuMillis": 100, "memoryMiB": 64},
                             },
@@ -1128,8 +1128,9 @@ async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
         "stepId": "workload-step",
     }
     assert request["spec"]["workspaceRef"] == {
-        "kind": "sandbox",
-        "workspaceId": "ws-1",
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": "wf-1",
         "relativePath": "repo",
     }
     assert [call[0] for call in captured].count("container_job.status") == 1
