@@ -530,6 +530,28 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_exit_diagnostics_are_redacted_before_persistence(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    await store.record_embedded_runner_exit(
+        runner_id="runner-1", error="launch failed token=supersecret"
+    )
+
+    row = await store.get_existing("idem-embedded")
+    assert row.metadata_["embedded_runner_exit"]["error"] == (
+        "launch failed token=[REDACTED]"
+    )
+
+
+@pytest.mark.asyncio
 async def test_first_message_uses_durable_runner_and_canonical_posting_state(store) -> None:
     await store.bind_profile_authorization(
         request=_request(), endpoint_ref="embedded",
@@ -601,6 +623,22 @@ async def test_runner_tunnel_reconnect_aborts_ambiguous_post_and_newest_wins() -
 
     registry.disconnect_runner(old)
     assert registry._runners["runner-1"] is new
+
+
+def test_terminal_runner_binding_cannot_be_replayed() -> None:
+    registry = EmbeddedHostChannelRegistry()
+    token = "runner-binding-token"
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({token})
+    ).runner_id_for_binding_token(token)
+    registry._runner_tokens[runner_id] = token
+    headers = Headers({"X-Omnigent-Runner-Tunnel-Token": token})
+
+    assert registry.authenticate_runner(runner_id=runner_id, headers=headers) == runner_id
+    registry.revoke_runner_binding(runner_id)
+
+    with pytest.raises(EmbeddedHostChannelError, match="binding is unavailable"):
+        registry.authenticate_runner(runner_id=runner_id, headers=headers)
 
 
 @pytest.mark.asyncio

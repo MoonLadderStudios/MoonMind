@@ -228,6 +228,19 @@ class EmbeddedHostChannelRegistry:
             raise EmbeddedHostChannelError("runner id does not match launch binding")
         return identity.runner_id
 
+    def revoke_runner_binding(self, runner_id: str) -> None:
+        """Invalidate a terminal runner's credential and live tunnel.
+
+        Reconnects remain possible while the runner is active, but an exit
+        frame is authoritative: its launch credential must never authenticate
+        a later, replayed tunnel.
+        """
+
+        self._runner_tokens.pop(runner_id, None)
+        channel = self._runners.pop(runner_id, None)
+        if channel is not None:
+            channel.disconnect()
+
     def connect_runner(
         self, *, runner_id: str, send_text: SendText, hello_text: str
     ) -> EmbeddedRunnerChannel:

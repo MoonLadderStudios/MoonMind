@@ -1332,11 +1332,14 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
-        verify_embedded_host_auth(
+        auth = verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
             configured_token=resolved_host_runner_token(),
         )
+        if str(host_id).strip() != auth.runner_id:
+            await websocket.close(code=4403)
+            return
     except OmnigentBridgeError:
         await websocket.close(code=4401)
         return
@@ -1354,6 +1357,7 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
                 await facade.record_runner_exit(
                     runner_id=frame.runner_id, error=frame.error
                 )
+                embedded_host_channels.revoke_runner_binding(frame.runner_id)
     except WebSocketDisconnect:
         pass
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):

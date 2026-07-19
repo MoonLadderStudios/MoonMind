@@ -411,6 +411,8 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession | None:
         """Persist the host's authoritative early runner-exit signal."""
 
+        from moonmind.utils.logging import redact_sensitive_text
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
@@ -424,7 +426,7 @@ class OmnigentBridgeSessionStore:
             metadata = dict(row.metadata_ or {})
             metadata["embedded_runner_exit"] = {
                 "runnerId": runner_id,
-                "error": str(error)[:512],
+                "error": redact_sensitive_text(str(error))[:512],
                 "recordedAt": datetime.now(tz=UTC).isoformat(),
             }
             row.metadata_ = metadata
