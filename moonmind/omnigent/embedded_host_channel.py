@@ -20,10 +20,17 @@ from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 SendText = Callable[[str], Awaitable[None]]
 MAX_PENDING_HOST_REQUESTS = 128
 MAX_PENDING_RUNNER_REQUESTS = 128
+MAX_EMBEDDED_FRAME_BYTES = 1_048_576
+MAX_EMBEDDED_RESPONSE_BYTES = 8_388_608
 
 
 class EmbeddedHostChannelError(RuntimeError):
     """A host channel violated lifecycle or correlation rules."""
+
+
+def _require_bounded_frame(text: str) -> None:
+    if len(text.encode("utf-8")) > MAX_EMBEDDED_FRAME_BYTES:
+        raise EmbeddedHostChannelError("embedded protocol frame exceeds size limit")
 
 
 @dataclass(slots=True)
@@ -58,6 +65,7 @@ class EmbeddedRunnerChannel:
             self._pending.pop(request_id, None)
 
     def accept_frame(self, text: str) -> None:
+        _require_bounded_frame(text)
         try:
             frame = self.frames.decode_frame(text)
         except ValueError as exc:
@@ -69,7 +77,19 @@ class EmbeddedRunnerChannel:
         if isinstance(frame, self.frames.ResponseHeadFrame):
             pending["status"] = frame.status
         elif isinstance(frame, self.frames.ResponseBodyFrame):
-            pending["body"].append(self.frames.decode_body(frame.body, frame.encoding))
+            part = self.frames.decode_body(frame.body, frame.encoding)
+            current_size = sum(
+                len(value.encode("utf-8")) if isinstance(value, str) else len(value)
+                for value in pending["body"]
+            )
+            part_size = len(part.encode("utf-8")) if isinstance(part, str) else len(part)
+            if current_size + part_size > MAX_EMBEDDED_RESPONSE_BYTES:
+                pending["future"].set_exception(
+                    EmbeddedHostChannelError("runner response exceeds size limit")
+                )
+                self._pending.pop(request_id, None)
+                return
+            pending["body"].append(part)
         elif isinstance(frame, self.frames.ResponseEndFrame):
             status = pending["status"]
             body = b"".join(
@@ -103,6 +123,7 @@ class EmbeddedHostChannel:
     _pending: dict[str, asyncio.Future[Any]] = field(default_factory=dict)
 
     def accept_host_frame(self, text: str) -> Any:
+        _require_bounded_frame(text)
         frame = self.adapter.decode_host_frame(text)
         frames = self.adapter.frames
         if self.hello is None:

@@ -46,6 +46,7 @@ from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
     EmbeddedHostChannelRegistry,
     EmbeddedRunnerChannel,
+    MAX_EMBEDDED_FRAME_BYTES,
     MAX_PENDING_HOST_REQUESTS,
     MAX_PENDING_RUNNER_REQUESTS,
 )
@@ -225,6 +226,25 @@ async def test_live_tunnels_bound_concurrent_requests() -> None:
     }
     with pytest.raises(EmbeddedHostChannelError, match="request limit"):
         await runner.request("GET", "/resource")
+
+
+@pytest.mark.asyncio
+async def test_live_tunnels_reject_oversized_frames_before_decoding() -> None:
+    registry = EmbeddedHostChannelRegistry()
+
+    async def send_text(_text: str) -> None:
+        return None
+
+    oversized = "x" * (MAX_EMBEDDED_FRAME_BYTES + 1)
+    host = registry.connect(host_id="host-1", send_text=send_text)
+    with pytest.raises(EmbeddedHostChannelError, match="frame exceeds size limit"):
+        host.accept_host_frame(oversized)
+
+    runner = EmbeddedRunnerChannel(
+        runner_id="runner-1", send_text=send_text, frames=object(), hello=object()
+    )
+    with pytest.raises(EmbeddedHostChannelError, match="frame exceeds size limit"):
+        runner.accept_frame(oversized)
 
 
 @pytest.mark.asyncio
