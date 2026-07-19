@@ -1,6 +1,7 @@
 """Hermetic conformance tests for the pinned stock-host frame profile."""
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -53,9 +54,9 @@ def test_encodes_exact_stock_host_launch_and_stop_commands() -> None:
         )
     )
 
-    assert '"kind":"host.launch_runner"' in launch
-    assert '"binding_token":"redacted-test-binding"' in launch
-    assert '"kind":"host.stop_runner"' in stop
+    assert json.loads(launch)["kind"] == "host.launch_runner"
+    assert json.loads(launch)["binding_token"] == "redacted-test-binding"
+    assert json.loads(stop)["kind"] == "host.stop_runner"
 
 
 def test_rejects_incompatible_misdirected_and_oversized_frames() -> None:

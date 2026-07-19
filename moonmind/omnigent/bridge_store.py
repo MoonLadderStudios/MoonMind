@@ -385,6 +385,32 @@ class OmnigentBridgeSessionStore:
             await session.refresh(row)
             return _detached(session, row)
 
+    async def record_embedded_runner_exit(
+        self, *, runner_id: str, error: str
+    ) -> OmnigentBridgeSession | None:
+        """Persist the host's authoritative early runner-exit signal."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.omnigent_runner_id == runner_id)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            row.status = "failed"
+            metadata = dict(row.metadata_ or {})
+            metadata["embedded_runner_exit"] = {
+                "runnerId": runner_id,
+                "error": str(error)[:512],
+                "recordedAt": datetime.now(tz=UTC).isoformat(),
+            }
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
     async def record_lifecycle_event(
         self,
         idempotency_key: str,

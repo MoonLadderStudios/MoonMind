@@ -235,6 +235,13 @@ class OmnigentEmbeddedHostProtocolFacade:
             ) from exc
         return {"runnerId": runner_id, "reused": False}
 
+    async def record_runner_exit(self, *, runner_id: str, error: str) -> None:
+        """Record a stock host's authoritative runner process failure."""
+
+        await self._run_store.record_embedded_runner_exit(
+            runner_id=runner_id, error=error
+        )
+
     async def create_session(
         self,
         *,

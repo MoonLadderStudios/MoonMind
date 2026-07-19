@@ -74,6 +74,7 @@ class EmbeddedHostChannelRegistry:
 
     def __init__(self) -> None:
         self._channels: dict[str, EmbeddedHostChannel] = {}
+        self._runner_tokens: dict[str, str] = {}
 
     def connect(self, *, host_id: str, send_text: SendText) -> EmbeddedHostChannel:
         previous = self._channels.get(host_id)
@@ -117,10 +118,29 @@ class EmbeddedHostChannelRegistry:
         )
         result = await channel.request(frame)
         if result.status != "launched":
-            raise EmbeddedHostChannelError("host rejected runner launch")
+            error_code = str(getattr(result, "error_code", "") or "").strip()
+            error = str(getattr(result, "error", "") or "").strip()
+            detail = ": ".join(part for part in (error_code, error) if part)
+            raise EmbeddedHostChannelError(
+                f"host rejected runner launch{': ' + detail if detail else ''}"
+            )
         if result.runner_id != identity:
             raise EmbeddedHostChannelError("host returned an invalid runner identity")
+        self._runner_tokens[identity] = binding_token
         return identity
+
+    def authenticate_runner(self, *, runner_id: str, headers: Any) -> str:
+        """Verify a spawned runner against its host-launch binding token."""
+
+        token = self._runner_tokens.get(runner_id)
+        if token is None:
+            raise EmbeddedHostChannelError("runner launch binding is unavailable")
+        identity = OmnigentHostAuthAdapter(
+            allowed_tokens=frozenset({token})
+        ).verify(headers)
+        if identity.runner_id != runner_id:
+            raise EmbeddedHostChannelError("runner id does not match launch binding")
+        return identity.runner_id
 
 
 embedded_host_channels = EmbeddedHostChannelRegistry()

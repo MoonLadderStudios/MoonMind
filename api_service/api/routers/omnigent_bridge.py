@@ -1256,13 +1256,13 @@ async def register_embedded_omnigent_host(
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.websocket("/v1/hosts/tunnel")
-async def embedded_omnigent_host_tunnel(websocket: WebSocket) -> None:
+@router.websocket("/v1/hosts/{host_id}/tunnel")
+async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> None:
     """Serve the pinned stock-host frame protocol over one authenticated tunnel."""
 
     try:
         config = get_bridge_config()
-        if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
         auth = verify_embedded_host_auth(
@@ -1275,17 +1275,49 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket) -> None:
         return
     await websocket.accept()
     channel = embedded_host_channels.connect(
-        host_id=auth.runner_id, send_text=websocket.send_text
+        host_id=host_id, send_text=websocket.send_text
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
     )
     try:
         while True:
-            channel.accept_host_frame(await websocket.receive_text())
+            frame = channel.accept_host_frame(await websocket.receive_text())
+            if isinstance(frame, channel.adapter.frames.HostRunnerExitedFrame):
+                await facade.record_runner_exit(
+                    runner_id=frame.runner_id, error=frame.error
+                )
     except WebSocketDisconnect:
         pass
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4400)
     finally:
         embedded_host_channels.disconnect(channel)
+
+
+@router.websocket("/v1/runners/{runner_id}/tunnel")
+async def embedded_omnigent_runner_tunnel(
+    websocket: WebSocket, runner_id: str
+) -> None:
+    """Accept the stock runner tunnel created by an embedded host launch."""
+
+    config = get_bridge_config()
+    if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        await websocket.close(code=4404)
+        return
+    try:
+        embedded_host_channels.authenticate_runner(
+            runner_id=runner_id, headers=websocket.headers
+        )
+    except (EmbeddedHostChannelError, UpstreamHostProtocolError):
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)

@@ -274,9 +274,9 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
 
     await store.bind_profile_authorization(
         request=AgentExecutionRequest(
-            agentKind="external",
-            agentId="omnigent",
-            correlationId="corr-create",
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="mm:wf-embedded",
             idempotencyKey="idem-create",
         ),
         endpoint_ref="embedded",
@@ -391,6 +391,12 @@ async def test_embedded_event_rejects_cross_host_binding(store) -> None:
 async def test_embedded_session_events_preserve_full_payload_and_errors(
     store,
 ) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
     row = await store.get_or_create(
         request=_request(),
         endpoint_ref="embedded",
