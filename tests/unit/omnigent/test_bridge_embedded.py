@@ -76,7 +76,7 @@ def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
     )
 
     assert context.auth_mode == "upstream_runner_tunnel"
-    assert context.protocol_profile == "omnigent.runner_tunnel.b95e41ec"
+    assert context.protocol_profile == "omnigent.runner_tunnel.7da32637"
     assert context.runner_id.startswith("runner_token_")
 
 
@@ -139,7 +139,7 @@ async def test_registration_rejects_runner_identity_substitution(store) -> None:
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
         runner_id="runner-authenticated",
         credential_generation=1,
     )
@@ -169,7 +169,7 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
         runner_id="runner-1",
         credential_generation=1,
     )
@@ -214,7 +214,7 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
         ),
         auth=EmbeddedHostAuthContext(
             auth_mode="upstream_runner_tunnel",
-            protocol_profile="omnigent.runner_tunnel.b95e41ec",
+            protocol_profile="omnigent.runner_tunnel.7da32637",
             runner_id="host-1",
             credential_generation=1,
         ),
@@ -283,7 +283,7 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.b95e41ec",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
         runner_id="host-1",
         credential_generation=1,
     )
