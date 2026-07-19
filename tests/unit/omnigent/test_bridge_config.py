@@ -228,6 +228,27 @@ def test_host_protocol_mode_accepts_embedded() -> None:
         config.host_connection.embedded.host_auth_conformance_evidence_ref
         == "artifact://omnigent/host-auth"
     )
+    assert config.readiness() == {
+        "enabled": True,
+        "selectedMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        "protocolProfile": "omnigent.runner_tunnel.7da32637",
+        "upstreamComponentVersion": "7da32637",
+        "conformanceState": "ready",
+        "evidenceRefs": {
+            "proxyConformance": "artifact://omnigent/proxy-conformance",
+            "liveSmoke": "artifact://omnigent/live-smoke",
+            "hostAuthConformance": "artifact://omnigent/host-auth",
+        },
+    }
+
+
+def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence() -> None:
+    readiness = parse_bridge_config({}).readiness()
+
+    assert readiness["selectedMode"] == HOST_PROTOCOL_MODE_PROXY
+    assert readiness["protocolProfile"] == "omnigent.server.v1"
+    assert readiness["conformanceState"] == "ready"
+    assert readiness["evidenceRefs"] == {}
 
 
 def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:

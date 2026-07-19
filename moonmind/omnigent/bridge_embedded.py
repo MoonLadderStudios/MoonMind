@@ -354,6 +354,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "hostType": request.host_type,
                 "hostId": authorized.omnigent_host_id,
                 "workspace": (request.workspace or "").strip() or None,
+                "hostProtocolMode": self._config.host_protocol_mode,
             },
             workflow_id=binding.workflow_id,
             agent_run_id=binding.agent_run_id,

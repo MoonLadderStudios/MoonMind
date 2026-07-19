@@ -35,6 +35,7 @@ _USER_ID = uuid4()
 _CREATE_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions"
 _AGENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"
 _HOSTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/hosts"
+_READINESS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/readiness"
 _EVENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/events"
 _ELICITATION_RESOLVE_PATH = (
     f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/elicitations/el-1/resolve"
@@ -43,6 +44,20 @@ _ELICITATION_RESOLVE_PATH = (
 # Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
 # bound" from "use the default mm:w1 owner".
 _UNSET = object()
+
+
+def test_readiness_reports_selected_mode_and_conformance_state() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    client = TestClient(app)
+
+    response = client.get(_READINESS_PATH)
+
+    assert response.status_code == 200
+    assert response.json()["selectedMode"] == "upstream_omnigent_server_proxy"
+    assert response.json()["protocolProfile"] == "omnigent.server.v1"
+    assert response.json()["conformanceState"] == "ready"
 
 
 def _mock_user():

@@ -122,6 +122,16 @@ def _require_bridge_enabled() -> OmnigentBridgeConfig:
     return _BRIDGE_CONFIG
 
 
+@router.get("/readiness", response_model=dict)
+async def get_omnigent_bridge_readiness(
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    _user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Expose selected protocol and conformance gates without secret material."""
+
+    return config.readiness()
+
+
 def _require_proxy_mode(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentBridgeConfig:

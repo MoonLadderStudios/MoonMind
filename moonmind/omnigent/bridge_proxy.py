@@ -277,6 +277,7 @@ class OmnigentBridgeSessionProxy:
             target_metadata={
                 "hostType": selection.session.host_type,
                 "workspace": selection.session.workspace,
+                "hostProtocolMode": self._config.host_protocol_mode,
             },
             workflow_id=binding.workflow_id,
             agent_run_id=binding.effective_agent_run_id,
