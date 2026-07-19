@@ -46,6 +46,27 @@ async def store(tmp_path):
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_active_host_protocol_modes_reports_ownership_and_unknown(store) -> None:
+    proxy = await store.get_or_create(
+        request=_request("proxy"), endpoint_ref="endpoint", agent_id=None,
+        agent_name=None, target_metadata={"hostProtocolMode": "proxy"},
+    )
+    await store.get_or_create(
+        request=_request("legacy"), endpoint_ref="endpoint", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    await store.get_or_create(
+        request=_request("terminal"), endpoint_ref="endpoint", agent_id=None,
+        agent_name=None, target_metadata={"hostProtocolMode": "embedded"},
+    )
+    await store.record_lifecycle_event(
+        "terminal", event_type="terminal", status="completed",
+    )
+
+    assert await store.active_host_protocol_modes() == {"proxy": 1, "unknown": 1}
+
+
 def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
     step = None
     if with_step:

@@ -146,6 +146,27 @@ class OmnigentBridgeSessionStore:
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
 
+    async def active_host_protocol_modes(self) -> dict[str, int]:
+        """Return durable protocol-mode ownership for non-terminal sessions.
+
+        A missing mode is deliberately reported as ``unknown``.  Deployments
+        must not switch the host protocol while a legacy/ambiguous active row
+        exists because doing so could route its controls to the wrong owner.
+        """
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession.metadata_).where(
+                    OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES)
+                )
+            )
+            modes: dict[str, int] = {}
+            for metadata in result.scalars().all():
+                mode = str((metadata or {}).get("hostProtocolMode") or "").strip()
+                key = mode or "unknown"
+                modes[key] = modes.get(key, 0) + 1
+            return modes
+
     async def get_or_create(
         self,
         *,

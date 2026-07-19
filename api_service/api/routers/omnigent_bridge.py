@@ -217,6 +217,35 @@ def _get_bridge_store(
     return OmnigentBridgeSessionStore(async_session_maker)
 
 
+async def _require_mode_transition_safe(
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> OmnigentBridgeConfig:
+    """Prevent a configured mode change from orphaning active session owners."""
+
+    active_modes = await store.active_host_protocol_modes()
+    conflicts = {
+        mode: count
+        for mode, count in active_modes.items()
+        if mode != config.host_protocol_mode
+    }
+    if conflicts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_bridge_mode_transition_blocked",
+                "message": (
+                    "The configured Omnigent host protocol mode cannot take "
+                    "ownership while active sessions belong to another or an "
+                    "unknown mode. Drain or terminalize those sessions first."
+                ),
+                "selectedMode": config.host_protocol_mode,
+                "activeSessionModes": conflicts,
+            },
+        )
+    return config
+
+
 def _get_embedded_host_facade(
     _config: OmnigentBridgeConfig = Depends(_require_embedded_mode),
 ) -> OmnigentEmbeddedHostProtocolFacade:
@@ -336,7 +365,7 @@ async def _resolve_bridge_binding(
 @router.post(_ROUTES.create_session, response_model=dict)
 async def create_omnigent_session(
     payload: BridgeSessionCreateRequest,
-    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    config: OmnigentBridgeConfig = Depends(_require_mode_transition_safe),
     user: User = Depends(get_current_user()),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),

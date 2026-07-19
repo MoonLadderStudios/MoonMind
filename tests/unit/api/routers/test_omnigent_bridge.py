@@ -183,6 +183,10 @@ class _FakeStore:
             ]
         )
         self._session_overrides = session_overrides or {}
+        self.active_modes: dict[str, int] = {}
+
+    async def active_host_protocol_modes(self):
+        return self.active_modes
 
     async def get_bridge_session_owner(self, bridge_session_id: str):
         return self._owner
@@ -313,6 +317,30 @@ def test_create_session_success_at_mount_path() -> None:
     assert binding.workflow_id == "mm:w1"
     assert binding.idempotency_key == "idem-1"
     assert binding.correlation_id == "corr-1"
+
+
+def test_create_session_blocks_mode_transition_with_active_other_mode() -> None:
+    store = _FakeStore()
+    store.active_modes = {HOST_PROTOCOL_MODE_EMBEDDED: 2, "unknown": 1}
+    client, proxy, _ = _build(store=store)
+
+    response = client.post(_CREATE_PATH, json=_create_body())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "omnigent_bridge_mode_transition_blocked",
+        "message": (
+            "The configured Omnigent host protocol mode cannot take ownership "
+            "while active sessions belong to another or an unknown mode. Drain "
+            "or terminalize those sessions first."
+        ),
+        "selectedMode": "upstream_omnigent_server_proxy",
+        "activeSessionModes": {
+            HOST_PROTOCOL_MODE_EMBEDDED: 2,
+            "unknown": 1,
+        },
+    }
+    assert not proxy.created
 
 
 def test_create_session_requires_idempotency_label() -> None:
