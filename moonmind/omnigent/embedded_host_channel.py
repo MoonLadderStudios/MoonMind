@@ -18,6 +18,8 @@ from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 
 
 SendText = Callable[[str], Awaitable[None]]
+MAX_PENDING_HOST_REQUESTS = 128
+MAX_PENDING_RUNNER_REQUESTS = 128
 
 
 class EmbeddedHostChannelError(RuntimeError):
@@ -37,6 +39,8 @@ class EmbeddedRunnerChannel:
     async def request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> bytes:
+        if len(self._pending) >= MAX_PENDING_RUNNER_REQUESTS:
+            raise EmbeddedHostChannelError("runner request limit reached")
         request_id = secrets.token_hex(16)
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = {"future": future, "status": None, "body": []}
@@ -118,6 +122,8 @@ class EmbeddedHostChannel:
     async def request(self, frame: Any, *, timeout_seconds: float = 30.0) -> Any:
         if self.hello is None:
             raise EmbeddedHostChannelError("host is not ready")
+        if len(self._pending) >= MAX_PENDING_HOST_REQUESTS:
+            raise EmbeddedHostChannelError("host command limit reached")
         request_id = str(getattr(frame, "request_id", "") or "")
         if not request_id or request_id in self._pending:
             raise EmbeddedHostChannelError("command request id is missing or active")

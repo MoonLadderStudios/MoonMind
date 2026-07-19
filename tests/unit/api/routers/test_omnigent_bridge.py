@@ -939,7 +939,7 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     assert facade.stopped == ["sess-77"]
 
 
-def test_interrupt_embedded_control_stops_runner() -> None:
+def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
@@ -964,6 +964,6 @@ def test_interrupt_embedded_control_stops_runner() -> None:
 
     response = client.post(_EVENTS_PATH, json={"type": "interrupt"})
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "stopped"
-    assert facade.stopped == ["sess-77"]
+    assert response.status_code == 501
+    assert response.json()["detail"]["code"] == "omnigent_embedded_control_unsupported"
+    assert facade.stopped == []

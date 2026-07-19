@@ -1070,9 +1070,16 @@ async def post_omnigent_session_event(
                 "stop",
                 "session.stop",
                 "stop_session",
-                "interrupt",
             }:
                 return await embedded_facade.stop_runner(session_id=session_id)
+            if payload.type == "interrupt":
+                raise OmnigentBridgeError(
+                    "Embedded interrupt is not supported by the pinned host "
+                    "protocol; use stop when terminating the runner is intended.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    code="omnigent_embedded_control_unsupported",
+                )
             if payload.type not in {"message", "user.message"}:
                 raise OmnigentBridgeError(
                     f"Embedded control {payload.type!r} is not supported.",

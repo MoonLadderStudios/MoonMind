@@ -44,6 +44,9 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
     EmbeddedHostChannelRegistry,
+    EmbeddedRunnerChannel,
+    MAX_PENDING_HOST_REQUESTS,
+    MAX_PENDING_RUNNER_REQUESTS,
 )
 from moonmind.omnigent.runner_protocol_adapter import runner_frames
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -168,6 +171,36 @@ def test_embedded_host_payloads_enforce_protocol_bounds() -> None:
             type="response.delta",
             data={"text": "x" * MAX_EMBEDDED_EVENT_BYTES},
         )
+
+
+@pytest.mark.asyncio
+async def test_live_tunnels_bound_concurrent_requests() -> None:
+    registry = EmbeddedHostChannelRegistry()
+
+    async def send_text(_text: str) -> None:
+        return None
+
+    host = registry.connect(host_id="host-1", send_text=send_text)
+    host.hello = object()
+    loop = asyncio.get_running_loop()
+    host._pending = {
+        str(index): loop.create_future() for index in range(MAX_PENDING_HOST_REQUESTS)
+    }
+    frame = type("Frame", (), {"request_id": "next"})()
+    with pytest.raises(EmbeddedHostChannelError, match="command limit"):
+        await host.request(frame)
+
+    frames = runner_frames()
+    # Exercise the production channel without depending on an upstream hello shape.
+    runner = EmbeddedRunnerChannel(
+        runner_id="runner-1", send_text=send_text, frames=frames, hello=object()
+    )
+    runner._pending = {
+        str(index): {"future": loop.create_future(), "status": None, "body": []}
+        for index in range(MAX_PENDING_RUNNER_REQUESTS)
+    }
+    with pytest.raises(EmbeddedHostChannelError, match="request limit"):
+        await runner.request("GET", "/resource")
 
 
 @pytest.mark.asyncio
