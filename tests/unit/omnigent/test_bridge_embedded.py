@@ -311,6 +311,61 @@ async def test_registration_rejects_host_without_profile_bound_lease(store) -> N
 
 
 @pytest.mark.asyncio
+async def test_registration_rejects_expired_profile_bound_lease(store) -> None:
+    await _bind_active_host(store, host_id="expired-host")
+    async with store._session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "lease-expired-host")
+        lease.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="expired-host",
+        credential_generation=1,
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(hostId="expired-host"), auth=auth
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_runner_exit_without_terminal_event_creates_terminal_evidence(store) -> None:
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    async with store._session_factory() as session:
+        from api_service.db.models import OmnigentBridgeSession
+
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        persisted.omnigent_runner_id = "runner-exited"
+        await session.commit()
+
+    await store.record_embedded_runner_exit(
+        runner_id="runner-exited", error="process failed token=secret-value"
+    )
+    recovered = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
+
+    assert recovered.status == "failed"
+    assert recovered.first_message_state == "terminal"
+    assert recovered.terminal_refs["cleanupState"] == "runner_exited"
+    assert recovered.terminal_refs["failureClass"] == "execution_error"
+    assert "secret-value" not in str(recovered.metadata_)
+    assert "secret-value" not in str(recovered.terminal_refs)
+    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert events[0].metadata_["metadata"]["janitorRequired"] is True
+
+
+@pytest.mark.asyncio
 async def test_embedded_session_events_append_to_same_bridge_event_model(store) -> None:
     row = await store.get_or_create(
         request=_request(),

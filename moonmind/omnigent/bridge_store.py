@@ -173,6 +173,7 @@ class OmnigentBridgeSessionStore:
                         OmnigentOAuthHostLeaseRecord.status.in_(
                             {"starting", "ready", "assigned", "draining"}
                         ),
+                        OmnigentOAuthHostLeaseRecord.expires_at > now,
                     )
                 )
             ).scalar_one_or_none()
@@ -456,7 +457,12 @@ class OmnigentBridgeSessionStore:
     async def record_embedded_runner_exit(
         self, *, runner_id: str, error: str
     ) -> OmnigentBridgeSession | None:
-        """Persist the host's authoritative early runner-exit signal."""
+        """Terminalize a session from the host's authoritative runner exit.
+
+        Runner exit is durable terminal evidence even when the runner never
+        managed to emit a terminal session event.  The stable lifecycle event
+        makes retries/replayed exit frames idempotent.
+        """
 
         from moonmind.utils.logging import redact_sensitive_text
 
@@ -469,17 +475,42 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 return None
+            recorded_at = datetime.now(tz=UTC)
+            safe_error = redact_sensitive_text(str(error))[:512]
             row.status = "failed"
+            row.first_message_state = FIRST_MESSAGE_TERMINAL
             metadata = dict(row.metadata_ or {})
             metadata["embedded_runner_exit"] = {
                 "runnerId": runner_id,
-                "error": redact_sensitive_text(str(error))[:512],
-                "recordedAt": datetime.now(tz=UTC).isoformat(),
+                "error": safe_error,
+                "recordedAt": recorded_at.isoformat(),
             }
             row.metadata_ = metadata
+            terminal_refs = dict(row.terminal_refs or {})
+            terminal_refs.update(
+                {
+                    "cleanupState": "runner_exited",
+                    "failureClass": "execution_error",
+                    "runnerId": runner_id,
+                    "runnerExitSummary": safe_error,
+                }
+            )
+            row.terminal_refs = terminal_refs
+            idempotency_key = row.idempotency_key
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="terminal",
+            status="failed",
+            event_identity=f"embedded-runner-exit:{runner_id}",
+            code="embedded_runner_exited",
+            summary=safe_error or "embedded runner exited without a terminal event",
+            failure_class="execution_error",
+            metadata={"cleanupCompleted": False, "janitorRequired": True},
+        )
+        return detached
 
     async def record_lifecycle_event(
         self,
