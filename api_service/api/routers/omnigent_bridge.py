@@ -17,7 +17,10 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
+    WebSocketDisconnect, status,
+)
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +56,11 @@ from moonmind.omnigent.bridge_store import (
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
 )
+from moonmind.omnigent.embedded_host_channel import (
+    EmbeddedHostChannelError,
+    embedded_host_channels,
+)
+from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -343,9 +351,14 @@ async def create_omnigent_session(
                     failure_class="system_error",
                     status_code=501,
                 )
-            return await embedded_facade.create_session(
+            response = await embedded_facade.create_session(
                 request=payload, binding=binding
             )
+            dispatch = await embedded_facade.dispatch_runner(
+                idempotency_key=binding.idempotency_key
+            )
+            response.setdefault("moonmind", {})["runner"] = dispatch
+            return response
         if proxy is None:
             raise OmnigentBridgeError(
                 "Omnigent proxy is unavailable for the configured bridge mode",
@@ -1241,6 +1254,70 @@ async def register_embedded_omnigent_host(
         return await facade.register_host(request=payload, auth=auth)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
+
+
+@router.websocket("/v1/hosts/{host_id}/tunnel")
+async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> None:
+    """Serve the pinned stock-host frame protocol over one authenticated tunnel."""
+
+    try:
+        config = get_bridge_config()
+        if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+            await websocket.close(code=4404)
+            return
+        verify_embedded_host_auth(
+            headers=websocket.headers,
+            config=config,
+            configured_token=resolved_host_runner_token(),
+        )
+    except OmnigentBridgeError:
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    channel = embedded_host_channels.connect(
+        host_id=host_id, send_text=websocket.send_text
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
+    )
+    try:
+        while True:
+            frame = channel.accept_host_frame(await websocket.receive_text())
+            if isinstance(frame, channel.adapter.frames.HostRunnerExitedFrame):
+                await facade.record_runner_exit(
+                    runner_id=frame.runner_id, error=frame.error
+                )
+    except WebSocketDisconnect:
+        pass
+    except (EmbeddedHostChannelError, UpstreamHostProtocolError):
+        await websocket.close(code=4400)
+    finally:
+        embedded_host_channels.disconnect(channel)
+
+
+@router.websocket("/v1/runners/{runner_id}/tunnel")
+async def embedded_omnigent_runner_tunnel(
+    websocket: WebSocket, runner_id: str
+) -> None:
+    """Accept the stock runner tunnel created by an embedded host launch."""
+
+    config = get_bridge_config()
+    if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+        await websocket.close(code=4404)
+        return
+    try:
+        embedded_host_channels.authenticate_runner(
+            runner_id=runner_id, headers=websocket.headers
+        )
+    except (EmbeddedHostChannelError, UpstreamHostProtocolError):
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)

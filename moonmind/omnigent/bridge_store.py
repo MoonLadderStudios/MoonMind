@@ -47,6 +47,7 @@ BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
 SESSION_CREATED_EVENT_TYPE = "session.created"
 RESOURCE_HARVEST_COMPLETED_KEY = "resource_harvest_completed_at"
 PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
+EMBEDDED_LAUNCH_KEY = "embedded_runner_launch"
 
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
@@ -201,8 +202,19 @@ class OmnigentBridgeSessionStore:
                 if row.omnigent_agent_name is None and agent_name is not None:
                     row.omnigent_agent_name = agent_name
                     changed = True
-                if not row.metadata_:
-                    row.metadata_ = metadata
+                merged_metadata = dict(row.metadata_ or {})
+                missing_metadata = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key not in merged_metadata
+                }
+                if missing_metadata:
+                    merged_metadata.update(missing_metadata)
+                    row.metadata_ = merged_metadata
+                    changed = True
+                workspace = _string_or_none(metadata.get("workspace"))
+                if row.workspace is None and workspace is not None:
+                    row.workspace = workspace
                     changed = True
                 if changed:
                     await session.commit()
@@ -269,6 +281,135 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             await session.refresh(stored)
             return _detached(session, stored)
+
+    async def bind_embedded_runner(
+        self, idempotency_key: str, *, host_id: str, runner_id: str
+    ) -> OmnigentBridgeSession:
+        """Persist the exact launched runner without permitting rebinding.
+
+        This write is the durable handoff between the process-local host tunnel
+        and first-message delivery. Retried launch responses may repeat the same
+        identity, but can never redirect an existing session.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_host_id != host_id:
+                raise OmnigentIdempotencyError(
+                    "embedded runner host does not match durable host assignment"
+                )
+            if row.omnigent_runner_id and row.omnigent_runner_id != runner_id:
+                raise OmnigentIdempotencyError(
+                    "embedded session is already bound to another runner"
+                )
+            row.omnigent_runner_id = runner_id
+            metadata = dict(row.metadata_ or {})
+            launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            launch.update(
+                {
+                    "state": "launched",
+                    "hostId": host_id,
+                    "runnerId": runner_id,
+                    "completedAt": datetime.now(tz=UTC).isoformat(),
+                }
+            )
+            metadata[EMBEDDED_LAUNCH_KEY] = launch
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def begin_embedded_runner_launch(
+        self, idempotency_key: str, *, host_id: str
+    ) -> OmnigentBridgeSession:
+        """Reserve the one permitted launch before crossing the socket boundary."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .with_for_update()
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            if row.omnigent_host_id != host_id:
+                raise OmnigentIdempotencyError(
+                    "embedded launch host does not match durable host assignment"
+                )
+            launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
+            if row.omnigent_runner_id:
+                return _detached(session, row)
+            if launch.get("state") in {"pending", "launched"}:
+                raise OmnigentIdempotencyError(
+                    "embedded runner launch requires durable reconciliation"
+                )
+            metadata = dict(row.metadata_ or {})
+            metadata[EMBEDDED_LAUNCH_KEY] = {
+                "state": "pending",
+                "hostId": host_id,
+                "reservedAt": datetime.now(tz=UTC).isoformat(),
+            }
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def fail_embedded_runner_launch(
+        self, idempotency_key: str, *, host_id: str
+    ) -> OmnigentBridgeSession:
+        """Release a launch reservation after the host rejects the side effect."""
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_host_id != host_id:
+                raise OmnigentIdempotencyError(
+                    "embedded launch host does not match durable host assignment"
+                )
+            metadata = dict(row.metadata_ or {})
+            launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            if launch.get("state") != "pending" or row.omnigent_runner_id:
+                raise OmnigentIdempotencyError(
+                    "embedded runner launch failure requires durable reconciliation"
+                )
+            launch.update(
+                {
+                    "state": "failed",
+                    "failedAt": datetime.now(tz=UTC).isoformat(),
+                }
+            )
+            metadata[EMBEDDED_LAUNCH_KEY] = launch
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def record_embedded_runner_exit(
+        self, *, runner_id: str, error: str
+    ) -> OmnigentBridgeSession | None:
+        """Persist the host's authoritative early runner-exit signal."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.omnigent_runner_id == runner_id)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            row.status = "failed"
+            metadata = dict(row.metadata_ or {})
+            metadata["embedded_runner_exit"] = {
+                "runnerId": runner_id,
+                "error": str(error)[:512],
+                "recordedAt": datetime.now(tz=UTC).isoformat(),
+            }
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
 
     async def record_lifecycle_event(
         self,

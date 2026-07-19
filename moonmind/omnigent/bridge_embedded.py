@@ -11,9 +11,10 @@ and persists them into the canonical bridge session store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -27,12 +28,40 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     validate_bridge_host_fields,
 )
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
+)
 from moonmind.omnigent.host_auth_adapter import (
     OmnigentHostAuthAdapter,
     UpstreamHostAuthError,
 )
+from moonmind.omnigent.embedded_host_channel import (
+    EmbeddedHostChannelError,
+    EmbeddedHostChannelRegistry,
+    embedded_host_channels,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+MAX_EMBEDDED_CAPABILITIES = 128
+MAX_EMBEDDED_CAPABILITY_BYTES = 64 * 1024
+MAX_EMBEDDED_EVENT_ENTRIES = 1024
+MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
+
+
+def _bounded_mapping(
+    value: dict[str, Any], *, label: str, max_entries: int, max_bytes: int
+) -> dict[str, Any]:
+    if len(value) > max_entries:
+        raise ValueError(f"{label} exceeds the {max_entries}-entry limit")
+    try:
+        encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be JSON serializable") from exc
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{label} exceeds the {max_bytes}-byte limit")
+    return value
+
 
 class EmbeddedHostRegisterRequest(BaseModel):
     """Host registration payload accepted from an unchanged Omnigent host."""
@@ -43,6 +72,16 @@ class EmbeddedHostRegisterRequest(BaseModel):
     runner_id: str | None = Field(None, alias="runnerId")
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_mapping(
+            value,
+            label="Host capabilities",
+            max_entries=MAX_EMBEDDED_CAPABILITIES,
+            max_bytes=MAX_EMBEDDED_CAPABILITY_BYTES,
+        )
+
 
 class EmbeddedHostHeartbeatRequest(BaseModel):
     """Host heartbeat payload."""
@@ -52,6 +91,16 @@ class EmbeddedHostHeartbeatRequest(BaseModel):
     status: str = "running"
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_mapping(
+            value,
+            label="Host capabilities",
+            max_entries=MAX_EMBEDDED_CAPABILITIES,
+            max_bytes=MAX_EMBEDDED_CAPABILITY_BYTES,
+        )
+
 
 class EmbeddedHostSessionEventRequest(BaseModel):
     """Host-to-MoonMind session event payload."""
@@ -60,6 +109,16 @@ class EmbeddedHostSessionEventRequest(BaseModel):
 
     type: str = Field(..., min_length=1)
     data: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("data")
+    @classmethod
+    def validate_data(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_mapping(
+            value,
+            label="Host event data",
+            max_entries=MAX_EMBEDDED_EVENT_ENTRIES,
+            max_bytes=MAX_EMBEDDED_EVENT_BYTES,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,9 +179,68 @@ class OmnigentEmbeddedHostProtocolFacade:
         *,
         run_store: OmnigentBridgeSessionStore,
         config: OmnigentBridgeConfig,
+        host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
     ) -> None:
         self._run_store = run_store
         self._config = config
+        self._host_channels = host_channels
+
+    async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
+        """Dispatch and durably bind a runner to an authorized embedded session."""
+
+        self._require_embedded_mode()
+        row = await self._run_store.get_existing(idempotency_key)
+        if row is None or not row.omnigent_session_id or not row.omnigent_host_id:
+            raise OmnigentBridgeError(
+                "Embedded runner dispatch requires an assigned session and host",
+                failure_class="system_error", status_code=409,
+            )
+        if row.omnigent_runner_id:
+            return {"runnerId": row.omnigent_runner_id, "reused": True}
+        workspace = _clean(row.workspace)
+        if not workspace:
+            raise OmnigentBridgeError(
+                "Embedded runner dispatch requires a workspace",
+                failure_class="user_error", status_code=422,
+            )
+        try:
+            await self._run_store.begin_embedded_runner_launch(
+                idempotency_key, host_id=row.omnigent_host_id
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        try:
+            runner_id = await self._host_channels.launch_runner(
+                host_id=row.omnigent_host_id,
+                workspace=workspace,
+                session_id=row.omnigent_session_id,
+                harness="codex-native",
+            )
+        except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._run_store.fail_embedded_runner_launch(
+                idempotency_key, host_id=row.omnigent_host_id
+            )
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        try:
+            await self._run_store.bind_embedded_runner(
+                idempotency_key, host_id=row.omnigent_host_id, runner_id=runner_id
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        return {"runnerId": runner_id, "reused": False}
+
+    async def record_runner_exit(self, *, runner_id: str, error: str) -> None:
+        """Record a stock host's authoritative runner process failure."""
+
+        await self._run_store.record_embedded_runner_exit(
+            runner_id=runner_id, error=error
+        )
 
     async def create_session(
         self,
@@ -139,6 +257,29 @@ class OmnigentEmbeddedHostProtocolFacade:
             workspace=request.workspace,
         )
         exec_request = _request_for_create(request=request, binding=binding)
+        authorized = await self._run_store.get_existing(binding.idempotency_key)
+        if authorized is None or not all(
+            (
+                authorized.provider_profile_id,
+                authorized.provider_lease_id,
+                authorized.host_binding_ref,
+                authorized.host_lease_ref,
+                authorized.omnigent_host_id,
+            )
+        ):
+            raise OmnigentBridgeError(
+                "Embedded session creation requires a durable profile lease-bound "
+                "host assignment",
+                failure_class="system_error",
+                status_code=409,
+            )
+        requested_host_id = _clean(request.host_id)
+        if requested_host_id and requested_host_id != authorized.omnigent_host_id:
+            raise OmnigentBridgeError(
+                "Caller-provided host does not match the profile lease-bound host",
+                failure_class="user_error",
+                status_code=403,
+            )
         row = await self._run_store.get_or_create(
             request=exec_request,
             endpoint_ref=(request.endpoint_ref or "").strip() or "embedded",
@@ -146,7 +287,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             agent_name=None,
             target_metadata={
                 "hostType": request.host_type,
-                "hostId": (request.host_id or "").strip() or None,
+                "hostId": authorized.omnigent_host_id,
                 "workspace": (request.workspace or "").strip() or None,
             },
             workflow_id=binding.workflow_id,
@@ -256,6 +397,12 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "No Omnigent bridge session is bound to the requested session id.",
                 failure_class="user_error",
                 status_code=404,
+            )
+        if not row.omnigent_host_id or row.omnigent_host_id != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated host is not the durable host assigned to this session",
+                failure_class="user_error",
+                status_code=403,
             )
         payload = request.model_dump(by_alias=True)
         payload.setdefault("direction", "host_to_moonmind")
@@ -368,6 +515,10 @@ __all__ = [
     "EmbeddedHostHeartbeatRequest",
     "EmbeddedHostRegisterRequest",
     "EmbeddedHostSessionEventRequest",
+    "MAX_EMBEDDED_CAPABILITIES",
+    "MAX_EMBEDDED_CAPABILITY_BYTES",
+    "MAX_EMBEDDED_EVENT_BYTES",
+    "MAX_EMBEDDED_EVENT_ENTRIES",
     "OmnigentEmbeddedHostProtocolFacade",
     "verify_embedded_host_auth",
 ]

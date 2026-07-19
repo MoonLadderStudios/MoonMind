@@ -244,6 +244,9 @@ class _FakeEmbeddedFacade:
             },
         }
 
+    async def dispatch_runner(self, *, idempotency_key):
+        return {"runnerId": "runner-1", "reused": False}
+
 
 def _build(
     *,

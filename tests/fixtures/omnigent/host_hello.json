@@ -1,0 +1,1 @@
+{"kind":"host.hello","version":"0.1.0","frame_protocol_version":1,"name":"stock-host","runners":["runner_token_existing"],"configured_harnesses":{"codex-native":true},"telemetry_opt_out":false}
