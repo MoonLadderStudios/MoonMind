@@ -167,6 +167,7 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
         evidence_publisher=publish,
         projection_writer=project,
         image_lock_root=tmp_path / "image-locks",
+        workspace_volume_name="agent_workspaces",
     )
     runtime = TemporalAgentRuntimeActivities(container_job_backend=backend)
     workflow_queue = f"container-job-journey-{uuid4()}"
@@ -218,6 +219,10 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
     assert len(creates) == 3
     assert all("--privileged=false" in command for command in creates)
     assert all("--network" in command and "none" in command for command in creates)
+    mounts = [command[command.index("--mount") + 1] for command in creates]
+    assert mounts == [
+        "type=volume,src=agent_workspaces,dst=/workspace,volume-subpath=workspace"
+    ] * 3
     assert all("/var/run/docker.sock" not in " ".join(command) for command in creates)
     assert all("DOCKER_HOST" not in " ".join(command) for command in daemon.commands)
     assert not any(command[0] == "rmi" for command in daemon.commands)

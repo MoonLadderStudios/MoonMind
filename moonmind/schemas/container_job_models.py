@@ -598,6 +598,12 @@ class ContainerJobActivityRequest(TemporalContractModel):
     resolved_workspace_ref: str | None = Field(
         None, alias="resolvedWorkspaceRef", max_length=1024
     )
+    resolved_workspace_volume_name: str | None = Field(
+        None, alias="resolvedWorkspaceVolumeName", max_length=255
+    )
+    resolved_workspace_volume_subpath: str | None = Field(
+        None, alias="resolvedWorkspaceVolumeSubpath", max_length=1024
+    )
     resolved_image_ref: str | None = Field(
         None, alias="resolvedImageRef", max_length=1024
     )
@@ -637,6 +643,12 @@ class ContainerJobActivityResult(TemporalContractModel):
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     resolved_workspace_ref: str | None = Field(
         None, alias="resolvedWorkspaceRef", max_length=1024
+    )
+    resolved_workspace_volume_name: str | None = Field(
+        None, alias="resolvedWorkspaceVolumeName", max_length=255
+    )
+    resolved_workspace_volume_subpath: str | None = Field(
+        None, alias="resolvedWorkspaceVolumeSubpath", max_length=1024
     )
     resolved_image_ref: str | None = Field(
         None, alias="resolvedImageRef", max_length=1024

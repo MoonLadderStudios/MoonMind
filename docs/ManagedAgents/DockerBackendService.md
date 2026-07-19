@@ -304,7 +304,9 @@ Docker nor waits for terminal completion.
   `POST .../{jobId}/cancel`. All are authenticated and owner-scoped.
 - MCP: the five `container.*` tools are dispatched to the same service, and
   `tools/list` advertises them only when the surface is enabled and ready.
-- Readiness/feature gate: `MOONMIND_CONTAINER_JOBS_ENABLED` (default off).
+- Readiness/feature gate: `MOONMIND_CONTAINER_JOBS_ENABLED`. The canonical local
+  Compose deployment enables it by default; non-Compose deployments retain the
+  settings-level fail-closed default and must opt in explicitly.
   When disabled, MCP discovery omits the tools and both transports return the
   `backend_unavailable` error until the Docker backend and worker routes are
   provisioned.
@@ -609,6 +611,24 @@ capabilities:
 
 It must not advertise a session-local `DOCKER_HOST`.
 
+For the MoonMind repository, managed agents run Python verification with:
+
+```bash
+moonmind container python-tests tests/unit/path/test_file.py
+```
+
+The command derives the canonical `managed_runtime` locator from the active
+session, submits `container.submit`, polls `container.status`, and exits from the
+authoritative terminal state. The canonical Compose stack builds
+`moonmind-python-tests:local` from the `test-runtime` Dockerfile target before
+the agent-runtime worker becomes ready. Operators may set
+`MOONMIND_PYTHON_TEST_IMAGE` to an equivalent prebuilt image and set
+`MOONMIND_PYTHON_TEST_IMAGE_PULL_POLICY=always` to pull it instead of building
+the local target. The trusted worker
+mounts the deployment's `agent_workspaces` named volume with a constrained
+volume subpath; it never forwards the worker-local `/work/agent_jobs/...` path
+to the host daemon as a bind mount.
+
 ---
 
 ## 17. Workload examples
@@ -627,7 +647,35 @@ It must not advertise a session-local `DOCKER_HOST`.
 }
 ```
 
-### 17.2 Unreal automation
+### 17.2 MoonMind Python tests
+
+The managed-agent convenience command is equivalent to a container job with
+the active `managed_runtime` workspace, the configured Python test image, and:
+
+```json
+{
+  "workdir": "/workspace",
+  "command": [
+    "bash",
+    "-lc",
+    "./tools/test_unit.sh --python-only -- \"$@\"",
+    "moonmind-python-tests",
+    "tests/unit"
+  ],
+  "environment": [
+    {"name": "MOONMIND_FORCE_LOCAL_TESTS", "value": "1"},
+    {"name": "MOONMIND_PYTEST_JUNITXML", "value": "artifacts/pytest-unit.xml"},
+    {"name": "PYTHONPATH", "value": "/workspace"}
+  ],
+  "networkMode": "bridge",
+  "pullPolicy": "never",
+  "outputs": [
+    {"name": "pytest-junit", "relativePath": "artifacts/pytest-unit.xml"}
+  ]
+}
+```
+
+### 17.3 Unreal automation
 
 ```json
 {

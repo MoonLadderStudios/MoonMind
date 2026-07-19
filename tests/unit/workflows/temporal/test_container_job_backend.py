@@ -126,6 +126,64 @@ async def test_create_applies_hardening_shm_pids_and_labels(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_mounts_authorized_workspace_volume_subpath(tmp_path) -> None:
+    workspace = tmp_path / "temporal_sandbox" / "run-1" / "repo"
+    workspace.mkdir(parents=True)
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        workspace_volume_name="agent_workspaces",
+        command_runner=_recording_runner(commands),
+    )
+    request = _request(
+        tmp_path,
+        workspaceRef={"kind": "sandbox", "workspaceId": "run-1"},
+    )
+    resolved = await backend.resolve_workspace(request)
+    request.resolved_workspace_ref = resolved.resolved_workspace_ref
+    request.resolved_workspace_volume_name = resolved.resolved_workspace_volume_name
+    request.resolved_workspace_volume_subpath = (
+        resolved.resolved_workspace_volume_subpath
+    )
+
+    await backend.create_container(request)
+
+    create = next(command for command in commands if command[0] == "create")
+    mount = create[create.index("--mount") + 1]
+    assert mount == (
+        "type=volume,src=agent_workspaces,dst=/workspace,"
+        "volume-subpath=temporal_sandbox/run-1/repo"
+    )
+    assert str(workspace) not in mount
+
+
+def test_workspace_volume_name_is_validated(tmp_path) -> None:
+    with pytest.raises(ValueError, match="workspace_volume_name"):
+        DockerContainerJobBackend(
+            workspace_root=tmp_path,
+            workspace_volume_name="bad,volume",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_untrusted_workspace_volume_metadata(tmp_path) -> None:
+    workspace = tmp_path / "temporal_sandbox" / "run-1" / "repo"
+    workspace.mkdir(parents=True)
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        workspace_volume_name="agent_workspaces",
+        command_runner=_recording_runner([]),
+    )
+    request = _request(tmp_path)
+    request.resolved_workspace_ref = str(workspace)
+    request.resolved_workspace_volume_name = "other_volume"
+    request.resolved_workspace_volume_subpath = "temporal_sandbox/run-1/repo"
+
+    with pytest.raises(RuntimeError, match="not deployment-authorized"):
+        await backend.create_container(request)
+
+
+@pytest.mark.asyncio
 async def test_remove_is_idempotent_when_owned_container_is_absent(tmp_path) -> None:
     commands: list[tuple[str, ...]] = []
     backend = DockerContainerJobBackend(

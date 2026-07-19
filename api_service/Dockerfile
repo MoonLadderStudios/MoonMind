@@ -103,7 +103,7 @@ RUN poetry export --only main --format requirements.txt --without-hashes --outpu
     && poetry export --only main --extras tests --format requirements.txt --without-hashes --output /deps/requirements-tests.txt
 
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime-base
+FROM python:3.12-slim-bookworm AS runtime-dependencies
 
 ARG CODEX_CLI_VERSION
 # Use bash with pipefail and strict mode in the runtime image as well so
@@ -215,6 +215,23 @@ COPY NOTICE /app/NOTICE
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
 
+# Keep the test image buildable from the shallow, submodule-free checkout used
+# by required backend CI and managed workflow workspaces. Tests execute the
+# mounted checkout via PYTHONPATH, so this stage needs locked dependencies but
+# must not inherit production-only source COPY steps such as Omnigent.
+FROM runtime-dependencies AS test-runtime
+ARG INSTALL_TEST_DEPS=true
+COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+        pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
+    fi && \
+    rm -f /tmp/requirements-tests.txt
+ENV HOME=/home/app
+USER app
+
+FROM runtime-dependencies AS runtime-base
+
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
@@ -238,15 +255,6 @@ COPY --from=frontend-builder /build/api_service/static/workflow_console/ /opt/mo
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
-
-FROM runtime-base AS test-runtime
-ARG INSTALL_TEST_DEPS=true
-COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
-        pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
-    fi && \
-    rm -f /tmp/requirements-tests.txt
 
 FROM runtime-base AS worker-runtime
 EXPOSE 8000

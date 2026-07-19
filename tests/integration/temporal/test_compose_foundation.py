@@ -740,6 +740,60 @@ def test_runtime_image_includes_agent_skill_sources():
     assert "COPY pr_resolver_core /app/pr_resolver_core/" in dockerfile
 
 
+def test_python_test_runtime_is_submodule_free_and_shared_by_compose_paths():
+    dockerfile = (REPO_ROOT / "api_service" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    test_stage = dockerfile.index("FROM runtime-dependencies AS test-runtime")
+    production_stage = dockerfile.index("FROM runtime-dependencies AS runtime-base")
+    omnigent_copy = dockerfile.index("COPY omnigent/omnigent /app/omnigent/omnigent/")
+
+    assert test_stage < production_stage < omnigent_copy
+    assert "USER app" in dockerfile[test_stage:production_stage]
+
+    compose = _load_compose()
+    services = compose["services"]
+    ready = services["python-test-runtime-ready"]
+    worker = services["temporal-worker-agent-runtime"]
+    worker_env = _env_map(worker["environment"])
+    api_env = _env_map(services["api"]["environment"])
+
+    assert ready["image"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
+    )
+    assert ready["pull_policy"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE_PULL_POLICY:-build}"
+    )
+    assert ready["build"]["target"] == "test-runtime"
+    assert ready["command"] == ["python", "-c", "import pytest"]
+    assert ready["network_mode"] == "none"
+    assert worker["depends_on"]["python-test-runtime-ready"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert worker_env["MOONMIND_CONTAINER_BACKEND_ENABLED"] == (
+        "${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}"
+    )
+    assert worker_env["MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"] == (
+        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    )
+    assert worker_env["MOONMIND_PYTHON_TEST_IMAGE"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
+    )
+    assert api_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
+        "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
+    )
+    assert compose["volumes"]["agent_workspaces"]["name"] == (
+        "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
+    )
+
+    test_compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
+    )
+    pytest_service = test_compose["services"]["pytest"]
+    assert pytest_service["image"] == ready["image"]
+    assert pytest_service["build"]["target"] == "test-runtime"
+
+
 def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     compose = _load_compose()
     services = compose["services"]

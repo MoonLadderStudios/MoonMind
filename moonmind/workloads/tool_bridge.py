@@ -52,9 +52,10 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
                 "type": "object",
                 "required": ["kind", "runtimeId", "agentRunId"],
                 "properties": {
-                    "kind": {"const": "managed"},
+                    "kind": {"const": "managed_runtime"},
                     "runtimeId": {"type": "string", "minLength": 1},
                     "agentRunId": {"type": "string", "minLength": 1},
+                    "relativePath": {"type": "string", "minLength": 1},
                 },
                 "additionalProperties": False,
             },
@@ -62,7 +63,7 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
     }
     spec_schema = {
         "type": "object",
-        "required": ["image", "workspaceRef", "resources"],
+        "required": ["image", "resources"],
         "properties": {
             "image": {"type": "string", "minLength": 1, "maxLength": 512},
             "workspaceRef": locator_schema,

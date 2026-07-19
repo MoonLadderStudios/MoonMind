@@ -309,6 +309,7 @@ class DockerContainerJobBackend:
         pull_lock_max_wait_seconds: float = 280.0,
         secret_resolver: SecretResolver | None = None,
         managed_run_store: ManagedRunRecordStore | None = None,
+        workspace_volume_name: str | None = None,
         log_spool_root: str | Path | None = None,
         live_log_max_events: int = _MAX_LIVE_LOG_EVENTS,
     ) -> None:
@@ -344,6 +345,11 @@ class DockerContainerJobBackend:
         self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
         self._resolve_secret = secret_resolver
         self._managed_run_store = managed_run_store
+        self._workspace_volume_name = str(workspace_volume_name or "").strip() or None
+        if self._workspace_volume_name is not None and not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.-]*", self._workspace_volume_name
+        ):
+            raise ValueError("workspace_volume_name has invalid format")
         # Live incremental logs are published to a MoonMind-controlled spool
         # root, never into the caller's mounted job workspace (which the
         # container itself sees at /workspace). When unset, live logging is a
@@ -518,9 +524,18 @@ class DockerContainerJobBackend:
         # Report a non-sensitive probe result only; the resolved host path is
         # returned for the trusted launch boundary but never recorded as an
         # observation.
-        return ContainerJobActivityResult(
+        result = ContainerJobActivityResult(
             resolvedWorkspaceRef=str(workspace), workspaceProbe="visible"
         )
+        if self._workspace_volume_name is not None:
+            relative = workspace.relative_to(self._workspace_root).as_posix()
+            if not relative or relative == "." or "," in relative:
+                raise RuntimeError(
+                    "authorized container-job workspace has an invalid volume subpath"
+                )
+            result.resolved_workspace_volume_name = self._workspace_volume_name
+            result.resolved_workspace_volume_subpath = relative
+        return result
 
     async def _inspect_image(
         self, image: str
@@ -920,6 +935,32 @@ class DockerContainerJobBackend:
         await self._reject_ownership_collision(request, name)
         if spec.network_mode not in {"none", "bridge"}:
             raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
+        volume_name = request.resolved_workspace_volume_name
+        volume_subpath = request.resolved_workspace_volume_subpath
+        if bool(volume_name) != bool(volume_subpath):
+            raise RuntimeError("resolved workspace volume metadata is incomplete")
+        if volume_name and volume_subpath:
+            if volume_name != self._workspace_volume_name:
+                raise RuntimeError(
+                    "resolved workspace volume is not deployment-authorized"
+                )
+            workspace = Path(request.resolved_workspace_ref).resolve()
+            if not workspace.is_relative_to(self._workspace_root):
+                raise RuntimeError("resolved workspace escapes its authority")
+            expected_subpath = workspace.relative_to(self._workspace_root).as_posix()
+            if volume_subpath != expected_subpath:
+                raise RuntimeError(
+                    "resolved workspace volume subpath does not match workspace"
+                )
+            workspace_mount = (
+                f"type=volume,src={volume_name},dst=/workspace,"
+                f"volume-subpath={volume_subpath}"
+            )
+        else:
+            # Preserve the pre-volume activity shape for already-started runs.
+            workspace_mount = (
+                f"type=bind,src={request.resolved_workspace_ref},dst=/workspace"
+            )
         args = [
             "create",
             "--name",
@@ -952,7 +993,7 @@ class DockerContainerJobBackend:
             "--workdir",
             spec.workdir,
             "--mount",
-            f"type=bind,src={request.resolved_workspace_ref},dst=/workspace",
+            workspace_mount,
         ]
         if spec.caches:
             raise RuntimeError(

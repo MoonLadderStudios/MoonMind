@@ -39,6 +39,7 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
+    canonical_managed_session_runtime_id,
 )
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
@@ -2949,6 +2950,18 @@ class DockerCodexManagedSessionController:
                 request.workflow_id,
             )
         session_environment.setdefault("MOONMIND_AGENT_RUN_ID", request.agent_run_id)
+        runtime_id = canonical_managed_session_runtime_id(request.runtime_family)
+        if runtime_id is None:
+            raise ValueError(
+                f"unsupported managed-session runtime family: {request.runtime_family}"
+            )
+        session_environment["MOONMIND_RUNTIME_ID"] = runtime_id
+        session_environment.setdefault(
+            "MOONMIND_PYTHON_TEST_IMAGE",
+            os.environ.get(
+                "MOONMIND_PYTHON_TEST_IMAGE", "moonmind-python-tests:local"
+            ),
+        )
         if self._moonmind_url:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
@@ -2961,7 +2974,10 @@ class DockerCodexManagedSessionController:
                 session_environment["MOONMIND_URL"].rstrip("/") + "/mcp"
             )
             session_environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] = (
-                "moonmind-session"
+                "managed_runtime"
+            )
+            session_environment["MOONMIND_CONTAINER_JOBS_RUNTIME_ID"] = (
+                runtime_id
             )
             session_environment["MOONMIND_CONTAINER_JOBS_SESSION_ID"] = (
                 request.session_id
@@ -3227,8 +3243,10 @@ class DockerCodexManagedSessionController:
                             "transport": "moonmind-mcp",
                             "backendKind": "docker-engine",
                             "workspace": {
-                                "kind": "moonmind-session",
-                                "sessionId": request.session_id,
+                                "kind": "managed_runtime",
+                                "runtimeId": runtime_id,
+                                "agentRunId": request.agent_run_id,
+                                "relativePath": "repo",
                             },
                             "tools": [
                                 "container.submit",

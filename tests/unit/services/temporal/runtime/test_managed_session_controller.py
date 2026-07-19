@@ -156,6 +156,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
 ) -> None:
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_PYTHON_TEST_IMAGE", raising=False)
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
@@ -242,8 +243,11 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert "MOONMIND_TASK_WORKFLOW_ID=wf-task-1" in run_command
     assert "MOONMIND_AGENT_RUN_ID=task-1" in run_command
+    assert "MOONMIND_RUNTIME_ID=codex_cli" in run_command
+    assert "MOONMIND_PYTHON_TEST_IMAGE=moonmind-python-tests:local" in run_command
     assert "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp" in run_command
-    assert "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND=moonmind-session" in run_command
+    assert "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND=managed_runtime" in run_command
+    assert "MOONMIND_CONTAINER_JOBS_RUNTIME_ID=codex_cli" in run_command
     assert "MOONMIND_CONTAINER_JOBS_SESSION_ID=sess-1" in run_command
     assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
     assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
@@ -259,7 +263,12 @@ async def test_controller_launches_container_and_returns_typed_handle(
         "available": True,
         "transport": "moonmind-mcp",
         "backendKind": "docker-engine",
-        "workspace": {"kind": "moonmind-session", "sessionId": "sess-1"},
+        "workspace": {
+            "kind": "managed_runtime",
+            "runtimeId": "codex_cli",
+            "agentRunId": "task-1",
+            "relativePath": "repo",
+        },
         "tools": [
             "container.submit",
             "container.status",
