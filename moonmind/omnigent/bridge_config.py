@@ -49,6 +49,8 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.omnigent.settings import build_omnigent_gate
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -597,6 +599,41 @@ class OmnigentBridgeConfig(BaseModel):
             "temporal": self.authority.temporal,
             "artifacts": self.authority.artifacts,
             "liveExecution": self.authority.live_execution,
+        }
+
+    def readiness(self) -> dict[str, Any]:
+        """Return non-secret, operator-visible mode/conformance readiness."""
+
+        embedded = self.host_connection.embedded
+        evidence = {
+            "proxyConformance": embedded.proxy_conformance_evidence_ref,
+            "liveSmoke": embedded.live_smoke_evidence_ref,
+            "hostAuthConformance": embedded.host_auth_conformance_evidence_ref,
+        }
+        selected_embedded = self.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        proxy_ready = build_omnigent_gate().enabled
+        return {
+            "enabled": self.enabled,
+            "selectedMode": self.host_protocol_mode,
+            "protocolProfile": (
+                embedded.protocol_profile
+                if selected_embedded
+                else self.compatibility.profile
+            ),
+            "upstreamComponentVersion": (
+                embedded.protocol_profile.rsplit(".", 1)[-1]
+                if selected_embedded
+                else None
+            ),
+            "conformanceState": (
+                "ready"
+                if self.enabled
+                and (
+                    all(evidence.values()) if selected_embedded else proxy_ready
+                )
+                else "disabled" if not self.enabled else "gated"
+            ),
+            "evidenceRefs": evidence if selected_embedded else {},
         }
 
 

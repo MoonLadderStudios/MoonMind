@@ -146,6 +146,32 @@ class OmnigentBridgeSessionStore:
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
 
+    async def active_host_protocol_modes(
+        self, *, exclude_idempotency_key: str | None = None
+    ) -> dict[str, int]:
+        """Return durable protocol-mode ownership for non-terminal sessions.
+
+        A missing mode is deliberately reported as ``unknown``.  Deployments
+        must not switch the host protocol while a legacy/ambiguous active row
+        exists because doing so could route its controls to the wrong owner.
+        """
+
+        async with self._session_factory() as session:
+            query = select(OmnigentBridgeSession.metadata_).where(
+                OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES)
+            )
+            if exclude_idempotency_key:
+                query = query.where(
+                    OmnigentBridgeSession.idempotency_key != exclude_idempotency_key
+                )
+            result = await session.execute(query)
+            modes: dict[str, int] = {}
+            for metadata in result.scalars().all():
+                mode = str((metadata or {}).get("hostProtocolMode") or "").strip()
+                key = mode or "unknown"
+                modes[key] = modes.get(key, 0) + 1
+            return modes
+
     async def get_or_create(
         self,
         *,
@@ -390,6 +416,8 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession | None:
         """Persist the host's authoritative early runner-exit signal."""
 
+        from moonmind.utils.logging import redact_sensitive_text
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
@@ -403,7 +431,7 @@ class OmnigentBridgeSessionStore:
             metadata = dict(row.metadata_ or {})
             metadata["embedded_runner_exit"] = {
                 "runnerId": runner_id,
-                "error": str(error)[:512],
+                "error": redact_sensitive_text(str(error))[:512],
                 "recordedAt": datetime.now(tz=UTC).isoformat(),
             }
             row.metadata_ = metadata

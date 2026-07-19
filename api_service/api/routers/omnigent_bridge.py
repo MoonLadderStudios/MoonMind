@@ -122,6 +122,16 @@ def _require_bridge_enabled() -> OmnigentBridgeConfig:
     return _BRIDGE_CONFIG
 
 
+@router.get("/readiness", response_model=dict)
+async def get_omnigent_bridge_readiness(
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    _user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Expose selected protocol and conformance gates without secret material."""
+
+    return config.readiness()
+
+
 def _require_proxy_mode(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentBridgeConfig:
@@ -205,6 +215,39 @@ def _get_bridge_store(
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentBridgeSessionStore:
     return OmnigentBridgeSessionStore(async_session_maker)
+
+
+async def _require_mode_transition_safe(
+    payload: BridgeSessionCreateRequest,
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
+) -> OmnigentBridgeConfig:
+    """Prevent a configured mode change from orphaning active session owners."""
+
+    idempotency_key = _clean(payload.labels.get(_IDEMPOTENCY_KEY_LABEL))
+    active_modes = await store.active_host_protocol_modes(
+        exclude_idempotency_key=idempotency_key
+    )
+    conflicts = {
+        mode: count
+        for mode, count in active_modes.items()
+        if mode != config.host_protocol_mode
+    }
+    if conflicts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_bridge_mode_transition_blocked",
+                "message": (
+                    "The configured Omnigent host protocol mode cannot take "
+                    "ownership while active sessions belong to another or an "
+                    "unknown mode. Drain or terminalize those sessions first."
+                ),
+                "selectedMode": config.host_protocol_mode,
+                "activeSessionModes": conflicts,
+            },
+        )
+    return config
 
 
 def _get_embedded_host_facade(
@@ -326,7 +369,7 @@ async def _resolve_bridge_binding(
 @router.post(_ROUTES.create_session, response_model=dict)
 async def create_omnigent_session(
     payload: BridgeSessionCreateRequest,
-    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    config: OmnigentBridgeConfig = Depends(_require_mode_transition_safe),
     user: User = Depends(get_current_user()),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),
@@ -991,20 +1034,54 @@ async def stream_omnigent_bridge_session_events(
 async def post_omnigent_session_event(
     session_id: str,
     payload: BridgeSessionEventRequest,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Apply Omnigent controls, including bridge-local harvest/clear policy."""
 
+    control_facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if control_facade is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported Omnigent bridge host protocol mode.",
+            },
+        )
     await _authorize_session_control(
         session_id=session_id,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=control_facade,
     )
     try:
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            assert embedded_facade is not None
+            if payload.type in {
+                "stop",
+                "session.stop",
+                "stop_session",
+                "interrupt",
+            }:
+                return await embedded_facade.stop_runner(session_id=session_id)
+            if payload.type not in {"message", "user.message"}:
+                raise OmnigentBridgeError(
+                    f"Embedded control {payload.type!r} is not supported.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    code="omnigent_embedded_control_unsupported",
+                )
+            return await embedded_facade.post_event(session_id=session_id, event=payload)
+        assert proxy is not None
         return await proxy.post_event(session_id=session_id, event=payload)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -1270,6 +1347,8 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
             config=config,
             configured_token=resolved_host_runner_token(),
         )
+        # The shared credential authenticates the stock host; the path value is
+        # its durable lease identity and is intentionally not token-derived.
     except OmnigentBridgeError:
         await websocket.close(code=4401)
         return
@@ -1287,6 +1366,7 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
                 await facade.record_runner_exit(
                     runner_id=frame.runner_id, error=frame.error
                 )
+                embedded_host_channels.revoke_runner_binding(frame.runner_id)
     except WebSocketDisconnect:
         pass
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
@@ -1313,11 +1393,22 @@ async def embedded_omnigent_runner_tunnel(
         await websocket.close(code=4401)
         return
     await websocket.accept()
+    channel = None
     try:
+        channel = embedded_host_channels.connect_runner(
+            runner_id=runner_id,
+            send_text=websocket.send_text,
+            hello_text=await websocket.receive_text(),
+        )
         while True:
-            await websocket.receive_text()
+            channel.accept_frame(await websocket.receive_text())
     except WebSocketDisconnect:
         pass
+    except EmbeddedHostChannelError:
+        await websocket.close(code=4400)
+    finally:
+        if channel is not None:
+            embedded_host_channels.disconnect_runner(channel)
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)

@@ -35,6 +35,7 @@ _USER_ID = uuid4()
 _CREATE_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions"
 _AGENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/agents"
 _HOSTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/api/hosts"
+_READINESS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/readiness"
 _EVENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/events"
 _ELICITATION_RESOLVE_PATH = (
     f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/elicitations/el-1/resolve"
@@ -43,6 +44,22 @@ _ELICITATION_RESOLVE_PATH = (
 # Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
 # bound" from "use the default mm:w1 owner".
 _UNSET = object()
+
+
+def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    client = TestClient(app)
+
+    response = client.get(_READINESS_PATH)
+
+    assert response.status_code == 200
+    assert response.json()["selectedMode"] == "upstream_omnigent_server_proxy"
+    assert response.json()["protocolProfile"] == "omnigent.server.v1"
+    assert response.json()["conformanceState"] == "ready"
 
 
 def _mock_user():
@@ -168,6 +185,11 @@ class _FakeStore:
             ]
         )
         self._session_overrides = session_overrides or {}
+        self.active_modes: dict[str, int] = {}
+
+    async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
+        self.excluded_idempotency_key = exclude_idempotency_key
+        return self.active_modes
 
     async def get_bridge_session_owner(self, bridge_session_id: str):
         return self._owner
@@ -231,6 +253,7 @@ class _FakeStore:
 class _FakeEmbeddedFacade:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
+        self.stopped: list[str] = []
 
     async def create_session(self, *, request, binding):
         self.created.append({"request": request, "binding": binding})
@@ -246,6 +269,13 @@ class _FakeEmbeddedFacade:
 
     async def dispatch_runner(self, *, idempotency_key):
         return {"runnerId": "runner-1", "reused": False}
+
+    async def get_session_owner(self, session_id: str):
+        return SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
+
+    async def stop_runner(self, *, session_id: str):
+        self.stopped.append(session_id)
+        return {"ok": True, "status": "stopped", "runnerId": "runner-1"}
 
 
 def _build(
@@ -290,6 +320,31 @@ def test_create_session_success_at_mount_path() -> None:
     assert binding.workflow_id == "mm:w1"
     assert binding.idempotency_key == "idem-1"
     assert binding.correlation_id == "corr-1"
+
+
+def test_create_session_blocks_mode_transition_with_active_other_mode() -> None:
+    store = _FakeStore()
+    store.active_modes = {HOST_PROTOCOL_MODE_EMBEDDED: 2, "unknown": 1}
+    client, proxy, _ = _build(store=store)
+
+    response = client.post(_CREATE_PATH, json=_create_body())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "omnigent_bridge_mode_transition_blocked",
+        "message": (
+            "The configured Omnigent host protocol mode cannot take ownership "
+            "while active sessions belong to another or an unknown mode. Drain "
+            "or terminalize those sessions first."
+        ),
+        "selectedMode": "upstream_omnigent_server_proxy",
+        "activeSessionModes": {
+            HOST_PROTOCOL_MODE_EMBEDDED: 2,
+            "unknown": 1,
+        },
+    }
+    assert not proxy.created
+    assert store.excluded_idempotency_key == "idem-1"
 
 
 def test_create_session_requires_idempotency_label() -> None:
@@ -806,6 +861,7 @@ def test_superuser_owns_any_workflow() -> None:
     # Service returns a foreign owner, but superuser bypasses ownership.
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
+    app.dependency_overrides[_get_bridge_store] = _FakeStore
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
@@ -834,6 +890,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = _FakeStore
     client = TestClient(app)
 
     resp = client.post(
@@ -846,3 +903,67 @@ def test_create_session_available_in_embedded_mode() -> None:
     assert resp.json()["moonmind"]["bridgeLocal"] is True
     assert len(facade.created) == 1
     assert facade.created[0]["binding"].workflow_id == "mm:w1"
+
+
+def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    client = TestClient(app)
+
+    response = client.post(_EVENTS_PATH, json={"type": "stop"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "status": "stopped",
+        "runnerId": "runner-1",
+    }
+    assert facade.stopped == ["sess-77"]
+
+
+def test_interrupt_embedded_control_stops_runner() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    client = TestClient(app)
+
+    response = client.post(_EVENTS_PATH, json={"type": "interrupt"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert facade.stopped == ["sess-77"]

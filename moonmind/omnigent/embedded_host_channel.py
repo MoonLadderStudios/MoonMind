@@ -8,6 +8,7 @@ authenticated host, while request correlation is bounded to the connection.
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -21,6 +22,77 @@ SendText = Callable[[str], Awaitable[None]]
 
 class EmbeddedHostChannelError(RuntimeError):
     """A host channel violated lifecycle or correlation rules."""
+
+
+@dataclass(slots=True)
+class EmbeddedRunnerChannel:
+    """One live stock-runner HTTP tunnel using the pinned frame codec."""
+
+    runner_id: str
+    send_text: SendText
+    frames: Any
+    hello: Any
+    _pending: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    async def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = secrets.token_hex(16)
+        future = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = {"future": future, "status": None, "body": []}
+        frame = self.frames.RequestFrame(
+            id=request_id,
+            method="POST",
+            path=path,
+            headers=[["content-type", "application/json"]],
+            body=json.dumps(payload, separators=(",", ":")),
+        )
+        try:
+            await self.send_text(self.frames.encode_frame(frame))
+            return await asyncio.wait_for(future, 30.0)
+        finally:
+            self._pending.pop(request_id, None)
+
+    def accept_frame(self, text: str) -> None:
+        try:
+            frame = self.frames.decode_frame(text)
+        except ValueError as exc:
+            raise EmbeddedHostChannelError("runner frame was rejected") from exc
+        request_id = str(getattr(frame, "id", "") or "")
+        pending = self._pending.get(request_id)
+        if pending is None:
+            return
+        if isinstance(frame, self.frames.ResponseHeadFrame):
+            pending["status"] = frame.status
+        elif isinstance(frame, self.frames.ResponseBodyFrame):
+            pending["body"].append(self.frames.decode_body(frame.body, frame.encoding))
+        elif isinstance(frame, self.frames.ResponseEndFrame):
+            status = pending["status"]
+            body = b"".join(
+                part.encode("utf-8") if isinstance(part, str) else part
+                for part in pending["body"]
+            )
+            if status is None:
+                error = EmbeddedHostChannelError("runner response ended without headers")
+                pending["future"].set_exception(error)
+            elif status < 200 or status >= 300:
+                pending["future"].set_exception(
+                    EmbeddedHostChannelError(f"runner request failed with HTTP {status}")
+                )
+            else:
+                try:
+                    value = json.loads(body or b"{}")
+                except (TypeError, ValueError) as exc:
+                    pending["future"].set_exception(
+                        EmbeddedHostChannelError("runner returned invalid JSON")
+                    )
+                else:
+                    pending["future"].set_result(value)
+
+    def disconnect(self) -> None:
+        for pending in self._pending.values():
+            future = pending["future"]
+            if not future.done():
+                future.set_exception(EmbeddedHostChannelError("runner disconnected"))
+        self._pending.clear()
 
 
 @dataclass(slots=True)
@@ -75,6 +147,7 @@ class EmbeddedHostChannelRegistry:
     def __init__(self) -> None:
         self._channels: dict[str, EmbeddedHostChannel] = {}
         self._runner_tokens: dict[str, str] = {}
+        self._runners: dict[str, EmbeddedRunnerChannel] = {}
 
     def connect(self, *, host_id: str, send_text: SendText) -> EmbeddedHostChannel:
         previous = self._channels.get(host_id)
@@ -129,6 +202,22 @@ class EmbeddedHostChannelRegistry:
         self._runner_tokens[identity] = binding_token
         return identity
 
+    async def stop_runner(self, *, host_id: str, runner_id: str) -> None:
+        """Stop a runner on its assigned host using the pinned host protocol."""
+
+        channel = self.get_ready(host_id)
+        frame = channel.adapter.frames.HostStopRunnerFrame(
+            request_id=f"stop_{secrets.token_hex(16)}",
+            runner_id=runner_id,
+        )
+        result = await channel.request(frame)
+        if result.status != "stopped":
+            error = str(getattr(result, "error", "") or "").strip()
+            raise EmbeddedHostChannelError(
+                f"host rejected runner stop{': ' + error if error else ''}"
+            )
+        self._runner_tokens.pop(runner_id, None)
+
     def authenticate_runner(self, *, runner_id: str, headers: Any) -> str:
         """Verify a spawned runner against its host-launch binding token."""
 
@@ -142,6 +231,63 @@ class EmbeddedHostChannelRegistry:
             raise EmbeddedHostChannelError("runner id does not match launch binding")
         return identity.runner_id
 
+    def revoke_runner_binding(self, runner_id: str) -> None:
+        """Invalidate a terminal runner's credential and live tunnel.
+
+        Reconnects remain possible while the runner is active, but an exit
+        frame is authoritative: its launch credential must never authenticate
+        a later, replayed tunnel.
+        """
+
+        self._runner_tokens.pop(runner_id, None)
+        channel = self._runners.pop(runner_id, None)
+        if channel is not None:
+            channel.disconnect()
+
+    def connect_runner(
+        self, *, runner_id: str, send_text: SendText, hello_text: str
+    ) -> EmbeddedRunnerChannel:
+        """Register a newest-wins runner tunnel after binding-token auth."""
+
+        from moonmind.omnigent.runner_protocol_adapter import runner_frames
+
+        frames = runner_frames()
+        try:
+            hello = frames.decode_frame(hello_text)
+        except ValueError as exc:
+            raise EmbeddedHostChannelError("runner hello was rejected") from exc
+        if not isinstance(hello, frames.HelloFrame):
+            raise EmbeddedHostChannelError("runner hello must be the first frame")
+        if hello.frame_protocol_version != 1:
+            raise EmbeddedHostChannelError("runner frame protocol major is incompatible")
+        previous = self._runners.get(runner_id)
+        if previous is not None:
+            previous.disconnect()
+        channel = EmbeddedRunnerChannel(runner_id, send_text, frames, hello)
+        self._runners[runner_id] = channel
+        return channel
+
+    def disconnect_runner(self, channel: EmbeddedRunnerChannel) -> None:
+        channel.disconnect()
+        if self._runners.get(channel.runner_id) is channel:
+            self._runners.pop(channel.runner_id, None)
+
+    async def post_runner_event(
+        self, *, runner_id: str, session_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        channel = self._runners.get(runner_id)
+        if channel is None:
+            # A successful host launch acknowledges process creation, not the
+            # subsequent runner-tunnel handshake. Bound the normal startup race
+            # here so the first control does not fail spuriously.
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while channel is None and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+                channel = self._runners.get(runner_id)
+        if channel is None:
+            raise EmbeddedHostChannelError("assigned runner is not connected")
+        return await channel.post_json(f"/v1/sessions/{session_id}/events", payload)
+
 
 embedded_host_channels = EmbeddedHostChannelRegistry()
 
@@ -149,5 +295,6 @@ __all__ = [
     "EmbeddedHostChannel",
     "EmbeddedHostChannelError",
     "EmbeddedHostChannelRegistry",
+    "EmbeddedRunnerChannel",
     "embedded_host_channels",
 ]
