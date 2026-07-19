@@ -129,6 +129,22 @@ class EmbeddedHostChannelRegistry:
         self._runner_tokens[identity] = binding_token
         return identity
 
+    async def stop_runner(self, *, host_id: str, runner_id: str) -> None:
+        """Stop a runner on its assigned host using the pinned host protocol."""
+
+        channel = self.get_ready(host_id)
+        frame = channel.adapter.frames.HostStopRunnerFrame(
+            request_id=f"stop_{secrets.token_hex(16)}",
+            runner_id=runner_id,
+        )
+        result = await channel.request(frame)
+        if result.status != "stopped":
+            error = str(getattr(result, "error", "") or "").strip()
+            raise EmbeddedHostChannelError(
+                f"host rejected runner stop{': ' + error if error else ''}"
+            )
+        self._runner_tokens.pop(runner_id, None)
+
     def authenticate_runner(self, *, runner_id: str, headers: Any) -> str:
         """Verify a spawned runner against its host-launch binding token."""
 

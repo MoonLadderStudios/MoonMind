@@ -488,6 +488,39 @@ async def test_dispatch_persists_launch_intent_before_host_side_effect(store) ->
 
 
 @pytest.mark.asyncio
+async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        async def stop_runner(self, **kwargs):
+            assert kwargs == {"host_id": "host-1", "runner_id": "runner-1"}
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels()
+    )
+    result = await facade.stop_runner(session_id="sess-embedded")
+    row = await store.get_existing("idem-embedded")
+
+    assert result == {"ok": True, "status": "stopped", "runnerId": "runner-1"}
+    assert row.metadata_["embedded_runner_exit"]["error"] == (
+        "stopped by MoonMind control"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dispatch_does_not_repeat_ambiguous_pending_launch(store) -> None:
     await store.bind_profile_authorization(
         request=_request(),

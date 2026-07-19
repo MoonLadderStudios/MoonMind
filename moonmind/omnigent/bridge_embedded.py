@@ -242,6 +242,38 @@ class OmnigentEmbeddedHostProtocolFacade:
             runner_id=runner_id, error=error
         )
 
+    async def stop_runner(self, *, session_id: str) -> dict[str, Any]:
+        """Stop the exact runner durably bound to an embedded session."""
+
+        self._require_embedded_mode()
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error",
+                status_code=404,
+            )
+        host_id = _clean(row.omnigent_host_id)
+        runner_id = _clean(row.omnigent_runner_id)
+        if not host_id or not runner_id:
+            raise OmnigentBridgeError(
+                "Embedded session has no durable host/runner assignment",
+                failure_class="integration_error",
+                status_code=409,
+            )
+        try:
+            await self._host_channels.stop_runner(
+                host_id=host_id, runner_id=runner_id
+            )
+        except (EmbeddedHostChannelError, TimeoutError) as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        await self._run_store.record_embedded_runner_exit(
+            runner_id=runner_id, error="stopped by MoonMind control"
+        )
+        return {"ok": True, "status": "stopped", "runnerId": runner_id}
+
     async def create_session(
         self,
         *,
