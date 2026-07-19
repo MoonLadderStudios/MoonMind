@@ -1342,7 +1342,7 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
-        auth = verify_embedded_host_auth(
+        verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
             configured_token=resolved_host_runner_token(),
