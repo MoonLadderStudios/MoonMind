@@ -46,7 +46,9 @@ _ELICITATION_RESOLVE_PATH = (
 _UNSET = object()
 
 
-def test_readiness_reports_selected_mode_and_conformance_state() -> None:
+def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     app.dependency_overrides[get_current_user()] = _mock_user
@@ -859,6 +861,7 @@ def test_superuser_owns_any_workflow() -> None:
     # Service returns a foreign owner, but superuser bypasses ownership.
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
+    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
@@ -887,6 +890,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
     client = TestClient(app)
 
     resp = client.post(
