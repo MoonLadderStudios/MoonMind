@@ -91,3 +91,21 @@ passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
 runner always attempts cleanup and evidence scanning, including after a failed
 startup or journey. `--mode static` covers restart and replay; `stock`,
 `ondemand`, and `failures` can be gated independently in provider environments.
+
+## Credentialed CI publication
+
+`.github/workflows/omnigent-live-conformance.yml` is the scheduled and manually
+dispatchable publication gate for MoonLadderStudios/MoonMind#3368. It runs on a
+dedicated `omnigent-provider-verification` self-hosted runner so the enrolled
+OAuth profile and live action adapter remain outside GitHub-hosted workers. The
+protected environment supplies the adapter command; repository variables supply
+the digest-pinned server and host images plus the four bounded evidence-channel
+paths. Manual dispatch may override the two image references, but the workflow
+rejects mutable references before provider execution.
+
+Stock proxy, static restart/replay, on-demand lifecycle, and failure/redaction
+run as independent matrix jobs. Each job uploads evidence even on failure. The
+publication job runs only after all four jobs pass, combines their reports, and
+uploads `published-matrix.json` with the four report trees as the durable GitHub
+Actions artifact. A configured workflow or an individual passing case is not
+published conformance evidence.
