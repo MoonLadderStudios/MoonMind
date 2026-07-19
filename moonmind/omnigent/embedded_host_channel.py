@@ -12,10 +12,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from moonmind.omnigent.host_protocol_adapter import (
-    OmnigentHostProtocolAdapter,
-    UpstreamHostProtocolError,
-)
+from moonmind.omnigent.host_protocol_adapter import OmnigentHostProtocolAdapter
 from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 
 
@@ -47,9 +44,7 @@ class EmbeddedHostChannel:
         request_id = str(getattr(frame, "request_id", "") or "")
         if request_id:
             future = self._pending.pop(request_id, None)
-            if future is None:
-                raise EmbeddedHostChannelError("unknown or duplicate host result")
-            if not future.done():
+            if future is not None and not future.done():
                 future.set_result(frame)
         return frame
 

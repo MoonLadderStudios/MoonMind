@@ -45,6 +45,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 MAX_EMBEDDED_CAPABILITIES = 128
 MAX_EMBEDDED_CAPABILITY_BYTES = 64 * 1024
+MAX_EMBEDDED_EVENT_ENTRIES = 1024
 MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
 
 
@@ -115,7 +116,7 @@ class EmbeddedHostSessionEventRequest(BaseModel):
         return _bounded_mapping(
             value,
             label="Host event data",
-            max_entries=MAX_EMBEDDED_EVENT_BYTES,
+            max_entries=MAX_EMBEDDED_EVENT_ENTRIES,
             max_bytes=MAX_EMBEDDED_EVENT_BYTES,
         )
 
@@ -206,16 +207,29 @@ class OmnigentEmbeddedHostProtocolFacade:
             await self._run_store.begin_embedded_runner_launch(
                 idempotency_key, host_id=row.omnigent_host_id
             )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        try:
             runner_id = await self._host_channels.launch_runner(
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
                 session_id=row.omnigent_session_id,
                 harness="codex-native",
             )
+        except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._run_store.fail_embedded_runner_launch(
+                idempotency_key, host_id=row.omnigent_host_id
+            )
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        try:
             await self._run_store.bind_embedded_runner(
                 idempotency_key, host_id=row.omnigent_host_id, runner_id=runner_id
             )
-        except (EmbeddedHostChannelError, OmnigentIdempotencyError) as exc:
+        except OmnigentIdempotencyError as exc:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
@@ -497,6 +511,7 @@ __all__ = [
     "MAX_EMBEDDED_CAPABILITIES",
     "MAX_EMBEDDED_CAPABILITY_BYTES",
     "MAX_EMBEDDED_EVENT_BYTES",
+    "MAX_EMBEDDED_EVENT_ENTRIES",
     "OmnigentEmbeddedHostProtocolFacade",
     "verify_embedded_host_auth",
 ]

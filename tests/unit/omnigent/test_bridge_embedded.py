@@ -22,6 +22,7 @@ from moonmind.omnigent.bridge_embedded import (
     MAX_EMBEDDED_CAPABILITIES,
     MAX_EMBEDDED_CAPABILITY_BYTES,
     MAX_EMBEDDED_EVENT_BYTES,
+    MAX_EMBEDDED_EVENT_ENTRIES,
     OmnigentEmbeddedHostProtocolFacade,
     verify_embedded_host_auth,
 )
@@ -35,6 +36,7 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.embedded_host_channel import EmbeddedHostChannelError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
@@ -144,6 +146,12 @@ def test_embedded_host_payloads_enforce_protocol_bounds() -> None:
     with pytest.raises(ValidationError, match="byte limit"):
         EmbeddedHostHeartbeatRequest(
             capabilities={"oversized": "x" * MAX_EMBEDDED_CAPABILITY_BYTES}
+        )
+
+    with pytest.raises(ValidationError, match="entry limit"):
+        EmbeddedHostSessionEventRequest(
+            type="response.delta",
+            data={str(index): True for index in range(MAX_EMBEDDED_EVENT_ENTRIES + 1)},
         )
 
     with pytest.raises(ValidationError, match="byte limit"):
@@ -502,3 +510,32 @@ async def test_dispatch_does_not_repeat_ambiguous_pending_launch(store) -> None:
         await facade.dispatch_runner(idempotency_key="idem-embedded")
 
     assert excinfo.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_dispatch_marks_rejected_launch_failed_for_retry(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+
+    class Channels:
+        async def launch_runner(self, **_kwargs):
+            raise EmbeddedHostChannelError("host rejected runner launch")
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels()
+    )
+    with pytest.raises(OmnigentBridgeError, match="rejected"):
+        await facade.dispatch_runner(idempotency_key="idem-embedded")
+
+    row = await store.get_existing("idem-embedded")
+    assert row.metadata_["embedded_runner_launch"]["state"] == "failed"
+    await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")

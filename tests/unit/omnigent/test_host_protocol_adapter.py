@@ -30,6 +30,10 @@ def test_decodes_stock_host_hello_and_result_fixtures() -> None:
     assert exited.error == "runner process exited with code 1"
 
 
+def test_reuses_one_pinned_frames_module() -> None:
+    assert OmnigentHostProtocolAdapter().frames is OmnigentHostProtocolAdapter().frames
+
+
 def test_encodes_exact_stock_host_launch_and_stop_commands() -> None:
     adapter = OmnigentHostProtocolAdapter()
     frames = adapter.frames

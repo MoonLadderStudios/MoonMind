@@ -16,6 +16,7 @@ from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 
 SUPPORTED_HOST_FRAME_PROTOCOL_MAJOR = 1
 MAX_HOST_FRAME_BYTES = 1024 * 1024
+_cached_frames_module: Any | None = None
 
 
 class UpstreamHostProtocolError(RuntimeError):
@@ -86,6 +87,10 @@ class OmnigentHostProtocolAdapter:
 
 
 def _load_pinned_frames_module() -> Any:
+    global _cached_frames_module
+    if _cached_frames_module is not None:
+        return _cached_frames_module
+
     bundle_root = Path(__file__).resolve().parents[2] / "omnigent"
     root = bundle_root / "omnigent"
     path = root / "host" / "frames.py"
@@ -104,6 +109,7 @@ def _load_pinned_frames_module() -> Any:
         # executing decorators, just as the normal import machinery does.
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
+        _cached_frames_module = module
         return module
     except (AttributeError, ImportError, OSError) as exc:
         raise UpstreamHostProtocolError(

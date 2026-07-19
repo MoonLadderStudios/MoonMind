@@ -202,8 +202,19 @@ class OmnigentBridgeSessionStore:
                 if row.omnigent_agent_name is None and agent_name is not None:
                     row.omnigent_agent_name = agent_name
                     changed = True
-                if not row.metadata_:
-                    row.metadata_ = metadata
+                merged_metadata = dict(row.metadata_ or {})
+                missing_metadata = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key not in merged_metadata
+                }
+                if missing_metadata:
+                    merged_metadata.update(missing_metadata)
+                    row.metadata_ = merged_metadata
+                    changed = True
+                workspace = _string_or_none(metadata.get("workspace"))
+                if row.workspace is None and workspace is not None:
+                    row.workspace = workspace
                     changed = True
                 if changed:
                     await session.commit()
@@ -340,6 +351,35 @@ class OmnigentBridgeSessionStore:
                 "hostId": host_id,
                 "reservedAt": datetime.now(tz=UTC).isoformat(),
             }
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def fail_embedded_runner_launch(
+        self, idempotency_key: str, *, host_id: str
+    ) -> OmnigentBridgeSession:
+        """Release a launch reservation after the host rejects the side effect."""
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_host_id != host_id:
+                raise OmnigentIdempotencyError(
+                    "embedded launch host does not match durable host assignment"
+                )
+            metadata = dict(row.metadata_ or {})
+            launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            if launch.get("state") != "pending" or row.omnigent_runner_id:
+                raise OmnigentIdempotencyError(
+                    "embedded runner launch failure requires durable reconciliation"
+                )
+            launch.update(
+                {
+                    "state": "failed",
+                    "failedAt": datetime.now(tz=UTC).isoformat(),
+                }
+            )
+            metadata[EMBEDDED_LAUNCH_KEY] = launch
             row.metadata_ = metadata
             await session.commit()
             await session.refresh(row)

@@ -39,7 +39,7 @@ async def test_channel_requires_hello_then_correlates_command_result() -> None:
     assert (await pending).status == "stopped"
 
 
-def test_channel_rejects_non_hello_first_and_duplicate_result() -> None:
+def test_channel_rejects_non_hello_first_and_ignores_late_result() -> None:
     async def send(_text: str) -> None:
         pass
 
@@ -49,10 +49,10 @@ def test_channel_rejects_non_hello_first_and_duplicate_result() -> None:
             "kind": "host.runner_exited", "runner_id": "r", "error": "exit"
         }))
     channel.accept_host_frame(_hello())
-    with pytest.raises(EmbeddedHostChannelError, match="unknown or duplicate"):
-        channel.accept_host_frame(json.dumps({
-            "kind": "host.stop_runner_result", "request_id": "unknown", "status": "stopped"
-        }))
+    result = channel.accept_host_frame(json.dumps({
+        "kind": "host.stop_runner_result", "request_id": "unknown", "status": "stopped"
+    }))
+    assert result.status == "stopped"
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_reconnect_fails_pending_request_and_replaces_channel() -> None:
     second = registry.connect(host_id="host-1", send_text=send)
     with pytest.raises(EmbeddedHostChannelError, match="disconnected"):
         await pending
-    second.accept_host_frame(_hello())
+    assert second.accept_host_frame(_hello()) is second.hello
     assert registry.get_ready("host-1") is second
 
 
