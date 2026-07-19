@@ -861,7 +861,7 @@ def test_superuser_owns_any_workflow() -> None:
     # Service returns a foreign owner, but superuser bypasses ownership.
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
-    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
+    app.dependency_overrides[_get_bridge_store] = _FakeStore
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
@@ -890,7 +890,7 @@ def test_create_session_available_in_embedded_mode() -> None:
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    app.dependency_overrides[_get_bridge_store] = lambda: _FakeStore()
+    app.dependency_overrides[_get_bridge_store] = _FakeStore
     client = TestClient(app)
 
     resp = client.post(
