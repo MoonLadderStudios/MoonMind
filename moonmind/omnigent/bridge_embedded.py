@@ -274,6 +274,34 @@ class OmnigentEmbeddedHostProtocolFacade:
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 
+    async def post_event(
+        self, *, session_id: str, event: Any
+    ) -> dict[str, Any]:
+        """Post a message through the exact durably bound runner tunnel."""
+
+        self._require_embedded_mode()
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error", status_code=404,
+            )
+        runner_id = _clean(row.omnigent_runner_id)
+        if not runner_id:
+            raise OmnigentBridgeError(
+                "Embedded session has no durable runner assignment",
+                failure_class="integration_error", status_code=409,
+            )
+        payload = event.model_dump(by_alias=True, exclude_none=True)
+        try:
+            return await self._host_channels.post_runner_event(
+                runner_id=runner_id, session_id=session_id, payload=payload
+            )
+        except (EmbeddedHostChannelError, TimeoutError) as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+
     async def get_session_owner(self, session_id: str):
         """Return the durable MoonMind owner for public control authorization."""
 

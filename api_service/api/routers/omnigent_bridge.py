@@ -1023,14 +1023,16 @@ async def post_omnigent_session_event(
     try:
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
-            if payload.type not in {"stop", "session.stop"}:
+            if payload.type in {"stop", "session.stop"}:
+                return await embedded_facade.stop_runner(session_id=session_id)
+            if payload.type not in {"message", "user.message"}:
                 raise OmnigentBridgeError(
                     f"Embedded control {payload.type!r} is not supported.",
                     failure_class="user_error",
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     code="omnigent_embedded_control_unsupported",
                 )
-            return await embedded_facade.stop_runner(session_id=session_id)
+            return await embedded_facade.post_event(session_id=session_id, event=payload)
         return await proxy.post_event(session_id=session_id, event=payload)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -1339,11 +1341,22 @@ async def embedded_omnigent_runner_tunnel(
         await websocket.close(code=4401)
         return
     await websocket.accept()
+    channel = None
     try:
+        channel = embedded_host_channels.connect_runner(
+            runner_id=runner_id,
+            send_text=websocket.send_text,
+            hello_text=await websocket.receive_text(),
+        )
         while True:
-            await websocket.receive_text()
+            channel.accept_frame(await websocket.receive_text())
     except WebSocketDisconnect:
         pass
+    except EmbeddedHostChannelError:
+        await websocket.close(code=4400)
+    finally:
+        if channel is not None:
+            embedded_host_channels.disconnect_runner(channel)
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)
