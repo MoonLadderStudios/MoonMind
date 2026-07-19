@@ -49,6 +49,8 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.omnigent.settings import build_omnigent_gate
+
 # ---------------------------------------------------------------------------
 # Contract constants
 # ---------------------------------------------------------------------------
@@ -609,6 +611,7 @@ class OmnigentBridgeConfig(BaseModel):
             "hostAuthConformance": embedded.host_auth_conformance_evidence_ref,
         }
         selected_embedded = self.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        proxy_ready = build_omnigent_gate().enabled
         return {
             "enabled": self.enabled,
             "selectedMode": self.host_protocol_mode,
@@ -624,7 +627,10 @@ class OmnigentBridgeConfig(BaseModel):
             ),
             "conformanceState": (
                 "ready"
-                if self.enabled and (not selected_embedded or all(evidence.values()))
+                if self.enabled
+                and (
+                    all(evidence.values()) if selected_embedded else proxy_ready
+                )
                 else "disabled" if not self.enabled else "gated"
             ),
             "evidenceRefs": evidence if selected_embedded else {},

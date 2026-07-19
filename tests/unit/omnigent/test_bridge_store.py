@@ -48,7 +48,7 @@ async def store(tmp_path):
 
 @pytest.mark.asyncio
 async def test_active_host_protocol_modes_reports_ownership_and_unknown(store) -> None:
-    proxy = await store.get_or_create(
+    await store.get_or_create(
         request=_request("proxy"), endpoint_ref="endpoint", agent_id=None,
         agent_name=None, target_metadata={"hostProtocolMode": "proxy"},
     )

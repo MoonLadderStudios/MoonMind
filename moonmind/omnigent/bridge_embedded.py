@@ -269,8 +269,12 @@ class OmnigentEmbeddedHostProtocolFacade:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
-        await self._run_store.record_embedded_runner_exit(
-            runner_id=runner_id, error="stopped by MoonMind control"
+        await self._run_store.record_lifecycle_event(
+            row.idempotency_key,
+            event_type="terminal",
+            status="canceled",
+            event_identity=f"embedded-stop:{runner_id}",
+            summary="stopped by MoonMind control",
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 

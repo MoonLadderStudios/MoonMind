@@ -185,7 +185,8 @@ class _FakeStore:
         self._session_overrides = session_overrides or {}
         self.active_modes: dict[str, int] = {}
 
-    async def active_host_protocol_modes(self):
+    async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
+        self.excluded_idempotency_key = exclude_idempotency_key
         return self.active_modes
 
     async def get_bridge_session_owner(self, bridge_session_id: str):
@@ -341,6 +342,7 @@ def test_create_session_blocks_mode_transition_with_active_other_mode() -> None:
         },
     }
     assert not proxy.created
+    assert store.excluded_idempotency_key == "idem-1"
 
 
 def test_create_session_requires_idempotency_label() -> None:
@@ -933,7 +935,7 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     assert facade.stopped == ["sess-77"]
 
 
-def test_unsupported_embedded_control_fails_explicitly() -> None:
+def test_interrupt_embedded_control_stops_runner() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
@@ -958,6 +960,6 @@ def test_unsupported_embedded_control_fails_explicitly() -> None:
 
     response = client.post(_EVENTS_PATH, json={"type": "interrupt"})
 
-    assert response.status_code == 501
-    assert response.json()["detail"]["code"] == "omnigent_embedded_control_unsupported"
-    assert facade.stopped == []
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert facade.stopped == ["sess-77"]

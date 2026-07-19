@@ -524,9 +524,8 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
     row = await store.get_existing("idem-embedded")
 
     assert result == {"ok": True, "status": "stopped", "runnerId": "runner-1"}
-    assert row.metadata_["embedded_runner_exit"]["error"] == (
-        "stopped by MoonMind control"
-    )
+    assert row.status == "canceled"
+    assert "embedded_runner_exit" not in row.metadata_
 
 
 @pytest.mark.asyncio
@@ -611,8 +610,9 @@ async def test_runner_tunnel_reconnect_aborts_ambiguous_post_and_newest_wins() -
     old = registry.connect_runner(
         runner_id="runner-1", send_text=send_text, hello_text=hello
     )
-    pending = old.post_json("/v1/sessions/sess-1/events", {"type": "message"})
-    task = asyncio.create_task(pending)
+    task = asyncio.create_task(
+        old.post_json("/v1/sessions/sess-1/events", {"type": "message"})
+    )
     await asyncio.sleep(0)
 
     new = registry.connect_runner(

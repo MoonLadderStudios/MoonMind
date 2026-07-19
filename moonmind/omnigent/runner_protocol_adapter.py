@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
+from functools import cache
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import sys
 from typing import Any
 
-_cached: Any | None = None
 
-
+@cache
 def runner_frames() -> Any:
     """Return the exact frame module shipped by the pinned Omnigent source."""
 
-    global _cached
-    if _cached is not None:
-        return _cached
     bundle = Path(__file__).resolve().parents[2] / "omnigent"
     path = bundle / "omnigent" / "runner" / "transports" / "ws_tunnel" / "frames.py"
     bundle_text = str(bundle)
@@ -27,5 +24,4 @@ def runner_frames() -> Any:
     module = module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    _cached = module
     return module

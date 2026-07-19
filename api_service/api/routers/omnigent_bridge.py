@@ -218,12 +218,16 @@ def _get_bridge_store(
 
 
 async def _require_mode_transition_safe(
+    payload: BridgeSessionCreateRequest,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> OmnigentBridgeConfig:
     """Prevent a configured mode change from orphaning active session owners."""
 
-    active_modes = await store.active_host_protocol_modes()
+    idempotency_key = _clean(payload.labels.get(_IDEMPOTENCY_KEY_LABEL))
+    active_modes = await store.active_host_protocol_modes(
+        exclude_idempotency_key=idempotency_key
+    )
     conflicts = {
         mode: count
         for mode, count in active_modes.items()
@@ -1062,7 +1066,12 @@ async def post_omnigent_session_event(
     try:
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
-            if payload.type in {"stop", "session.stop"}:
+            if payload.type in {
+                "stop",
+                "session.stop",
+                "stop_session",
+                "interrupt",
+            }:
                 return await embedded_facade.stop_runner(session_id=session_id)
             if payload.type not in {"message", "user.message"}:
                 raise OmnigentBridgeError(
@@ -1072,6 +1081,7 @@ async def post_omnigent_session_event(
                     code="omnigent_embedded_control_unsupported",
                 )
             return await embedded_facade.post_event(session_id=session_id, event=payload)
+        assert proxy is not None
         return await proxy.post_event(session_id=session_id, event=payload)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -1337,9 +1347,8 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
             config=config,
             configured_token=resolved_host_runner_token(),
         )
-        if str(host_id).strip() != auth.runner_id:
-            await websocket.close(code=4403)
-            return
+        # The shared credential authenticates the stock host; the path value is
+        # its durable lease identity and is intentionally not token-derived.
     except OmnigentBridgeError:
         await websocket.close(code=4401)
         return

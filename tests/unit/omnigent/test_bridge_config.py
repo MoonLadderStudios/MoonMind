@@ -242,13 +242,24 @@ def test_host_protocol_mode_accepts_embedded() -> None:
     }
 
 
-def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence() -> None:
+def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
     readiness = parse_bridge_config({}).readiness()
 
     assert readiness["selectedMode"] == HOST_PROTOCOL_MODE_PROXY
     assert readiness["protocolProfile"] == "omnigent.server.v1"
     assert readiness["conformanceState"] == "ready"
     assert readiness["evidenceRefs"] == {}
+
+
+def test_proxy_readiness_is_gated_when_runtime_is_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("OMNIGENT_ENABLED", raising=False)
+    monkeypatch.delenv("OMNIGENT_SERVER_URL", raising=False)
+
+    assert parse_bridge_config({}).readiness()["conformanceState"] == "gated"
 
 
 def test_embedded_mode_requires_conformance_and_smoke_evidence() -> None:

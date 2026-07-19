@@ -66,7 +66,10 @@ class EmbeddedRunnerChannel:
             pending["body"].append(self.frames.decode_body(frame.body, frame.encoding))
         elif isinstance(frame, self.frames.ResponseEndFrame):
             status = pending["status"]
-            body = b"".join(pending["body"])
+            body = b"".join(
+                part.encode("utf-8") if isinstance(part, str) else part
+                for part in pending["body"]
+            )
             if status is None:
                 error = EmbeddedHostChannelError("runner response ended without headers")
                 pending["future"].set_exception(error)
@@ -273,6 +276,14 @@ class EmbeddedHostChannelRegistry:
         self, *, runner_id: str, session_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         channel = self._runners.get(runner_id)
+        if channel is None:
+            # A successful host launch acknowledges process creation, not the
+            # subsequent runner-tunnel handshake. Bound the normal startup race
+            # here so the first control does not fail spuriously.
+            deadline = asyncio.get_running_loop().time() + 5.0
+            while channel is None and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+                channel = self._runners.get(runner_id)
         if channel is None:
             raise EmbeddedHostChannelError("assigned runner is not connected")
         return await channel.post_json(f"/v1/sessions/{session_id}/events", payload)
