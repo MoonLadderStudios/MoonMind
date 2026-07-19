@@ -2732,6 +2732,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Omnigent Bridge Readiness
+         * @description Expose selected protocol and conformance gates without secret material.
+         */
+        get: operations["get_omnigent_bridge_readiness_api_omnigent_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/v1/sessions": {
         parameters: {
             query?: never;
@@ -17813,6 +17833,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_omnigent_bridge_readiness_api_omnigent_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
