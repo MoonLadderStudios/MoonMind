@@ -36,6 +36,9 @@ def test_generic_tool_uses_logical_workspace_and_declared_outputs() -> None:
     assert schema["required"] == ["idempotencyKey", "spec"]
     spec = schema["properties"]["spec"]
     assert "workspaceRef" in spec["properties"]
+    assert "workspaceRef" not in spec["required"]
+    managed = spec["properties"]["workspaceRef"]["oneOf"][2]
+    assert managed["properties"]["kind"] == {"const": "managed_runtime"}
     assert "outputs" in spec["properties"]
     serialized = str(definition)
     for forbidden in ("repoDir", "artifactsDir", "scratchDir", "dockerHost", "privileged"):

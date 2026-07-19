@@ -17420,6 +17420,22 @@ class MoonMindRunWorkflow:
         owner = OwnerIdentity(
             principalId=self._principal(), principalType="service"
         )
+        spec = node_inputs.get("spec")
+        if not isinstance(spec, Mapping):
+            raise ValueError("container.run_job inputs.spec is required")
+        resolved_spec = dict(spec)
+        if "workspaceRef" not in resolved_spec:
+            runtime_id = self._managed_runtime_id(self._target_runtime or "")
+            if not runtime_id:
+                raise ValueError(
+                    "container.run_job requires workspaceRef when no managed runtime is selected"
+                )
+            resolved_spec["workspaceRef"] = {
+                "kind": "managed_runtime",
+                "runtimeId": runtime_id,
+                "agentRunId": info.workflow_id,
+                "relativePath": "repo",
+            }
         request = ContainerJobSubmitRequest.model_validate(
             {
                 "contractVersion": node_inputs.get("contractVersion", "v1"),
@@ -17431,7 +17447,7 @@ class MoonMindRunWorkflow:
                     "runId": info.run_id,
                     "stepId": node_id,
                 },
-                "spec": node_inputs.get("spec"),
+                "spec": resolved_spec,
             }
         )
         owner_payload = owner.model_dump(mode="json", by_alias=True)

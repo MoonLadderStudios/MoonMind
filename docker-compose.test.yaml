@@ -17,6 +17,10 @@ services:
           - moonmind-test-temporal-artifacts-s3
 
   pytest:
+    image: ${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}
+    # Preserve the existing bind-mounted developer workflow; managed workspace
+    # jobs use the image's non-root app user against app-owned named volumes.
+    user: root
     build:
       context: .
       dockerfile: api_service/Dockerfile

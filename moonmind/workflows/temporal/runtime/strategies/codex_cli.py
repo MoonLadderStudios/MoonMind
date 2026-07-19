@@ -53,6 +53,11 @@ _CODEX_MANAGED_RUNTIME_NOTE = (
     "content pattern with `rg --files`.\n"
     "- Prefer targeted reads like `rg` and `sed -n` over dumping whole files "
     "with `cat`, especially for large frontend files.\n"
+    "- In the MoonMind repository, run Python tests through the durable Docker "
+    "backend with `moonmind container python-tests [pytest targets...]`. Do not "
+    "invoke nested Docker or treat missing pytest in this agent container as a "
+    "test failure. The command exits non-zero when the authoritative container "
+    "job fails and prints its logs/artifact references.\n"
 )
 _CODEX_MANAGED_RUNTIME_NOTE_HEADER = "Managed Codex CLI note:\n"
 
