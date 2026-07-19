@@ -699,3 +699,70 @@ async def test_dispatch_marks_rejected_launch_failed_for_retry(store) -> None:
     row = await store.get_existing("idem-embedded")
     assert row.metadata_["embedded_runner_launch"]["state"] == "failed"
     await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
+
+
+@pytest.mark.asyncio
+async def test_embedded_resources_and_elicitation_use_exact_bound_runner(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = []
+
+        async def request_runner(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["expect_json"]:
+                return {"items": [{"path": "src/main.py"}]}
+            return b"content"
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+
+    index = await facade.get_resource("changed_files", "sess-embedded")
+    content = await facade.get_resource(
+        "workspace_file", "sess-embedded", "src/main.py"
+    )
+    resolved = await facade.resolve_elicitation(
+        session_id="sess-embedded", elicitation_id="approval-1",
+        payload={"decision": "approve"},
+    )
+
+    assert index == {"items": [{"path": "src/main.py"}]}
+    assert content == b"content"
+    assert resolved == {"items": [{"path": "src/main.py"}]}
+    assert {call["runner_id"] for call in channels.calls} == {"runner-1"}
+    assert channels.calls[1]["path"].endswith("/filesystem/src/main.py")
+    assert channels.calls[2]["path"].endswith("/approval-1/resolve")
+
+
+@pytest.mark.asyncio
+async def test_embedded_resource_rejects_traversal_before_runner_request(store) -> None:
+    class Store:
+        async def get_session_by_provider_session_id(self, _session_id):
+            return type("Row", (), {
+                "omnigent_host_id": "host-1", "omnigent_runner_id": "runner-1"
+            })()
+
+    class Channels:
+        async def request_runner(self, **_kwargs):
+            raise AssertionError("unsafe path reached runner")
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=Store(), config=_embedded_config(), host_channels=Channels()
+    )
+    with pytest.raises(OmnigentBridgeError, match="traversal-unsafe"):
+        await facade.get_resource("workspace_file", "sess-embedded", "../secret")

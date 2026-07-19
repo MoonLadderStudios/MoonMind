@@ -514,7 +514,7 @@ async def _authorize_session_control(
     session_id: str,
     user: User,
     service: Any,
-    proxy: OmnigentBridgeSessionProxy,
+    proxy: Any,
 ) -> None:
     owner = await proxy.get_session_owner(session_id)
     if owner is None:
@@ -1095,21 +1095,31 @@ async def resolve_omnigent_elicitation(
     session_id: str,
     elicitation_id: str,
     payload: dict[str, Any],
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Resolve a pending Omnigent elicitation through the bridge surface."""
 
+    facade = (
+        embedded
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if facade is None:
+        raise HTTPException(status_code=501, detail="Unsupported bridge mode")
     await _authorize_session_control(
         session_id=session_id,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=facade,
     )
     try:
-        return await proxy.resolve_elicitation(
+        return await facade.resolve_elicitation(
             session_id=session_id,
             elicitation_id=elicitation_id,
             payload=payload,
@@ -1183,7 +1193,7 @@ async def _owned_resource(
     value: str | None,
     user: User,
     service: Any,
-    proxy: OmnigentBridgeSessionProxy,
+    proxy: Any,
 ):
     await _authorize_session_control(
         session_id=session_id, user=user, service=service, proxy=proxy
@@ -1197,10 +1207,13 @@ async def _owned_resource(
 @router.get(_ROUTES.changed_files, response_model=dict)
 async def list_omnigent_changed_files(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ):
     return await _owned_resource(
         operation="changed_files",
@@ -1208,17 +1221,24 @@ async def list_omnigent_changed_files(
         value=None,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
 
 
 @router.get(_ROUTES.workspace_files, response_model=dict)
 async def list_omnigent_workspace_files(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ):
     return await _owned_resource(
         operation="workspace_files",
@@ -1226,7 +1246,11 @@ async def list_omnigent_workspace_files(
         value=None,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
 
 
@@ -1237,10 +1261,13 @@ async def list_omnigent_workspace_files(
 async def get_omnigent_workspace_file(
     session_id: str,
     path: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> Response:
     content = await _owned_resource(
         operation="workspace_file",
@@ -1248,7 +1275,11 @@ async def get_omnigent_workspace_file(
         value=path,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
     return Response(content=content, media_type="application/octet-stream")
 
@@ -1260,10 +1291,13 @@ async def get_omnigent_workspace_file(
 async def get_omnigent_workspace_diff(
     session_id: str,
     path: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> Response:
     content = await _owned_resource(
         operation="workspace_diff",
@@ -1271,7 +1305,11 @@ async def get_omnigent_workspace_diff(
         value=path,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
     return Response(content=content, media_type="text/x-diff")
 
@@ -1279,10 +1317,13 @@ async def get_omnigent_workspace_diff(
 @router.get(_ROUTES.session_files, response_model=dict)
 async def list_omnigent_session_files(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ):
     return await _owned_resource(
         operation="session_files",
@@ -1290,7 +1331,11 @@ async def list_omnigent_session_files(
         value=None,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
 
 
@@ -1301,10 +1346,13 @@ async def list_omnigent_session_files(
 async def get_omnigent_session_file(
     session_id: str,
     file_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> Response:
     content = await _owned_resource(
         operation="session_file",
@@ -1312,7 +1360,11 @@ async def get_omnigent_session_file(
         value=file_id,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
     return Response(content=content, media_type="application/octet-stream")
 

@@ -34,16 +34,18 @@ class EmbeddedRunnerChannel:
     hello: Any
     _pending: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    async def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> bytes:
         request_id = secrets.token_hex(16)
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = {"future": future, "status": None, "body": []}
         frame = self.frames.RequestFrame(
             id=request_id,
-            method="POST",
+            method=method,
             path=path,
-            headers=[["content-type", "application/json"]],
-            body=json.dumps(payload, separators=(",", ":")),
+            headers=[["content-type", "application/json"]] if payload is not None else [],
+            body=(json.dumps(payload, separators=(",", ":")) if payload is not None else ""),
         )
         try:
             await self.send_text(self.frames.encode_frame(frame))
@@ -78,14 +80,7 @@ class EmbeddedRunnerChannel:
                     EmbeddedHostChannelError(f"runner request failed with HTTP {status}")
                 )
             else:
-                try:
-                    value = json.loads(body or b"{}")
-                except (TypeError, ValueError) as exc:
-                    pending["future"].set_exception(
-                        EmbeddedHostChannelError("runner returned invalid JSON")
-                    )
-                else:
-                    pending["future"].set_result(value)
+                pending["future"].set_result(body)
 
     def disconnect(self) -> None:
         for pending in self._pending.values():
@@ -286,7 +281,37 @@ class EmbeddedHostChannelRegistry:
                 channel = self._runners.get(runner_id)
         if channel is None:
             raise EmbeddedHostChannelError("assigned runner is not connected")
-        return await channel.post_json(f"/v1/sessions/{session_id}/events", payload)
+        body = await channel.request(
+            "POST", f"/v1/sessions/{session_id}/events", payload
+        )
+        return self._decode_json_response(body)
+
+    async def request_runner(
+        self,
+        *,
+        runner_id: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        expect_json: bool = True,
+    ) -> Any:
+        """Send an upstream-compatible HTTP-shaped request to an exact runner."""
+
+        channel = self._runners.get(runner_id)
+        if channel is None:
+            raise EmbeddedHostChannelError("assigned runner is not connected")
+        body = await channel.request(method, path, payload)
+        return self._decode_json_response(body) if expect_json else body
+
+    @staticmethod
+    def _decode_json_response(body: bytes) -> dict[str, Any]:
+        try:
+            value = json.loads(body or b"{}")
+        except (TypeError, ValueError) as exc:
+            raise EmbeddedHostChannelError("runner returned invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise EmbeddedHostChannelError("runner returned a non-object JSON response")
+        return value
 
 
 embedded_host_channels = EmbeddedHostChannelRegistry()
