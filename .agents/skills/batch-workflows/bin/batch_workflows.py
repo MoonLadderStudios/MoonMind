@@ -882,12 +882,13 @@ def main(argv: list[str] | None = None) -> int:
         preflight_error = _text(args.preflight_error)
         if preflight_error:
             if args.requested_count < 0:
-                raise RuntimeError("--requested-count must be zero or greater")
+                preflight_error = "--requested-count must be zero or greater"
+            requested_count = max(0, args.requested_count)
             failed = {
                 **base_result,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "status": "failed",
-                "requested": args.requested_count,
+                "requested": requested_count,
                 "failure": {
                     "code": "BATCH_FANOUT_INPUT_INVALID",
                     "message": preflight_error[:1024],

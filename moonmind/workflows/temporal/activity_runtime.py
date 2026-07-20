@@ -11871,7 +11871,7 @@ class TemporalAgentRuntimeActivities:
         terminal_failure_code = str(
             metadata.get("terminalFailureCode") or evaluation.failure_code or ""
         ).strip()
-        if terminal_failure_code == "BATCH_FANOUT_INPUT_INVALID":
+        if evaluation.failure_code == "BATCH_FANOUT_INPUT_INVALID":
             return result.model_copy(
                 update={
                     "summary": terminal_failure_message

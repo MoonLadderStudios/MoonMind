@@ -6276,3 +6276,57 @@ async def test_terminal_evidence_activity_classifies_batch_input_failure_as_user
     assert result.provider_error_code == "BATCH_FANOUT_INPUT_INVALID"
     assert result.summary == message
     assert result.metadata["terminalContractMissingEvidence"] == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_activity_does_not_trust_rejected_failure_metadata(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step-malformed-input-failure",
+                "targetsSha256": None,
+                "status": "failed",
+                "requested": 1,
+                "created": 1,
+                "queued": [{"executionId": "unexpected-child"}],
+                "skipped": [],
+                "errors": [
+                    {
+                        "code": "BATCH_FANOUT_INPUT_INVALID",
+                        "error": "Invalid range.",
+                    }
+                ],
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": "Invalid range.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = await TemporalAgentRuntimeActivities().agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": {
+                "contractId": "batch_workflows_fanout.v1",
+                "relativePath": "artifacts/batch-workflows-result.json",
+                "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+                "executionRef": "step-malformed-input-failure",
+            },
+            "result": {"summary": "Malformed terminal result."},
+        }
+    )
+
+    assert result.failure_class == "execution_error"
+    assert result.provider_error_code == "INVALID_TERMINAL_EVIDENCE"
+    assert result.metadata["failureCode"] == "INVALID_TERMINAL_EVIDENCE"

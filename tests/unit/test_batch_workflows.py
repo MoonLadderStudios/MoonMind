@@ -732,6 +732,38 @@ def test_helper_records_preflight_failure_without_targets_or_queueing(
     assert evidence["failure"]["code"] == "BATCH_FANOUT_INPUT_INVALID"
 
 
+def test_helper_preserves_preflight_classification_for_negative_requested_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-negative-count")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Invalid range.",
+            "--requested-count",
+            "-1",
+        ]
+    )
+
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert return_code == 2
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 0
+    assert evidence["failure"] == {
+        "code": "BATCH_FANOUT_INPUT_INVALID",
+        "message": "--requested-count must be zero or greater",
+    }
+
+
 def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp_path):
     """Every preflight/transport failure replaces stale evidence and retains children."""
     repo_root = Path(__file__).resolve().parents[2]
