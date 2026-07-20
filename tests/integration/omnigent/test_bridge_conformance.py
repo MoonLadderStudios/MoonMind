@@ -335,6 +335,50 @@ async def test_malformed_timeout_and_close_are_deterministic_real_transport_fail
         await closed.proxy.list_hosts()
 
 
+@pytest.mark.parametrize(
+    "route,operation",
+    [
+        ("agents", "list_agents"),
+        ("hosts", "list_hosts"),
+        ("get_session", "get_session"),
+        ("workspace_files", "workspace_files"),
+        ("workspace_file", "workspace_file"),
+    ],
+)
+async def test_malformed_nested_response_classes_fail_bounded_and_secret_free(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+    route: str,
+    operation: str,
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(malformed_routes=(route,))
+    )
+    session_id = "session-unknown"
+    if route not in {"agents", "hosts"}:
+        created = await harness.proxy.create_session(
+            request=_request(), binding=_binding(f"malformed-{route}")
+        )
+        session_id = created["id"]
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        if operation == "list_agents":
+            await harness.proxy.list_agents()
+        elif operation == "list_hosts":
+            await harness.proxy.list_hosts()
+        elif operation == "get_session":
+            await harness.proxy.get_session(session_id)
+        elif operation == "workspace_file":
+            await harness.proxy.get_resource(operation, session_id, "src/app.py")
+        else:
+            await harness.proxy.get_resource(operation, session_id)
+
+    summary = str(excinfo.value)
+    assert excinfo.value.failure_class
+    assert len(summary) < 2048
+    assert "authorization" not in summary.lower()
+    assert "Bearer " not in summary
+
+
 async def test_stream_reconnect_replays_frames_and_store_deduplicates_after_restart(
     bridge_harness: Callable[..., Awaitable[BridgeHarness]],
 ) -> None:

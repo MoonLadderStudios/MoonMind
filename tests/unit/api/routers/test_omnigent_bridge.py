@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -538,6 +539,54 @@ def test_all_id_bearing_route_classes_reject_unknown_owner() -> None:
     assert proxy.deleted == []
     assert proxy.posted_events == []
     assert proxy.resolved_elicitations == []
+    assert proxy.resource_calls == []
+
+
+@pytest.mark.parametrize("resolution", ["deleted_binding", "ambiguous_binding"])
+def test_all_owner_authorized_route_classes_fail_closed_before_upstream(
+    resolution: str,
+) -> None:
+    """Deleted and ambiguous bindings share the non-enumerating API policy."""
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/{resolution}"
+    requests = (
+        lambda: client.get(base),
+        lambda: client.get(f"{base}/stream"),
+        lambda: client.post(f"{base}/events", json={"type": "interrupt"}),
+        lambda: client.delete(base),
+        lambda: client.get(f"{base}/resources/environments/default/changes"),
+        lambda: client.get(f"{base}/resources/files"),
+    )
+
+    responses = [request() for request in requests]
+
+    assert {response.status_code for response in responses} == {404}
+    assert all(
+        response.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
+        for response in responses
+    )
+    assert proxy.posted_events == []
+    assert proxy.deleted == []
+    assert proxy.resource_calls == []
+
+
+def test_duplicate_authorization_headers_never_survive_api_or_sse_failures() -> None:
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    secret_values = ("Bearer ghp_duplicate_one", "Bearer github_pat_duplicate_two")
+    headers = [("Authorization", value) for value in secret_values]
+    paths = (
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown",
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown/stream",
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown/resources/files",
+    )
+
+    responses = [client.request("GET", path, headers=headers) for path in paths]
+
+    assert {response.status_code for response in responses} == {404}
+    serialized = "\n".join(response.text for response in responses)
+    assert all(secret not in serialized for secret in secret_values)
     assert proxy.resource_calls == []
 
 

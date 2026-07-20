@@ -1407,13 +1407,29 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "durable_state",
+    [
+        "not_prepared",
+        "prepared",
+        "posting",
+        "response_before_posted_persistence",
+        "posted",
+        "terminal",
+    ],
+)
 async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diagnostics(
     monkeypatch,
     tmp_path,
+    durable_state: str,
 ) -> None:
     class Row:
         omnigent_session_id = "persisted-session"
-        first_message_state = "prepared"
+        first_message_state = (
+            "posting"
+            if durable_state == "response_before_posted_persistence"
+            else durable_state
+        )
 
     class Store:
         async def get_or_create(self, **_: object) -> Row:
