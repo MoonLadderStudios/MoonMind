@@ -7976,7 +7976,7 @@ describe('Workflow Detail Entrypoint', () => {
     };
     const event = (sequence: number, kind: string, text: string, metadata: Record<string, unknown> = {}) => ({
       sequence, timestamp: `2026-07-09T00:00:${String(sequence).padStart(2, '0')}Z`,
-      stream: 'stdout', kind, text, sessionId: bridgeSessionId,
+      stream: 'stdout' as const, kind, text, sessionId: bridgeSessionId,
       metadata: { source, directSessionId: source === 'codex_direct_compat' ? 'sess-direct' : undefined, ...metadata },
     });
 
@@ -8015,7 +8015,7 @@ describe('Workflow Detail Entrypoint', () => {
       await waitForEventSourceInstance();
       const stream = MockEventSource.instances.at(-1)!;
       expect(stream.url).toContain(`/${bridgeSessionId}/stream`);
-      act(() => stream.triggerMessage(event(4, 'assistant_message', 'Shared live delta') as any));
+      act(() => stream.triggerMessage(event(4, 'assistant_message', 'Shared live delta')));
       expect((await screen.findAllByText('Shared live delta')).length).toBeGreaterThan(0);
       expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
     } finally {
