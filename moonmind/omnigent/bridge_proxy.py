@@ -140,6 +140,7 @@ class OmnigentSessionFacade(Protocol):
         self, *, session_id: str, binding: BridgePrincipalBinding
     ) -> dict[str, Any]: ...
     async def delete_session(self, session_id: str) -> dict[str, Any]: ...
+    async def stop_session(self, session_id: str) -> dict[str, Any]: ...
     async def post_event(
         self, *, session_id: str, event: BridgeSessionEventRequest
     ) -> dict[str, Any]: ...
@@ -150,7 +151,7 @@ class OmnigentSessionFacade(Protocol):
         self, operation: str, session_id: str, value: str | None = None
     ) -> Any: ...
     def stream_events(
-        self, session_id: str, **kwargs: Any
+        self, session_id: str, *, after: int = 0
     ) -> AsyncIterator[dict[str, Any]]: ...
 
 
@@ -554,8 +555,15 @@ class OmnigentBridgeSessionProxy:
             if isinstance(host, dict)
         ]
 
-    async def stream_events(self, session_id: str):
+    async def stream_events(self, session_id: str, *, after: int = 0):
         self._require_proxy_mode()
+        if after:
+            raise OmnigentBridgeError(
+                "The upstream proxy does not support durable event cursors",
+                failure_class="user_error",
+                status_code=409,
+                code="omnigent_bridge_capability_unavailable",
+            )
         for attempt in range(_MAX_STREAM_RECONNECTS + 1):
             try:
                 async for event in self._client.stream_events(session_id):
@@ -574,6 +582,14 @@ class OmnigentBridgeSessionProxy:
             failure_class="integration_error",
             status_code=502,
             code="omnigent_bridge_upstream_transport",
+        )
+
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        """Stop a provider session through the common lifecycle contract."""
+
+        return await self.post_event(
+            session_id=session_id,
+            event=BridgeSessionEventRequest(type="stop"),
         )
 
     async def delete_session(self, session_id: str) -> dict[str, Any]:

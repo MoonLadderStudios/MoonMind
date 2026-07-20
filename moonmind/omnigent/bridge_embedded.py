@@ -512,6 +512,11 @@ class OmnigentEmbeddedHostProtocolFacade:
             },
         }
 
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        """Stop the exact bound runner through the common facade contract."""
+
+        return await self.stop_runner(session_id=session_id)
+
     async def attach_session(
         self, *, session_id: str, binding: BridgePrincipalBinding
     ) -> dict[str, Any]:
