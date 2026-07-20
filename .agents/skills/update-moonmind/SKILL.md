@@ -1,6 +1,6 @@
 ---
 name: update-moonmind
-description: Refresh MoonMind services from git by checking out a branch, pulling updates, pulling compose images, then restarting changed containers with optional orchestrator inclusion.
+description: Refresh MoonMind services from git by fetching and pinning a branch snapshot, pulling compose images, then restarting changed containers with optional orchestrator inclusion.
 metadata:
   required-capabilities:
     - git
@@ -24,10 +24,15 @@ metadata:
    - Pass `--restart-orchestrator` if you need the orchestrator container restarted as well.
 3. The script will:
    - validate `branch` as a safe git branch value
-   - `git fetch` from `origin` and checkout/reset local `<branch>` from `origin/<branch>`
-   - `git pull --ff-only origin <branch>`
-   - optionally `docker compose pull` (unless `noComposePull` is set)
-  - detect files changed between pre-pull and post-pull commits, force-recreate only application processes affected by bind-mounted runtime source, and use normal Compose reconciliation for other selected services
-  - restart services with image drift or stopped service state so runtime stays healthy
-  - exclude the deployment-control worker from update targets so it can finish and verify the operation
+   - `git fetch` `<branch>` from `origin`
+   - quiesce and coherently recreate the agent-runtime worker across changes to
+     the live-mounted Skill catalog or its resolver code
+   - checkout/reset local `<branch>` to the exact commit captured by that fetch
+   - optionally `docker compose pull` while the resolver worker remains quiesced
+     (unless `noComposePull` is set)
+   - recreate the resolver worker only when it still exists in the post-checkout
+     Compose topology
+   - detect files changed between pre-pull and post-pull commits, force-recreate only application processes affected by bind-mounted runtime source, and use normal Compose reconciliation for other selected services
+   - restart services with image drift or stopped service state so runtime stays healthy
+   - exclude the deployment-control worker from update targets so it can finish and verify the operation
 4. By default, do not restart the `orchestrator` container, even when it changed.
