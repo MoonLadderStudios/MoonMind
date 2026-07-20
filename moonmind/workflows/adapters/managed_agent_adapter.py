@@ -1234,19 +1234,19 @@ class ManagedAgentAdapter:
                         output_refs.append(ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
-                metadata = _derive_pr_resolver_metadata(
-                    record.workspace_path,
-                    merge_gate_owned=pr_resolver_merge_gate_owned,
-                    supports_same_session_continuation=(
-                        resolve_runtime_execution_capabilities(record.runtime_id)
-                        .supports_same_session_continuation
-                    ),
-                    run_id=record.run_id,
-                    workflow_id=record.workflow_id,
-                    not_before=record.started_at,
-                )
-                if not pr_resolver_expected:
-                    metadata.pop("retryRecommendation", None)
+                metadata: dict[str, Any] = {}
+                if pr_resolver_expected:
+                    metadata = _derive_pr_resolver_metadata(
+                        record.workspace_path,
+                        merge_gate_owned=pr_resolver_merge_gate_owned,
+                        supports_same_session_continuation=(
+                            resolve_runtime_execution_capabilities(record.runtime_id)
+                            .supports_same_session_continuation
+                        ),
+                        run_id=record.run_id,
+                        workflow_id=record.workflow_id,
+                        not_before=record.started_at,
+                    )
                 if (
                     include_workspace_auto_publish_evidence
                     and "publishResult" not in metadata
