@@ -37,8 +37,14 @@ class FakeOmnigentScenario:
     delayed_routes: tuple[str, ...] = ()
     delay_seconds: float = 0.0
     close_routes: tuple[str, ...] = ()
+    close_during_body_routes: tuple[str, ...] = ()
+    absent_routes: tuple[str, ...] = ()
     stream_frames: tuple[str, ...] = ()
     stream_disconnect_attempts: int = 0
+    stream_disconnect_after_frames: int | None = None
+    omit_terminal_event: bool = False
+    snapshot_stays_active: bool = False
+    post_event_response_then_disconnect: bool = False
     oversized_json_items: int = 0
     oversized_binary_bytes: int = 0
 
@@ -95,6 +101,8 @@ class FakeOmnigentServer:
                 {"error": f"injected {status}", "authorization": "Bearer fake-secret"},
                 status=status,
             )
+        if route in self.scenario.absent_routes:
+            return web.json_response({"error": "capability unavailable"}, status=404)
         if route in self.scenario.malformed_routes:
             return web.Response(text="{malformed", content_type="application/json")
         return None
@@ -171,6 +179,8 @@ class FakeOmnigentServer:
         status = self.terminal_status if (
             self.first_message_posted.is_set() and not reconnect_pending
         ) else "running"
+        if self.scenario.snapshot_stays_active:
+            status = "running"
         payload: dict[str, Any] = {
             "id": request.match_info["session_id"],
             "status": status,
@@ -196,6 +206,15 @@ class FakeOmnigentServer:
         self.events.append(payload)
         if payload.get("type") not in {"interrupt", "stop_session"}:
             self.first_message_posted.set()
+        if self.scenario.post_event_response_then_disconnect:
+            response = web.StreamResponse(
+                status=200, headers={"Content-Type": "application/json"}
+            )
+            await response.prepare(request)
+            await response.write(b'{"pending_id":"pending-1","item_id":"item-1"}')
+            if request.transport is not None:
+                request.transport.abort()
+            return response
         return web.json_response({"pending_id": "pending-1", "item_id": "item-1"})
 
     async def resolve_elicitation(self, request: web.Request) -> web.Response:
@@ -225,8 +244,12 @@ class FakeOmnigentServer:
         )
         await response.prepare(request)
         frames = self.scenario.stream_frames or ('{"session":{"status":"running"}}',)
-        for frame in frames:
+        for index, frame in enumerate(frames, start=1):
             await response.write(f"data: {frame}\n\n".encode())
+            if self.scenario.stream_disconnect_after_frames == index:
+                if request.transport is not None:
+                    request.transport.abort()
+                return response
         if self.include_child_session_event:
             await response.write(
                 b'data: {"type":"session.child.created",'
@@ -235,6 +258,9 @@ class FakeOmnigentServer:
         if self.stream_disconnect or self.stream_attempts <= self.scenario.stream_disconnect_attempts:
             if request.transport is not None:
                 request.transport.abort()
+            return response
+        if self.scenario.omit_terminal_event:
+            await response.write_eof()
             return response
         await response.write(
             f'data: {{"type":"response.completed","session":{{"status":'
@@ -249,6 +275,15 @@ class FakeOmnigentServer:
     async def list_workspace_files(self, request: web.Request) -> web.Response:
         if fault := await self._fault(request, "workspace_files"):
             return fault
+        if "workspace_files" in self.scenario.close_during_body_routes:
+            response = web.StreamResponse(
+                status=200, headers={"Content-Type": "application/json"}
+            )
+            await response.prepare(request)
+            await response.write(b'{"items":[')
+            if request.transport is not None:
+                request.transport.abort()
+            return response
         if self.scenario.oversized_json_items:
             return web.json_response({
                 "items": [{"path": f"item-{i}"} for i in range(self.scenario.oversized_json_items)]
@@ -266,6 +301,13 @@ class FakeOmnigentServer:
     async def get_workspace_file(self, request: web.Request) -> web.Response:
         if fault := await self._fault(request, "workspace_file"):
             return fault
+        if "workspace_file" in self.scenario.close_during_body_routes:
+            response = web.StreamResponse(status=200)
+            await response.prepare(request)
+            await response.write(b"partial-secret-shaped-token")
+            if request.transport is not None:
+                request.transport.abort()
+            return response
         if self.scenario.oversized_binary_bytes:
             return web.Response(body=b"x" * self.scenario.oversized_binary_bytes)
         path = request.match_info["path"]

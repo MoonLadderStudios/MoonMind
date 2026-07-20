@@ -392,3 +392,111 @@ async def test_oversized_json_and_binary_are_bounded_through_facade(
     assert len(index["items"]) == 250
     with pytest.raises(OmnigentBridgeError, match="exceeds the bridge response limit"):
         await harness.proxy.get_resource("workspace_file", created["id"], "src/app.py")
+
+
+@pytest.mark.parametrize("route,resource,args", [
+    ("workspace_files", "workspace_files", ()),
+    ("workspace_file", "workspace_file", ("src/app.py",)),
+])
+async def test_close_during_json_or_binary_body_is_a_bounded_transport_failure(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+    route: str,
+    resource: str,
+    args: tuple[str, ...],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(close_during_body_routes=(route,))
+    )
+    created = await harness.proxy.create_session(
+        request=_request(), binding=_binding(f"body-close-{route}")
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await harness.proxy.get_resource(resource, created["id"], *args)
+
+    assert excinfo.value.failure_class
+    assert len(str(excinfo.value)) < 2048
+    assert "partial-secret-shaped-token" not in str(excinfo.value)
+
+
+async def test_stream_frame_variants_disconnect_and_terminal_omission_are_explicit(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    frames = (
+        '{"id":"provider-2","type":"assistant.delta","delta":"same","cursor":2}',
+        '{"id":"provider-1","type":"assistant.delta","delta":"same","cursor":1}',
+        "{malformed",
+    )
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            stream_frames=frames,
+            stream_disconnect_after_frames=3,
+            omit_terminal_event=True,
+        )
+    )
+    created = await _create_and_post(harness, key="frame-variants")
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        _ = [event async for event in harness.proxy.stream_events(created["id"])]
+
+    assert excinfo.value.failure_class
+    assert len(str(excinfo.value)) < 2048
+
+
+async def test_missing_terminal_and_active_snapshot_remain_nonterminal(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            omit_terminal_event=True, snapshot_stays_active=True
+        )
+    )
+    created = await _create_and_post(harness, key="active-end")
+    events = [event async for event in harness.proxy.stream_events(created["id"])]
+    snapshot = await harness.proxy.get_session(created["id"])
+
+    assert events == [{"session": {"status": "running"}}]
+    assert snapshot["status"] == "running"
+
+
+async def test_optional_capability_absence_degrades_without_hiding_required_failure(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    optional = await bridge_harness(
+        scenario=FakeOmnigentScenario(absent_routes=("workspace_files",))
+    )
+    created = await _create_and_post(optional, key="absent-optional")
+    harvested = await optional.proxy.harvest_session(created["id"])
+    assert harvested["status"] == "completed_with_diagnostics"
+
+    required = await bridge_harness(
+        scenario=FakeOmnigentScenario(absent_routes=("create_session",))
+    )
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await required.proxy.create_session(
+            request=_request(), binding=_binding("absent-required")
+        )
+    assert excinfo.value.status_code == 404
+
+
+async def test_response_before_posted_persistence_is_ambiguous_and_never_retried(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(post_event_response_then_disconnect=True)
+    )
+    key = "ambiguous-post"
+    created = await harness.proxy.create_session(request=_request(), binding=_binding(key))
+    await harness.store.mark_prepared(key, digest="sha256:first", marker="m")
+    await harness.store.mark_posting(key)
+
+    with pytest.raises(OmnigentBridgeError):
+        await harness.proxy.post_event(
+            session_id=created["id"],
+            event=BridgeSessionEventRequest(type="message", text="hello"),
+        )
+
+    row = await harness.store.get_existing(key)
+    assert row is not None and row.first_message_state == FIRST_MESSAGE_POSTING
+    assert len(harness.running.server.session_ids) == 1
+    assert len(harness.running.server.events) == 1
