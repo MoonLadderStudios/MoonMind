@@ -29,7 +29,7 @@ BRIDGE_CONFORMANCE_SCENARIOS: tuple[str, ...] = (
     "ambiguous_first_message_response",
 )
 
-CONFORMANCE_PROFILE_VERSION = "moonmind.omnigent.conformance/v2"
+CONFORMANCE_PROFILE_VERSION = "moonmind.omnigent.conformance/v3"
 
 
 @dataclass(slots=True)
@@ -44,6 +44,9 @@ class FakeOmnigentScenario:
     statuses: dict[str, int] = field(default_factory=dict)
     delays: dict[str, float] = field(default_factory=dict)
     malformed_json: set[str] = field(default_factory=set)
+    malformed_payloads: dict[str, Any] = field(default_factory=dict)
+    close_before_headers: set[str] = field(default_factory=set)
+    close_during_body: set[str] = field(default_factory=set)
     stream_frames: list[bytes] | None = None
     stream_disconnect_after: int | None = None
     oversized_json_items: int = 0
@@ -86,6 +89,8 @@ class FakeOmnigentServer:
         delay = self.scenario.delays.get(route)
         if delay:
             await asyncio.sleep(delay)
+        if route in self.scenario.close_before_headers:
+            raise ConnectionResetError(f"injected close before headers: {route}")
         status = self.scenario.statuses.get(route)
         if status is not None:
             return web.json_response(
@@ -94,7 +99,21 @@ class FakeOmnigentServer:
             )
         if route in self.scenario.malformed_json:
             return web.Response(body=b'{"broken":', content_type="application/json")
+        if route in self.scenario.malformed_payloads:
+            return web.json_response(self.scenario.malformed_payloads[route])
         return None
+
+    async def _maybe_close_body(
+        self, request: web.Request, route: str, body: bytes
+    ) -> web.StreamResponse | None:
+        if route not in self.scenario.close_during_body:
+            return None
+        response = web.StreamResponse(status=200)
+        response.content_length = len(body) + 100
+        await response.prepare(request)
+        await response.write(body)
+        request.transport.close()
+        return response
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -277,6 +296,11 @@ class FakeOmnigentServer:
             return fault
         if self.scenario.oversized_binary_bytes:
             return web.Response(body=b"x" * self.scenario.oversized_binary_bytes)
+        response = await self._maybe_close_body(
+            request, "resources.workspace-file", b"partial"
+        )
+        if response is not None:
+            return response
         path = request.match_info["path"]
         body = {
             "README.md": b"# Fake repo\n",

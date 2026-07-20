@@ -133,7 +133,7 @@ async def _create_and_post(
 
 
 async def test_bridge_conformance_suite_declares_versioned_scenarios() -> None:
-    assert CONFORMANCE_PROFILE_VERSION == "moonmind.omnigent.conformance/v2"
+    assert CONFORMANCE_PROFILE_VERSION == "moonmind.omnigent.conformance/v3"
     assert BRIDGE_CONFORMANCE_SCENARIOS == (
         "successful_session_with_streamed_assistant_output",
         "failed_session_with_diagnostics",
@@ -345,6 +345,56 @@ async def test_scenario_10_timeout_and_malformed_json_are_deterministic(
     with pytest.raises(OmnigentClientError) as payload:
         await malformed.client.list_hosts()
     assert payload.value.failure_class == "integration_error"
+
+
+@pytest.mark.parametrize(
+    ("route", "invoke"),
+    [
+        ("agents", lambda client: client.list_agents()),
+        ("hosts", lambda client: client.list_hosts()),
+        ("sessions.create", lambda client: client.create_session({"agentId": "agent-1"})),
+        ("sessions.get", lambda client: client.get_session("session-1")),
+        ("resources.changes", lambda client: client.list_changed_files("session-1")),
+        ("resources.workspace-list", lambda client: client.list_workspace_files("session-1")),
+        ("resources.session-list", lambda client: client.list_session_files("session-1")),
+    ],
+)
+async def test_malformed_route_schema_matrix_fails_closed(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+    route: str,
+    invoke: Callable[[OmnigentHttpClient], Awaitable[Any]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(malformed_payloads={route: {"unexpected": [{"nested": None}]}})
+    )
+    try:
+        result = await invoke(harness.client)
+    except (OmnigentClientError, OmnigentBridgeError, KeyError, TypeError, ValueError) as exc:
+        assert len(str(exc)) < 512
+        assert "authorization" not in str(exc).lower()
+    else:
+        # Catalog discovery may safely degrade to an empty list; other raw
+        # client calls preserve the malformed shape for facade validation.
+        assert result == [] or isinstance(result, dict)
+    assert harness.running.server.route_calls == [route]
+
+
+async def test_transport_close_phases_are_bounded_integration_failures(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    before = await bridge_harness(
+        scenario=FakeOmnigentScenario(close_before_headers={"hosts"})
+    )
+    with pytest.raises(OmnigentClientError) as closed:
+        await before.client.list_hosts()
+    assert closed.value.failure_class == "integration_error"
+
+    during = await bridge_harness(
+        scenario=FakeOmnigentScenario(close_during_body={"resources.workspace-file"})
+    )
+    with pytest.raises(OmnigentClientError) as partial:
+        await during.client.get_workspace_file("session-1", "README.md")
+    assert partial.value.failure_class == "integration_error"
 
 
 async def test_scenario_11_stream_replay_identity_and_malformed_frame(
