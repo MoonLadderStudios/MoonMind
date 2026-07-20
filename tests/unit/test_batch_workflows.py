@@ -7,9 +7,9 @@ and unsupported-target skips.
 
 from __future__ import annotations
 
-import runpy
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -101,6 +101,123 @@ _GITHUB_TARGET: dict[str, Any] = {
     },
     "repository": "MoonLadderStudios/MoonMind",
 }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1-1", (1, 1)),
+        ("3370-3425", (3370, 3425)),
+    ],
+)
+def test_parse_github_issue_range(value, expected):
+    module = _load_module()
+
+    assert module["parse_github_issue_range"](value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "1", "1..2", "0-2", "3-2"])
+def test_parse_github_issue_range_rejects_invalid_search_criteria(value):
+    module = _load_module()
+
+    with pytest.raises(ValueError):
+        module["parse_github_issue_range"](value)
+
+
+def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
+    module = _load_module()
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {
+            "capture_output": True,
+            "text": True,
+            "timeout": 60,
+            "check": False,
+        }
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue40": {
+                                "number": 40,
+                                "title": "Existing issue",
+                                "body": "Body",
+                                "url": "https://github.com/acme/widgets/issues/40",
+                                "state": "OPEN",
+                                "labels": {"nodes": [{"name": "bug"}]},
+                            },
+                            # GraphQL issue(number:) returns null for both a pull
+                            # request number and a number that does not exist.
+                            "issue41": None,
+                            "issue42": None,
+                        }
+                    },
+                    "errors": [
+                        {
+                            "type": "NOT_FOUND",
+                            "path": ["repository", "issue41"],
+                            "message": (
+                                "Could not resolve to an Issue with the number of 41."
+                            ),
+                        },
+                        {
+                            "type": "NOT_FOUND",
+                            "path": ["repository", "issue42"],
+                            "message": (
+                                "Could not resolve to an Issue with the number of 42."
+                            ),
+                        },
+                    ],
+                }
+            ),
+            stderr="gh: some issues were not found",
+        )
+
+    targets = module["resolve_github_issue_range"](
+        "acme/widgets",
+        "40-42",
+        run_command=fake_run,
+    )
+
+    assert [target["ref"] for target in targets] == ["acme/widgets#40"]
+    assert targets[0]["githubIssue"] == {
+        "repository": "acme/widgets",
+        "number": 40,
+        "title": "Existing issue",
+        "body": "Body",
+        "url": "https://github.com/acme/widgets/issues/40",
+        "state": "open",
+        "labels": ["bug"],
+    }
+    assert len(calls) == 1
+    query_arg = next(arg for arg in calls[0] if arg.startswith("query="))
+    assert "issue40: issue(number: 40)" in query_arg
+    assert "issue41: issue(number: 41)" in query_arg
+    assert "issue42: issue(number: 42)" in query_arg
+
+
+def test_parse_args_accepts_github_range_without_targets():
+    module = _load_module()
+
+    args = module["_parse_args"](
+        [
+            "--github-issue-range",
+            "3370-3425",
+            "--github-repository",
+            "MoonLadderStudios/MoonMind",
+            "--run-ref",
+            "preset:github-issue-implement",
+        ]
+    )
+
+    assert args.targets is None
+    assert args.github_issue_range == "3370-3425"
+    assert args.github_repository == "MoonLadderStudios/MoonMind"
 
 
 def _jira_config(module, **overrides):

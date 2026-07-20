@@ -47,6 +47,8 @@ Progress" with a single batch run.
   implement presets. Default `true`.
 - `additional_jql` (string, optional): advanced JQL AND-clause appended to the
   project/status query.
+- `issue_range` (string, GitHub preset only): inclusive `START-END` search
+  criteria. Numeric members are not targets unless GitHub returns an Issue.
 - `repository` (string, optional): repository override when workflow context
   cannot infer it.
 - `publish_mode` (string, optional): advanced child publish override, `none`,
@@ -54,9 +56,10 @@ Progress" with a single batch run.
 
 ## Workflow
 
-1. **Resolve Jira targets** into the canonical resolved-target shape and write
-   them to `artifacts/batch-workflows-targets.json`, then preview the list before
-   queueing. Use the trusted Jira tool surface to search:
+1. **Resolve provider targets** into the canonical resolved-target shape and
+   write them to `artifacts/batch-workflows-targets.json` before queueing.
+
+   For Jira, use the trusted Jira tool surface to search and preview the list:
 
    ```text
    project = "<jira_project_key>" AND status = "<jira_status>"
@@ -77,6 +80,13 @@ Progress" with a single batch run.
    Never use raw Jira credentials, web scraping, or guessed issue content to
    build the target list.
 
+   For GitHub, the inclusive number range is search criteria, not a target list.
+   GitHub issues and pull requests share numbers, and numbers may be absent. Use
+   the helper's `--github-issue-range` plus `--github-repository` inputs so its
+   trusted GraphQL `issue(number:)` lookup returns only real Issue objects.
+   Pull requests and absent numbers are omitted normally and never become
+   targets. The helper writes the resolved target artifact before queueing.
+
 2. **Queue child workflows** by running the helper:
 
    ```bash
@@ -88,6 +98,13 @@ Progress" with a single batch run.
      --run-verify | --no-run-verify \
      --update-status | --no-update-status \
      --max-workflows <cap>
+   ```
+
+   For the GitHub preset, replace `--targets` with:
+
+   ```bash
+   --github-issue-range <START-END> \
+   --github-repository <owner/repository>
    ```
 
    For each resolved target the helper:
@@ -128,6 +145,7 @@ Progress" with a single batch run.
   not supported.
 - Never re-select provider/model/effort in the batch form; children inherit the
   caller runtime.
-- Cap the resolved list at `max_workflows`.
+- Cap the resolved target list at `max_workflows`; a GitHub range's numeric
+  width is not the target count.
 - Targets whose selected run capability is not auto-bindable are skipped with a
   clear `unsupported_target` reason rather than queued blindly.
