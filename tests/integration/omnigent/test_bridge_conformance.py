@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -60,6 +61,7 @@ class BridgeHarness:
     store: OmnigentBridgeSessionStore
     proxy: OmnigentBridgeSessionProxy
     client: OmnigentHttpClient
+    session_maker: Any
 
 
 @pytest_asyncio.fixture
@@ -90,6 +92,7 @@ async def bridge_harness():
             store=store,
             proxy=proxy,
             client=client,
+            session_maker=session_maker,
         )
 
     try:
@@ -790,6 +793,16 @@ async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redac
             bridge_session_id=row.bridge_session_id,
         ).event
         await harness.store.append_events(row.bridge_session_id, [normalized])
+    # Simulate retention pruning the first durable event so the API must
+    # report the gap before the remaining sequence range.
+    async with harness.session_maker() as session:
+        await session.execute(
+            delete(OmnigentBridgeSessionEvent).where(
+                OmnigentBridgeSessionEvent.bridge_session_id == row.bridge_session_id,
+                OmnigentBridgeSessionEvent.sequence == 1,
+            )
+        )
+        await session.commit()
     await harness.store.mark_terminal(
         key,
         status="completed",
