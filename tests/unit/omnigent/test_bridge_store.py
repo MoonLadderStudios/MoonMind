@@ -676,15 +676,49 @@ async def test_terminal_reconciliation_never_deletes_live_rows(store):
         "eventType": "response.completed", "normalizedStatus": "completed",
         "deduplicationKey": "provider:event-2",
     }
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="profile.resolved",
+        status="completed",
+        event_identity="idem-1:profile.resolved",
+    )
     await store.append_events(row.bridge_session_id, [live])
+    before = await store.list_events(row.bridge_session_id)
+    cursor = before[-1].sequence
+    identities = [
+        (
+            event.event_id,
+            event.sequence,
+            event.deduplication_key,
+            event.metadata_,
+        )
+        for event in before
+    ]
     await store.mark_terminal("idem-1", status="completed", events=[live, terminal])
     await store.mark_terminal("idem-1", status="completed", events=[live, terminal])
 
     events = await store.list_events(row.bridge_session_id)
-    assert [event.sequence for event in events] == [1, 2]
+    assert [event.sequence for event in events] == [1, 2, 3]
     assert [event.event_type for event in events] == [
-        "response.delta", "response.completed",
+        "lifecycle.profile.resolved", "response.delta", "response.completed",
     ]
+    assert [
+        (
+            event.event_id,
+            event.sequence,
+            event.deduplication_key,
+            event.metadata_,
+        )
+        for event in events[:2]
+    ] == identities
+
+    # A client reconnecting from its active-session cursor receives only the
+    # missing terminal tail; no rebuilt active row crosses the cursor again.
+    page = await store.list_event_page(
+        row.bridge_session_id, after=cursor, limit=100
+    )
+    assert [event.event_type for event in page.rows] == ["response.completed"]
+    assert page.latest_sequence == 3
 
 
 @pytest.mark.asyncio

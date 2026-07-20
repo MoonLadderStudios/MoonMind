@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -1048,31 +1048,10 @@ class OmnigentBridgeSessionStore:
                 for column, value in _canonical_ref_columns(terminal_refs).items():
                     setattr(row, column, value)
             if events:
-                # Replace only provider events. Lifecycle rows are independent
-                # terminal evidence and must survive provider stream indexing.
-                await session.execute(
-                    delete(OmnigentBridgeSessionEvent).where(
-                        OmnigentBridgeSessionEvent.bridge_session_id
-                        == row.bridge_session_id,
-                        OmnigentBridgeSessionEvent.direction != "moonmind_system",
-                    )
-                )
-                max_sequence_result = await session.execute(
-                    select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
-                        OmnigentBridgeSessionEvent.bridge_session_id
-                        == row.bridge_session_id
-                    )
-                )
-                offset = int(max_sequence_result.scalar() or 0)
-                provider_events = []
-                for index, event in enumerate(events, start=1):
-                    prepared = dict(event)
-                    prepared["sequence"] = offset + index
-                    provider_events.append(prepared)
-                for event_row in _build_event_rows(
-                    row.bridge_session_id, provider_events
-                ):
-                    session.add(event_row)
+                # Terminal reconciliation shares the active append boundary.
+                # Published rows are cursor-visible evidence and therefore
+                # immutable: a final journal may only contribute a missing tail.
+                await self._append_events_locked(session, row, events)
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -1162,58 +1141,71 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
-            dedup_keys = [_event_deduplication_key(event) for event in events]
-            existing_result = await session.execute(
-                select(OmnigentBridgeSessionEvent.deduplication_key).where(
-                    OmnigentBridgeSessionEvent.bridge_session_id == key,
-                    OmnigentBridgeSessionEvent.deduplication_key.in_(dedup_keys),
-                )
-            )
-            existing = set(existing_result.scalars().all())
-            pending = [
-                (event, dedup_key)
-                for event, dedup_key in zip(events, dedup_keys, strict=True)
-                if dedup_key not in existing
-            ]
-            if not pending:
-                return []
-            max_sequence_result = await session.execute(
-                select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
-                    OmnigentBridgeSessionEvent.bridge_session_id == key
-                )
-            )
-            next_sequence = int(max_sequence_result.scalar() or 0) + 1
-            prepared_events: list[dict[str, Any]] = []
-            for offset, (event, dedup_key) in enumerate(pending):
-                prepared = redact_raw_events([dict(event)])[0]
-                prepared["sequence"] = next_sequence + offset
-                prepared["deduplicationKey"] = dedup_key
-                prepared_events.append(prepared)
-            rows = _build_event_rows(key, prepared_events)
-            for event_row in rows:
-                session.add(event_row)
-            next_status = None
-            for event in prepared_events:
-                normalized = _string_or_none(event.get("normalizedStatus"))
-                if normalized is None:
-                    continue
-                coalesced = coalesce_bridge_status(normalized)
-                if (
-                    next_status in _TERMINAL_STATUSES
-                    and coalesced not in _TERMINAL_STATUSES
-                ):
-                    continue
-                next_status = coalesced
-            if next_status is not None and not (
-                row.status in _TERMINAL_STATUSES
-                and next_status not in _TERMINAL_STATUSES
-            ):
-                row.status = next_status
+            rows = await self._append_events_locked(session, row, events)
             await session.commit()
             for event_row in rows:
                 await session.refresh(event_row)
                 session.expunge(event_row)
             return rows
+
+    async def _append_events_locked(
+        self,
+        session: AsyncSession,
+        row: OmnigentBridgeSession,
+        events: Sequence[dict[str, Any]],
+    ) -> list[OmnigentBridgeSessionEvent]:
+        """Append missing events while the bridge-session row is locked."""
+
+        dedup_keys = [_event_deduplication_key(event) for event in events]
+        existing_result = await session.execute(
+            select(OmnigentBridgeSessionEvent.deduplication_key).where(
+                OmnigentBridgeSessionEvent.bridge_session_id
+                == row.bridge_session_id,
+                OmnigentBridgeSessionEvent.deduplication_key.in_(dedup_keys),
+            )
+        )
+        seen = set(existing_result.scalars().all())
+        pending: list[tuple[dict[str, Any], str]] = []
+        for event, dedup_key in zip(events, dedup_keys, strict=True):
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            pending.append((event, dedup_key))
+        if not pending:
+            return []
+        max_sequence_result = await session.execute(
+            select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
+                OmnigentBridgeSessionEvent.bridge_session_id
+                == row.bridge_session_id
+            )
+        )
+        next_sequence = int(max_sequence_result.scalar() or 0) + 1
+        prepared_events: list[dict[str, Any]] = []
+        for offset, (event, dedup_key) in enumerate(pending):
+            prepared = redact_raw_events([dict(event)])[0]
+            prepared["sequence"] = next_sequence + offset
+            prepared["deduplicationKey"] = dedup_key
+            prepared_events.append(prepared)
+        rows = _build_event_rows(row.bridge_session_id, prepared_events)
+        session.add_all(rows)
+        next_status = None
+        for event in prepared_events:
+            normalized = _string_or_none(event.get("normalizedStatus"))
+            if normalized is None:
+                continue
+            coalesced = coalesce_bridge_status(normalized)
+            if (
+                next_status in _TERMINAL_STATUSES
+                and coalesced not in _TERMINAL_STATUSES
+            ):
+                continue
+            next_status = coalesced
+        if next_status is not None and not (
+            row.status in _TERMINAL_STATUSES
+            and next_status not in _TERMINAL_STATUSES
+        ):
+            row.status = next_status
+        return rows
 
     async def attach_active_journal_refs(
         self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
