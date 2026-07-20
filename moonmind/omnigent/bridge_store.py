@@ -501,6 +501,17 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "embedded session is already bound to another runner"
                 )
+            launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
+            if launch.get("runnerId") not in {None, runner_id}:
+                raise OmnigentIdempotencyError(
+                    "embedded runner does not match the reserved launch generation"
+                )
+            if launch.get("credentialGeneration") not in {
+                None, row.credential_generation
+            }:
+                raise OmnigentIdempotencyError(
+                    "embedded runner callback uses a stale credential generation"
+                )
             row.omnigent_runner_id = runner_id
             metadata = dict(row.metadata_ or {})
             launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
@@ -525,7 +536,10 @@ class OmnigentBridgeSessionStore:
             return _detached(session, row)
 
     async def begin_embedded_runner_launch(
-        self, idempotency_key: str, *, host_id: str
+        self, idempotency_key: str, *, host_id: str,
+        runner_id: str | None = None, generation: int | None = None,
+        credential_generation: int | None = None,
+        launch_generation: int | None = None,
     ) -> OmnigentBridgeSession:
         """Reserve the one permitted launch before crossing the socket boundary."""
 
@@ -547,13 +561,25 @@ class OmnigentBridgeSessionStore:
             if row.omnigent_runner_id:
                 return _detached(session, row)
             if launch.get("state") in {"pending", "launched"}:
+                if (
+                    launch.get("hostId") == host_id
+                    and launch.get("runnerId") == runner_id
+                    and launch.get("generation") == generation
+                    and launch.get("credentialGeneration") == credential_generation
+                    and launch.get("launchGeneration") == launch_generation
+                ):
+                    return _detached(session, row)
                 raise OmnigentIdempotencyError(
-                    "embedded runner launch requires durable reconciliation"
+                    "embedded runner launch generation requires durable reconciliation"
                 )
             metadata = dict(row.metadata_ or {})
             metadata[EMBEDDED_LAUNCH_KEY] = {
                 "state": "pending",
                 "hostId": host_id,
+                "runnerId": runner_id,
+                "generation": generation,
+                "credentialGeneration": credential_generation,
+                "launchGeneration": launch_generation,
                 "reservedAt": datetime.now(tz=UTC).isoformat(),
             }
             row.metadata_ = metadata
@@ -661,6 +687,48 @@ class OmnigentBridgeSessionStore:
         async with self._session_factory() as session:
             row = await self._require(session, idempotency_key)
             _advance_embedded_lifecycle(row, state, code=code)
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def prepare_embedded_runner_replacement(
+        self, idempotency_key: str, *, runner_id: str
+    ) -> OmnigentBridgeSession:
+        """Clear a stale assignment only after the host confirmed it stopped.
+
+        Provider and host lease fields intentionally remain untouched; callers
+        may launch the replacement before credential capacity is released.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_runner_id != runner_id:
+                raise OmnigentIdempotencyError(
+                    "embedded replacement does not match durable runner assignment"
+                )
+            _advance_embedded_lifecycle(
+                row, "draining", code="stale_runner_stop_confirmed", runner_id=runner_id
+            )
+            _advance_embedded_lifecycle(
+                row, "stopped", code="stale_runner_stopped", runner_id=runner_id
+            )
+            row.omnigent_runner_id = None
+            metadata = dict(row.metadata_ or {})
+            prior_launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            metadata[EMBEDDED_LAUNCH_KEY] = {
+                "state": "failed",
+                "hostId": row.omnigent_host_id,
+                "credentialGeneration": row.credential_generation,
+                "launchGeneration": int(prior_launch.get("launchGeneration") or 1),
+                "reconciliationCode": "safe_replacement_required",
+                "reconciledAt": datetime.now(tz=UTC).isoformat(),
+            }
+            # A stopped generation is terminal. Start a fresh lifecycle journal
+            # for the replacement while retaining the prior timeline as evidence.
+            previous = dict(metadata.get(EMBEDDED_LIFECYCLE_KEY) or {})
+            metadata["embedded_runner_lifecycle_previous"] = previous
+            metadata.pop(EMBEDDED_LIFECYCLE_KEY, None)
+            row.metadata_ = metadata
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)

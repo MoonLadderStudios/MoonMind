@@ -1472,8 +1472,31 @@ async def embedded_omnigent_runner_tunnel(
         await websocket.close(code=4404)
         return
     try:
+        store = OmnigentBridgeSessionStore(async_session_maker)
+        binding = await store.get_session_by_runner_id(runner_id)
+        if (
+            binding is None
+            or not binding.omnigent_host_id
+            or not binding.omnigent_session_id
+            or binding.credential_generation is None
+        ):
+            raise EmbeddedHostChannelError("runner has no active durable binding")
+        from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
+
+        binding_token = derive_runner_binding_token(
+            resolved_host_runner_token(),
+            host_id=binding.omnigent_host_id,
+            session_id=binding.omnigent_session_id,
+            generation=int(
+                ((binding.metadata_ or {}).get("embedded_runner_launch") or {}).get(
+                    "generation"
+                )
+                or binding.credential_generation
+            ),
+        )
         embedded_host_channels.authenticate_runner(
-            runner_id=runner_id, headers=websocket.headers
+            runner_id=runner_id, headers=websocket.headers,
+            binding_token=binding_token,
         )
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4401)

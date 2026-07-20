@@ -44,7 +44,10 @@ from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
     EmbeddedHostChannelRegistry,
     embedded_host_channels,
+    derive_runner_binding_token,
 )
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
+from moonmind.omnigent.settings import resolved_host_runner_token
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 MAX_EMBEDDED_CAPABILITIES = 128
@@ -184,10 +187,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         run_store: OmnigentBridgeSessionStore,
         config: OmnigentBridgeConfig,
         host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
+        runner_binding_root_secret: str | None = None,
     ) -> None:
         self._run_store = run_store
         self._config = config
         self._host_channels = host_channels
+        self._runner_binding_root_secret = runner_binding_root_secret
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
@@ -207,14 +212,34 @@ class OmnigentEmbeddedHostProtocolFacade:
                     code="live_tunnel_verified",
                 )
                 return {"runnerId": row.omnigent_runner_id, "reused": True}
+            wait_ready = getattr(self._host_channels, "wait_runner_ready", None)
+            if wait_ready is not None and await wait_ready(row.omnigent_runner_id):
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key, state="runner_tunnel_ready",
+                    code="bounded_runner_reconnect_verified",
+                )
+                return {"runnerId": row.omnigent_runner_id, "reused": True}
             await self._run_store.mark_embedded_runner_state(
                 idempotency_key,
                 state="stale",
                 code="durable_runner_tunnel_unavailable",
             )
+            stop_runner = getattr(self._host_channels, "stop_runner", None)
+            if stop_runner is not None:
+                try:
+                    await stop_runner(
+                        host_id=row.omnigent_host_id, runner_id=row.omnigent_runner_id
+                    )
+                except (EmbeddedHostChannelError, TimeoutError):
+                    pass
+                else:
+                    await self._run_store.prepare_embedded_runner_replacement(
+                        idempotency_key, runner_id=row.omnigent_runner_id
+                    )
+                    return await self.dispatch_runner(idempotency_key=idempotency_key)
             raise OmnigentBridgeError(
-                "Durable embedded runner assignment is not live; reconciliation or "
-                "janitor replacement is required",
+                "Durable embedded runner assignment did not reconnect before the "
+                "bounded deadline; it was marked stale for safe replacement",
                 failure_class="integration_error",
                 status_code=503,
                 code="embedded_runner_stale",
@@ -226,30 +251,58 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error", status_code=422,
             )
         try:
-            await self._run_store.begin_embedded_runner_launch(
-                idempotency_key, host_id=row.omnigent_host_id
+            credential_generation = int(row.credential_generation or 0)
+            prior_launch = dict(
+                (row.metadata_ or {}).get("embedded_runner_launch") or {}
             )
-        except OmnigentIdempotencyError as exc:
+            launch_generation = int(prior_launch.get("launchGeneration") or 0)
+            if prior_launch.get("state") not in {"pending", "launched"}:
+                launch_generation += 1
+            launch_generation = max(launch_generation, 1)
+            binding_generation = credential_generation * 1_000_000 + launch_generation
+            binding_token = derive_runner_binding_token(
+                self._runner_binding_root_secret or resolved_host_runner_token(),
+                host_id=row.omnigent_host_id,
+                session_id=row.omnigent_session_id, generation=binding_generation,
+            )
+            expected_runner_id = OmnigentHostAuthAdapter(
+                allowed_tokens=frozenset({binding_token})
+            ).runner_id_for_binding_token(binding_token)
+            reserved = await self._run_store.begin_embedded_runner_launch(
+                idempotency_key, host_id=row.omnigent_host_id,
+                runner_id=expected_runner_id, generation=binding_generation,
+                credential_generation=credential_generation,
+                launch_generation=launch_generation,
+            )
+        except (OmnigentIdempotencyError, EmbeddedHostChannelError) as exc:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         try:
-            await self._run_store.mark_embedded_runner_state(
-                idempotency_key,
-                state="launch_sent",
-                code="host_launch_command_sending",
-            )
+            lifecycle_state = (
+                (reserved.metadata_ or {}).get("embedded_runner_lifecycle") or {}
+            ).get("state")
+            if lifecycle_state == "launch_reserved":
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key,
+                    state="launch_sent",
+                    code="host_launch_command_sending",
+                )
             runner_id = await self._host_channels.launch_runner(
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
                 session_id=row.omnigent_session_id,
                 harness="codex-native",
+                binding_token=binding_token,
             )
-            await self._run_store.mark_embedded_runner_state(
-                idempotency_key,
-                state="launch_acknowledged",
-                code="host_launch_acknowledged",
-            )
+            if runner_id != expected_runner_id:
+                raise EmbeddedHostChannelError("host returned a stale launch generation")
+            if lifecycle_state != "launch_acknowledged":
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key,
+                    state="launch_acknowledged",
+                    code="host_launch_acknowledged",
+                )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
             await self._run_store.fail_embedded_runner_launch(
                 idempotency_key, host_id=row.omnigent_host_id

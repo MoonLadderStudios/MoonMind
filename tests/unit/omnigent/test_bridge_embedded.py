@@ -699,16 +699,19 @@ async def test_dispatch_persists_launch_intent_before_host_side_effect(store) ->
             row = await store.get_existing("idem-embedded")
             assert row.metadata_["embedded_runner_launch"]["state"] == "pending"
             assert kwargs["host_id"] == "host-1"
-            return "runner-1"
+            return OmnigentHostAuthAdapter(
+                allowed_tokens=frozenset({kwargs["binding_token"]})
+            ).runner_id_for_binding_token(kwargs["binding_token"])
 
     facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=store, config=_embedded_config(), host_channels=Channels()
+        run_store=store, config=_embedded_config(), host_channels=Channels(),
+        runner_binding_root_secret="root-secret",
     )
     result = await facade.dispatch_runner(idempotency_key="idem-embedded")
     row = await store.get_existing("idem-embedded")
 
-    assert result == {"runnerId": "runner-1", "reused": False}
-    assert row.omnigent_runner_id == "runner-1"
+    assert result["reused"] is False
+    assert row.omnigent_runner_id == result["runnerId"]
     assert row.metadata_["embedded_runner_launch"]["state"] == "launched"
     lifecycle = row.metadata_["embedded_runner_lifecycle"]
     assert lifecycle["version"] == 1
@@ -912,24 +915,25 @@ async def test_runner_tunnel_reconnect_aborts_ambiguous_post_and_newest_wins() -
     assert registry._runners["runner-1"] is new
 
 
-def test_terminal_runner_binding_cannot_be_replayed() -> None:
+def test_runner_binding_auth_is_reconstructable_after_registry_restart() -> None:
     registry = EmbeddedHostChannelRegistry()
     token = "runner-binding-token"
     runner_id = OmnigentHostAuthAdapter(
         allowed_tokens=frozenset({token})
     ).runner_id_for_binding_token(token)
-    registry._runner_tokens[runner_id] = token
     headers = Headers({"X-Omnigent-Runner-Tunnel-Token": token})
 
-    assert registry.authenticate_runner(runner_id=runner_id, headers=headers) == runner_id
-    registry.revoke_runner_binding(runner_id)
-
-    with pytest.raises(EmbeddedHostChannelError, match="binding is unavailable"):
-        registry.authenticate_runner(runner_id=runner_id, headers=headers)
+    assert registry.authenticate_runner(
+        runner_id=runner_id, headers=headers, binding_token=token
+    ) == runner_id
+    restarted = EmbeddedHostChannelRegistry()
+    assert restarted.authenticate_runner(
+        runner_id=runner_id, headers=headers, binding_token=token
+    ) == runner_id
 
 
 @pytest.mark.asyncio
-async def test_dispatch_does_not_repeat_ambiguous_pending_launch(store) -> None:
+async def test_dispatch_replays_pending_launch_with_same_generation_identity(store) -> None:
     await store.bind_profile_authorization(
         request=_request(),
         endpoint_ref="embedded",
@@ -948,15 +952,52 @@ async def test_dispatch_does_not_repeat_ambiguous_pending_launch(store) -> None:
         target_metadata={"workspace": "/workspace/repo"},
     )
     await store.attach_session("idem-embedded", "sess-embedded")
-    await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
+    from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
+    token = derive_runner_binding_token(
+        "root-secret", host_id="host-1", session_id="sess-embedded", generation=1000001
+    )
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({token})
+    ).runner_id_for_binding_token(token)
+    await store.begin_embedded_runner_launch(
+        "idem-embedded", host_id="host-1", runner_id=runner_id,
+        generation=1000001, credential_generation=1, launch_generation=1,
+    )
+
+    class Channels:
+        async def launch_runner(self, **kwargs):
+            assert kwargs["binding_token"] == token
+            return runner_id
 
     facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=store, config=_embedded_config()
+        run_store=store, config=_embedded_config(), host_channels=Channels(),
+        runner_binding_root_secret="root-secret",
     )
-    with pytest.raises(OmnigentBridgeError, match="durable reconciliation") as excinfo:
-        await facade.dispatch_runner(idempotency_key="idem-embedded")
+    result = await facade.dispatch_runner(idempotency_key="idem-embedded")
+    assert result == {"runnerId": runner_id, "reused": False}
 
-    assert excinfo.value.status_code == 503
+
+@pytest.mark.asyncio
+async def test_reserved_launch_rejects_stale_generation_and_cross_session_identity(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=2, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.begin_embedded_runner_launch(
+        "idem-embedded", host_id="host-1", runner_id="runner-current", generation=2
+    )
+
+    with pytest.raises(OmnigentIdempotencyError, match="generation"):
+        await store.begin_embedded_runner_launch(
+            "idem-embedded", host_id="host-1", runner_id="runner-stale", generation=1
+        )
+    with pytest.raises(OmnigentIdempotencyError, match="reserved launch generation"):
+        await store.bind_embedded_runner(
+            "idem-embedded", host_id="host-1", runner_id="runner-other-session"
+        )
 
 
 @pytest.mark.asyncio
@@ -978,7 +1019,8 @@ async def test_dispatch_marks_rejected_launch_failed_for_retry(store) -> None:
             raise EmbeddedHostChannelError("host rejected runner launch")
 
     facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=store, config=_embedded_config(), host_channels=Channels()
+        run_store=store, config=_embedded_config(), host_channels=Channels(),
+        runner_binding_root_secret="root-secret",
     )
     with pytest.raises(OmnigentBridgeError, match="rejected"):
         await facade.dispatch_runner(idempotency_key="idem-embedded")
