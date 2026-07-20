@@ -3087,20 +3087,21 @@ class CodexManagedSessionRuntime:
                 )
         if disposition:
             metadata["disposition"] = disposition
-        terminal_kind = "turn_completed" if status == "completed" else "turn_failed"
-        terminal_observations = [
-            *rollout_mirror.observations,
-            {
-                "kind": terminal_kind,
-                "turnId": vendor_turn_id,
-                "metadata": {
-                    "sourceEventId": f"{vendor_turn_id}:{terminal_kind}",
-                    "status": status,
-                },
-            },
-        ]
-        metadata["observabilityEvents"] = terminal_observations[-100:]
-        state.observability_events = terminal_observations[-100:]
+        terminal_observations = list(rollout_mirror.observations)
+        if status == "completed":
+            terminal_observations.append(
+                {
+                    "kind": "turn_completed",
+                    "turnId": vendor_turn_id,
+                    "metadata": {
+                        "sourceEventId": f"{vendor_turn_id}:turn_completed",
+                        "status": status,
+                    },
+                }
+            )
+        if terminal_observations:
+            metadata["observabilityEvents"] = terminal_observations[-100:]
+            state.observability_events = terminal_observations[-100:]
         self._finalize_turn(
             state=state,
             turn_id=vendor_turn_id,
