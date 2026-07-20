@@ -21,6 +21,7 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     _agent_items,
+    _publish_active_journals,
     _resolve_agent_id,
     _restore_active_journals,
     normalize_omnigent_observation,
@@ -84,6 +85,82 @@ def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
     }
     payload.update(overrides)
     return OmnigentCaptureBundle(**payload)
+
+
+@pytest.mark.asyncio
+async def test_active_journal_tail_recovers_after_index_append_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """Published journal refs remain retryable when the following index write fails."""
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(session_maker)
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex",
+        target_metadata={},
+    )
+    prefix = {
+        "eventType": "response.delta",
+        "normalizedStatus": "running",
+        "deduplicationKey": "provider:prefix",
+    }
+    tail = {
+        "eventType": "response.delta",
+        "normalizedStatus": "running",
+        "deduplicationKey": "provider:tail",
+    }
+    await store.append_events(row.bridge_session_id, [prefix])
+    prefix_row = (await store.list_events(row.bridge_session_id))[0]
+    prefix_identity = (prefix_row.event_id, prefix_row.sequence)
+
+    raw_ref, normalized_ref = await _publish_active_journals(
+        artifact_gateway=gateway,
+        request=request,
+        raw_events=[{"type": "response.delta", "text": "tail"}],
+        normalized_events=[prefix, tail],
+    )
+    await store.attach_active_journal_refs(
+        row.bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref
+    )
+    original_append = store.append_events
+
+    async def fail_append(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected index failure")
+
+    monkeypatch.setattr(store, "append_events", fail_append)
+    with pytest.raises(RuntimeError, match="injected index failure"):
+        await store.append_events(row.bridge_session_id, [tail])
+
+    durable_row = await store.get_existing(request.idempotency_key)
+    assert durable_row is not None
+    restored_raw, restored_events = await _restore_active_journals(
+        artifact_gateway=gateway, durable_row=durable_row
+    )
+    assert restored_raw
+    monkeypatch.setattr(store, "append_events", original_append)
+    await store.append_events(row.bridge_session_id, restored_events)
+    await store.append_events(row.bridge_session_id, restored_events)
+
+    events = await store.list_events(row.bridge_session_id)
+    assert (events[0].event_id, events[0].sequence) == prefix_identity
+    assert [event.deduplication_key for event in events] == [
+        "provider:prefix",
+        "provider:tail",
+    ]
+    await engine.dispose()
 
 
 def test_build_terminal_refs_persists_router_terminal_metadata() -> None:
@@ -2063,25 +2140,40 @@ async def test_snapshot_derived_terminal_status_is_indexed(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
 
+    original_mark_terminal = store.mark_terminal
+    terminal_call: dict[str, Any] = {}
+
+    async def fail_terminal_commit(
+        idempotency_key: str, **kwargs: Any
+    ) -> None:
+        terminal_call.update(idempotency_key=idempotency_key, **kwargs)
+        raise RuntimeError("injected terminal row failure")
+
+    monkeypatch.setattr(store, "mark_terminal", fail_terminal_commit)
+
     try:
-        result = await run_omnigent_execution(
-            AgentExecutionRequest(
-                agentKind="external",
-                agentId="omnigent",
-                correlationId="corr-1",
-                idempotencyKey="idem-1",
-                parameters={
-                    "omnigent": {
-                        "agent": {"agentName": "codex-native-ui"},
-                        "session": {"allowEmptyWorkspace": True},
-                        "prompt": {"text": "Do the task"},
+        with pytest.raises(RuntimeError, match="injected terminal row failure"):
+            await run_omnigent_execution(
+                AgentExecutionRequest(
+                    agentKind="external",
+                    agentId="omnigent",
+                    correlationId="corr-1",
+                    idempotencyKey="idem-1",
+                    parameters={
+                        "omnigent": {
+                            "agent": {"agentName": "codex-native-ui"},
+                            "session": {"allowEmptyWorkspace": True},
+                            "prompt": {"text": "Do the task"},
+                        },
                     },
-                },
-            ),
-            run_store=store,
-            artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
-        )
-        assert result.metadata["normalizedStatus"] == "completed"
+                ),
+                run_store=store,
+                artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            )
+
+        # Final evidence exists before the terminal session row is committed.
+        assert (tmp_path / "corr-1" / "output.omnigent.snapshot.final.json").exists()
+        assert (tmp_path / "corr-1" / "output.omnigent.capture_manifest.json").exists()
 
         from sqlalchemy import select
 
@@ -2097,7 +2189,16 @@ async def test_snapshot_derived_terminal_status_is_indexed(
             ).scalar_one()
             bridge_session_id = row.bridge_session_id
 
+        before_retry = await store.list_events(bridge_session_id)
+        before_identities = [
+            (event.event_id, event.sequence, event.deduplication_key)
+            for event in before_retry
+        ]
+        retry_key = terminal_call.pop("idempotency_key")
+        await original_mark_terminal(retry_key, **terminal_call)
+        await original_mark_terminal(retry_key, **terminal_call)
         events = await store.list_events(bridge_session_id)
+        final_row = await store.get_existing("idem-1")
     finally:
         await engine.dispose()
 
@@ -2108,6 +2209,13 @@ async def test_snapshot_derived_terminal_status_is_indexed(
     assert len(sequences) == len(set(sequences))
     assert events[-1].normalized_status == "completed"
     assert events[-1].event_type == "session.final_snapshot"
+    assert sum(event.event_type == "session.final_snapshot" for event in events) == 1
+    assert [
+        (event.event_id, event.sequence, event.deduplication_key)
+        for event in events[: len(before_identities)]
+    ] == before_identities
+    assert final_row is not None
+    assert final_row.status == "completed"
 
 
 @pytest.mark.asyncio
