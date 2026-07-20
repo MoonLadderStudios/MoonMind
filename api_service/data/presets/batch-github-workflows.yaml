@@ -167,6 +167,13 @@ steps:
     {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
     --constraints "{{ inputs.constraints }}"
 
+    If strict range validation fails before the target list can be written, invoke
+    that same helper once with the same arguments plus
+    --preflight-error "<actionable validation error>" and
+    --requested-count "<inclusive range count>". Do not read GitHub issues, queue
+    a partial range, handcraft the result JSON, or reuse evidence from an earlier
+    execution. The helper writes the authoritative failure result.
+
     The helper writes artifacts/batch-workflows-result.json. Report its queued,
     skipped, and error counts honestly and link every queued child workflow.
   batchOrchestration:

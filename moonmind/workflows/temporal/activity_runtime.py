@@ -11865,6 +11865,22 @@ class TemporalAgentRuntimeActivities:
             }
         )
         missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
+        terminal_failure_message = str(
+            metadata.get("terminalFailureMessage") or ""
+        ).strip()
+        terminal_failure_code = str(
+            metadata.get("terminalFailureCode") or evaluation.failure_code or ""
+        ).strip()
+        if evaluation.failure_code == "BATCH_FANOUT_INPUT_INVALID":
+            return result.model_copy(
+                update={
+                    "summary": terminal_failure_message
+                    or "Batch fan-out input validation failed.",
+                    "failure_class": "user_error",
+                    "provider_error_code": terminal_failure_code,
+                    "metadata": metadata,
+                }
+            )
         if result.failure_class is not None:
             return result.model_copy(
                 update={

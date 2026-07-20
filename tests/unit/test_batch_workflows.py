@@ -698,6 +698,72 @@ def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
     assert [item["ref"] for item in evidence["queued"]] == [f"THOR-{n}" for n in range(705, 710)]
 
 
+def test_helper_records_preflight_failure_without_targets_or_queueing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-invalid-range")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+    monkeypatch.delenv("MOONMIND_URL", raising=False)
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Range 3370-3425 contains 56 issues; maximum is 25.",
+            "--requested-count",
+            "56",
+        ]
+    )
+
+    assert return_code == 2
+    assert not (tmp_path / "artifacts/batch-workflows-targets.json").exists()
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert evidence["executionRef"] == "step-invalid-range"
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 56
+    assert evidence["created"] == 0
+    assert evidence["queued"] == []
+    assert evidence["failure"]["code"] == "BATCH_FANOUT_INPUT_INVALID"
+
+
+def test_helper_preserves_preflight_classification_for_negative_requested_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-negative-count")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Invalid range.",
+            "--requested-count",
+            "-1",
+        ]
+    )
+
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert return_code == 2
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 0
+    assert evidence["failure"] == {
+        "code": "BATCH_FANOUT_INPUT_INVALID",
+        "message": "--requested-count must be zero or greater",
+    }
+
+
 def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp_path):
     """Every preflight/transport failure replaces stale evidence and retains children."""
     repo_root = Path(__file__).resolve().parents[2]

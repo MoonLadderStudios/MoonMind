@@ -110,6 +110,14 @@ Progress" with a single batch run.
    - Submits via the internal Temporal execution API (`POST /api/executions`);
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
 
+   If provider-specific input validation fails before a trustworthy target list
+   can be written, still invoke the same helper exactly once with
+   `--preflight-error <actionable message>` and
+   `--requested-count <requested target count>`. The helper records the
+   current execution's authoritative failure in the managed artifact spool and
+   does not read targets or queue children. Do not handcraft or reuse a
+   repo-local result artifact.
+
 3. **Record the summary**: the helper writes `artifacts/batch-workflows-result.json`
    linking every queued child workflow id together with the resolved targets,
    skips, and errors, and prints a short `queued/skipped/errors` count summary.
