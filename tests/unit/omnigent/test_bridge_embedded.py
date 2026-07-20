@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -11,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers
 
-from api_service.db.models import Base
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+)
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     parse_bridge_config,
@@ -44,6 +52,10 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
     EmbeddedHostChannelRegistry,
+    EmbeddedRunnerChannel,
+    MAX_EMBEDDED_FRAME_BYTES,
+    MAX_PENDING_HOST_REQUESTS,
+    MAX_PENDING_RUNNER_REQUESTS,
 )
 from moonmind.omnigent.runner_protocol_adapter import runner_frames
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -81,6 +93,65 @@ def _request():
         correlationId="mm:wf-embedded",
         idempotencyKey="idem-embedded",
     )
+
+
+async def _bind_active_host(store, *, host_id: str = "runner-1") -> None:
+    now = datetime.now(UTC)
+    async with store._session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        if profile is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="profile-1",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    max_parallel_runs=1,
+                    credential_generation=1,
+                )
+            )
+            session.add(
+                OmnigentOAuthHostBindingRecord(
+                    binding_ref="binding-1",
+                    provider_profile_id="profile-1",
+                    endpoint_ref="embedded",
+                    harness="codex-native",
+                    credential_mount_template_json={
+                        "authVolumeRef": {
+                            "providerProfileId": "profile-1",
+                            "runtimeId": "codex_cli",
+                            "providerId": "openai",
+                            "volumeRef": "profile-1-volume",
+                            "credentialGeneration": 1,
+                            "ownerUserId": "user-1",
+                        },
+                        "targetPath": "/home/app/.codex",
+                        "accessMode": "read_write",
+                        "runtimeUid": 1000,
+                        "runtimeGid": 1000,
+                    },
+                )
+            )
+            await session.flush()
+        session.add(
+            OmnigentOAuthHostLeaseRecord(
+                lease_id=f"lease-{host_id}",
+                provider_profile_id="profile-1",
+                provider_lease_id=f"provider-{host_id}",
+                binding_ref="binding-1",
+                credential_generation=1,
+                holder_workflow_id="workflow-1",
+                idempotency_key=f"host-{host_id}",
+                lease_purpose="execution_omnigent",
+                omnigent_host_id=host_id,
+                status="ready",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        await session.commit()
 
 
 def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
@@ -171,6 +242,55 @@ def test_embedded_host_payloads_enforce_protocol_bounds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_tunnels_bound_concurrent_requests() -> None:
+    registry = EmbeddedHostChannelRegistry()
+
+    async def send_text(_text: str) -> None:
+        return None
+
+    host = registry.connect(host_id="host-1", send_text=send_text)
+    host.hello = object()
+    loop = asyncio.get_running_loop()
+    host._pending = {
+        str(index): loop.create_future() for index in range(MAX_PENDING_HOST_REQUESTS)
+    }
+    frame = type("Frame", (), {"request_id": "next"})()
+    with pytest.raises(EmbeddedHostChannelError, match="command limit"):
+        await host.request(frame)
+
+    frames = runner_frames()
+    # Exercise the production channel without depending on an upstream hello shape.
+    runner = EmbeddedRunnerChannel(
+        runner_id="runner-1", send_text=send_text, frames=frames, hello=object()
+    )
+    runner._pending = {
+        str(index): {"future": loop.create_future(), "status": None, "body": []}
+        for index in range(MAX_PENDING_RUNNER_REQUESTS)
+    }
+    with pytest.raises(EmbeddedHostChannelError, match="request limit"):
+        await runner.request("GET", "/resource")
+
+
+@pytest.mark.asyncio
+async def test_live_tunnels_reject_oversized_frames_before_decoding() -> None:
+    registry = EmbeddedHostChannelRegistry()
+
+    async def send_text(_text: str) -> None:
+        return None
+
+    oversized = "x" * (MAX_EMBEDDED_FRAME_BYTES + 1)
+    host = registry.connect(host_id="host-1", send_text=send_text)
+    with pytest.raises(EmbeddedHostChannelError, match="frame exceeds size limit"):
+        host.accept_host_frame(oversized)
+
+    runner = EmbeddedRunnerChannel(
+        runner_id="runner-1", send_text=send_text, frames=object(), hello=object()
+    )
+    with pytest.raises(EmbeddedHostChannelError, match="frame exceeds size limit"):
+        runner.accept_frame(oversized)
+
+
+@pytest.mark.asyncio
 async def test_registration_rejects_runner_identity_substitution(store) -> None:
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
@@ -202,6 +322,7 @@ async def test_registration_rejects_runner_identity_substitution(store) -> None:
 
 @pytest.mark.asyncio
 async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> None:
+    await _bind_active_host(store)
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
@@ -225,6 +346,99 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
 
     assert registered["status"] == "registered"
     assert heartbeat["moonmind"]["hostProtocolMode"] == HOST_PROTOCOL_MODE_EMBEDDED
+    await facade.disconnect_host(host_id="runner-1", auth=auth)
+    async with store._session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "lease-runner-1")
+        assert lease.host_readiness == "disconnected"
+        assert lease.disconnected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_registration_rejects_host_without_profile_bound_lease(store) -> None:
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="unbound-host",
+        credential_generation=1,
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(hostId="unbound-host"), auth=auth
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_registration_rejects_expired_profile_bound_lease(store) -> None:
+    await _bind_active_host(store, host_id="expired-host")
+    async with store._session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "lease-expired-host")
+        now = datetime.now(UTC)
+        lease.acquired_at = now - timedelta(hours=2)
+        lease.expires_at = now - timedelta(seconds=1)
+        await session.commit()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="expired-host",
+        credential_generation=1,
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.register_host(
+            request=EmbeddedHostRegisterRequest(hostId="expired-host"), auth=auth
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_runner_exit_without_terminal_event_creates_terminal_evidence(store) -> None:
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id=None,
+    )
+    async with store._session_factory() as session:
+        from api_service.db.models import OmnigentBridgeSession
+
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        persisted.omnigent_runner_id = "runner-exited"
+        await session.commit()
+
+    await store.record_embedded_runner_exit(
+        runner_id="runner-exited", error="process failed token=secret-value"
+    )
+    recovered = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
+
+    assert recovered.status == "failed"
+    assert recovered.first_message_state == "terminal"
+    assert recovered.terminal_refs["cleanupState"] == "runner_exited"
+    assert recovered.terminal_refs["failureClass"] == "execution_error"
+    assert "secret-value" not in str(recovered.metadata_)
+    assert "secret-value" not in str(recovered.terminal_refs)
+    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert events[0].metadata_["metadata"]["janitorRequired"] is True
+    assert await store.cleanup_required_host_lease_refs() == {"host-lease-1"}
 
 
 @pytest.mark.asyncio
@@ -611,7 +825,7 @@ async def test_runner_tunnel_reconnect_aborts_ambiguous_post_and_newest_wins() -
         runner_id="runner-1", send_text=send_text, hello_text=hello
     )
     task = asyncio.create_task(
-        old.post_json("/v1/sessions/sess-1/events", {"type": "message"})
+        old.request("POST", "/v1/sessions/sess-1/events", {"type": "message"})
     )
     await asyncio.sleep(0)
 
@@ -699,3 +913,70 @@ async def test_dispatch_marks_rejected_launch_failed_for_retry(store) -> None:
     row = await store.get_existing("idem-embedded")
     assert row.metadata_["embedded_runner_launch"]["state"] == "failed"
     await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
+
+
+@pytest.mark.asyncio
+async def test_embedded_resources_and_elicitation_use_exact_bound_runner(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = []
+
+        async def request_runner(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["expect_json"]:
+                return {"items": [{"path": "src/main.py"}]}
+            return b"content"
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+
+    index = await facade.get_resource("changed_files", "sess-embedded")
+    content = await facade.get_resource(
+        "workspace_file", "sess-embedded", "src/main.py"
+    )
+    resolved = await facade.resolve_elicitation(
+        session_id="sess-embedded", elicitation_id="approval-1",
+        payload={"decision": "approve"},
+    )
+
+    assert index == {"items": [{"path": "src/main.py"}]}
+    assert content == b"content"
+    assert resolved == {"items": [{"path": "src/main.py"}]}
+    assert {call["runner_id"] for call in channels.calls} == {"runner-1"}
+    assert channels.calls[1]["path"].endswith("/filesystem/src/main.py")
+    assert channels.calls[2]["path"].endswith("/approval-1/resolve")
+
+
+@pytest.mark.asyncio
+async def test_embedded_resource_rejects_traversal_before_runner_request(store) -> None:
+    class Store:
+        async def get_session_by_provider_session_id(self, _session_id):
+            return type("Row", (), {
+                "omnigent_host_id": "host-1", "omnigent_runner_id": "runner-1"
+            })()
+
+    class Channels:
+        async def request_runner(self, **_kwargs):
+            raise AssertionError("unsafe path reached runner")
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=Store(), config=_embedded_config(), host_channels=Channels()
+    )
+    with pytest.raises(OmnigentBridgeError, match="traversal-unsafe"):
+        await facade.get_resource("workspace_file", "sess-embedded", "../secret")

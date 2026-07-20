@@ -514,8 +514,16 @@ async def _authorize_session_control(
     session_id: str,
     user: User,
     service: Any,
-    proxy: OmnigentBridgeSessionProxy,
+    proxy: Any,
 ) -> None:
+    if proxy is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported bridge mode",
+            },
+        )
     owner = await proxy.get_session_owner(session_id)
     if owner is None:
         raise HTTPException(
@@ -1070,9 +1078,16 @@ async def post_omnigent_session_event(
                 "stop",
                 "session.stop",
                 "stop_session",
-                "interrupt",
             }:
                 return await embedded_facade.stop_runner(session_id=session_id)
+            if payload.type == "interrupt":
+                raise OmnigentBridgeError(
+                    "Embedded interrupt is not supported by the pinned host "
+                    "protocol; use stop when terminating the runner is intended.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                    code="omnigent_embedded_control_unsupported",
+                )
             if payload.type not in {"message", "user.message"}:
                 raise OmnigentBridgeError(
                     f"Embedded control {payload.type!r} is not supported.",
@@ -1095,21 +1110,37 @@ async def resolve_omnigent_elicitation(
     session_id: str,
     elicitation_id: str,
     payload: dict[str, Any],
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Resolve a pending Omnigent elicitation through the bridge surface."""
 
+    facade = (
+        embedded
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if facade is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported bridge mode",
+            },
+        )
     await _authorize_session_control(
         session_id=session_id,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=facade,
     )
     try:
-        return await proxy.resolve_elicitation(
+        return await facade.resolve_elicitation(
             session_id=session_id,
             elicitation_id=elicitation_id,
             payload=payload,
@@ -1183,7 +1214,7 @@ async def _owned_resource(
     value: str | None,
     user: User,
     service: Any,
-    proxy: OmnigentBridgeSessionProxy,
+    proxy: Any,
 ):
     await _authorize_session_control(
         session_id=session_id, user=user, service=service, proxy=proxy
@@ -1197,10 +1228,13 @@ async def _owned_resource(
 @router.get(_ROUTES.changed_files, response_model=dict)
 async def list_omnigent_changed_files(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ):
     return await _owned_resource(
         operation="changed_files",
@@ -1208,17 +1242,24 @@ async def list_omnigent_changed_files(
         value=None,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
 
 
 @router.get(_ROUTES.workspace_files, response_model=dict)
 async def list_omnigent_workspace_files(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ):
     return await _owned_resource(
         operation="workspace_files",
@@ -1226,7 +1267,11 @@ async def list_omnigent_workspace_files(
         value=None,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
 
 
@@ -1237,10 +1282,13 @@ async def list_omnigent_workspace_files(
 async def get_omnigent_workspace_file(
     session_id: str,
     path: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> Response:
     content = await _owned_resource(
         operation="workspace_file",
@@ -1248,7 +1296,11 @@ async def get_omnigent_workspace_file(
         value=path,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
     return Response(content=content, media_type="application/octet-stream")
 
@@ -1260,10 +1312,13 @@ async def get_omnigent_workspace_file(
 async def get_omnigent_workspace_diff(
     session_id: str,
     path: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> Response:
     content = await _owned_resource(
         operation="workspace_diff",
@@ -1271,7 +1326,11 @@ async def get_omnigent_workspace_diff(
         value=path,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
     return Response(content=content, media_type="text/x-diff")
 
@@ -1279,10 +1338,13 @@ async def get_omnigent_workspace_diff(
 @router.get(_ROUTES.session_files, response_model=dict)
 async def list_omnigent_session_files(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ):
     return await _owned_resource(
         operation="session_files",
@@ -1290,7 +1352,11 @@ async def list_omnigent_session_files(
         value=None,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
 
 
@@ -1301,10 +1367,13 @@ async def list_omnigent_session_files(
 async def get_omnigent_session_file(
     session_id: str,
     file_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> Response:
     content = await _owned_resource(
         operation="session_file",
@@ -1312,7 +1381,11 @@ async def get_omnigent_session_file(
         value=file_id,
         user=user,
         service=service,
-        proxy=proxy,
+        proxy=(
+            embedded
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        ),
     )
     return Response(content=content, media_type="application/octet-stream")
 
@@ -1342,13 +1415,14 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
-        verify_embedded_host_auth(
+        auth = verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
             configured_token=resolved_host_runner_token(),
         )
-        # The shared credential authenticates the stock host; the path value is
-        # its durable lease identity and is intentionally not token-derived.
+        if host_id != auth.runner_id:
+            await websocket.close(code=4403)
+            return
     except OmnigentBridgeError:
         await websocket.close(code=4401)
         return
@@ -1373,6 +1447,12 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         await websocket.close(code=4400)
     finally:
         embedded_host_channels.disconnect(channel)
+        try:
+            await facade.disconnect_host(host_id=host_id, auth=auth)
+        except OmnigentBridgeError:
+            # The durable lease may already have terminalized while the socket
+            # was closing; terminal state remains authoritative.
+            pass
 
 
 @router.websocket("/v1/runners/{runner_id}/tunnel")

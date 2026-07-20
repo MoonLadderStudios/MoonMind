@@ -18,10 +18,19 @@ from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 
 
 SendText = Callable[[str], Awaitable[None]]
+MAX_PENDING_HOST_REQUESTS = 128
+MAX_PENDING_RUNNER_REQUESTS = 128
+MAX_EMBEDDED_FRAME_BYTES = 1_048_576
+MAX_EMBEDDED_RESPONSE_BYTES = 8_388_608
 
 
 class EmbeddedHostChannelError(RuntimeError):
     """A host channel violated lifecycle or correlation rules."""
+
+
+def _require_bounded_frame(text: str) -> None:
+    if len(text.encode("utf-8")) > MAX_EMBEDDED_FRAME_BYTES:
+        raise EmbeddedHostChannelError("embedded protocol frame exceeds size limit")
 
 
 @dataclass(slots=True)
@@ -34,16 +43,25 @@ class EmbeddedRunnerChannel:
     hello: Any
     _pending: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    async def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> bytes:
+        if len(self._pending) >= MAX_PENDING_RUNNER_REQUESTS:
+            raise EmbeddedHostChannelError("runner request limit reached")
         request_id = secrets.token_hex(16)
         future = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = {"future": future, "status": None, "body": []}
+        self._pending[request_id] = {
+            "future": future,
+            "status": None,
+            "body": [],
+            "size": 0,
+        }
         frame = self.frames.RequestFrame(
             id=request_id,
-            method="POST",
+            method=method,
             path=path,
-            headers=[["content-type", "application/json"]],
-            body=json.dumps(payload, separators=(",", ":")),
+            headers=[["content-type", "application/json"]] if payload is not None else [],
+            body=(json.dumps(payload, separators=(",", ":")) if payload is not None else ""),
         )
         try:
             await self.send_text(self.frames.encode_frame(frame))
@@ -52,6 +70,7 @@ class EmbeddedRunnerChannel:
             self._pending.pop(request_id, None)
 
     def accept_frame(self, text: str) -> None:
+        _require_bounded_frame(text)
         try:
             frame = self.frames.decode_frame(text)
         except ValueError as exc:
@@ -63,7 +82,17 @@ class EmbeddedRunnerChannel:
         if isinstance(frame, self.frames.ResponseHeadFrame):
             pending["status"] = frame.status
         elif isinstance(frame, self.frames.ResponseBodyFrame):
-            pending["body"].append(self.frames.decode_body(frame.body, frame.encoding))
+            part = self.frames.decode_body(frame.body, frame.encoding)
+            part_size = len(part.encode("utf-8")) if isinstance(part, str) else len(part)
+            current_size = pending["size"]
+            if current_size + part_size > MAX_EMBEDDED_RESPONSE_BYTES:
+                pending["future"].set_exception(
+                    EmbeddedHostChannelError("runner response exceeds size limit")
+                )
+                self._pending.pop(request_id, None)
+                return
+            pending["body"].append(part)
+            pending["size"] = current_size + part_size
         elif isinstance(frame, self.frames.ResponseEndFrame):
             status = pending["status"]
             body = b"".join(
@@ -78,14 +107,7 @@ class EmbeddedRunnerChannel:
                     EmbeddedHostChannelError(f"runner request failed with HTTP {status}")
                 )
             else:
-                try:
-                    value = json.loads(body or b"{}")
-                except (TypeError, ValueError) as exc:
-                    pending["future"].set_exception(
-                        EmbeddedHostChannelError("runner returned invalid JSON")
-                    )
-                else:
-                    pending["future"].set_result(value)
+                pending["future"].set_result(body)
 
     def disconnect(self) -> None:
         for pending in self._pending.values():
@@ -104,6 +126,7 @@ class EmbeddedHostChannel:
     _pending: dict[str, asyncio.Future[Any]] = field(default_factory=dict)
 
     def accept_host_frame(self, text: str) -> Any:
+        _require_bounded_frame(text)
         frame = self.adapter.decode_host_frame(text)
         frames = self.adapter.frames
         if self.hello is None:
@@ -123,6 +146,8 @@ class EmbeddedHostChannel:
     async def request(self, frame: Any, *, timeout_seconds: float = 30.0) -> Any:
         if self.hello is None:
             raise EmbeddedHostChannelError("host is not ready")
+        if len(self._pending) >= MAX_PENDING_HOST_REQUESTS:
+            raise EmbeddedHostChannelError("host command limit reached")
         request_id = str(getattr(frame, "request_id", "") or "")
         if not request_id or request_id in self._pending:
             raise EmbeddedHostChannelError("command request id is missing or active")
@@ -286,7 +311,37 @@ class EmbeddedHostChannelRegistry:
                 channel = self._runners.get(runner_id)
         if channel is None:
             raise EmbeddedHostChannelError("assigned runner is not connected")
-        return await channel.post_json(f"/v1/sessions/{session_id}/events", payload)
+        body = await channel.request(
+            "POST", f"/v1/sessions/{session_id}/events", payload
+        )
+        return self._decode_json_response(body)
+
+    async def request_runner(
+        self,
+        *,
+        runner_id: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        expect_json: bool = True,
+    ) -> Any:
+        """Send an upstream-compatible HTTP-shaped request to an exact runner."""
+
+        channel = self._runners.get(runner_id)
+        if channel is None:
+            raise EmbeddedHostChannelError("assigned runner is not connected")
+        body = await channel.request(method, path, payload)
+        return self._decode_json_response(body) if expect_json else body
+
+    @staticmethod
+    def _decode_json_response(body: bytes) -> dict[str, Any]:
+        try:
+            value = json.loads(body or b"{}")
+        except (TypeError, ValueError) as exc:
+            raise EmbeddedHostChannelError("runner returned invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise EmbeddedHostChannelError("runner returned a non-object JSON response")
+        return value
 
 
 embedded_host_channels = EmbeddedHostChannelRegistry()

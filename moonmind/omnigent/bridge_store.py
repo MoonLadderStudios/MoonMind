@@ -146,6 +146,49 @@ class OmnigentBridgeSessionStore:
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
 
+    async def record_embedded_host_lifecycle(
+        self,
+        *,
+        host_id: str,
+        credential_generation: int,
+        capabilities: dict[str, Any] | None = None,
+        readiness: str | None = None,
+        disconnected: bool = False,
+    ) -> None:
+        """Persist embedded connection state on its exact profile host lease.
+
+        A host must already have been selected by the profile/lease coordinator;
+        the embedded protocol is not allowed to create or claim a lease.
+        """
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            lease = (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord).where(
+                        OmnigentOAuthHostLeaseRecord.omnigent_host_id == host_id,
+                        OmnigentOAuthHostLeaseRecord.credential_generation
+                        == credential_generation,
+                        OmnigentOAuthHostLeaseRecord.status.in_(
+                            {"starting", "ready", "assigned", "draining"}
+                        ),
+                        OmnigentOAuthHostLeaseRecord.expires_at > now,
+                    )
+                )
+            ).scalar_one_or_none()
+            if lease is None:
+                raise OmnigentIdempotencyError(
+                    "embedded host is not bound to an active profile lease"
+                )
+            lease.last_heartbeat_at = now
+            lease.disconnected_at = now if disconnected else None
+            if capabilities is not None:
+                lease.host_capabilities_json = dict(capabilities)
+            if readiness is not None:
+                lease.host_readiness = readiness[:32]
+            await session.commit()
+
     async def active_host_protocol_modes(
         self, *, exclude_idempotency_key: str | None = None
     ) -> dict[str, int]:
@@ -171,6 +214,32 @@ class OmnigentBridgeSessionStore:
                 key = mode or "unknown"
                 modes[key] = modes.get(key, 0) + 1
             return modes
+
+    async def cleanup_required_host_lease_refs(self) -> set[str]:
+        """Return active durable host leases whose terminal evidence needs cleanup.
+
+        This is intentionally derived from the canonical bridge rows on every
+        janitor pass, so an API restart cannot lose the handoff recorded by an
+        authoritative runner-exit frame.
+        """
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(
+                    OmnigentBridgeSession.host_lease_ref,
+                    OmnigentBridgeSession.terminal_refs,
+                ).where(
+                    OmnigentBridgeSession.host_lease_ref.is_not(None),
+                    OmnigentBridgeSession.status.in_(_TERMINAL_STATUSES),
+                )
+            )
+            refs: set[str] = set()
+            for host_lease_ref, terminal_refs in result.all():
+                if host_lease_ref and (terminal_refs or {}).get(
+                    "cleanupState"
+                ) == "runner_exited":
+                    refs.add(str(host_lease_ref))
+            return refs
 
     async def get_or_create(
         self,
@@ -414,7 +483,12 @@ class OmnigentBridgeSessionStore:
     async def record_embedded_runner_exit(
         self, *, runner_id: str, error: str
     ) -> OmnigentBridgeSession | None:
-        """Persist the host's authoritative early runner-exit signal."""
+        """Terminalize a session from the host's authoritative runner exit.
+
+        Runner exit is durable terminal evidence even when the runner never
+        managed to emit a terminal session event.  The stable lifecycle event
+        makes retries/replayed exit frames idempotent.
+        """
 
         from moonmind.utils.logging import redact_sensitive_text
 
@@ -427,17 +501,42 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 return None
+            recorded_at = datetime.now(tz=UTC)
+            safe_error = redact_sensitive_text(str(error))[:512]
             row.status = "failed"
+            row.first_message_state = FIRST_MESSAGE_TERMINAL
             metadata = dict(row.metadata_ or {})
             metadata["embedded_runner_exit"] = {
                 "runnerId": runner_id,
-                "error": redact_sensitive_text(str(error))[:512],
-                "recordedAt": datetime.now(tz=UTC).isoformat(),
+                "error": safe_error,
+                "recordedAt": recorded_at.isoformat(),
             }
             row.metadata_ = metadata
+            terminal_refs = dict(row.terminal_refs or {})
+            terminal_refs.update(
+                {
+                    "cleanupState": "runner_exited",
+                    "failureClass": "execution_error",
+                    "runnerId": runner_id,
+                    "runnerExitSummary": safe_error,
+                }
+            )
+            row.terminal_refs = terminal_refs
+            idempotency_key = row.idempotency_key
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="terminal",
+            status="failed",
+            event_identity=f"embedded-runner-exit:{runner_id}",
+            code="embedded_runner_exited",
+            summary=safe_error or "embedded runner exited without a terminal event",
+            failure_class="execution_error",
+            metadata={"cleanupCompleted": False, "janitorRequired": True},
+        )
+        return detached
 
     async def record_lifecycle_event(
         self,

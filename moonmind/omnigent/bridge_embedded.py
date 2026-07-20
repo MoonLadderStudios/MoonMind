@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from typing import Any, Mapping
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -23,6 +24,9 @@ from moonmind.omnigent.bridge_config import (
 from moonmind.omnigent.bridge_artifacts import OmnigentContractError
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_proxy import (
+    _MAX_FACADE_RESOURCE_BYTES,
+    _bound_resource_lists,
+    _safe_resource_identifier,
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
     OmnigentBridgeError,
@@ -306,6 +310,110 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
 
+    async def get_resource(
+        self, operation: str, session_id: str, value: str | None = None
+    ) -> Any:
+        """Read a bounded resource through the exact durably bound runner."""
+
+        _, runner_id = await self._bound_runner(session_id)
+        if value is not None:
+            value = _safe_resource_identifier(value)
+        routes = self._config.public_api.routes
+        route_templates: dict[str, tuple[str, bool]] = {
+            "changed_files": (routes.changed_files, True),
+            "workspace_files": (routes.workspace_files, True),
+            "workspace_file": (routes.workspace_file, False),
+            "workspace_diff": (routes.workspace_diffs, False),
+            "session_files": (routes.session_files, True),
+            "session_file": (routes.session_file, False),
+        }
+        if operation not in route_templates:
+            raise OmnigentBridgeError(
+                f"Unknown embedded resource operation: {operation}",
+                failure_class="user_error", status_code=404,
+            )
+        template, expect_json = route_templates[operation]
+        path = template.replace("{path:path}", "{path}").format(
+            session_id=quote(session_id, safe=""),
+            path=quote(value or "", safe="/"),
+            file_id=quote(value or "", safe=""),
+        )
+        try:
+            result = await self._host_channels.request_runner(
+                runner_id=runner_id,
+                method="GET",
+                path=path,
+                expect_json=expect_json,
+            )
+        except (EmbeddedHostChannelError, TimeoutError) as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        if isinstance(result, bytes):
+            if len(result) > _MAX_FACADE_RESOURCE_BYTES:
+                raise OmnigentBridgeError(
+                    "Embedded runner resource exceeds the bridge response limit",
+                    failure_class="integration_error", status_code=502,
+                    code="omnigent_bridge_response_too_large",
+                )
+            return result
+        bounded = _bound_resource_lists(result)
+        try:
+            encoded = json.dumps(bounded, separators=(",", ":")).encode()
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise OmnigentBridgeError(
+                "Embedded runner resource index is malformed",
+                failure_class="integration_error",
+                status_code=502,
+                code="omnigent_bridge_upstream_payload",
+            ) from exc
+        if len(encoded) > _MAX_FACADE_RESOURCE_BYTES:
+            raise OmnigentBridgeError(
+                "Embedded runner resource index exceeds the bridge response limit",
+                failure_class="integration_error", status_code=502,
+                code="omnigent_bridge_response_too_large",
+            )
+        return bounded
+
+    async def resolve_elicitation(
+        self, *, session_id: str, elicitation_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve an elicitation through the exact durably bound runner."""
+
+        _, runner_id = await self._bound_runner(session_id)
+        path = self._config.public_api.routes.resolve_elicitation.format(
+            session_id=quote(session_id, safe=""),
+            elicitation_id=quote(_safe_resource_identifier(elicitation_id), safe=""),
+        )
+        try:
+            return await self._host_channels.request_runner(
+                runner_id=runner_id,
+                method="POST",
+                path=path,
+                payload=payload,
+                expect_json=True,
+            )
+        except (EmbeddedHostChannelError, TimeoutError) as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+
+    async def _bound_runner(self, session_id: str) -> tuple[Any, str]:
+        self._require_embedded_mode()
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error", status_code=404,
+            )
+        runner_id = _clean(row.omnigent_runner_id)
+        if not runner_id or not _clean(row.omnigent_host_id):
+            raise OmnigentBridgeError(
+                "Embedded session has no durable host/runner assignment",
+                failure_class="integration_error", status_code=409,
+            )
+        return row, runner_id
+
     async def get_session_owner(self, session_id: str):
         """Return the durable MoonMind owner for public control authorization."""
 
@@ -409,6 +517,17 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        try:
+            await self._run_store.record_embedded_host_lifecycle(
+                host_id=host_id,
+                credential_generation=auth.credential_generation,
+                capabilities=request.capabilities,
+                readiness="registered",
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="user_error", status_code=403
+            ) from exc
         return {
             "hostId": host_id,
             "runnerId": runner_id,
@@ -435,6 +554,17 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
+        try:
+            await self._run_store.record_embedded_host_lifecycle(
+                host_id=_clean(host_id),
+                credential_generation=auth.credential_generation,
+                capabilities=request.capabilities,
+                readiness=request.status,
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="user_error", status_code=403
+            ) from exc
         return {
             "hostId": _clean(host_id),
             "status": request.status,
@@ -445,6 +575,28 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "protocolProfile": auth.protocol_profile,
             },
         }
+
+    async def disconnect_host(
+        self, *, host_id: str, auth: EmbeddedHostAuthContext
+    ) -> None:
+        """Durably mark the exact authenticated host connection disconnected."""
+        if _clean(host_id) != auth.runner_id:
+            raise OmnigentBridgeError(
+                "Authenticated runner identity does not match host binding",
+                failure_class="user_error",
+                status_code=403,
+            )
+        try:
+            await self._run_store.record_embedded_host_lifecycle(
+                host_id=_clean(host_id),
+                credential_generation=auth.credential_generation,
+                readiness="disconnected",
+                disconnected=True,
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="user_error", status_code=403
+            ) from exc
 
     async def ingest_session_event(
         self,
