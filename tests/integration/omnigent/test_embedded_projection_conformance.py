@@ -12,8 +12,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base, OmnigentBridgeSession
 from moonmind.omnigent.bridge_config import (
@@ -38,15 +37,20 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 
 @pytest_asyncio.fixture()
-async def store(tmp_path):
+async def session_factory(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/conformance.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        yield OmnigentBridgeSessionStore(factory)
+        yield factory
     finally:
         await engine.dispose()
+
+
+@pytest_asyncio.fixture()
+def store(session_factory):
+    return OmnigentBridgeSessionStore(session_factory)
 
 
 def _request(key: str) -> AgentExecutionRequest:
@@ -102,11 +106,11 @@ async def _session(store: OmnigentBridgeSessionStore, key: str, session_id: str)
 
 
 async def test_proxy_and_embedded_events_have_equivalent_public_projections(
-    store,
+    store, session_factory,
 ) -> None:
     proxy = await _session(store, "proxy", "proxy-session")
     embedded = await _session(store, "embedded", "embedded-session")
-    async with store._session_factory() as session:
+    async with session_factory() as session:
         persisted = await session.get(OmnigentBridgeSession, embedded.bridge_session_id)
         persisted.omnigent_host_id = "host-1"
         await session.commit()
@@ -186,9 +190,11 @@ class _ResourceChannel:
         return self.responses[path]
 
 
-async def test_embedded_resources_share_the_canonical_proxy_shapes(store) -> None:
+async def test_embedded_resources_share_the_canonical_proxy_shapes(
+    store, session_factory,
+) -> None:
     row = await _session(store, "embedded", "embedded-session")
-    async with store._session_factory() as session:
+    async with session_factory() as session:
         persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
         persisted.omnigent_host_id = "host-1"
         persisted.omnigent_runner_id = "runner-1"

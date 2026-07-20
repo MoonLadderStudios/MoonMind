@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import (
     Base,
@@ -35,15 +35,20 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 
 @pytest_asyncio.fixture()
-async def store(tmp_path):
+async def session_factory(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/recovery.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        yield OmnigentBridgeSessionStore(factory)
+        yield factory
     finally:
         await engine.dispose()
+
+
+@pytest_asyncio.fixture()
+def store(session_factory):
+    return OmnigentBridgeSessionStore(session_factory)
 
 
 def _config():
@@ -64,9 +69,9 @@ def _request() -> AgentExecutionRequest:
     )
 
 
-async def _seed(store: OmnigentBridgeSessionStore) -> EmbeddedHostAuthContext:
+async def _seed(store: OmnigentBridgeSessionStore, session_factory) -> EmbeddedHostAuthContext:
     now = datetime.now(UTC)
-    async with store._session_factory() as session:
+    async with session_factory() as session:
         session.add(ManagedAgentProviderProfile(
             profile_id="profile-1", runtime_id="codex_cli", provider_id="openai",
             credential_source=ProviderCredentialSource.OAUTH_VOLUME,
@@ -76,7 +81,20 @@ async def _seed(store: OmnigentBridgeSessionStore) -> EmbeddedHostAuthContext:
         session.add(OmnigentOAuthHostBindingRecord(
             binding_ref="binding-1", provider_profile_id="profile-1",
             endpoint_ref="embedded", harness="codex-native",
-            credential_mount_template_json={},
+            credential_mount_template_json={
+                "authVolumeRef": {
+                    "providerProfileId": "profile-1",
+                    "runtimeId": "codex_cli",
+                    "providerId": "openai",
+                    "volumeRef": "profile-1-volume",
+                    "credentialGeneration": 1,
+                    "ownerUserId": "user-1",
+                },
+                "targetPath": "/home/app/.codex",
+                "accessMode": "read_write",
+                "runtimeUid": 1000,
+                "runtimeGid": 1000,
+            },
         ))
         await session.flush()
         session.add(OmnigentOAuthHostLeaseRecord(
@@ -106,8 +124,10 @@ async def _seed(store: OmnigentBridgeSessionStore) -> EmbeddedHostAuthContext:
     )
 
 
-async def test_disconnect_restart_reconnect_and_retry_matrix(store) -> None:
-    auth = await _seed(store)
+async def test_disconnect_restart_reconnect_and_retry_matrix(
+    store, session_factory,
+) -> None:
+    auth = await _seed(store, session_factory)
     first = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_config())
     registration = EmbeddedHostRegisterRequest(
         hostId="host-1", capabilities={"harnesses": ["codex-native"]}
@@ -139,7 +159,7 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(store) -> None:
     assert row.omnigent_runner_id == "runner-1"
     assert row.first_message_digest == "digest-1"
 
-    stale = auth.model_copy(update={"credential_generation": 2})
+    stale = replace(auth, credential_generation=2)
     with pytest.raises(OmnigentBridgeError, match="active profile lease"):
         await restarted.heartbeat(
             host_id="host-1", request=EmbeddedHostHeartbeatRequest(), auth=stale
@@ -150,8 +170,10 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(store) -> None:
         )
 
 
-async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_janitor(store) -> None:
-    auth = await _seed(store)
+async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_janitor(
+    store, session_factory,
+) -> None:
+    auth = await _seed(store, session_factory)
     facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_config())
     await store.bind_embedded_runner("recovery", host_id="host-1", runner_id="runner-1")
     await facade.disconnect_host(host_id="host-1", auth=auth)
