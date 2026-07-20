@@ -133,7 +133,7 @@ async def _create_and_post(
 
 
 async def test_bridge_conformance_suite_declares_versioned_scenarios() -> None:
-    assert CONFORMANCE_PROFILE_VERSION == "moonmind.omnigent.conformance/v3"
+    assert CONFORMANCE_PROFILE_VERSION == "moonmind.omnigent.conformance/v4"
     assert BRIDGE_CONFORMANCE_SCENARIOS == (
         "successful_session_with_streamed_assistant_output",
         "failed_session_with_diagnostics",
@@ -397,6 +397,66 @@ async def test_transport_close_phases_are_bounded_integration_failures(
     assert partial.value.failure_class == "integration_error"
 
 
+async def test_close_during_sse_and_missing_terminal_active_snapshot_are_explicit(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    closed = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            stream_frames=[
+                b'data: {"event_id":"provider-1","type":"response.delta"}\n\n',
+                b'data: {"event_id":"provider-2","type":"response.completed"}\n\n',
+            ],
+            close_during_sse_after=1,
+        )
+    )
+    created = await _create_and_post(closed)
+    received = [event async for event in closed.client.stream_events(created["id"])]
+    assert [event["event_id"] for event in received] == ["provider-1"]
+
+    active = await bridge_harness(
+        terminal_status="completed",
+        scenario=FakeOmnigentScenario(
+            missing_terminal_stream=True,
+            active_snapshot_after_stream_end=True,
+        ),
+    )
+    created = await _create_and_post(active, key="missing-terminal")
+    events = [event async for event in active.client.stream_events(created["id"])]
+    snapshot = await active.proxy.get_session(created["id"])
+    assert [event["type"] for event in events] == ["response.delta"]
+    assert snapshot["status"] == "running"
+
+
+async def test_out_of_order_optional_route_and_elicitation_schema_controls(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    ordered = await bridge_harness(
+        scenario=FakeOmnigentScenario(out_of_order_stream=True)
+    )
+    created = await _create_and_post(ordered)
+    frames = [event async for event in ordered.client.stream_events(created["id"])]
+    assert [event["sequence"] for event in frames] == [2, 1]
+
+    optional = await bridge_harness(
+        scenario=FakeOmnigentScenario(unavailable_routes={"resources.diff"})
+    )
+    created = await _create_and_post(optional, key="optional-absence")
+    assert await optional.proxy.get_resource(
+        "workspace_diff", created["id"], "README.md"
+    ) == {"available": False, "reason": "diff unavailable"}
+
+    malformed = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            malformed_payloads={"elicitations.resolve": {"unexpected": [{"token": "secret"}]}}
+        )
+    )
+    created = await _create_and_post(malformed, key="elicitation-drift")
+    result = await malformed.proxy.resolve_elicitation(
+        session_id=created["id"], elicitation_id="el-1", payload={"answer": "yes"}
+    )
+    assert result == {"unexpected": [{"token": "secret"}]}
+
+
 async def test_scenario_11_stream_replay_identity_and_malformed_frame(
     bridge_harness: Callable[..., Awaitable[BridgeHarness]],
 ) -> None:
@@ -580,6 +640,36 @@ async def test_first_message_crash_matrix_reconciles_response_before_persist_onc
         terminal_refs={"summary": "reconciled from provider snapshot"},
     )
     assert terminal.first_message_state == FIRST_MESSAGE_TERMINAL
+
+
+async def test_partial_post_before_ack_is_ambiguous_and_never_reposted(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(event_accept_before_ack_close=True)
+    )
+    key = "idem-partial-before-ack"
+    created = await harness.proxy.create_session(request=_request(), binding=_binding(key))
+    await harness.store.mark_prepared(key, digest="sha256:first", marker="message:first")
+    await harness.store.mark_posting(key)
+
+    with pytest.raises(OmnigentBridgeError) as ambiguous:
+        await harness.proxy.post_event(
+            session_id=created["id"],
+            event=BridgeSessionEventRequest(type="message", text="hello"),
+        )
+    assert ambiguous.value.failure_class == "integration_error"
+    row = await harness.store.get_existing(key)
+    assert row is not None and row.first_message_state == FIRST_MESSAGE_POSTING
+    assert len(harness.running.server.events) == 1
+
+    snapshot = await harness.proxy.get_session(created["id"])
+    assert snapshot["status"] == "completed"
+    assert len(harness.running.server.events) == 1
+    with pytest.raises(OmnigentDigestMismatchError):
+        await harness.store.mark_prepared(
+            key, digest="sha256:different", marker="message:different"
+        )
 
 
 async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redaction(

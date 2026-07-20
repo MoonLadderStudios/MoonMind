@@ -18,7 +18,7 @@ from moonmind.omnigent.conformance import (  # noqa: E402
     assert_secret_free,
 )
 
-PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v2.json"
+PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
     "proxy.routes",
     "session.first-message-crash-matrix",

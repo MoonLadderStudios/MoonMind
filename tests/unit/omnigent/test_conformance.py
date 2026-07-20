@@ -17,7 +17,7 @@ from moonmind.omnigent.conformance import (
     validate_fixture,
 )
 
-PROFILE = Path("tests/fixtures/omnigent/conformance-v2.json")
+PROFILE = Path("tests/fixtures/omnigent/conformance-v4.json")
 
 
 def _scans() -> dict[str, dict[str, str]]:

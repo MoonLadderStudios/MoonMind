@@ -29,7 +29,7 @@ BRIDGE_CONFORMANCE_SCENARIOS: tuple[str, ...] = (
     "ambiguous_first_message_response",
 )
 
-CONFORMANCE_PROFILE_VERSION = "moonmind.omnigent.conformance/v3"
+CONFORMANCE_PROFILE_VERSION = "moonmind.omnigent.conformance/v4"
 
 
 @dataclass(slots=True)
@@ -47,11 +47,17 @@ class FakeOmnigentScenario:
     malformed_payloads: dict[str, Any] = field(default_factory=dict)
     close_before_headers: set[str] = field(default_factory=set)
     close_during_body: set[str] = field(default_factory=set)
+    close_during_sse_after: int | None = None
     stream_frames: list[bytes] | None = None
     stream_disconnect_after: int | None = None
+    out_of_order_stream: bool = False
+    missing_terminal_stream: bool = False
+    active_snapshot_after_stream_end: bool = False
+    unavailable_routes: set[str] = field(default_factory=set)
     oversized_json_items: int = 0
     oversized_binary_bytes: int = 0
     event_response_before_close: bool = False
+    event_accept_before_ack_close: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +97,8 @@ class FakeOmnigentServer:
             await asyncio.sleep(delay)
         if route in self.scenario.close_before_headers:
             raise ConnectionResetError(f"injected close before headers: {route}")
+        if route in self.scenario.unavailable_routes:
+            return web.json_response({"error": "capability unavailable"}, status=404)
         status = self.scenario.statuses.get(route)
         if status is not None:
             return web.json_response(
@@ -183,6 +191,8 @@ class FakeOmnigentServer:
         status = (
             self.terminal_status if self.first_message_posted.is_set() else "running"
         )
+        if self.scenario.active_snapshot_after_stream_end:
+            status = "running"
         payload: dict[str, Any] = {
             "id": request.match_info["session_id"],
             "status": status,
@@ -208,12 +218,21 @@ class FakeOmnigentServer:
         self.events.append(payload)
         if payload.get("type") not in {"interrupt", "stop_session"}:
             self.first_message_posted.set()
+        if self.scenario.event_accept_before_ack_close:
+            response = web.StreamResponse(status=200)
+            response.content_length = 128
+            await response.prepare(request)
+            await response.write(b'{"pending_id":"accepted-but-ambiguous"')
+            request.transport.close()
+            return response
         response = web.json_response({"pending_id": "pending-1", "item_id": "item-1"})
         if self.scenario.event_response_before_close:
             response.force_close()
         return response
 
     async def resolve_elicitation(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault("elicitations.resolve")) is not None:
+            return fault
         payload = await request.json()
         self.events.append(
             {"type": "elicitation.resolve", "id": request.match_info["elicitation_id"], **payload}
@@ -240,11 +259,21 @@ class FakeOmnigentServer:
         )
         await response.prepare(request)
         frames = self.scenario.stream_frames
+        if frames is None and self.scenario.out_of_order_stream:
+            frames = [
+                b'data: {"event_id":"provider-2","sequence":2,"type":"response.delta"}\n\n',
+                b'data: {"event_id":"provider-1","sequence":1,"type":"response.delta"}\n\n',
+            ]
+        if frames is None and self.scenario.missing_terminal_stream:
+            frames = [b'data: {"event_id":"provider-1","type":"response.delta"}\n\n']
         if frames is not None:
             for index, frame in enumerate(frames, start=1):
                 await response.write(frame)
-                if self.scenario.stream_disconnect_after == index:
-                    response.force_close()
+                if (
+                    self.scenario.stream_disconnect_after == index
+                    or self.scenario.close_during_sse_after == index
+                ):
+                    request.transport.close()
                     return response
             await response.write_eof()
             return response

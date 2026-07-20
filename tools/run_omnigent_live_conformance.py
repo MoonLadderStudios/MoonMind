@@ -34,7 +34,7 @@ from moonmind.omnigent.conformance import (  # noqa: E402
     require_pinned_images,
 )
 
-PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v2.json"
+PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 PROJECT = "moonmind-test-omnigent-live"
 PROVIDER_TEST = "tests/provider/omnigent/test_omnigent_smoke.py"
 LIVE_CASES = {
