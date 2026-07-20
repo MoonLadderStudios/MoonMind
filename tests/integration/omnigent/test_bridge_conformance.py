@@ -24,12 +24,14 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
+from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
@@ -362,6 +364,75 @@ async def test_scenario_11_stream_replay_identity_and_malformed_frame(
         "provider-1",
         "provider-2",
     ]
+
+
+async def test_scenario_11_reconnect_persists_overlap_once_and_terminalizes_append_only(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    """Exercise the real HTTP stream, normalizer, and durable store together."""
+
+    first_stream = [
+        b'data: {"event_id":"provider-1","type":"response.delta","data":{"text":"one"}}\n\n',
+        b'data: {"event_id":"provider-2","type":"response.delta","data":{"text":"same"}}\n\n',
+    ]
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            stream_frames=first_stream,
+            stream_disconnect_after=2,
+        )
+    )
+    key = "idem-durable-reconnect"
+    created = await _create_and_post(harness, key=key)
+    row = await harness.store.get_existing(key)
+    assert row is not None
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-1",
+        idempotencyKey=key,
+    )
+
+    async def persist(frames: list[dict[str, Any]], start: int) -> None:
+        for cursor, payload in enumerate(frames, start=start):
+            normalized = build_omnigent_bridge_event(
+                payload=payload,
+                sequence=cursor,
+                request=request,
+                omnigent_session_id=created["id"],
+                bridge_session_id=row.bridge_session_id,
+            ).event
+            await harness.store.append_events(row.bridge_session_id, [normalized])
+
+    received = [event async for event in harness.client.stream_events(created["id"])]
+    await persist(received, 1)
+
+    # Recreate the HTTP client boundary and reconnect with one overlapping event.
+    harness.running.server.scenario.stream_disconnect_after = None
+    harness.running.server.scenario.stream_frames = [
+        first_stream[1],
+        b'data: {"event_id":"provider-3","type":"response.delta","data":{"text":"same"}}\n\n',
+        b'data: {"event_id":"provider-4","type":"response.completed"}\n\n',
+    ]
+    restarted_client = OmnigentHttpClient(base_url=harness.running.base_url)
+    replayed = [event async for event in restarted_client.stream_events(created["id"])]
+    # Use the original cursor for the overlap; provider event identity is stable
+    # and the distinct identical delta keeps its own identity.
+    await persist([replayed[0]], 2)
+    await persist(replayed[1:], 3)
+    await harness.store.mark_terminal(key, status="completed")
+
+    events = await harness.store.list_events(row.bridge_session_id)
+    assert [event.sequence for event in events] == [1, 2, 3, 4]
+    assert [event.event_type for event in events] == [
+        "response.delta",
+        "response.delta",
+        "response.delta",
+        "response.completed",
+    ]
+    assert [event.text_preview for event in events[:3]] == ["one", "same", "same"]
+    terminal = await harness.store.get_existing(key)
+    assert terminal is not None
+    assert terminal.status == "completed"
 
 
 async def test_scenario_12_oversized_real_resources_fail_bounded(

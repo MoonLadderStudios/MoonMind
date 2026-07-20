@@ -27,6 +27,9 @@ DETERMINISTIC_CASES = {
     "resources.authorization-and-evidence",
     "failures.lifecycle-and-redaction",
     "codex.direct-event-parity",
+    "failures.transport-status-timeout",
+    "events.replay-overlap-schema-drift",
+    "resources.bounds-and-secret-scan",
 }
 COMMANDS = (
     (
@@ -80,6 +83,10 @@ def main() -> int:
         failed |= completed.returncode != 0
 
     profile = json.loads(PROFILE.read_text(encoding="utf-8"))
+    profile_case_ids = {case["id"] for case in profile["cases"]}
+    missing_deterministic = DETERMINISTIC_CASES - profile_case_ids
+    if missing_deterministic:
+        failed = True
     cases = []
     for case in profile["cases"]:
         cases.append(
@@ -120,6 +127,10 @@ def main() -> int:
         "capabilities": ["deterministic-fake", "bridge", "workflow-detail"],
         "evidenceScans": scans,
         "cases": cases,
+        "deterministicCoverage": {
+            "requiredCaseIds": sorted(DETERMINISTIC_CASES),
+            "missingCaseIds": sorted(missing_deterministic),
+        },
     }
     evidence_path = args.output_dir / "runner-evidence.json"
     evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
