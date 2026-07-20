@@ -186,6 +186,14 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
     compose = _load_compose()
     services = compose["services"]
     initializer = services["omnigent-tools-init"]
+    tool_manifest = json.loads(
+        Path("services/omnigent/tools/manifest.lock.json").read_text(encoding="utf-8")
+    )
+
+    configured_version = initializer["environment"]["MOONMIND_GH_VERSION"]
+    compose_default_version = configured_version.removesuffix("}").rsplit(":-", 1)[1]
+    assert tool_manifest["bundleVersion"] == f"gh-{compose_default_version}-1"
+    assert tool_manifest["tools"][0]["version"] == compose_default_version
 
     assert initializer["image"] == (
         "${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}"

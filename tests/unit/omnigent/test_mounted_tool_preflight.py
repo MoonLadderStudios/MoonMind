@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+import hashlib
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from moonmind.omnigent.mounted_tool_preflight import (
+    _digest_check_command,
     MountedToolPreflightError,
     preflight_mounted_tools,
 )
+
+
+def test_digest_probe_executes_against_mounted_executable(tmp_path: Path) -> None:
+    executable = tmp_path / "mounted tools/gh"
+    executable.parent.mkdir()
+    executable.write_bytes(b"pinned gh executable fixture")
+    trusted_digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+    command = _digest_check_command(str(executable), {trusted_digest})
+
+    assert subprocess.run(["bash", "-lc", command], check=False).returncode == 0
+
+    executable.write_bytes(b"different executable")
+    assert subprocess.run(["bash", "-lc", command], check=False).returncode != 0
 
 
 @pytest.mark.asyncio
