@@ -1,0 +1,6 @@
+{
+  "barrierService": "temporal-worker-agent-runtime",
+  "stopCommand": "compose stop temporal-worker-agent-runtime",
+  "recreateCommand": "compose up -d --no-deps --force-recreate temporal-worker-agent-runtime",
+  "composePullCommand": "compose pull"
+}

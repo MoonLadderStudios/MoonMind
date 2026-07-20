@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +17,14 @@ UPDATE_SCRIPT = (
     / "update-moonmind"
     / "scripts"
     / "run-update-moonmind.sh"
+)
+REPLAY_ROOT = (
+    ROOT
+    / "tests"
+    / "integration"
+    / "reliability"
+    / "replays"
+    / "skill-resolution-update-skew"
 )
 
 
@@ -44,7 +53,12 @@ def _modern_bash() -> str:
     return bash
 
 
-def _run_update_scenario(tmp_path: Path, *, changed_file: str) -> list[str]:
+def _run_update_scenario(
+    tmp_path: Path,
+    *,
+    changed_file: str,
+    include_all_commands: bool = False,
+) -> list[str]:
     bash = _modern_bash()
     seed = tmp_path / "seed"
     remote = tmp_path / "origin.git"
@@ -94,10 +108,10 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   "config --services")
-    printf '%s\\n' api postgres temporal-worker-deployment-control temporal-worker-workflow
+    printf '%s\\n' api postgres temporal-worker-agent-runtime temporal-worker-deployment-control temporal-worker-workflow
     ;;
   "config --format")
-    printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+    printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-agent-runtime":{"image":"moonmind:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
     ;;
   "pull ")
     exit 0
@@ -127,11 +141,10 @@ esac
     )
 
     assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected_head
-    return [
-        line
-        for line in docker_log.read_text(encoding="utf-8").splitlines()
-        if line.startswith("compose up ")
-    ]
+    commands = docker_log.read_text(encoding="utf-8").splitlines()
+    if include_all_commands:
+        return commands
+    return [line for line in commands if line.startswith("compose up ")]
 
 
 def test_runtime_source_update_force_recreates_only_application_services(
@@ -170,3 +183,28 @@ def test_documentation_update_does_not_force_recreate_services(
     assert "postgres" in up_commands[0]
     assert "temporal-worker-workflow" in up_commands[0]
     assert "temporal-worker-deployment-control" not in up_commands[0]
+
+
+def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
+    tmp_path: Path,
+) -> None:
+    manifest = json.loads(
+        (REPLAY_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    expected = json.loads(
+        (REPLAY_ROOT / "expected-outcome.json").read_text(encoding="utf-8")
+    )
+    commands = _run_update_scenario(
+        tmp_path,
+        changed_file=manifest["changedFile"],
+        include_all_commands=True,
+    )
+
+    stop_command = expected["stopCommand"]
+    barrier_recreate = expected["recreateCommand"]
+    assert stop_command in commands
+    assert barrier_recreate in commands
+    assert commands.index(stop_command) < commands.index(barrier_recreate)
+    assert commands.index(barrier_recreate) < commands.index(
+        expected["composePullCommand"]
+    )
