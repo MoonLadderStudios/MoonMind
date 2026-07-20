@@ -534,6 +534,10 @@ def test_all_id_bearing_route_classes_reject_unknown_owner() -> None:
         lambda: client.get(f"{base}/resources/files/file-1/content"),
     ]
     assert all(call().status_code == 404 for call in requests)
+    assert proxy.attached == []
+    assert proxy.deleted == []
+    assert proxy.posted_events == []
+    assert proxy.resolved_elicitations == []
     assert proxy.resource_calls == []
 
 
@@ -828,6 +832,69 @@ def test_stream_resumes_from_greatest_cursor_source() -> None:
     assert "evt-1" not in resp.text
     assert "evt-2" not in resp.text
     assert "evt-3" in resp.text
+
+
+def test_event_page_projects_unavailable_replay_as_explicit_retention_gap() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id=f"evt-{sequence}",
+            bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(
+                isoformat=lambda: "2026-07-09T00:00:00+00:00"
+            ),
+            direction="host_to_moonmind",
+            event_type="response.completed" if sequence == 4 else "response.delta",
+            normalized_status="completed" if sequence == 4 else "running",
+            text_preview=str(sequence),
+            artifact_ref=None,
+            metadata_={},
+        )
+        for sequence in (3, 4)
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?after=0"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["retentionGap"] == {
+        "requestedAfter": 0,
+        "earliestAvailable": 3,
+    }
+    assert [item["sequence"] for item in response.json()["items"]] == [3, 4]
+    assert response.json()["terminal"] is True
+
+
+def test_sse_projects_unavailable_replay_gap_and_stops_before_later_events() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-3",
+            bridge_session_id="brs-1",
+            sequence=3,
+            timestamp=SimpleNamespace(
+                isoformat=lambda: "2026-07-09T00:00:00+00:00"
+            ),
+            direction="host_to_moonmind",
+            event_type="response.delta",
+            normalized_status="running",
+            text_preview="unavailable history follows",
+            artifact_ref=None,
+            metadata_={},
+        )
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?cursor=0"
+    )
+
+    assert response.status_code == 200
+    assert "event: retention_gap" in response.text
+    assert '"requestedAfter":0' in response.text
+    assert '"earliestAvailable":3' in response.text
+    assert "event: bridge_event" not in response.text
 
 
 def test_terminal_page_falls_back_to_durable_session_evidence_without_events() -> None:
