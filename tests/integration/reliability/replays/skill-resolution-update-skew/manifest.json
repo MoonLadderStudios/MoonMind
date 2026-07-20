@@ -1,0 +1,10 @@
+{
+  "failureShapeId": "skill-resolution-update-skew",
+  "incidentWorkflowId": "mm:95f76aea-06f2-4e3b-9317-2dcc46f22c2a",
+  "activityType": "agent_skill.resolve",
+  "activityTaskQueue": "mm.activity.agent_runtime",
+  "changedFile": ".agents/skills/batch-dependabot-resolver/SKILL.md",
+  "selectedSkill": "moonspec-verify",
+  "observedFailure": "skill 'batch-dependabot-resolver' selects unknown terminal contract 'batch_dependabot_resolver_fanout.v1'",
+  "invariant": "The worker that resolves live-mounted Skill metadata must not execute between checkout mutation and recreation with resolver code from the same revision"
+}
