@@ -827,6 +827,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="For skill:jira-verify children, update Jira status only on PASS.",
     )
     parser.add_argument("--max-workflows", type=int, default=25)
+    parser.add_argument(
+        "--preflight-error",
+        default=None,
+        help=(
+            "Record an input-validation failure without reading targets or "
+            "queueing child workflows."
+        ),
+    )
+    parser.add_argument(
+        "--requested-count",
+        type=int,
+        default=0,
+        help="Number of requested targets reported with --preflight-error.",
+    )
     parser.add_argument("--task-context-path", default=None)
     parser.add_argument("--artifacts-dir", default="artifacts")
     return parser.parse_args(argv)
@@ -865,6 +879,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not execution_ref:
             raise RuntimeError("MOONMIND_STEP_EXECUTION_ID is required")
+        preflight_error = _text(args.preflight_error)
+        if preflight_error:
+            if args.requested_count < 0:
+                raise RuntimeError("--requested-count must be zero or greater")
+            failed = {
+                **base_result,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "status": "failed",
+                "requested": args.requested_count,
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": preflight_error[:1024],
+                },
+                "errors": [
+                    {
+                        "code": "BATCH_FANOUT_INPUT_INVALID",
+                        "error": preflight_error[:1024],
+                    }
+                ],
+            }
+            _write_artifacts(result_path, failed)
+            print(json.dumps(failed, indent=2))
+            return 2
         if not targets_path.exists():
             raise RuntimeError(f"targets file not found: {targets_path}")
         targets = _read_targets(targets_path)

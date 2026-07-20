@@ -243,6 +243,47 @@ async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     ]
 
 
+async def test_invalid_batch_range_records_terminal_failure_without_retry(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:3df0b867 through the terminal and parent retry boundaries."""
+    manifest = load_replay("batch-workflows-invalid-range", "manifest.json")
+    expected = load_replay(
+        "batch-workflows-invalid-range", "expected-outcome.json"
+    )
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(manifest["terminalEvidence"]), encoding="utf-8"
+    )
+
+    result = await TemporalAgentRuntimeActivities().agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "artifactSpoolPath": str(spool),
+            "terminalContract": manifest["terminalContract"],
+            "result": {"summary": "Batch range validation failed."},
+        }
+    )
+
+    assert result.failure_class == expected["failureClass"]
+    assert result.provider_error_code == expected["failureCode"]
+    assert result.metadata["terminalContractMissingEvidence"] == expected[
+        "missingEvidence"
+    ]
+
+    parent = MoonMindRunWorkflow()
+    retryable = parent._activity_result_retryable(
+        {"outputs": result.model_dump(mode="json", by_alias=True)},
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+    )
+    assert retryable is expected["retryable"]
+    assert expected["parentState"] == "failed"
+
+
 async def test_completed_batch_no_op_replays_through_production_activity_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

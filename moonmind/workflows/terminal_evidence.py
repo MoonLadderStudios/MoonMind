@@ -156,6 +156,46 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
     if not expected_execution or payload.get("executionRef") != expected_execution:
         return TerminalEvidenceEvaluation(False, "STALE_TERMINAL_EVIDENCE")
+    status = payload.get("status")
+    queued = payload.get("queued")
+    requested, created = payload.get("requested"), payload.get("created")
+    skipped = payload.get("skipped")
+    errors = payload.get("errors")
+    failure = payload.get("failure")
+    failure_payload = dict(failure) if isinstance(failure, Mapping) else {}
+    failure_code = str(failure_payload.get("code") or "").strip()
+    failure_message = str(failure_payload.get("message") or "").strip()
+    metadata = {
+        "terminalContractId": contract_id,
+        "terminalContractEvidencePath": relative,
+        "terminalContractExecutionRef": expected_execution,
+        "queuedChildCount": created if isinstance(created, int) else 0,
+        "queuedChildren": queued if isinstance(queued, list) else [],
+    }
+    if failure_code:
+        metadata["terminalFailureCode"] = failure_code
+    if failure_message:
+        metadata["terminalFailureMessage"] = failure_message
+
+    # Input validation can fail before a trustworthy target list exists. The
+    # portable helper still binds that terminal failure to this execution and
+    # guarantees that no child side effect occurred.
+    if status == "failed" and failure_code == "BATCH_FANOUT_INPUT_INVALID":
+        if (
+            not isinstance(requested, int)
+            or requested < 0
+            or created != 0
+            or queued != []
+            or skipped != []
+            or not isinstance(errors, list)
+            or not errors
+            or not failure_message
+        ):
+            return TerminalEvidenceEvaluation(
+                False, "INVALID_TERMINAL_EVIDENCE", metadata=metadata
+            )
+        return _failure("BATCH_FANOUT_INPUT_INVALID", metadata=metadata)
+
     targets_relative = str(contract.get("targetsRelativePath") or "artifacts/batch-workflows-targets.json").replace("\\", "/")
     targets_path = (workspace / targets_relative).resolve()
     try:
@@ -165,17 +205,6 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
     if payload.get("targetsSha256") != expected_digest:
         return TerminalEvidenceEvaluation(False, "STALE_TERMINAL_EVIDENCE")
-    status = payload.get("status")
-    queued = payload.get("queued")
-    requested, created = payload.get("requested"), payload.get("created")
-    skipped = payload.get("skipped")
-    errors = payload.get("errors")
-    metadata = {
-        "terminalContractId": contract_id,
-        "terminalContractEvidencePath": relative,
-        "queuedChildCount": created if isinstance(created, int) else 0,
-        "queuedChildren": queued if isinstance(queued, list) else [],
-    }
     if status == "running":
         return TerminalEvidenceEvaluation(
             False, "INCOMPLETE_TERMINAL_CONTRACT", metadata=metadata

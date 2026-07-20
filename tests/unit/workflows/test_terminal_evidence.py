@@ -90,6 +90,56 @@ def test_batch_terminal_reads_result_from_artifact_spool(tmp_path: Path) -> None
     assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]
 
 
+def test_batch_terminal_accepts_preflight_failure_without_target_list(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-workflows-result.v1",
+                "contractId": "batch_workflows_fanout.v1",
+                "executionRef": "step:1",
+                "targetsSha256": None,
+                "status": "failed",
+                "requested": 56,
+                "created": 0,
+                "queued": [],
+                "skipped": [],
+                "errors": [
+                    {
+                        "code": "BATCH_FANOUT_INPUT_INVALID",
+                        "error": "Range contains 56 issues; maximum is 25.",
+                    }
+                ],
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": "Range contains 56 issues; maximum is 25.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_terminal_evidence(
+        _contract(),
+        workspace_path=str(workspace),
+        artifact_spool_path=str(spool),
+    )
+
+    assert result.satisfied is False
+    assert result.failure_code == "BATCH_FANOUT_INPUT_INVALID"
+    assert result.missing_evidence == ()
+    assert result.metadata["terminalContractExecutionRef"] == "step:1"
+    assert (
+        result.metadata["terminalFailureMessage"]
+        == "Range contains 56 issues; maximum is 25."
+    )
+
+
 def test_pr_resolver_terminal_requires_result_and_publish_evidence(tmp_path: Path) -> None:
     contract = {
         "contractId": "pr_resolver_terminal.v1",

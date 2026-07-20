@@ -83,6 +83,8 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     assert orchestration["publish"]["mode"] == "pr_with_merge_automation"
     assert orchestration["runtime"]["inherit"] == "caller"
     assert "--run-verify" in step["instructions"]
+    assert "--preflight-error" in step["instructions"]
+    assert "--requested-count" in step["instructions"]
 
 
 async def test_batch_github_workflows_uses_repository_context(tmp_path):
