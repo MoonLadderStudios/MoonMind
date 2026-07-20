@@ -672,8 +672,70 @@ async def test_partial_post_before_ack_is_ambiguous_and_never_reposted(
         )
 
 
+@pytest.mark.parametrize(
+    ("boundary", "expected_posts"),
+    [
+        ("not_prepared", 1),
+        (FIRST_MESSAGE_PREPARED, 1),
+        (FIRST_MESSAGE_POSTING, 0),
+        (FIRST_MESSAGE_POSTED, 0),
+        (FIRST_MESSAGE_TERMINAL, 0),
+    ],
+)
+async def test_each_first_message_restart_boundary_is_exactly_once(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+    boundary: str,
+    expected_posts: int,
+) -> None:
+    """Independently recreate the facade at each durable retry boundary."""
+
+    harness = await bridge_harness()
+    key = f"idem-restart-{boundary}"
+    created = await harness.proxy.create_session(request=_request(), binding=_binding(key))
+    if boundary != "not_prepared":
+        await harness.store.mark_prepared(
+            key, digest="sha256:first", marker="message:first"
+        )
+    if boundary in {FIRST_MESSAGE_POSTING, FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}:
+        await harness.store.mark_posting(key)
+    if boundary in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}:
+        await harness.store.mark_posted(
+            key, response={"pending_id": "pending-1", "item_id": "item-1"}
+        )
+    if boundary == FIRST_MESSAGE_TERMINAL:
+        await harness.store.mark_terminal(
+            key, status="completed", terminal_refs={"summary": "complete"}
+        )
+
+    restarted = OmnigentBridgeSessionProxy(
+        run_store=harness.store,
+        client=harness.client,
+        default_agent_name="codex",
+    )
+    reused = await restarted.create_session(request=_request(), binding=_binding(key))
+    assert reused["id"] == created["id"]
+    assert len(harness.running.server.session_ids) == 1
+
+    if boundary in {"not_prepared", FIRST_MESSAGE_PREPARED}:
+        await restarted.post_event(
+            session_id=created["id"],
+            event=BridgeSessionEventRequest(type="message", text="hello"),
+        )
+    else:
+        # Posting is ambiguous; posted/terminal are authoritative. None may be
+        # retried by silently issuing another provider prompt.
+        row = await harness.store.get_existing(key)
+        assert row is not None and row.first_message_state == boundary
+    assert len(harness.running.server.events) == expected_posts
+
+    with pytest.raises(OmnigentDigestMismatchError):
+        await harness.store.mark_prepared(
+            key, digest="sha256:different", marker="message:different"
+        )
+
+
 async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redaction(
-    bridge_harness: Callable[..., Awaitable[BridgeHarness]], monkeypatch
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]], monkeypatch, tmp_path
 ) -> None:
     """Drive the durable store through the API page/SSE projection functions."""
 
@@ -773,6 +835,23 @@ async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redac
     combined = "\n".join((page_json, sse, durable_rendered))
     assert "github_pat_secret" not in combined
     assert "[REDACTED]" in combined
+
+    # Materialize and scan the same durable evidence classes used by the
+    # terminal contract, rather than checking refs or DB projections alone.
+    artifact_bodies = {}
+    for name, body in {
+        "raw.sse": sse,
+        "normalized.json": durable_rendered,
+        "diagnostics.json": json.dumps({"summary": page.terminal_envelope.summary}),
+    }.items():
+        path = tmp_path / name
+        path.write_text(body, encoding="utf-8")
+        artifact_bodies[name] = path.read_text(encoding="utf-8")
+    materialized = json.dumps(artifact_bodies)
+    assert "github_pat_secret" not in materialized
+    assert "user-jwt" not in materialized
+    assert "fake-upstream-secret" not in materialized
+    assert "[REDACTED]" in materialized
 
     calls_before_denial = list(harness.running.server.route_calls)
 
