@@ -1,8 +1,8 @@
 slug: batch-github-workflows
 title: Batch GitHub Workflows
 description: Resolve an inclusive GitHub issue-number range and queue one GitHub
-  Issue Implement or GitHub Issue Orchestrate workflow per issue with inherited
-  runtime settings and a shared publish override.
+  Issue Implement or GitHub Issue Orchestrate workflow per existing issue in the
+  range with inherited runtime settings and a shared publish override.
 scope: global
 tags:
 - batch
@@ -140,39 +140,29 @@ steps:
   annotations:
     batchWorkflowsRole: resolve-and-queue
   instructions: |-
-    Resolve the inclusive GitHub issue-number range "{{ inputs.issue_range }}"
-    for repository "{{ inputs.repository }}" and queue one child MoonMind workflow
-    per issue. When the repository input is empty, use the repository from workflow
-    context. Do not re-select provider, model, or effort: every child inherits the
-    parent runtime via runtimeInheritance="caller".
+    Treat the inclusive GitHub issue-number range "{{ inputs.issue_range }}" as
+    search criteria for repository "{{ inputs.repository }}", not as a list of
+    targets. GitHub issues and pull requests share numbering, and some numbers may
+    not exist. Queue children only for Issue objects returned by GitHub; never queue
+    a pull request or fabricate a target for an absent number. When the repository
+    input is empty, use the repository from workflow context. Do not re-select
+    provider, model, or effort: every child inherits the parent runtime via
+    runtimeInheritance="caller".
 
-    Parse the range strictly as START-END. Require positive integers, START <= END,
-    and no more than {{ inputs.max_workflows }} issue numbers. Use the trusted `gh`
-    CLI to read each issue. Fail with an actionable error if an issue does not exist
-    or cannot be read; do not guess or silently omit it. Resolve every issue to:
-    {"provider":"github","ref":"<owner/repo>#<number>","githubIssue":
-    {"repository":"<owner/repo>","number":<number>,"title":"<title>",
-    "body":"<body>","url":"<url>","state":"<state>",
-    "labels":["<label>"]},
-    "repository":"<owner/repo>"}. Write the complete list to
-    artifacts/batch-workflows-targets.json before queueing.
-
-    Queue each target with "{{ inputs.run_ref }}" and publish override
-    "{{ inputs.publish_mode }}" using one helper invocation:
+    Resolve the range and queue each matched issue with "{{ inputs.run_ref }}" and
+    publish override "{{ inputs.publish_mode }}" using one helper invocation. The
+    portable helper performs the trusted GitHub query, excludes pull requests and
+    absent numbers, rejects numeric spans wider than 1,000 before querying, writes
+    artifacts/batch-workflows-targets.json, applies max_workflows to the resolved
+    Issue objects, and queues the children:
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
-    --targets artifacts/batch-workflows-targets.json \
+    --github-issue-range "{{ inputs.issue_range }}" \
+    --github-repository "{{ inputs.repository }}" \
     --run-ref "{{ inputs.run_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
     --max-workflows "{{ inputs.max_workflows }}" \
     {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
     --constraints "{{ inputs.constraints }}"
-
-    If strict range validation fails before the target list can be written, invoke
-    that same helper once with the same arguments plus
-    --preflight-error "<actionable validation error>" and
-    --requested-count "<inclusive range count>". Do not read GitHub issues, queue
-    a partial range, handcraft the result JSON, or reuse evidence from an earlier
-    execution. The helper writes the authoritative failure result.
 
     The helper writes artifacts/batch-workflows-result.json. Report its queued,
     skipped, and error counts honestly and link every queued child workflow.
