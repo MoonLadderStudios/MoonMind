@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -708,6 +709,52 @@ async def test_dispatch_persists_launch_intent_before_host_side_effect(store) ->
     assert result == {"runnerId": "runner-1", "reused": False}
     assert row.omnigent_runner_id == "runner-1"
     assert row.metadata_["embedded_runner_launch"]["state"] == "launched"
+    lifecycle = row.metadata_["embedded_runner_lifecycle"]
+    assert lifecycle["version"] == 1
+    assert lifecycle["state"] == "runner_tunnel_waiting"
+    assert [item["state"] for item in lifecycle["timeline"]] == [
+        "launch_reserved",
+        "launch_sent",
+        "launch_acknowledged",
+        "runner_tunnel_waiting",
+    ]
+    assert lifecycle["providerLeaseId"] == "provider-lease-1"
+    assert "binding_token" not in json.dumps(lifecycle).lower()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_stale_durable_runner_instead_of_claiming_reuse(
+    store,
+) -> None:
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        def is_runner_ready(self, runner_id):
+            assert runner_id == "runner-1"
+            return False
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels()
+    )
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.dispatch_runner(idempotency_key="idem-embedded")
+
+    assert excinfo.value.code == "embedded_runner_stale"
+    row = await store.get_existing("idem-embedded")
+    assert row.metadata_["embedded_runner_lifecycle"]["state"] == "stale"
 
 
 @pytest.mark.asyncio

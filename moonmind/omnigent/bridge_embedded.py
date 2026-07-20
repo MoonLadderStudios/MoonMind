@@ -200,7 +200,25 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="system_error", status_code=409,
             )
         if row.omnigent_runner_id:
-            return {"runnerId": row.omnigent_runner_id, "reused": True}
+            if self._host_channels.is_runner_ready(row.omnigent_runner_id):
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key,
+                    state="runner_tunnel_ready",
+                    code="live_tunnel_verified",
+                )
+                return {"runnerId": row.omnigent_runner_id, "reused": True}
+            await self._run_store.mark_embedded_runner_state(
+                idempotency_key,
+                state="stale",
+                code="durable_runner_tunnel_unavailable",
+            )
+            raise OmnigentBridgeError(
+                "Durable embedded runner assignment is not live; reconciliation or "
+                "janitor replacement is required",
+                failure_class="integration_error",
+                status_code=503,
+                code="embedded_runner_stale",
+            )
         workspace = _clean(row.workspace)
         if not workspace:
             raise OmnigentBridgeError(
@@ -216,11 +234,21 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         try:
+            await self._run_store.mark_embedded_runner_state(
+                idempotency_key,
+                state="launch_sent",
+                code="host_launch_command_sending",
+            )
             runner_id = await self._host_channels.launch_runner(
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
                 session_id=row.omnigent_session_id,
                 harness="codex-native",
+            )
+            await self._run_store.mark_embedded_runner_state(
+                idempotency_key,
+                state="launch_acknowledged",
+                code="host_launch_acknowledged",
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
             await self._run_store.fail_embedded_runner_launch(
@@ -238,6 +266,30 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         return {"runnerId": runner_id, "reused": False}
+
+    async def record_runner_tunnel_ready(self, *, runner_id: str) -> None:
+        row = await self._run_store.get_session_by_runner_id(runner_id)
+        if row is None:
+            raise EmbeddedHostChannelError("runner has no durable session binding")
+        await self._run_store.mark_embedded_runner_state(
+            row.idempotency_key,
+            state="runner_tunnel_ready",
+            code="authenticated_runner_handshake",
+        )
+
+    async def record_runner_tunnel_disconnected(self, *, runner_id: str) -> None:
+        row = await self._run_store.get_session_by_runner_id(runner_id)
+        if row is not None and row.status not in {
+            "completed",
+            "failed",
+            "canceled",
+            "timed_out",
+        }:
+            await self._run_store.mark_embedded_runner_state(
+                row.idempotency_key,
+                state="runner_tunnel_waiting",
+                code="runner_tunnel_disconnected",
+            )
 
     async def record_runner_exit(self, *, runner_id: str, error: str) -> None:
         """Record a stock host's authoritative runner process failure."""

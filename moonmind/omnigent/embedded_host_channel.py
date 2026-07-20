@@ -297,6 +297,11 @@ class EmbeddedHostChannelRegistry:
         if self._runners.get(channel.runner_id) is channel:
             self._runners.pop(channel.runner_id, None)
 
+    def is_runner_ready(self, runner_id: str) -> bool:
+        """Return live tunnel readiness; durable identity alone is insufficient."""
+
+        return runner_id in self._runners
+
     async def post_runner_event(
         self, *, runner_id: str, session_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
