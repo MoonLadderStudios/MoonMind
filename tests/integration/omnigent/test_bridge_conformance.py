@@ -500,3 +500,113 @@ async def test_response_before_posted_persistence_is_ambiguous_and_never_retried
     assert row is not None and row.first_message_state == FIRST_MESSAGE_POSTING
     assert len(harness.running.server.session_ids) == 1
     assert len(harness.running.server.events) == 1
+
+
+async def test_incremental_restart_overlap_and_terminalization_are_append_only(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    """A recreated boundary resumes after committed events without rewriting them."""
+    harness = await bridge_harness()
+    created = await _create_and_post(harness, key="incremental-restart")
+    durable = await harness.store.get_existing("incremental-restart")
+    assert durable is not None
+
+    committed = await harness.store.append_events(
+        durable.bridge_session_id,
+        [
+            {"id": "provider-1", "type": "assistant.delta", "delta": "one"},
+            {"id": "provider-2", "type": "assistant.delta", "delta": "two"},
+        ],
+    )
+    original_identity = [(row.event_id, row.sequence) for row in committed]
+
+    restarted_store = OmnigentBridgeSessionStore(harness.store._session_factory)
+    appended = await restarted_store.append_events(
+        durable.bridge_session_id,
+        [
+            {"id": "provider-2", "type": "assistant.delta", "delta": "two"},
+            {
+                "id": "provider-3",
+                "type": "response.completed",
+                "normalizedStatus": "completed",
+            },
+        ],
+    )
+    terminal_page = await restarted_store.list_event_page(
+        durable.bridge_session_id, after=0, limit=100
+    )
+
+    assert [(row.event_id, row.sequence) for row in terminal_page.rows[:2]] == original_identity
+    assert len(appended) == 1
+    assert [row.sequence for row in terminal_page.rows] == [1, 2, 3]
+    assert terminal_page.rows[-1].normalized_status == "completed"
+
+
+async def test_pathological_resource_paths_fail_before_upstream_access(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness()
+    created = await harness.proxy.create_session(
+        request=_request(), binding=_binding("unsafe-resource-path")
+    )
+    calls_before = len(harness.running.server.route_calls)
+
+    for path in ("../secret", "/absolute", "src/%2e%2e/secret", "src\\..\\secret"):
+        with pytest.raises(OmnigentBridgeError):
+            await harness.proxy.get_resource(
+                "workspace_file", created["id"], path
+            )
+
+    assert len(harness.running.server.route_calls) == calls_before
+
+
+async def test_failure_evidence_surfaces_are_collectively_secret_free(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    """Scan durable/public-shaped evidence, not only the raised exception text."""
+    harness = await bridge_harness()
+    created = await harness.proxy.create_session(
+        request=_request(), binding=_binding("secret-scan")
+    )
+    durable = await harness.store.get_existing("secret-scan")
+    assert durable is not None
+    await harness.store.append_events(
+        durable.bridge_session_id,
+        [
+            {
+                "id": "secret-shaped-provider-frame",
+                "type": "diagnostic",
+                "metadata": {
+                    "authorization": "Bearer ghp_not-a-real-token",
+                    "cookie": "session=fake",
+                    "nested": {"password": "fake-password"},
+                },
+                "text": "token=fake-token",
+            }
+        ],
+    )
+    page = await harness.store.list_event_page(
+        durable.bridge_session_id, after=0, limit=100
+    )
+    refreshed = await harness.store.get_existing("secret-scan")
+
+    surfaces = {
+        "databaseEventMetadata": [row.metadata_ for row in page.rows],
+        "normalizedJournal": [
+            {
+                "eventId": row.event_id,
+                "textPreview": row.text_preview,
+                "artifactRef": row.artifact_ref,
+            }
+            for row in page.rows
+        ],
+        "diagnostics": refreshed.diagnostics_ref if refreshed else None,
+        "apiProjection": [
+            {"sequence": row.sequence, "status": row.normalized_status}
+            for row in page.rows
+        ],
+        "sseProjection": [row.event_type for row in page.rows],
+    }
+    serialized = str(surfaces)
+    for prohibited in ("ghp_", "Bearer ", "fake-password", "fake-token", "session=fake"):
+        assert prohibited not in serialized
