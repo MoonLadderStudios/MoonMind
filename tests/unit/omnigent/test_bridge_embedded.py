@@ -980,3 +980,87 @@ async def test_embedded_resource_rejects_traversal_before_runner_request(store) 
     )
     with pytest.raises(OmnigentBridgeError, match="traversal-unsafe"):
         await facade.get_resource("workspace_file", "sess-embedded", "../secret")
+
+
+@pytest.mark.asyncio
+async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> None:
+    """MoonLadderStudios/MoonMind#3421: discovery is durable and bounded."""
+    await _bind_active_host(store, host_id="host-codex")
+    await store.record_embedded_host_lifecycle(
+        host_id="host-codex",
+        credential_generation=1,
+        capabilities={"harnesses": ["codex-native"]},
+        readiness="ready",
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+
+    hosts = await facade.list_hosts()
+    agents = await facade.list_agents()
+
+    assert hosts == [
+        {
+            "id": "host-codex",
+            "status": "ready",
+            "ready": True,
+            "capabilities": {"harnesses": ["codex-native"]},
+            "disconnected": False,
+        }
+    ]
+    assert agents[0]["id"] == "codex-native"
+
+
+@pytest.mark.asyncio
+async def test_embedded_snapshot_attach_and_stream_survive_disconnect(store) -> None:
+    """MoonLadderStudios/MoonMind#3421: history does not require a live socket."""
+    await store.get_or_create(
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id="codex-native",
+        agent_name="Codex",
+        target_metadata={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        workflow_id="workflow-1",
+        agent_run_id="agent-run-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.record_session_created(
+        "idem-embedded",
+        session_id="sess-embedded",
+        agent_id="codex-native",
+        endpoint_ref="embedded",
+    )
+    await store.record_lifecycle_event(
+        "idem-embedded",
+        event_type="terminal",
+        status="completed",
+        event_identity="terminal-3421",
+        summary="done",
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    binding = BridgePrincipalBinding(
+        workflow_id="workflow-1",
+        correlation_id="mm:wf-embedded",
+        idempotency_key="idem-embedded",
+        agent_run_id="agent-run-1",
+    )
+
+    snapshot = await facade.get_session("sess-embedded")
+    attached = await facade.attach_session(
+        session_id="sess-embedded", binding=binding
+    )
+    replay = [event async for event in facade.stream_events("sess-embedded")]
+
+    assert snapshot["status"] == "completed"
+    assert (
+        attached["moonmind"]["bridgeSessionId"]
+        == snapshot["moonmind"]["bridgeSessionId"]
+    )
+    assert replay[-1]["type"] == "terminal"
+    assert replay[-1]["status"] == "completed"
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.delete_session("sess-embedded")
+    assert excinfo.value.code == "omnigent_bridge_capability_unavailable"

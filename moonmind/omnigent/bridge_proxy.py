@@ -24,7 +24,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, AsyncIterator, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,6 +122,27 @@ class BridgePrincipalBinding:
         """Return the durable AgentRun owner used by the bridge store."""
 
         return str(self.agent_run_id or "").strip() or self.correlation_id
+
+
+class OmnigentSessionFacade(Protocol):
+    """Mode-neutral public Session API contract for issue #3421."""
+
+    async def list_agents(self) -> list[dict[str, Any]]: ...
+    async def list_hosts(self) -> list[dict[str, Any]]: ...
+    async def create_session(
+        self, *, request: BridgeSessionCreateRequest, binding: BridgePrincipalBinding
+    ) -> dict[str, Any]: ...
+    async def get_session(self, session_id: str) -> dict[str, Any]: ...
+    async def get_session_owner(
+        self, session_id: str
+    ) -> BridgeSessionBinding | None: ...
+    async def attach_session(
+        self, *, session_id: str, binding: BridgePrincipalBinding
+    ) -> dict[str, Any]: ...
+    async def delete_session(self, session_id: str) -> dict[str, Any]: ...
+    def stream_events(
+        self, session_id: str, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]: ...
 
 
 def validate_bridge_host_fields(
