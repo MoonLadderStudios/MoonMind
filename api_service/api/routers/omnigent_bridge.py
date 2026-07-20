@@ -746,7 +746,12 @@ def _bridge_event_kind(event_type: str | None) -> str:
         "message.received",
     }:
         return "assistant_message"
-    if raw in {"response.completed", "completed", "stream.done"}:
+    if raw in {
+        "response.completed",
+        "completed",
+        "stream.done",
+        "session.item.turn.completed",
+    }:
         return "response_completed"
     if raw in {"response.failed", "failed"}:
         return "response_failed"

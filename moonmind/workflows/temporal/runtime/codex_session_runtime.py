@@ -187,6 +187,7 @@ class _RolloutLiveMirror:
     inside_active_turn: bool = False
     emitted_assistant_texts: set[str] = field(default_factory=set)
     emitted_live_keys: set[str] = field(default_factory=set)
+    observations: list[dict[str, Any]] = field(default_factory=list)
 
 class CodexSessionRuntimeState(BaseModel):
     """Persisted logical-to-vendor session mapping for one container session."""
@@ -209,6 +210,9 @@ class CodexSessionRuntimeState(BaseModel):
     last_turn_error: str | None = Field(None, alias="lastTurnError")
     last_failure_class: str | None = Field(None, alias="lastFailureClass")
     last_disposition: str | None = Field(None, alias="lastDisposition")
+    observability_events: list[dict[str, Any]] = Field(
+        default_factory=list, alias="observabilityEvents"
+    )
 
 class CodexAppServerRpcClient:
     """Minimal JSON-RPC stdio client for ``codex app-server``."""
@@ -869,6 +873,8 @@ class CodexManagedSessionRuntime:
             merged.setdefault("failureClass", state.last_failure_class)
         if state.last_disposition:
             merged.setdefault("disposition", state.last_disposition)
+        if state.observability_events:
+            merged.setdefault("observabilityEvents", state.observability_events)
         return CodexManagedSessionHandle(
             sessionState=self._session_state(state),
             status=status,
@@ -1465,6 +1471,22 @@ class CodexManagedSessionRuntime:
                             mirror.offset = handle.tell()
                             continue
                         mirror.emitted_assistant_texts.add(normalized_text)
+                    if belongs_to_active_turn:
+                        observation_kind = {
+                            "assistant": "assistant_message_completed",
+                            "tool_call": "tool_call_started",
+                            "tool_output": "tool_call_output",
+                            "task_complete": "turn_completed",
+                        }.get(label)
+                        if observation_kind:
+                            mirror.observations.append(
+                                {
+                                    "kind": observation_kind,
+                                    "turnId": vendor_turn_id,
+                                    "text": text.strip(),
+                                    "metadata": {"sourceEventId": live_key},
+                                }
+                            )
                     updates.append((stream_name, text))
                     if event_type == "task_complete" and belongs_to_active_turn:
                         mirror.inside_active_turn = False
@@ -1477,6 +1499,9 @@ class CodexManagedSessionRuntime:
                     )
                     if stream_text:
                         self._append_spool(stream_name, stream_text)
+                if mirror.observations:
+                    state.observability_events = mirror.observations[-100:]
+                    self._save_state(state)
         except OSError:
             return
 
@@ -2903,6 +2928,13 @@ class CodexManagedSessionRuntime:
         state.last_turn_id = vendor_turn_id
         state.last_turn_status = "running"
         state.last_turn_error = None
+        state.observability_events = [
+            {
+                "kind": "turn_started",
+                "turnId": vendor_turn_id,
+                "metadata": {"sourceEventId": f"{vendor_turn_id}:started"},
+            }
+        ]
         state.last_control_action = "send_turn"
         state.last_control_at = time.time()
         rollout_mirror.turn_started_at = state.last_control_at
@@ -3055,6 +3087,21 @@ class CodexManagedSessionRuntime:
                 )
         if disposition:
             metadata["disposition"] = disposition
+        terminal_observations = list(rollout_mirror.observations)
+        if status == "completed":
+            terminal_observations.append(
+                {
+                    "kind": "turn_completed",
+                    "turnId": vendor_turn_id,
+                    "metadata": {
+                        "sourceEventId": f"{vendor_turn_id}:turn_completed",
+                        "status": status,
+                    },
+                }
+            )
+        if terminal_observations:
+            metadata["observabilityEvents"] = terminal_observations[-100:]
+            state.observability_events = terminal_observations[-100:]
         self._finalize_turn(
             state=state,
             turn_id=vendor_turn_id,

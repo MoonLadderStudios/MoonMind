@@ -147,6 +147,28 @@ describe('chat session observability projection for MM-1013', () => {
     });
   });
 
+  it('projects direct-compat and Omnigent bridge journeys through the same chat path', () => {
+    const journey = (source: 'codex_direct_compat' | 'omnigent') => [
+      row(1, 'assistant_message_delta', 'working', { source, responseId: 'response-1' }),
+      row(2, 'tool_call_started', 'Running tests', { source, callId: 'tool-1', toolName: 'pytest' }),
+      row(3, 'tool_call_completed', 'passed', { source, callId: 'tool-1' }),
+      row(4, 'approval_requested', 'Approval required.', { source, requestId: 'approval-1' }),
+      row(5, 'resource_available', 'Summary published.', { source, artifactRef: 'artifact://summary/1' }),
+      row(6, 'assistant_message_completed', 'working', { source, responseId: 'response-1' }),
+      row(7, 'turn_completed', 'Complete.', { source, responseId: 'response-1' }),
+    ];
+
+    const direct = projectChatSessionBlocks(journey('codex_direct_compat'));
+    const omnigent = projectChatSessionBlocks(journey('omnigent'));
+
+    expect(direct.blocks.map(({ kind, text }) => ({ kind, text }))).toEqual(
+      omnigent.blocks.map(({ kind, text }) => ({ kind, text })),
+    );
+    expect(direct.blocks.map((block) => block.kind)).toEqual([
+      'assistant', 'tool', 'approval', 'system', 'status',
+    ]);
+  });
+
   it('pairs tool calls and results by callId and ignores duplicate call/result rows', () => {
     const state = projectChatSessionBlocks([
       row(1, 'tool_call_started', 'Running pytest', { responseId: 'resp-1', callId: 'call-1', toolName: 'pytest' }),

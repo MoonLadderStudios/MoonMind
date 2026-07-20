@@ -1270,6 +1270,9 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
     request_id: NonBlankStr | None = Field(None, alias="requestId")
+    bridge_publication: dict[str, Any] | None = Field(
+        None, alias="bridgePublication"
+    )
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Provide follow-up steering to an in-flight turn."""
