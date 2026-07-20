@@ -2284,3 +2284,14 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     }
     assert normalized_events[-1]["type"] == "response.completed"
     assert normalized_events[-1]["normalizedStatus"] == "completed"
+
+    # Scan the actual durable artifact bodies emitted by the execution, rather
+    # than reconstructed projections. This includes the raw and normalized
+    # journals, diagnostics, manifest, snapshots, and external-state evidence.
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(tmp_path.rglob("*"))
+        if path.is_file()
+    )
+    assert "sk-should-not-persist" not in persisted
+    assert "[REDACTED]" in persisted

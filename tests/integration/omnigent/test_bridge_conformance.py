@@ -560,6 +560,25 @@ async def test_pathological_resource_paths_fail_before_upstream_access(
     assert len(harness.running.server.route_calls) == calls_before
 
 
+async def test_deleted_provider_binding_cannot_be_reused_or_reach_upstream(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    """Deletion clears durable ownership before later ID-bearing requests."""
+    harness = await bridge_harness()
+    created = await _create_and_post(harness, key="deleted-binding")
+
+    await harness.proxy.delete_session(created["id"])
+    deleted = await harness.store.get_existing("deleted-binding")
+    calls_after_delete = len(harness.running.server.route_calls)
+
+    assert deleted is not None
+    assert deleted.omnigent_session_id is None
+    assert await harness.proxy.get_session_owner(created["id"]) is None
+    # The owner lookup is entirely durable and must not enumerate the deleted
+    # provider ID by consulting the fake upstream.
+    assert len(harness.running.server.route_calls) == calls_after_delete
+
+
 async def test_failure_evidence_surfaces_are_collectively_secret_free(
     bridge_harness: Callable[..., Awaitable[BridgeHarness]],
 ) -> None:
