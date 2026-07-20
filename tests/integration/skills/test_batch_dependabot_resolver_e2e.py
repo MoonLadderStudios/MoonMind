@@ -84,7 +84,7 @@ def _mixed_pr_set() -> list[dict[str, Any]]:
         },
         {  # second genuine Dependabot match (npm)
             "number": 5,
-            "title": "Bump eslint from 8.0.0 to 9.0.0",
+            "title": "Chore(deps): bump eslint from 8.0.0 to 9.0.0",
             "author": {"login": "dependabot[bot]"},
             "headRefName": "dependabot/npm_and_yarn/eslint-9.0.0",
             "headRefOid": "sha-5",
@@ -145,6 +145,7 @@ def _run_main(
     tmp_path: Path,
     *,
     extra_env: dict[str, str] | None = None,
+    pr_set: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     _FakeAsyncClient.submissions = []
     _FakeAsyncClient.workflow_ids = set()
@@ -163,13 +164,17 @@ def _run_main(
         "MOONMIND_AGENT_RUN_ID",
         "MOONMIND_RUN_ID",
         "AGENT_RUN_ID",
+        "MOONMIND_STEP_EXECUTION_ID",
     ):
         monkeypatch.delenv(env_key, raising=False)
     for key, value in (extra_env or {}).items():
         monkeypatch.setenv(key, value)
 
     completed = subprocess.CompletedProcess(
-        args=["gh"], returncode=0, stdout=json.dumps(_mixed_pr_set()), stderr=""
+        args=["gh"],
+        returncode=0,
+        stdout=json.dumps(_mixed_pr_set() if pr_set is None else pr_set),
+        stderr="",
     )
 
     artifacts_dir = tmp_path / "artifacts"
@@ -198,6 +203,7 @@ def test_end_to_end_mixed_pr_set(monkeypatch: Any, tmp_path: Path) -> None:
     assert summary["requested"] == 5
     assert summary["matched"] == 2
     assert summary["created"] == 2
+    assert summary["status"] == "queued"
     assert sorted(item["pr"] for item in summary["queued"]) == [1, 5]
     reasons = {entry["pr"]: entry["reason"] for entry in summary["skipped"]}
     assert reasons == {2: "fork-pr", 3: "not-dependabot-author", 4: "title-mismatch"}
@@ -251,6 +257,7 @@ def test_end_to_end_inherits_runtime_selection_from_parent_context(
             "MOONMIND_TASK_CONTEXT_PATH": str(task_context_path),
             "MOONMIND_TASK_WORKFLOW_ID": "mm:parent-workflow",
             "MOONMIND_AGENT_RUN_ID": "agent-run-1",
+            "MOONMIND_STEP_EXECUTION_ID": "step:batch-dependabot",
         },
     )
 
@@ -259,7 +266,14 @@ def test_end_to_end_inherits_runtime_selection_from_parent_context(
         "model": "gpt-5.3-codex-spark",
         "effort": "xhigh",
         "executionProfileRef": "codex-profile",
+        "inheritance": "caller",
     }
+    assert summary["schemaVersion"] == (
+        "moonmind.batch-dependabot-resolver-result.v1"
+    )
+    assert summary["contractId"] == "batch_dependabot_resolver_fanout.v1"
+    assert summary["executionRef"] == "step:batch-dependabot"
+    assert summary["status"] == "queued"
     assert summary["created"] == 1
     assert len(_FakeAsyncClient.submissions) == 1
 
@@ -284,6 +298,7 @@ def test_end_to_end_dry_run_submits_nothing(monkeypatch: Any, tmp_path: Path) ->
     )
 
     assert summary["dryRun"] is True
+    assert summary["status"] == "dry_run"
     assert summary["created"] == 0
     assert summary["queued"] == []
     assert sorted(item["pr"] for item in summary["wouldQueue"]) == [1, 5]
@@ -291,6 +306,66 @@ def test_end_to_end_dry_run_submits_nothing(monkeypatch: Any, tmp_path: Path) ->
     assert summary["_exit_code"] == 0
     # No no-op signal on a dry run even though created==0.
     assert not (tmp_path / "artifacts" / "skill_outcome.json").exists()
+
+
+def test_end_to_end_fails_when_default_title_contract_drifts(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    drifted_pr = {
+        **_mixed_pr_set()[0],
+        "number": 9,
+        "title": "Deps: bump anthropic from 0.105.2 to 0.107.1",
+    }
+    summary = _run_main(
+        module,
+        ["--repo", "MoonLadderStudios/MoonMind"],
+        monkeypatch,
+        tmp_path,
+        pr_set=[drifted_pr],
+    )
+
+    assert summary["_exit_code"] == 1
+    assert summary["matched"] == 0
+    assert summary["status"] == "failed"
+    assert summary["failureCode"] == "DEPENDABOT_TITLE_CONTRACT_DRIFT"
+    assert summary["diagnostics"]["titleContractDriftPrs"] == [9]
+    outcome = json.loads(
+        (tmp_path / "artifacts" / "skill_outcome.json").read_text()
+    )
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "dependabot_title_contract_drift"
+
+
+def test_end_to_end_dry_run_fails_when_default_title_contract_drifts(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    drifted_pr = {
+        **_mixed_pr_set()[0],
+        "number": 9,
+        "title": "Deps: bump anthropic from 0.105.2 to 0.107.1",
+    }
+    summary = _run_main(
+        module,
+        ["--repo", "MoonLadderStudios/MoonMind", "--dry-run"],
+        monkeypatch,
+        tmp_path,
+        pr_set=[drifted_pr],
+    )
+
+    assert summary["_exit_code"] == 1
+    assert summary["dryRun"] is True
+    assert summary["status"] == "failed"
+    assert summary["failureCode"] == "DEPENDABOT_TITLE_CONTRACT_DRIFT"
+    assert summary["diagnostics"]["titleContractDriftPrs"] == [9]
+    outcome = json.loads(
+        (tmp_path / "artifacts" / "skill_outcome.json").read_text()
+    )
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "dependabot_title_contract_drift"
 
 
 def test_end_to_end_package_manager_filter(monkeypatch: Any, tmp_path: Path) -> None:

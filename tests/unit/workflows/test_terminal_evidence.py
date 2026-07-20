@@ -90,6 +90,128 @@ def test_batch_terminal_reads_result_from_artifact_spool(tmp_path: Path) -> None
     assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]
 
 
+def _dependabot_contract(execution_ref: str = "step:dependabot") -> dict[str, str]:
+    return {
+        "contractId": "batch_dependabot_resolver_fanout.v1",
+        "relativePath": "artifacts/batch_dependabot_resolver_result.json",
+        "expectedSchemaVersion": "moonmind.batch-dependabot-resolver-result.v1",
+        "executionRef": execution_ref,
+    }
+
+
+def _write_dependabot_result(
+    workspace: Path,
+    *,
+    status: str,
+    requested: int,
+    queued: list[dict],
+    skipped: list[dict] | None = None,
+    errors: list[dict] | None = None,
+    would_queue: list[dict] | None = None,
+    failure_code: str | None = None,
+    dry_run: bool | None = None,
+) -> None:
+    artifacts = workspace / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schemaVersion": "moonmind.batch-dependabot-resolver-result.v1",
+        "contractId": "batch_dependabot_resolver_fanout.v1",
+        "executionRef": "step:dependabot",
+        "status": status,
+        "failureCode": failure_code,
+        "dryRun": status == "dry_run" if dry_run is None else dry_run,
+        "requested": requested,
+        "created": len(queued),
+        "queued": queued,
+        "wouldQueue": would_queue or [],
+        "skipped": skipped or [],
+        "errors": errors or [],
+    }
+    (artifacts / "batch_dependabot_resolver_result.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+
+def test_batch_dependabot_terminal_accepts_queued_and_no_op_results(
+    tmp_path: Path,
+) -> None:
+    queued = [{"pr": 1, "workflowId": "mm:child-1"}]
+    skipped = [{"pr": 2, "reason": "not-dependabot-author"}]
+    _write_dependabot_result(
+        tmp_path,
+        status="queued",
+        requested=2,
+        queued=queued,
+        skipped=skipped,
+    )
+    queued_result = evaluate_terminal_evidence(
+        _dependabot_contract(), workspace_path=str(tmp_path)
+    )
+    assert queued_result.satisfied is True
+    assert queued_result.metadata["queuedChildren"] == queued
+
+    _write_dependabot_result(
+        tmp_path,
+        status="no_op",
+        requested=1,
+        queued=[],
+        skipped=skipped,
+    )
+    no_op_result = evaluate_terminal_evidence(
+        _dependabot_contract(), workspace_path=str(tmp_path)
+    )
+    assert no_op_result.satisfied is True
+
+
+def test_batch_dependabot_terminal_accepts_dry_run(tmp_path: Path) -> None:
+    _write_dependabot_result(
+        tmp_path,
+        status="dry_run",
+        requested=1,
+        queued=[],
+        would_queue=[{"pr": 1, "idempotencyKey": "key"}],
+    )
+    result = evaluate_terminal_evidence(
+        _dependabot_contract(), workspace_path=str(tmp_path)
+    )
+    assert result.satisfied is True
+
+
+def test_batch_dependabot_terminal_rejects_drift_stale_and_bad_accounting(
+    tmp_path: Path,
+) -> None:
+    skipped = [{"pr": 1, "reason": "title-mismatch"}]
+    _write_dependabot_result(
+        tmp_path,
+        status="failed",
+        requested=1,
+        queued=[],
+        skipped=skipped,
+        failure_code="DEPENDABOT_TITLE_CONTRACT_DRIFT",
+        dry_run=True,
+    )
+    drift = evaluate_terminal_evidence(
+        _dependabot_contract(), workspace_path=str(tmp_path)
+    )
+    assert drift.failure_code == "DEPENDABOT_TITLE_CONTRACT_DRIFT"
+
+    stale = evaluate_terminal_evidence(
+        _dependabot_contract("other-step"), workspace_path=str(tmp_path)
+    )
+    assert stale.failure_code == "STALE_TERMINAL_EVIDENCE"
+
+    _write_dependabot_result(
+        tmp_path,
+        status="queued",
+        requested=2,
+        queued=[{"pr": 1, "workflowId": "mm:child-1"}],
+    )
+    invalid = evaluate_terminal_evidence(
+        _dependabot_contract(), workspace_path=str(tmp_path)
+    )
+    assert invalid.failure_code == "INVALID_TERMINAL_EVIDENCE"
+
+
 def test_pr_resolver_terminal_requires_result_and_publish_evidence(tmp_path: Path) -> None:
     contract = {
         "contractId": "pr_resolver_terminal.v1",
