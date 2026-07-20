@@ -10403,15 +10403,22 @@ class TemporalAgentRuntimeActivities:
         ) -> None:
             if not bridge_publication or not observations:
                 return
-            await self.agent_runtime_publish_bridge_events(
-                {
-                    **bridge_publication,
-                    "locator": locator.model_dump(mode="json", by_alias=True),
-                    "turnId": turn_id,
-                    "observations": observations,
-                    "phase": "active",
-                }
-            )
+            try:
+                await self.agent_runtime_publish_bridge_events(
+                    {
+                        **bridge_publication,
+                        "locator": locator.model_dump(mode="json", by_alias=True),
+                        "turnId": turn_id,
+                        "observations": observations,
+                        "phase": "active",
+                    }
+                )
+            except Exception:
+                logger.warning(
+                    "Active managed-session bridge publication failed; "
+                    "continuing the already-started turn",
+                    exc_info=True,
+                )
 
         send_turn_call = (
             controller.send_turn(
@@ -10869,7 +10876,19 @@ class TemporalAgentRuntimeActivities:
                         "artifactRef": observation.get("auditRef"),
                     }
                 )
-        if assistant_text:
+        existing_events = await store.list_events(row.bridge_session_id)
+        active_assistant_output_published = any(
+            event.event_type in {"response.output", "response.output.completed"}
+            and str(
+                (getattr(event, "metadata_", {}) or {})
+                .get("moonmind", {})
+                .get("turnId")
+                or ""
+            )
+            == turn_response.turn_id
+            for event in existing_events
+        )
+        if assistant_text and not active_assistant_output_published:
             event_payloads.append(
                 {
                     "type": "response.output",
@@ -10974,7 +10993,9 @@ class TemporalAgentRuntimeActivities:
             ]
             comparison_events = [
                 event for event in durable_events
-                if event_source(event) != "codex_direct_compat"
+                if event_source(event)
+                and event_source(event) != "codex_direct_compat"
+                and not str(event.event_type).startswith("lifecycle.")
             ]
             comparison = self._compare_bridge_event_streams(
                 direct_events=direct_events,
@@ -11047,7 +11068,7 @@ class TemporalAgentRuntimeActivities:
         dropped_count = sum(max(expected.count(value) - actual.count(value), 0) for value in set(expected))
         duplicate_count = sum(max(actual.count(value) - expected.count(value), 0) for value in set(actual))
         reordered = bool(expected and actual and expected != actual and sorted(expected) == sorted(actual))
-        semantic_fields = ("status", "artifact_ref", "text_preview")
+        semantic_fields = ("normalized_status", "artifact_ref", "text_preview")
         semantic_mismatch_count = sum(
             1
             for direct, comparison in zip(direct_events, comparison_events)
@@ -11102,7 +11123,7 @@ class TemporalAgentRuntimeActivities:
             "turn_canceled": "session.item.terminal.canceled",
             "turn_timed_out": "session.item.terminal.timed_out",
             "turn_started": "session.item.turn_started",
-            "turn_completed": "session.item.turn_completed",
+            "turn_completed": "session.item.turn.completed",
             "turn_failed": "session.item.turn_failed",
             "reset_boundary_published": "session.item.reset_boundary",
             "summary_published": "session.item.resource_published",
@@ -11168,6 +11189,7 @@ class TemporalAgentRuntimeActivities:
                 "status": "running",
                 "eventId": source_event_id,
                 "data": data,
+                "metadata": metadata,
             }
             text = str(raw.get("text") or "").strip()
             if text:
@@ -11270,6 +11292,21 @@ class TemporalAgentRuntimeActivities:
                         None,
                     ),
                     "sourceOutcome": source_data.get("outcome"),
+                }
+            )
+            event["metadata"].update(
+                {
+                    key: value
+                    for key, value in source_data.items()
+                    if key
+                    not in {
+                        "source",
+                        "compatibilityProfile",
+                        "directManagedSessionId",
+                        "sessionEpoch",
+                        "turnId",
+                        "sourceEventId",
+                    }
                 }
             )
             key = identity(event)

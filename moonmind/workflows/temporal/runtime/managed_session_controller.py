@@ -2600,17 +2600,27 @@ class DockerCodexManagedSessionController:
                     continue
                 item = dict(value)
                 item_metadata = item.get("metadata")
+                metadata_mapping = (
+                    item_metadata if isinstance(item_metadata, Mapping) else {}
+                )
                 source_id = ""
-                if isinstance(item_metadata, Mapping):
+                if metadata_mapping:
                     source_id = str(
-                        item_metadata.get("sourceEventId")
-                        or item_metadata.get("idempotencyKey")
+                        metadata_mapping.get("sourceEventId")
+                        or metadata_mapping.get("idempotencyKey")
                         or ""
                     ).strip()
-                if source_id and source_id in seen_source_ids:
+                event_state = str(
+                    item.get("kind")
+                    or item.get("type")
+                    or metadata_mapping.get("outcome")
+                    or ""
+                ).strip()
+                dedupe_id = f"{source_id}:{event_state}" if source_id else ""
+                if dedupe_id and dedupe_id in seen_source_ids:
                     continue
-                if source_id:
-                    seen_source_ids.add(source_id)
+                if dedupe_id:
+                    seen_source_ids.add(dedupe_id)
                 combined.append(item)
         return combined
 
@@ -3432,6 +3442,14 @@ class DockerCodexManagedSessionController:
             if recovered is None:
                 raise
             response = self._with_runtime_family(recovered, request)
+
+        initial_observations = response.metadata.get("observabilityEvents")
+        if observation_sink is not None and isinstance(initial_observations, list):
+            await observation_sink(
+                initial_observations,
+                response.turn_id,
+                self._locator_from_session_state(response.session_state),
+            )
 
         terminal_response = response
         if response.status in {"accepted", "running"}:

@@ -7335,6 +7335,10 @@ def test_active_session_observations_merges_authoritative_intervention_journal()
                 {"kind": "intervention_completed", "metadata": authority},
             ],
             "interventionJournal": [
+                {
+                    "kind": "intervention_accepted",
+                    "metadata": {**authority, "outcome": "accepted"},
+                },
                 {"kind": "intervention_completed", "metadata": authority},
                 {
                     "kind": "approval_requested",
@@ -7347,6 +7351,7 @@ def test_active_session_observations_merges_authoritative_intervention_journal()
     assert [item["kind"] for item in observations] == [
         "tool_call_started",
         "intervention_completed",
+        "intervention_accepted",
         "approval_requested",
     ]
     assert observations[-1]["metadata"]["auditRef"] == "artifact://interventions/request-1"

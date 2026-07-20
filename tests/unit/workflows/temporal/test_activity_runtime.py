@@ -338,6 +338,7 @@ def test_direct_codex_active_observations_cover_lifecycle_and_intervention_outco
 
     events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
         observations=[
+            {"kind": "turn_completed", "metadata": {"sourceEventId": "done-1"}},
             {"kind": "intervention_delivery_unknown", "metadata": authority},
             {"kind": "turn_canceled", "metadata": {"sourceEventId": "cancel-1"}},
             {"kind": "turn_timed_out", "metadata": {"sourceEventId": "timeout-1"}},
@@ -359,14 +360,16 @@ def test_direct_codex_active_observations_cover_lifecycle_and_intervention_outco
     )
 
     assert [event["type"] for event in events] == [
+        "session.item.turn.completed",
         "session.item.control.delivery_unknown",
         "session.item.terminal.canceled",
         "session.item.terminal.timed_out",
         "session.item.resource_published",
         "session.item.cleanup.failed",
     ]
-    assert events[0]["artifactRef"] == "artifact://audit/control-1"
-    assert events[3]["artifactRef"] == "artifact://continuity/1"
+    assert events[1]["artifactRef"] == "artifact://audit/control-1"
+    assert events[4]["artifactRef"] == "artifact://continuity/1"
+    assert events[1]["metadata"]["actorId"] == "operator-1"
 
 
 def test_direct_codex_active_intervention_rejects_wrong_turn_authority() -> None:
@@ -404,7 +407,12 @@ def test_direct_codex_active_intervention_rejects_wrong_turn_authority() -> None
 
 def test_direct_codex_dual_write_compares_independently_persisted_streams() -> None:
     def event(kind: str, *, status: str = "running", artifact: str | None = None, text: str | None = None) -> Any:
-        return SimpleNamespace(event_type=kind, status=status, artifact_ref=artifact, text_preview=text)
+        return SimpleNamespace(
+            event_type=kind,
+            normalized_status=status,
+            artifact_ref=artifact,
+            text_preview=text,
+        )
 
     reference = [
         event("response.output", text="answer"),
