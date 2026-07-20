@@ -80,16 +80,6 @@ inputSchema:
 uiSchema:
   titleRegex:
     widget: textarea
-defaults:
-  state: open
-  mergeMethod: squash
-  maxIterations: 5
-  maxAttempts: 3
-  priority: 0
-  packageManagers: []
-  titleRegex: '^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$'
-  includeSecurityUpdates: true
-  dryRun: false
 ---
 
 # Batch Dependabot Resolver Skill

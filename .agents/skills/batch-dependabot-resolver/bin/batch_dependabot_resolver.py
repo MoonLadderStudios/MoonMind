@@ -906,9 +906,12 @@ def _would_queue_records(queue_requests: list[JobSubmission]) -> list[dict[str, 
 
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    temporary = path.with_name(f".{path.name}.{os.urandom(6).hex()}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_run_artifacts(artifacts_dir: Path, payload: dict[str, Any]) -> None:
@@ -1093,14 +1096,14 @@ async def main(argv: list[str] | None = None) -> int:
         and item.get("likelyVersionBump") is True
     ]
     failure_code: str | None = None
-    if args.dry_run:
-        status = "dry_run"
-    elif errors:
+    if errors:
         status = "partial_failure" if created else "failed"
         failure_code = "CHILD_WORKFLOW_QUEUE_FAILED"
     elif title_contract_drift_prs:
         status = "partial_failure" if created else "failed"
         failure_code = "DEPENDABOT_TITLE_CONTRACT_DRIFT"
+    elif args.dry_run:
+        status = "dry_run"
     elif created:
         status = "queued"
     else:

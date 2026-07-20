@@ -4,6 +4,7 @@ from pathlib import Path
 
 from moonmind.capabilities.input_contracts import (
     parse_skill_capability_input_contract,
+    validate_capability_inputs,
 )
 
 
@@ -27,6 +28,8 @@ def test_batch_dependabot_resolver_exposes_structured_inputs() -> None:
     assert contract["inputSchema"]["properties"]["titleRegex"]["default"] == (
         r"^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$"
     )
-    assert contract["defaults"]["mergeMethod"] == "squash"
-    assert contract["defaults"]["dryRun"] is False
+    assert contract["defaults"] == {}
+    validated = validate_capability_inputs(contract=contract, values={})
+    assert validated["values"]["mergeMethod"] == "squash"
+    assert validated["values"]["dryRun"] is False
     assert contract["diagnostics"] == []

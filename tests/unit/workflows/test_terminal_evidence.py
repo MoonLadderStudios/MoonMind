@@ -109,6 +109,7 @@ def _write_dependabot_result(
     errors: list[dict] | None = None,
     would_queue: list[dict] | None = None,
     failure_code: str | None = None,
+    dry_run: bool | None = None,
 ) -> None:
     artifacts = workspace / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -118,7 +119,7 @@ def _write_dependabot_result(
         "executionRef": "step:dependabot",
         "status": status,
         "failureCode": failure_code,
-        "dryRun": status == "dry_run",
+        "dryRun": status == "dry_run" if dry_run is None else dry_run,
         "requested": requested,
         "created": len(queued),
         "queued": queued,
@@ -187,6 +188,7 @@ def test_batch_dependabot_terminal_rejects_drift_stale_and_bad_accounting(
         queued=[],
         skipped=skipped,
         failure_code="DEPENDABOT_TITLE_CONTRACT_DRIFT",
+        dry_run=True,
     )
     drift = evaluate_terminal_evidence(
         _dependabot_contract(), workspace_path=str(tmp_path)

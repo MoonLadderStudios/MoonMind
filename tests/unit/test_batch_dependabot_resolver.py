@@ -519,6 +519,35 @@ def test_would_queue_records_carry_idempotency_keys() -> None:
     assert records[0]["idempotencyKey"].startswith("batch-dependabot-resolver:")
 
 
+def test_write_artifacts_uses_unique_temporary_names(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    entropy = iter([b"first1", b"second"])
+    temporary_names: list[str] = []
+    original_replace = module["os"].replace
+
+    monkeypatch.setattr(module["os"], "urandom", lambda _size: next(entropy))
+
+    def capture_replace(source: str | Path, destination: str | Path) -> None:
+        temporary_names.append(Path(source).name)
+        original_replace(source, destination)
+
+    monkeypatch.setattr(module["os"], "replace", capture_replace)
+    result_path = tmp_path / "result.json"
+
+    module["_write_artifacts"](result_path, {"attempt": 1})
+    module["_write_artifacts"](result_path, {"attempt": 2})
+
+    assert temporary_names == [
+        ".result.json.666972737431.tmp",
+        ".result.json.7365636f6e64.tmp",
+    ]
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"attempt": 2}
+    assert list(tmp_path.glob(".result.json.*.tmp")) == []
+
+
 def test_write_run_artifacts_emits_no_op_on_zero_match(tmp_path: Path) -> None:
     module = _load_module()
     payload = {

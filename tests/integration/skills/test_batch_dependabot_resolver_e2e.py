@@ -338,6 +338,36 @@ def test_end_to_end_fails_when_default_title_contract_drifts(
     assert outcome["reason"] == "dependabot_title_contract_drift"
 
 
+def test_end_to_end_dry_run_fails_when_default_title_contract_drifts(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    drifted_pr = {
+        **_mixed_pr_set()[0],
+        "number": 9,
+        "title": "Deps: bump anthropic from 0.105.2 to 0.107.1",
+    }
+    summary = _run_main(
+        module,
+        ["--repo", "MoonLadderStudios/MoonMind", "--dry-run"],
+        monkeypatch,
+        tmp_path,
+        pr_set=[drifted_pr],
+    )
+
+    assert summary["_exit_code"] == 1
+    assert summary["dryRun"] is True
+    assert summary["status"] == "failed"
+    assert summary["failureCode"] == "DEPENDABOT_TITLE_CONTRACT_DRIFT"
+    assert summary["diagnostics"]["titleContractDriftPrs"] == [9]
+    outcome = json.loads(
+        (tmp_path / "artifacts" / "skill_outcome.json").read_text()
+    )
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "dependabot_title_contract_drift"
+
+
 def test_end_to_end_package_manager_filter(monkeypatch: Any, tmp_path: Path) -> None:
     module = _load_module()
     summary = _run_main(
