@@ -475,6 +475,10 @@ resume_skill_resolution_worker() {
   if [[ "$SKILL_RESOLUTION_BARRIER_ACTIVE" != "true" ]]; then
     return
   fi
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+    warn "Cannot restart removed Skill resolution service $SKILL_RESOLUTION_SERVICE; normal Compose reconciliation must start its replacement."
+    return
+  fi
   warn "Update exited while the Skill resolution barrier was active; restarting $SKILL_RESOLUTION_SERVICE."
   "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE" || true
 }
@@ -491,19 +495,12 @@ if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
   run_cmd "${COMPOSE_CMD[@]}" stop "$SKILL_RESOLUTION_SERVICE"
 fi
 
-say "Checking out local branch '$BRANCH' tracking origin/$BRANCH"
-run_cmd git checkout -B "$BRANCH" "origin/$BRANCH"
-
-say "Pulling latest git changes"
-run_cmd git pull --ff-only origin "$BRANCH"
+say "Checking out local branch '$BRANCH' at fetched commit $REMOTE_COMMIT"
+run_cmd git checkout -B "$BRANCH" "$REMOTE_COMMIT"
 
 POST_PULL_COMMIT="$(git rev-parse HEAD)"
-
-if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
-  say "Recreating $SKILL_RESOLUTION_SERVICE with coherent Skill resolver and catalog source"
-  run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE"
-  SKILL_RESOLUTION_BARRIER_ACTIVE="false"
-  trap - EXIT
+if [[ "$POST_PULL_COMMIT" != "$REMOTE_COMMIT" ]]; then
+  die "Checked-out commit $POST_PULL_COMMIT does not match fetched commit $REMOTE_COMMIT."
 fi
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
@@ -520,6 +517,17 @@ if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
       die "Command failed with exit code $compose_pull_exit: ${COMPOSE_CMD[*]} pull"
     fi
   fi
+fi
+
+if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+  if "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+    say "Recreating $SKILL_RESOLUTION_SERVICE with coherent Skill resolver, catalog, and image source"
+    run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE"
+  else
+    say "Skill resolution service $SKILL_RESOLUTION_SERVICE was removed by the update; normal Compose reconciliation will start the replacement topology"
+  fi
+  SKILL_RESOLUTION_BARRIER_ACTIVE="false"
+  trap - EXIT
 fi
 
 if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
