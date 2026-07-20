@@ -187,7 +187,9 @@ def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
     services = compose["services"]
     initializer = services["omnigent-tools-init"]
     tool_manifest = json.loads(
-        Path("services/omnigent/tools/manifest.lock.json").read_text(encoding="utf-8")
+        (REPO_ROOT / "services/omnigent/tools/manifest.lock.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     configured_version = initializer["environment"]["MOONMIND_GH_VERSION"]

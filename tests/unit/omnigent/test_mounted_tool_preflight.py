@@ -20,7 +20,7 @@ def test_digest_probe_executes_against_mounted_executable(tmp_path: Path) -> Non
     executable.parent.mkdir()
     executable.write_bytes(b"pinned gh executable fixture")
     trusted_digest = hashlib.sha256(executable.read_bytes()).hexdigest()
-    command = _digest_check_command(str(executable), {trusted_digest})
+    command = _digest_check_command(str(executable), [trusted_digest])
 
     assert subprocess.run(["bash", "-lc", command], check=False).returncode == 0
 

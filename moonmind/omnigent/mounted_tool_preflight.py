@@ -64,7 +64,7 @@ def _trusted_gh_digest_checks() -> str:
     tool = next(item for item in manifest["tools"] if item["name"] == "gh")
     digests = {item["executableSha256"] for item in tool["platforms"].values()}
     executable = f'/opt/moonmind-tools/{tool["path"]}'
-    return _digest_check_command(executable, digests)
+    return _digest_check_command(executable, sorted(digests))
 
 
 def _digest_check_command(executable: str, digests: Sequence[str]) -> str:
