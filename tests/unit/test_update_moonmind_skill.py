@@ -82,6 +82,7 @@ def _run_update_scenario(
     _run_git("push", "-u", "origin", "main", cwd=seed)
     _run_git("symbolic-ref", "HEAD", "refs/heads/main", cwd=remote)
     _run_git("clone", str(remote), str(checkout), cwd=tmp_path)
+    initial_head = _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
 
     source_file.write_text("VERSION = 2\n", encoding="utf-8")
     _run_git("add", changed_file, cwd=seed)
@@ -91,8 +92,7 @@ def _run_update_scenario(
 
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
-    fake_docker.write_text(
-        """#!/usr/bin/env bash
+    fake_docker_script = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 
@@ -109,16 +109,16 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   "config --services")
-    if [[ "${REMOVE_AGENT_RUNTIME_AFTER_UPDATE:-false}" == "true" ]] \
-      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" == "$UPDATE_EXPECTED_HEAD" ]]; then
+    if [[ "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__" == "true" ]] \
+      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" != "$UPDATE_INITIAL_HEAD" ]]; then
       printf '%s\\n' api postgres temporal-worker-deployment-control temporal-worker-workflow
     else
       printf '%s\\n' api postgres temporal-worker-agent-runtime temporal-worker-deployment-control temporal-worker-workflow
     fi
     ;;
   "config --format")
-    if [[ "${REMOVE_AGENT_RUNTIME_AFTER_UPDATE:-false}" == "true" ]] \
-      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" == "$UPDATE_EXPECTED_HEAD" ]]; then
+    if [[ "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__" == "true" ]] \
+      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" != "$UPDATE_INITIAL_HEAD" ]]; then
       printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
     else
       printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-agent-runtime":{"image":"moonmind:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
@@ -134,7 +134,12 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
 esac
-""",
+"""
+    fake_docker.write_text(
+        fake_docker_script.replace(
+            "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__",
+            str(remove_agent_runtime_after_update).lower(),
+        ),
         encoding="utf-8",
     )
     fake_docker.chmod(0o755)
@@ -143,17 +148,19 @@ esac
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
     env["DOCKER_LOG"] = str(docker_log)
     env["UPDATE_CHECKOUT"] = str(checkout)
-    env["UPDATE_EXPECTED_HEAD"] = expected_head
-    env["REMOVE_AGENT_RUNTIME_AFTER_UPDATE"] = str(
-        remove_agent_runtime_after_update
-    ).lower()
-    subprocess.run(
+    env["UPDATE_INITIAL_HEAD"] = initial_head
+    update = subprocess.run(
         [bash, str(UPDATE_SCRIPT), "--repo", str(checkout), "--branch", "main"],
         cwd=ROOT,
         env=env,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
+    )
+    assert update.returncode == 0, (
+        f"update script failed with exit code {update.returncode}\n"
+        f"stdout:\n{update.stdout}\n"
+        f"stderr:\n{update.stderr}"
     )
 
     assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected_head
