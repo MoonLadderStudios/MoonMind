@@ -17,6 +17,7 @@ from api_service.db.models import (
     OmnigentOAuthHostLeaseRecord,
     ProviderCredentialSource,
     RuntimeMaterializationMode,
+    OmnigentBridgeSession,
 )
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED, parse_bridge_config
 from moonmind.omnigent.bridge_embedded import (
@@ -215,3 +216,49 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
     assert [event.event_type for event in events] == ["lifecycle.terminal"]
     assert result["actions"][-1]["action"] == "runner_exit_cleanup"
     assert repository.stopped == ["host-lease-1"]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_action"),
+    [
+        ("launch_reserved", "abandoned_launch_cleanup"),
+        ("launch_acknowledged", "acknowledgement_without_binding_cleanup"),
+        ("runner_identity_bound", "binding_without_tunnel_cleanup"),
+        ("runner_tunnel_waiting", "binding_without_tunnel_cleanup"),
+        ("stale", "stale_binding_cleanup"),
+    ],
+)
+async def test_restart_janitor_classifies_each_abandoned_lifecycle_boundary(
+    store, session_factory, state, expected_action,
+) -> None:
+    await _seed(store, session_factory)
+    row = await store.get_existing("recovery")
+    old = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    async with session_factory() as session:
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        metadata = dict(persisted.metadata_ or {})
+        metadata["embedded_runner_lifecycle"] = {
+            "version": 1, "state": state, "updatedAt": old, "timeline": [],
+        }
+        persisted.metadata_ = metadata
+        await session.commit()
+
+    refs = await store.embedded_reconciliation_host_lease_refs(
+        abandoned_before=datetime.now(UTC) - timedelta(seconds=90)
+    )
+    assert refs == {"host-lease-1": expected_action}
+
+
+async def test_restart_janitor_rejects_changed_credential_generation(
+    store, session_factory,
+) -> None:
+    await _seed(store, session_factory)
+    async with session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        profile.credential_generation = 2
+        await session.commit()
+
+    refs = await store.embedded_reconciliation_host_lease_refs(
+        abandoned_before=datetime.now(UTC)
+    )
+    assert refs == {"host-lease-1": "credential_generation_cleanup"}

@@ -345,6 +345,61 @@ class OmnigentBridgeSessionStore:
                     refs.add(str(host_lease_ref))
             return refs
 
+    async def embedded_reconciliation_host_lease_refs(
+        self, *, abandoned_before: datetime
+    ) -> dict[str, str]:
+        """Return durable embedded generations that require ordered host cleanup.
+
+        The janitor deliberately consumes bridge authority instead of socket
+        registries: process-local channels disappear on restart.  Stopping the
+        credential-consuming host before releasing its lease is the safe common
+        repair for every generation that can no longer be proven recoverable.
+        """
+        from api_service.db.models import ManagedAgentProviderProfile
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(
+                    OmnigentBridgeSession.host_lease_ref,
+                    OmnigentBridgeSession.metadata_,
+                    OmnigentBridgeSession.credential_generation,
+                    ManagedAgentProviderProfile.credential_generation,
+                )
+                .outerjoin(
+                    ManagedAgentProviderProfile,
+                    ManagedAgentProviderProfile.profile_id
+                    == OmnigentBridgeSession.provider_profile_id,
+                )
+                .where(
+                    OmnigentBridgeSession.omnigent_endpoint_ref == "embedded",
+                    OmnigentBridgeSession.host_lease_ref.is_not(None),
+                    OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES),
+                )
+            )
+            required: dict[str, str] = {}
+            for lease_ref, metadata, bound_generation, current_generation in result.all():
+                lifecycle = dict((metadata or {}).get(EMBEDDED_LIFECYCLE_KEY) or {})
+                state = str(lifecycle.get("state") or "")
+                updated_raw = lifecycle.get("updatedAt")
+                try:
+                    updated_at = datetime.fromisoformat(str(updated_raw))
+                except (TypeError, ValueError):
+                    updated_at = None
+                if (
+                    current_generation is not None
+                    and bound_generation != current_generation
+                ):
+                    required[str(lease_ref)] = "credential_generation_cleanup"
+                elif state == "launch_acknowledged" and updated_at and updated_at <= abandoned_before:
+                    required[str(lease_ref)] = "acknowledgement_without_binding_cleanup"
+                elif state in {"runner_identity_bound", "runner_tunnel_waiting"} and updated_at and updated_at <= abandoned_before:
+                    required[str(lease_ref)] = "binding_without_tunnel_cleanup"
+                elif state == "launch_reserved" and updated_at and updated_at <= abandoned_before:
+                    required[str(lease_ref)] = "abandoned_launch_cleanup"
+                elif state in {"stopped", "failed", "stale"}:
+                    required[str(lease_ref)] = "stale_binding_cleanup"
+            return required
+
     async def get_or_create(
         self,
         *,
