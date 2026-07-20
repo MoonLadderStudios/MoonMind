@@ -516,6 +516,14 @@ async def _authorize_session_control(
     service: Any,
     proxy: Any,
 ) -> None:
+    if proxy is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported bridge mode",
+            },
+        )
     owner = await proxy.get_session_owner(session_id)
     if owner is None:
         raise HTTPException(
@@ -1118,7 +1126,13 @@ async def resolve_omnigent_elicitation(
         else proxy
     )
     if facade is None:
-        raise HTTPException(status_code=501, detail="Unsupported bridge mode")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "omnigent_bridge_mode_unsupported",
+                "message": "Unsupported bridge mode",
+            },
+        )
     await _authorize_session_control(
         session_id=session_id,
         user=user,

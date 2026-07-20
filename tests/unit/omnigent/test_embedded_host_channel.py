@@ -113,6 +113,7 @@ def test_runner_response_limit_fails_future_and_clears_correlation() -> None:
         "future": future,
         "status": 200,
         "body": ["x" * MAX_EMBEDDED_RESPONSE_BYTES],
+        "size": MAX_EMBEDDED_RESPONSE_BYTES,
     }
 
     channel.accept_frame(json.dumps({"id": "request-1", "body": "overflow"}))

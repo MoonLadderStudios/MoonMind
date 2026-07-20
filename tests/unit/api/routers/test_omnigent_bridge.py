@@ -569,6 +569,42 @@ def test_resolve_elicitation_authorizes_and_delegates() -> None:
     ]
 
 
+def test_resolve_elicitation_reports_structured_error_when_mode_has_no_facade() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+
+    response = TestClient(app).post(
+        _ELICITATION_RESOLVE_PATH, json={"answer": "yes"}
+    )
+
+    assert response.status_code == 501
+    assert response.json()["detail"] == {
+        "code": "omnigent_bridge_mode_unsupported",
+        "message": "Unsupported bridge mode",
+    }
+
+
+def test_session_authorization_reports_structured_error_when_proxy_is_missing() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+
+    response = TestClient(app).delete(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77"
+    )
+
+    assert response.status_code == 501
+    assert response.json()["detail"] == {
+        "code": "omnigent_bridge_mode_unsupported",
+        "message": "Unsupported bridge mode",
+    }
+
+
 def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
     client, _, _ = _build()
     resp = client.get(

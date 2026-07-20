@@ -50,7 +50,12 @@ class EmbeddedRunnerChannel:
             raise EmbeddedHostChannelError("runner request limit reached")
         request_id = secrets.token_hex(16)
         future = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = {"future": future, "status": None, "body": []}
+        self._pending[request_id] = {
+            "future": future,
+            "status": None,
+            "body": [],
+            "size": 0,
+        }
         frame = self.frames.RequestFrame(
             id=request_id,
             method=method,
@@ -78,11 +83,8 @@ class EmbeddedRunnerChannel:
             pending["status"] = frame.status
         elif isinstance(frame, self.frames.ResponseBodyFrame):
             part = self.frames.decode_body(frame.body, frame.encoding)
-            current_size = sum(
-                len(value.encode("utf-8")) if isinstance(value, str) else len(value)
-                for value in pending["body"]
-            )
             part_size = len(part.encode("utf-8")) if isinstance(part, str) else len(part)
+            current_size = pending["size"]
             if current_size + part_size > MAX_EMBEDDED_RESPONSE_BYTES:
                 pending["future"].set_exception(
                     EmbeddedHostChannelError("runner response exceeds size limit")
@@ -90,6 +92,7 @@ class EmbeddedRunnerChannel:
                 self._pending.pop(request_id, None)
                 return
             pending["body"].append(part)
+            pending["size"] = current_size + part_size
         elif isinstance(frame, self.frames.ResponseEndFrame):
             status = pending["status"]
             body = b"".join(
