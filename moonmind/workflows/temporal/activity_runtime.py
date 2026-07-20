@@ -1030,7 +1030,13 @@ class ManagedSessionController(Protocol):
         pass
 
     async def send_turn(
-        self, request: SendCodexManagedSessionTurnRequest, /
+        self,
+        request: SendCodexManagedSessionTurnRequest,
+        /,
+        *,
+        observation_sink: Callable[
+            [list[Any], str, CodexManagedSessionLocator], Awaitable[None]
+        ] | None = None,
     ) -> CodexManagedSessionTurnResponse | Mapping[str, Any]:
         pass
 
@@ -10388,8 +10394,35 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.send_turn",
             model_type=SendCodexManagedSessionTurnRequest,
         )
+        bridge_publication = validated.bridge_publication
+
+        async def _publish_active_observations(
+            observations: list[Any],
+            turn_id: str,
+            locator: CodexManagedSessionLocator,
+        ) -> None:
+            if not bridge_publication or not observations:
+                return
+            await self.agent_runtime_publish_bridge_events(
+                {
+                    **bridge_publication,
+                    "locator": locator.model_dump(mode="json", by_alias=True),
+                    "turnId": turn_id,
+                    "observations": observations,
+                    "phase": "active",
+                }
+            )
+
+        send_turn_call = (
+            controller.send_turn(
+                validated,
+                observation_sink=_publish_active_observations,
+            )
+            if bridge_publication
+            else controller.send_turn(validated)
+        )
         response = await _await_with_activity_heartbeats(
-            controller.send_turn(validated),
+            send_turn_call,
             heartbeat_payload={
                 "activityType": "agent_runtime.send_turn",
                 "sessionId": validated.session_id,

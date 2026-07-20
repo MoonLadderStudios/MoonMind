@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
 from moonmind.schemas.managed_session_models import (
@@ -2586,6 +2586,9 @@ class DockerCodexManagedSessionController:
         *,
         request: SendCodexManagedSessionTurnRequest,
         initial_response: CodexManagedSessionTurnResponse,
+        observation_sink: Callable[
+            [list[Any], str, CodexManagedSessionLocator], Awaitable[None]
+        ] | None = None,
     ) -> CodexManagedSessionTurnResponse:
         turn_id = initial_response.turn_id
         locator_payload = self._locator_from_session_state(
@@ -2601,6 +2604,13 @@ class DockerCodexManagedSessionController:
             handle = CodexManagedSessionHandle.model_validate(payload)
             metadata = dict(handle.metadata)
             turn_id = str(metadata.get("lastTurnId") or turn_id).strip() or turn_id
+            observations = metadata.get("observabilityEvents")
+            if observation_sink is not None and isinstance(observations, list):
+                await observation_sink(
+                    observations,
+                    turn_id,
+                    self._locator_from_session_state(handle.session_state),
+                )
             last_turn_status = str(metadata.get("lastTurnStatus") or "").strip().lower()
             assistant_text = str(metadata.get("lastAssistantText") or "").strip()
             reason = str(metadata.get("lastTurnError") or "").strip()
@@ -3367,12 +3377,18 @@ class DockerCodexManagedSessionController:
     async def send_turn(
         self,
         request: SendCodexManagedSessionTurnRequest,
+        *,
+        observation_sink: Callable[
+            [list[Any], str, CodexManagedSessionLocator], Awaitable[None]
+        ] | None = None,
     ) -> CodexManagedSessionTurnResponse:
         try:
             payload = await self._invoke_json(
                 container_id=request.container_id,
                 action="send_turn",
-                payload=request.model_dump(by_alias=True),
+                payload=request.model_dump(
+                    by_alias=True, exclude={"bridge_publication"}
+                ),
             )
             response = self._with_runtime_family(
                 CodexManagedSessionTurnResponse.model_validate(payload),
@@ -3389,6 +3405,7 @@ class DockerCodexManagedSessionController:
             terminal_response = await self._wait_for_terminal_turn_response(
                 request=request,
                 initial_response=response,
+                observation_sink=observation_sink,
             )
             terminal_response = self._with_runtime_family(terminal_response, request)
 

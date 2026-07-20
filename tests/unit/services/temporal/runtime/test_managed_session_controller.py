@@ -15,6 +15,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     CodexManagedSessionLocator,
     CodexManagedSessionRecord,
+    CodexManagedSessionTurnResponse,
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
@@ -7223,3 +7224,94 @@ async def test_controller_launch_rejects_reserved_session_environment() -> None:
 
     with pytest.raises(RuntimeError, match="reserved session keys"):
         await controller.launch_session(request)
+@pytest.mark.asyncio
+async def test_wait_for_turn_streams_typed_observations_before_terminal(
+    tmp_path: Path,
+) -> None:
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path),
+        turn_poll_interval_seconds=0,
+    )
+    responses = iter(
+        [
+            {
+                "sessionState": {
+                    "sessionId": "session-3418",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                    "activeTurnId": "turn-7",
+                },
+                "status": "busy",
+                "metadata": {
+                    "lastTurnId": "turn-7",
+                    "lastTurnStatus": "running",
+                    "observabilityEvents": [
+                        {
+                            "kind": "tool_call_started",
+                            "turnId": "turn-7",
+                            "metadata": {"sourceEventId": "event-1"},
+                        }
+                    ],
+                },
+            },
+            {
+                "sessionState": {
+                    "sessionId": "session-3418",
+                    "sessionEpoch": 2,
+                    "containerId": "container-1",
+                    "threadId": "thread-2",
+                },
+                "status": "ready",
+                "metadata": {
+                    "lastTurnId": "turn-7",
+                    "lastTurnStatus": "completed",
+                },
+            },
+        ]
+    )
+
+    async def invoke_json(**_kwargs: Any) -> dict[str, Any]:
+        return next(responses)
+
+    streamed: list[tuple[list[Any], str, CodexManagedSessionLocator]] = []
+
+    async def sink(
+        observations: list[Any],
+        turn_id: str,
+        locator: CodexManagedSessionLocator,
+    ) -> None:
+        streamed.append((observations, turn_id, locator))
+
+    controller._invoke_json = invoke_json
+    request = SendCodexManagedSessionTurnRequest(
+        sessionId="session-3418",
+        sessionEpoch=2,
+        containerId="container-1",
+        threadId="thread-2",
+        instructions="work",
+    )
+    initial = CodexManagedSessionTurnResponse(
+        sessionState={
+            "sessionId": "session-3418",
+            "sessionEpoch": 2,
+            "containerId": "container-1",
+            "threadId": "thread-2",
+            "activeTurnId": "turn-7",
+        },
+        turnId="turn-7",
+        status="running",
+    )
+
+    result = await controller._wait_for_terminal_turn_response(
+        request=request,
+        initial_response=initial,
+        observation_sink=sink,
+    )
+
+    assert result.status == "completed"
+    assert streamed[0][0][0]["metadata"]["sourceEventId"] == "event-1"
+    assert streamed[0][1] == "turn-7"
+    assert streamed[0][2].session_epoch == 2

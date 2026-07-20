@@ -755,6 +755,22 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_interventions: list[dict[str, Any]] = []
 
             async def _send_current_turn() -> CodexManagedSessionTurnResponse:
+                bridge_publication = None
+                if (
+                    self._publish_bridge_events is not None
+                    and _uses_omnigent_bridge_communication(request.parameters)
+                ):
+                    bridge_publication = {
+                        "request": request.model_dump(
+                            mode="json", by_alias=True, exclude_none=True
+                        ),
+                        "binding": binding.model_dump(mode="json", by_alias=True),
+                        "locator": current_locator.model_dump(
+                            mode="json", by_alias=True
+                        ),
+                        "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                        "producer": "direct_codex_managed_session",
+                    }
                 return await self._coerce_turn_response(
                     self._send_turn(
                         SendCodexManagedSessionTurnRequest(
@@ -764,6 +780,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             threadId=current_locator.thread_id,
                             instructions=instructions,
                             requestId=f"{request.idempotency_key}:initial",
+                            bridgePublication=bridge_publication,
                         )
                     )
                 )
