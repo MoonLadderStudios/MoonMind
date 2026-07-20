@@ -274,6 +274,90 @@ def test_direct_codex_active_intervention_requires_authoritative_evidence() -> N
         )
 
 
+def test_direct_codex_active_observations_cover_lifecycle_and_intervention_outcomes(
+) -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=4,
+        containerId="container-1",
+        threadId="thread-4",
+    )
+    authority = {
+        "actorId": "operator-1",
+        "idempotencyKey": "control-1",
+        "expectedSessionId": locator.session_id,
+        "expectedSessionEpoch": locator.session_epoch,
+        "expectedTurnId": "turn-8",
+        "outcome": "delivery_unknown",
+        "auditRef": "artifact://audit/control-1",
+    }
+
+    events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+        observations=[
+            {"kind": "intervention_delivery_unknown", "metadata": authority},
+            {"kind": "turn_canceled", "metadata": {"sourceEventId": "cancel-1"}},
+            {"kind": "turn_timed_out", "metadata": {"sourceEventId": "timeout-1"}},
+            {
+                "kind": "continuity_published",
+                "metadata": {"artifactRef": "artifact://continuity/1"},
+            },
+            {
+                "kind": "cleanup_failed",
+                "metadata": {
+                    "sourceEventId": "cleanup-1",
+                    "failureReason": "sidecar unavailable",
+                },
+            },
+        ],
+        source_metadata={"source": "codex_direct_compat"},
+        locator=locator,
+        turn_id="turn-8",
+    )
+
+    assert [event["type"] for event in events] == [
+        "session.item.control.delivery_unknown",
+        "session.item.terminal.canceled",
+        "session.item.terminal.timed_out",
+        "session.item.resource_published",
+        "session.item.cleanup.failed",
+    ]
+    assert events[0]["artifactRef"] == "artifact://audit/control-1"
+    assert events[3]["artifactRef"] == "artifact://continuity/1"
+
+
+def test_direct_codex_active_intervention_rejects_wrong_turn_authority() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=4,
+        containerId="container-1",
+        threadId="thread-4",
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="does not match the active turn",
+    ):
+        TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+            observations=[
+                {
+                    "kind": "intervention_completed",
+                    "metadata": {
+                        "actorId": "operator-1",
+                        "idempotencyKey": "control-1",
+                        "expectedSessionId": locator.session_id,
+                        "expectedSessionEpoch": locator.session_epoch,
+                        "expectedTurnId": "stale-turn",
+                        "outcome": "completed",
+                        "auditRef": "artifact://audit/control-1",
+                    },
+                },
+            ],
+            source_metadata={"source": "codex_direct_compat"},
+            locator=locator,
+            turn_id="turn-8",
+        )
+
+
 @pytest.mark.asyncio
 async def test_post_merge_github_completion_applies_done_status(
     monkeypatch: pytest.MonkeyPatch,

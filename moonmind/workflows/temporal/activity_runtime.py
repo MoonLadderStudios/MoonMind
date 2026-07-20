@@ -11080,15 +11080,35 @@ class TemporalAgentRuntimeActivities:
             "approval_requested": "session.item.approval.requested",
             "approval_resolved": "session.item.approval.resolved",
             "intervention_requested": "session.item.control.requested",
+            "intervention_accepted": "session.item.control.accepted",
+            "intervention_rejected": "session.item.control.rejected",
+            "intervention_completed": "session.item.control.completed",
+            "intervention_failed": "session.item.control.failed",
+            "intervention_delivery_unknown": "session.item.control.delivery_unknown",
+            "turn_interrupted": "session.item.control.interrupted",
+            "turn_canceled": "session.item.terminal.canceled",
+            "turn_timed_out": "session.item.terminal.timed_out",
             "turn_started": "session.item.turn_started",
             "turn_completed": "session.item.turn_completed",
             "turn_failed": "session.item.turn_failed",
             "reset_boundary_published": "session.item.reset_boundary",
             "summary_published": "session.item.resource_published",
             "checkpoint_published": "session.item.resource_published",
+            "artifact_published": "session.item.resource_published",
+            "continuity_published": "session.item.resource_published",
+            "cleanup_completed": "session.item.cleanup.completed",
+            "cleanup_failed": "session.item.cleanup.failed",
         }
         intervention_kinds = {
-            "approval_requested", "approval_resolved", "intervention_requested"
+            "approval_requested",
+            "approval_resolved",
+            "intervention_requested",
+            "intervention_accepted",
+            "intervention_rejected",
+            "intervention_completed",
+            "intervention_failed",
+            "intervention_delivery_unknown",
+            "turn_interrupted",
         }
         mapped: list[dict[str, Any]] = []
         for index, raw in enumerate(observations):
