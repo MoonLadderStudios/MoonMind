@@ -77,7 +77,8 @@ async def test_reconnect_fails_pending_request_and_replaces_channel() -> None:
     assert registry.get_ready("host-1") is second
 
 
-def test_runner_response_limit_fails_future_and_clears_correlation() -> None:
+@pytest.mark.asyncio
+async def test_runner_response_limit_fails_future_and_clears_correlation() -> None:
     class _ResponseBodyFrame:
         def __init__(self, *, id: str, body: str) -> None:
             self.id = id
@@ -105,7 +106,7 @@ def test_runner_response_limit_fails_future_and_clears_correlation() -> None:
     async def send(_text: str) -> None:
         pass
 
-    future = asyncio.get_event_loop().create_future()
+    future = asyncio.get_running_loop().create_future()
     channel = EmbeddedRunnerChannel(
         runner_id="runner-1", send_text=send, frames=Frames, hello=object()
     )

@@ -12,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.datastructures import Headers
 
-from api_service.db.models import Base, OmnigentOAuthHostLeaseRecord
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+)
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     parse_bridge_config,
@@ -91,6 +98,42 @@ def _request():
 async def _bind_active_host(store, *, host_id: str = "runner-1") -> None:
     now = datetime.now(UTC)
     async with store._session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        if profile is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="profile-1",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    max_parallel_runs=1,
+                    credential_generation=1,
+                )
+            )
+            session.add(
+                OmnigentOAuthHostBindingRecord(
+                    binding_ref="binding-1",
+                    provider_profile_id="profile-1",
+                    endpoint_ref="embedded",
+                    harness="codex-native",
+                    credential_mount_template_json={
+                        "authVolumeRef": {
+                            "providerProfileId": "profile-1",
+                            "runtimeId": "codex_cli",
+                            "providerId": "openai",
+                            "volumeRef": "profile-1-volume",
+                            "credentialGeneration": 1,
+                            "ownerUserId": "user-1",
+                        },
+                        "targetPath": "/home/app/.codex",
+                        "accessMode": "read_write",
+                        "runtimeUid": 1000,
+                        "runtimeGid": 1000,
+                    },
+                )
+            )
+            await session.flush()
         session.add(
             OmnigentOAuthHostLeaseRecord(
                 lease_id=f"lease-{host_id}",
@@ -780,7 +823,7 @@ async def test_runner_tunnel_reconnect_aborts_ambiguous_post_and_newest_wins() -
         runner_id="runner-1", send_text=send_text, hello_text=hello
     )
     task = asyncio.create_task(
-        old.post_json("/v1/sessions/sess-1/events", {"type": "message"})
+        old.request("POST", "/v1/sessions/sess-1/events", {"type": "message"})
     )
     await asyncio.sleep(0)
 

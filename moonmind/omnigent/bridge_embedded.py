@@ -333,7 +333,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error", status_code=404,
             )
         template, expect_json = route_templates[operation]
-        path = template.format(
+        path = template.replace("{path:path}", "{path}").format(
             session_id=quote(session_id, safe=""),
             path=quote(value or "", safe="/"),
             file_id=quote(value or "", safe=""),
