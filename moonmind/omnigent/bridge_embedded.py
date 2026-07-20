@@ -135,6 +135,31 @@ class EmbeddedHostAuthContext:
     credential_generation: int
 
 
+def _first_message_response_evidence(value: Any) -> dict[str, Any] | None:
+    """Extract stable posting identifiers from an upstream session snapshot."""
+
+    if not isinstance(value, Mapping):
+        return None
+    candidates = [value]
+    for key in ("firstMessage", "first_message", "initialMessage", "initial_message"):
+        nested = value.get(key)
+        if isinstance(nested, Mapping):
+            candidates.insert(0, nested)
+    for candidate in candidates:
+        pending_id = candidate.get("pending_id") or candidate.get("pendingId")
+        item_id = candidate.get("item_id") or candidate.get("itemId")
+        if pending_id or item_id:
+            return {
+                key: identifier
+                for key, identifier in {
+                    "pending_id": pending_id,
+                    "item_id": item_id,
+                }.items()
+                if identifier
+            }
+    return None
+
+
 def verify_embedded_host_auth(
     *,
     headers: Mapping[str, Any],
@@ -223,20 +248,28 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=503,
                 code="omnigent_embedded_runner_stale",
             )
+        lifecycle = dict((row.metadata_ or {}).get("embedded_runner_launch") or {})
+        if lifecycle:
+            recovered = await self._reconcile_pending_launch(
+                idempotency_key=idempotency_key, row=row
+            )
+            if recovered:
+                return {"runnerId": recovered, "reused": True}
         workspace = _clean(row.workspace)
         if not workspace:
             raise OmnigentBridgeError(
                 "Embedded runner dispatch requires a workspace",
                 failure_class="user_error", status_code=422,
             )
-        try:
-            await self._run_store.begin_embedded_runner_launch(
-                idempotency_key, host_id=row.omnigent_host_id
-            )
-        except OmnigentIdempotencyError as exc:
-            raise OmnigentBridgeError(
-                str(exc), failure_class="integration_error", status_code=503
-            ) from exc
+        if not lifecycle:
+            try:
+                await self._run_store.begin_embedded_runner_launch(
+                    idempotency_key, host_id=row.omnigent_host_id
+                )
+            except OmnigentIdempotencyError as exc:
+                raise OmnigentBridgeError(
+                    str(exc), failure_class="integration_error", status_code=503
+                ) from exc
         try:
             _, binding_token = await self._run_store.get_embedded_runner_binding_token(
                 idempotency_key=idempotency_key
@@ -255,15 +288,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                 idempotency_key, state="launch_acknowledged"
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
-            # Once the command crossed the socket boundary, every transport
-            # failure is response-before-persist ambiguity.  Never free the
-            # reservation for a blind retry: reconciliation/cleanup must prove
-            # the old process absent before replacement.
-            await self._run_store.transition_embedded_runner(
-                idempotency_key,
-                state="stale",
-                code="host_launch_outcome_ambiguous",
-            )
+            # Keep launch_sent as the durable ambiguity marker. A retry derives
+            # the exact runner identity and can reattach its tunnel, but never
+            # sends a second launch command.
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
@@ -276,6 +303,65 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         return {"runnerId": runner_id, "reused": False}
+
+    async def _reconcile_pending_launch(self, *, idempotency_key: str, row: Any) -> str | None:
+        """Recover an acknowledged process without repeating the launch side effect."""
+
+        lifecycle = dict((row.metadata_ or {}).get("embedded_runner_launch") or {})
+        state = str(lifecycle.get("state") or "")
+        if state == "launch_reserved":
+            # No command crossed the transport boundary, so the normal dispatch
+            # path may safely continue the already-reserved attempt.
+            return None
+        if state not in {"launch_sent", "launch_acknowledged"}:
+            raise OmnigentBridgeError(
+                "Embedded runner launch requires durable reconciliation",
+                failure_class="integration_error", status_code=503,
+                code="omnigent_embedded_launch_reconciliation_required",
+            )
+        try:
+            _, token = await self._run_store.get_embedded_runner_binding_token(
+                idempotency_key=idempotency_key
+            )
+            runner_id = OmnigentHostAuthAdapter(
+                allowed_tokens=frozenset({token})
+            ).runner_id_for_binding_token(token)
+            ready = getattr(self._host_channels, "runner_ready", lambda _id: False)(
+                runner_id
+            )
+            if not ready and hasattr(self._host_channels, "wait_runner_ready"):
+                ready = await self._host_channels.wait_runner_ready(
+                    runner_id, timeout_seconds=5.0
+                )
+            if ready:
+                if state == "launch_sent":
+                    await self._run_store.transition_embedded_runner(
+                        idempotency_key, state="launch_acknowledged",
+                        code="runner_tunnel_proved_launch",
+                    )
+                await self._run_store.bind_embedded_runner(
+                    idempotency_key,
+                    host_id=row.omnigent_host_id,
+                    runner_id=runner_id,
+                )
+                await self._run_store.transition_embedded_runner(
+                    idempotency_key, state="runner_tunnel_ready",
+                    code="runner_tunnel_reattached",
+                )
+                return runner_id
+            await self._run_store.transition_embedded_runner(
+                idempotency_key, state="stale",
+                code="pending_launch_not_recoverable",
+            )
+        except OmnigentIdempotencyError as exc:
+            raise OmnigentBridgeError(
+                str(exc), failure_class="integration_error", status_code=503
+            ) from exc
+        raise OmnigentBridgeError(
+            "Pending embedded runner launch has no recoverable tunnel; janitor cleanup is required",
+            failure_class="integration_error", status_code=503,
+            code="omnigent_embedded_runner_stale",
+        )
 
     async def record_runner_exit(self, *, runner_id: str, error: str) -> None:
         """Record a stock host's authoritative runner process failure."""
@@ -361,6 +447,22 @@ class OmnigentEmbeddedHostProtocolFacade:
                     row.idempotency_key
                 )
             except OmnigentIdempotencyError as exc:
+                evidence = None
+                if hasattr(self._host_channels, "request_runner"):
+                    try:
+                        evidence = await self._host_channels.request_runner(
+                            runner_id=runner_id,
+                            method="GET",
+                            path=f"/v1/sessions/{session_id}",
+                        )
+                    except (EmbeddedHostChannelError, TimeoutError):
+                        pass
+                response = _first_message_response_evidence(evidence)
+                if response is not None:
+                    await self._run_store.mark_posted(
+                        row.idempotency_key, response=response
+                    )
+                    return response
                 raise OmnigentBridgeError(
                     str(exc), failure_class="integration_error", status_code=409,
                     code="omnigent_first_message_reconciliation_required",

@@ -208,6 +208,40 @@ async def test_runner_reconnect_authority_survives_api_process_restart(
     assert token not in str(recovered.metadata_)
 
 
+async def test_launch_response_before_persist_reattaches_without_duplicate_launch(
+    store, session_factory,
+) -> None:
+    await _seed(store, session_factory)
+    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
+    _, token = await store.get_embedded_runner_binding_token(
+        idempotency_key="recovery"
+    )
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({token})
+    ).runner_id_for_binding_token(token)
+    await store.transition_embedded_runner("recovery", state="launch_sent")
+
+    class Channels:
+        launches = 0
+
+        def runner_ready(self, candidate):
+            return candidate == runner_id
+
+        async def launch_runner(self, **_kwargs):
+            self.launches += 1
+            raise AssertionError("reconciliation must not repeat launch")
+
+    channels = Channels()
+    result = await OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_config(), host_channels=channels
+    ).dispatch_runner(idempotency_key="recovery")
+    row = await store.get_existing("recovery")
+    assert result == {"runnerId": runner_id, "reused": True}
+    assert channels.launches == 0
+    assert row.omnigent_runner_id == runner_id
+    assert row.metadata_["embedded_runner_launch"]["state"] == "runner_tunnel_ready"
+
+
 async def test_runner_reconnect_revalidates_current_lease_and_generation(
     store, session_factory,
 ) -> None:

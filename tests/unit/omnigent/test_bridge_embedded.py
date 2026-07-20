@@ -947,7 +947,51 @@ async def test_first_message_retry_fails_closed_before_duplicate_side_effect(sto
 
 
 @pytest.mark.asyncio
-async def test_dispatch_marks_uncertain_launch_stale_without_retry(store) -> None:
+async def test_first_message_retry_recovers_runner_evidence_without_reposting(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+    await store.mark_prepared("idem-embedded", digest="digest", marker="marker")
+    await store.mark_posting("idem-embedded")
+
+    class Channels:
+        posts = 0
+        queries = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.posts += 1
+            raise TimeoutError("response lost")
+
+        async def request_runner(self, **kwargs):
+            self.queries += 1
+            assert kwargs["path"] == "/v1/sessions/sess-embedded"
+            return {"firstMessage": {"pendingId": "pending-1", "itemId": "item-1"}}
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    event = EmbeddedHostSessionEventRequest(type="message", data={"text": "hello"})
+    with pytest.raises(OmnigentBridgeError, match="response lost"):
+        await facade.post_event(session_id="sess-embedded", event=event)
+    assert await facade.post_event(session_id="sess-embedded", event=event) == {
+        "pending_id": "pending-1", "item_id": "item-1"
+    }
+    row = await store.get_existing("idem-embedded")
+    assert channels.posts == 1
+    assert channels.queries == 1
+    assert row.first_message_state == FIRST_MESSAGE_POSTED
+
+
+@pytest.mark.asyncio
+async def test_dispatch_preserves_uncertain_launch_for_evidence_based_retry(store) -> None:
     await store.bind_profile_authorization(
         request=_request(), endpoint_ref="embedded",
         provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
@@ -971,7 +1015,7 @@ async def test_dispatch_marks_uncertain_launch_stale_without_retry(store) -> Non
         await facade.dispatch_runner(idempotency_key="idem-embedded")
 
     row = await store.get_existing("idem-embedded")
-    assert row.metadata_["embedded_runner_launch"]["state"] == "stale"
+    assert row.metadata_["embedded_runner_launch"]["state"] == "launch_sent"
     with pytest.raises(OmnigentIdempotencyError, match="durable reconciliation"):
         await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
 
