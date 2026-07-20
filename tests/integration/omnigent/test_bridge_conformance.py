@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from api_service.api.routers import omnigent_bridge as bridge_router
-from api_service.db.models import OmnigentBridgeSession
+from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
@@ -71,6 +71,7 @@ async def bridge_harness():
     )
     async with engine.begin() as conn:
         await conn.run_sync(OmnigentBridgeSession.__table__.create)
+        await conn.run_sync(OmnigentBridgeSessionEvent.__table__.create)
     session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     store = OmnigentBridgeSessionStore(session_maker)
     running_servers: list[RunningFakeOmnigentServer] = []
@@ -600,7 +601,7 @@ async def test_scenario_13_error_diagnostics_redact_credentials(
     assert "fake-upstream-secret" not in rendered
     assert "user-cookie" not in rendered
     assert "user-jwt" not in rendered
-    assert "[REDACTED]" in rendered
+    assert "[REDACTED_AUTHORIZATION]" in rendered
 
 
 async def test_first_message_crash_matrix_reconciles_response_before_persist_once(
@@ -736,6 +737,10 @@ async def test_each_first_message_restart_boundary_is_exactly_once(
         assert row is not None and row.first_message_state == boundary
     assert len(harness.running.server.events) == expected_posts
 
+    if boundary == "not_prepared":
+        await harness.store.mark_prepared(
+            key, digest="sha256:first", marker="message:first"
+        )
     with pytest.raises(OmnigentDigestMismatchError):
         await harness.store.mark_prepared(
             key, digest="sha256:different", marker="message:different"

@@ -42,7 +42,7 @@ def test_load_profile_rejects_missing_empty_and_duplicate_case_ids(
     profile_path = tmp_path / "profile.json"
     for invalid_case in ({"not_id": "foo"}, {"id": ""}, {"id": 7}):
         profile_path.write_text(
-            '{"profileVersion": "moonmind.omnigent.conformance/v2", "cases": ['
+            '{"profileVersion": "moonmind.omnigent.conformance/v4", "cases": ['
             + json.dumps(invalid_case)
             + "]}",
             encoding="utf-8",
@@ -51,7 +51,7 @@ def test_load_profile_rejects_missing_empty_and_duplicate_case_ids(
             load_profile(profile_path)
 
     profile_path.write_text(
-        '{"profileVersion": "moonmind.omnigent.conformance/v2", '
+        '{"profileVersion": "moonmind.omnigent.conformance/v4", '
         '"cases": [{"id": "foo"}, {"id": "foo"}]}',
         encoding="utf-8",
     )
@@ -62,7 +62,7 @@ def test_load_profile_rejects_missing_empty_and_duplicate_case_ids(
 def test_load_profile_rejects_modified_inventory(tmp_path: Path) -> None:
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(
-        '{"profileVersion": "moonmind.omnigent.conformance/v2", '
+        '{"profileVersion": "moonmind.omnigent.conformance/v4", '
         '"cases": [{"id": "easy"}]}',
         encoding="utf-8",
     )
