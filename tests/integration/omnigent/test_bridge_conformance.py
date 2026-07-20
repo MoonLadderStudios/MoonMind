@@ -21,6 +21,7 @@ from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
     BridgeSessionEventRequest,
+    OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import (
@@ -29,9 +30,14 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
-from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.adapters.omnigent_client import (
+    OmnigentClientError,
+    OmnigentHttpClient,
+)
 from tests.helpers.omnigent_conformance import (
     BRIDGE_CONFORMANCE_SCENARIOS,
+    CONFORMANCE_PROFILE_VERSION,
+    FakeOmnigentScenario,
     FakeOmnigentServer,
     RunningFakeOmnigentServer,
     start_fake_omnigent_server,
@@ -118,7 +124,8 @@ async def _create_and_post(
     return created
 
 
-async def test_bridge_conformance_suite_declares_all_nine_scenarios() -> None:
+async def test_bridge_conformance_suite_declares_versioned_scenarios() -> None:
+    assert CONFORMANCE_PROFILE_VERSION == "moonmind.omnigent.conformance/v2"
     assert BRIDGE_CONFORMANCE_SCENARIOS == (
         "successful_session_with_streamed_assistant_output",
         "failed_session_with_diagnostics",
@@ -129,6 +136,10 @@ async def test_bridge_conformance_suite_declares_all_nine_scenarios() -> None:
         "optional_diff_unavailable",
         "child_session_event_capture",
         "cancellation_via_interrupt_and_stop_session",
+        "transport_status_timeout_and_malformed_responses",
+        "stream_replay_overlap_and_schema_drift",
+        "oversized_resources_and_secret_redaction",
+        "ambiguous_first_message_response",
     )
 
 
@@ -285,3 +296,113 @@ async def test_scenario_09_cancellation_via_interrupt_and_stop_session(
         "interrupt",
         "stop_session",
     ]
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 409, 429, 500, 502, 504])
+async def test_scenario_10_upstream_statuses_keep_stable_failure_evidence(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]], status: int
+) -> None:
+    scenario = FakeOmnigentScenario(statuses={"sessions.create": status})
+    harness = await bridge_harness(scenario=scenario)
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await harness.proxy.create_session(
+            request=_request(), binding=_binding(f"status-{status}")
+        )
+
+    error = excinfo.value
+    assert error.status_code == status
+    assert error.code.startswith("omnigent_bridge_")
+    assert error.failure_class
+    assert "fake-upstream-secret" not in str(error)
+    assert harness.running.server.route_calls == ["sessions.create"]
+
+
+async def test_scenario_10_timeout_and_malformed_json_are_deterministic(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    timeout_harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(delays={"hosts": 0.1})
+    )
+    timeout_client = OmnigentHttpClient(
+        base_url=timeout_harness.running.base_url, timeout_seconds=0.01
+    )
+    with pytest.raises(OmnigentClientError) as timeout:
+        await timeout_client.list_hosts()
+    assert timeout.value.failure_class == "integration_error"
+
+    malformed = await bridge_harness(
+        scenario=FakeOmnigentScenario(malformed_json={"hosts"})
+    )
+    with pytest.raises(OmnigentClientError) as payload:
+        await malformed.client.list_hosts()
+    assert payload.value.failure_class == "integration_error"
+
+
+async def test_scenario_11_stream_replay_identity_and_malformed_frame(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    frames = [
+        b'data: {"id":"provider-1","delta":"same"}\n\n',
+        b'data: {"id":"provider-1","delta":"same"}\n\n',
+        b'data: {"id":"provider-2","delta":"same"}\n\n',
+        b'data: {broken}\n\n',
+    ]
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(stream_frames=frames)
+    )
+    created = await _create_and_post(harness)
+    received: list[dict[str, Any]] = []
+    with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
+        async for event in harness.client.stream_events(created["id"]):
+            received.append(event)
+
+    assert [event["id"] for event in received] == [
+        "provider-1",
+        "provider-1",
+        "provider-2",
+    ]
+
+
+async def test_scenario_12_oversized_real_resources_fail_bounded(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            oversized_json_items=20_000,
+            oversized_binary_bytes=4 * 1024 * 1024 + 1,
+        )
+    )
+    created = await _create_and_post(harness)
+
+    bounded = await harness.proxy.get_resource("workspace_files", created["id"])
+    assert len(bounded["items"]) == 250
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await harness.proxy.get_resource(
+            "workspace_file", created["id"], "README.md"
+        )
+    assert excinfo.value.code == "omnigent_bridge_response_too_large"
+    assert len(str(excinfo.value)) < 256
+
+
+async def test_scenario_13_error_diagnostics_redact_credentials(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(statuses={"sessions.get": 500})
+    )
+    client = OmnigentHttpClient(
+        base_url=harness.running.base_url,
+        api_token="fake-upstream-secret",
+        forward_headers={
+            "cookie": "user-cookie",
+            "authorization": "Bearer user-jwt",
+        },
+    )
+    with pytest.raises(OmnigentClientError) as excinfo:
+        await client.get_session("session-unknown")
+    rendered = repr(excinfo.value.diagnostics())
+    assert "fake-upstream-secret" not in rendered
+    assert "user-cookie" not in rendered
+    assert "user-jwt" not in rendered
+    assert "[REDACTED]" in rendered

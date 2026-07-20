@@ -1,7 +1,7 @@
 {
-  "profileVersion": "moonmind.omnigent.conformance/v1",
+  "profileVersion": "moonmind.omnigent.conformance/v2",
   "provenance": {
-    "source": "MoonLadderStudios/MoonMind#3368",
+    "source": "MoonLadderStudios/MoonMind#3419",
     "contract": "Omnigent bridge Milestone 1.8"
   },
   "cases": [
@@ -11,6 +11,9 @@
     {"id": "projection.workflow-detail-chat", "layer": "frontend", "critical": true},
     {"id": "resources.authorization-and-evidence", "layer": "api", "critical": true},
     {"id": "failures.lifecycle-and-redaction", "layer": "fake-and-live", "critical": true},
+    {"id": "failures.transport-status-timeout", "layer": "fake-and-stock", "critical": true},
+    {"id": "events.replay-overlap-schema-drift", "layer": "fake-and-stock", "critical": true},
+    {"id": "resources.bounds-and-secret-scan", "layer": "fake-and-stock", "critical": true},
     {"id": "codex.direct-event-parity", "layer": "unit", "critical": true},
     {"id": "stock-images.proxy", "layer": "provider", "critical": true},
     {"id": "compose.static-codex-oauth", "layer": "provider", "critical": true},

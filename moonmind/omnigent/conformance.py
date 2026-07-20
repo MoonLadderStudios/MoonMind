@@ -1,6 +1,6 @@
 """Versioned Omnigent bridge conformance evidence contracts.
 
-Source issue: MoonLadderStudios/MoonMind#3368.
+Source issue: MoonLadderStudios/MoonMind#3419.
 
 This module deliberately contains no provider semantics.  It validates the
 portable profile and the evidence emitted by fake, stock-image, Compose, and
@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-PROFILE_VERSION = "moonmind.omnigent.conformance/v1"
-PROFILE_SHA256 = "35ff2246182f33edfbfa3de84bac1cf9a1eb8a2e47468b7ca30649f99ed7370f"
+PROFILE_VERSION = "moonmind.omnigent.conformance/v2"
+PROFILE_SHA256 = "2ec0bfddc331ecc843f3b8dcf4b0cf62bf515b614296600eda31df8631f03c68"
 REPORT_VERSION = "moonmind.omnigent.conformance-report/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 

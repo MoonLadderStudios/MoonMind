@@ -8,7 +8,7 @@ host through the bridge facade or execution adapter.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from aiohttp import web
@@ -23,7 +23,32 @@ BRIDGE_CONFORMANCE_SCENARIOS: tuple[str, ...] = (
     "optional_diff_unavailable",
     "child_session_event_capture",
     "cancellation_via_interrupt_and_stop_session",
+    "transport_status_timeout_and_malformed_responses",
+    "stream_replay_overlap_and_schema_drift",
+    "oversized_resources_and_secret_redaction",
+    "ambiguous_first_message_response",
 )
+
+CONFORMANCE_PROFILE_VERSION = "moonmind.omnigent.conformance/v2"
+
+
+@dataclass(slots=True)
+class FakeOmnigentScenario:
+    """Composable fault controls shared by proxy, execution, and API tests.
+
+    Keys use stable route names (``sessions.create``, ``sessions.get``,
+    ``sessions.events``, ``sessions.stream``, ``agents``, ``hosts``, and the
+    ``resources.*`` names below) rather than aiohttp implementation details.
+    """
+
+    statuses: dict[str, int] = field(default_factory=dict)
+    delays: dict[str, float] = field(default_factory=dict)
+    malformed_json: set[str] = field(default_factory=set)
+    stream_frames: list[bytes] | None = None
+    stream_disconnect_after: int | None = None
+    oversized_json_items: int = 0
+    oversized_binary_bytes: int = 0
+    event_response_before_close: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,15 +68,33 @@ class FakeOmnigentServer:
         terminal_status: str = "completed",
         stream_disconnect: bool = False,
         include_child_session_event: bool = False,
+        scenario: FakeOmnigentScenario | None = None,
     ) -> None:
         self.supports_diff = supports_diff
         self.terminal_status = terminal_status
         self.stream_disconnect = stream_disconnect
         self.include_child_session_event = include_child_session_event
+        self.scenario = scenario or FakeOmnigentScenario()
         self.session_ids: list[str] = []
         self.create_payloads: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.first_message_posted = asyncio.Event()
+        self.route_calls: list[str] = []
+
+    async def _fault(self, route: str) -> web.Response | None:
+        self.route_calls.append(route)
+        delay = self.scenario.delays.get(route)
+        if delay:
+            await asyncio.sleep(delay)
+        status = self.scenario.statuses.get(route)
+        if status is not None:
+            return web.json_response(
+                {"error": "injected", "authorization": "Bearer fake-upstream-secret"},
+                status=status,
+            )
+        if route in self.scenario.malformed_json:
+            return web.Response(body=b'{"broken":', content_type="application/json")
+        return None
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -95,14 +138,20 @@ class FakeOmnigentServer:
         return app
 
     async def list_agents(self, _request: web.Request) -> web.Response:
+        if (fault := await self._fault("agents")) is not None:
+            return fault
         return web.json_response({"agents": [{"id": "agent-1", "name": "codex"}]})
 
     async def list_hosts(self, _request: web.Request) -> web.Response:
+        if (fault := await self._fault("hosts")) is not None:
+            return fault
         return web.json_response(
             {"hosts": [{"id": "host-1", "name": "managed", "status": "ready", "secret": "excluded"}]}
         )
 
     async def create_session(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault("sessions.create")) is not None:
+            return fault
         payload = await request.json()
         self.create_payloads.append(payload)
         session_id = f"session-{len(self.session_ids) + 1}"
@@ -110,6 +159,8 @@ class FakeOmnigentServer:
         return web.json_response({"id": session_id})
 
     async def get_session(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault("sessions.get")) is not None:
+            return fault
         status = (
             self.terminal_status if self.first_message_posted.is_set() else "running"
         )
@@ -132,11 +183,16 @@ class FakeOmnigentServer:
         return web.json_response(payload)
 
     async def post_event(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault("sessions.events")) is not None:
+            return fault
         payload = await request.json()
         self.events.append(payload)
         if payload.get("type") not in {"interrupt", "stop_session"}:
             self.first_message_posted.set()
-        return web.json_response({"pending_id": "pending-1", "item_id": "item-1"})
+        response = web.json_response({"pending_id": "pending-1", "item_id": "item-1"})
+        if self.scenario.event_response_before_close:
+            response.force_close()
+        return response
 
     async def resolve_elicitation(self, request: web.Request) -> web.Response:
         payload = await request.json()
@@ -157,11 +213,22 @@ class FakeOmnigentServer:
 
     async def stream(self, request: web.Request) -> web.StreamResponse:
         await self.first_message_posted.wait()
+        if (fault := await self._fault("sessions.stream")) is not None:
+            return fault
         response = web.StreamResponse(
             status=200,
             headers={"Content-Type": "text/event-stream"},
         )
         await response.prepare(request)
+        frames = self.scenario.stream_frames
+        if frames is not None:
+            for index, frame in enumerate(frames, start=1):
+                await response.write(frame)
+                if self.scenario.stream_disconnect_after == index:
+                    response.force_close()
+                    return response
+            await response.write_eof()
+            return response
         await response.write(b'data: {"session":{"status":"running"}}\n\n')
         if self.include_child_session_event:
             await response.write(
@@ -179,9 +246,22 @@ class FakeOmnigentServer:
         return response
 
     async def list_changed_files(self, _request: web.Request) -> web.Response:
+        if (fault := await self._fault("resources.changes")) is not None:
+            return fault
         return web.json_response({"items": [{"path": "src/app.py"}]})
 
     async def list_workspace_files(self, _request: web.Request) -> web.Response:
+        if (fault := await self._fault("resources.workspace-list")) is not None:
+            return fault
+        if self.scenario.oversized_json_items:
+            return web.json_response(
+                {
+                    "items": [
+                        {"path": f"generated/{index}.txt", "type": "file"}
+                        for index in range(self.scenario.oversized_json_items)
+                    ]
+                }
+            )
         return web.json_response(
             {
                 "items": [
@@ -193,6 +273,10 @@ class FakeOmnigentServer:
         )
 
     async def get_workspace_file(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault("resources.workspace-file")) is not None:
+            return fault
+        if self.scenario.oversized_binary_bytes:
+            return web.Response(body=b"x" * self.scenario.oversized_binary_bytes)
         path = request.match_info["path"]
         body = {
             "README.md": b"# Fake repo\n",
@@ -203,6 +287,8 @@ class FakeOmnigentServer:
         return web.Response(body=body, content_type="text/plain")
 
     async def get_workspace_diff(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault("resources.diff")) is not None:
+            return fault
         if not self.supports_diff:
             return web.json_response({"error": "diff unavailable"}, status=404)
         path = request.match_info["path"]
@@ -212,11 +298,15 @@ class FakeOmnigentServer:
         )
 
     async def list_session_files(self, _request: web.Request) -> web.Response:
+        if (fault := await self._fault("resources.session-list")) is not None:
+            return fault
         return web.json_response(
             {"items": [{"id": "file-1", "filename": "session.log"}]}
         )
 
     async def get_session_file_content(self, _request: web.Request) -> web.Response:
+        if (fault := await self._fault("resources.session-file")) is not None:
+            return fault
         return web.Response(body=b"session file evidence\n", content_type="text/plain")
 
 
