@@ -208,6 +208,50 @@ async def test_runner_reconnect_authority_survives_api_process_restart(
     assert token not in str(recovered.metadata_)
 
 
+async def test_runner_reconnect_revalidates_current_lease_and_generation(
+    store, session_factory,
+) -> None:
+    await _seed(store, session_factory)
+    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
+    _, token = await store.get_embedded_runner_binding_token(
+        idempotency_key="recovery"
+    )
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({token})
+    ).runner_id_for_binding_token(token)
+    await store.transition_embedded_runner("recovery", state="launch_sent")
+    await store.transition_embedded_runner("recovery", state="launch_acknowledged")
+    await store.bind_embedded_runner(
+        "recovery", host_id="host-1", runner_id=runner_id
+    )
+
+    async with session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "host-lease-1")
+        lease.status = "stopped"
+        await session.commit()
+    with pytest.raises(OmnigentIdempotencyError, match="inactive or stale host lease"):
+        await store.get_embedded_runner_binding_token(runner_id=runner_id)
+
+    async with session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "host-lease-1")
+        lease.status = "ready"
+        lease.omnigent_session_id = "another-session"
+        await session.commit()
+    with pytest.raises(OmnigentIdempotencyError, match="inactive or stale host lease"):
+        await store.get_embedded_runner_binding_token(runner_id=runner_id)
+
+    async with session_factory() as session:
+        lease = await session.get(OmnigentOAuthHostLeaseRecord, "host-lease-1")
+        lease.omnigent_session_id = "session-1"
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        profile.credential_generation = 2
+        await session.commit()
+    with pytest.raises(
+        OmnigentIdempotencyError, match="inactive credential generation"
+    ):
+        await store.get_embedded_runner_binding_token(runner_id=runner_id)
+
+
 async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_janitor(
     store, session_factory,
 ) -> None:

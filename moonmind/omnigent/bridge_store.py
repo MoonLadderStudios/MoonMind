@@ -27,9 +27,11 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     ManagedSecret,
     OmnigentBridgeSession,
     OmnigentBridgeSessionEvent,
+    OmnigentOAuthHostLeaseRecord,
     SecretStatus,
 )
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
@@ -610,6 +612,37 @@ class OmnigentBridgeSessionStore:
                     raise OmnigentIdempotencyError(
                         f"runner launch binding has stale {field} authority"
                     )
+            now = datetime.now(tz=UTC)
+            host_lease = await session.get(
+                OmnigentOAuthHostLeaseRecord, row.host_lease_ref
+            )
+            if (
+                host_lease is None
+                or host_lease.status not in {
+                    "allocating", "starting", "ready", "assigned", "draining"
+                }
+                or host_lease.expires_at <= now
+                or host_lease.provider_profile_id != row.provider_profile_id
+                or host_lease.provider_lease_id != row.provider_lease_id
+                or host_lease.credential_generation != row.credential_generation
+                or host_lease.omnigent_host_id != row.omnigent_host_id
+                or host_lease.omnigent_session_id != row.omnigent_session_id
+                or host_lease.bridge_session_id != row.bridge_session_id
+            ):
+                raise OmnigentIdempotencyError(
+                    "runner launch binding references an inactive or stale host lease"
+                )
+            profile = await session.get(
+                ManagedAgentProviderProfile, row.provider_profile_id
+            )
+            if (
+                profile is None
+                or not profile.enabled
+                or profile.credential_generation != row.credential_generation
+            ):
+                raise OmnigentIdempotencyError(
+                    "runner launch binding references an inactive credential generation"
+                )
             ref = str(launch.get("bindingSecretRef") or "")
             if not ref.startswith("db://"):
                 raise OmnigentIdempotencyError("runner launch binding is unavailable")
