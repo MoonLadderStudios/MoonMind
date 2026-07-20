@@ -207,6 +207,246 @@ async def test_direct_codex_bridge_dedup_keeps_same_text_in_distinct_turns() -> 
 
 
 @pytest.mark.asyncio
+async def test_direct_codex_bridge_retry_after_partial_commit_appends_only_tail() -> None:
+    committed: list[Any] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return list(committed)
+
+        async def append_events(self, _bridge_session_id: str, events: list[dict[str, Any]]) -> None:
+            committed.extend(
+                SimpleNamespace(
+                    event_type=event["eventType"],
+                    text_preview=event.get("textPreview"),
+                    artifact_ref=event.get("artifactRef"),
+                    metadata_=event["metadata"],
+                )
+                for event in events
+            )
+
+    request = AgentExecutionRequest(agentKind="managed", agentId="codex", correlationId="wf", idempotencyKey="idem")
+    locator = CodexManagedSessionLocator(sessionId="session", sessionEpoch=4, containerId="container", threadId="thread")
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+    events = [
+        {"type": "response.output.delta", "status": "running", "text": "same", "data": {"turnId": "turn", "sourceEventId": "position-1"}},
+        {"type": "response.output.delta", "status": "running", "text": "same", "data": {"turnId": "turn", "sourceEventId": "position-2"}},
+        {"type": "response.completed", "status": "completed", "data": {"turnId": "turn", "sourceEventId": "terminal-1"}},
+    ]
+
+    first = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator, event_payloads=events[:2], compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+    retry = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator, event_payloads=events, compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert first["eventCount"] == 2
+    assert retry["eventCount"] == 1
+    assert [event.metadata_["moonmind"]["sourceEventId"] for event in committed] == [
+        "position-1", "position-2", "terminal-1"
+    ]
+
+
+def test_direct_codex_active_observations_use_canonical_classes_and_source_ids() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=3,
+        containerId="container-1",
+        threadId="thread-3",
+    )
+
+    events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+        observations=[
+            {
+                "kind": "assistant_message_delta",
+                "turnId": "turn-7",
+                "text": "bounded delta",
+                "metadata": {"sourceEventId": "codex-event-1"},
+            },
+            {
+                "kind": "tool_call_started",
+                "turnId": "turn-7",
+                "metadata": {
+                    "sourceEventId": "codex-event-2",
+                    "toolName": "shell",
+                },
+            },
+        ],
+        source_metadata={
+            "source": "codex_direct_compat",
+            "directManagedSessionId": "direct-session-3418",
+            "sessionEpoch": 3,
+        },
+        locator=locator,
+        turn_id="turn-7",
+    )
+
+    assert [event["type"] for event in events] == [
+        "response.output.delta",
+        "session.item.tool.started",
+    ]
+    assert [event["eventId"] for event in events] == [
+        "codex-event-1",
+        "codex-event-2",
+    ]
+    assert all(
+        event["data"]["directManagedSessionId"] == "direct-session-3418"
+        for event in events
+    )
+
+
+def test_direct_codex_active_intervention_requires_authoritative_evidence() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=3,
+        containerId="container-1",
+        threadId="thread-3",
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="requires authoritative intervention evidence",
+    ):
+        TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+            observations=[{"kind": "approval_requested", "metadata": {}}],
+            source_metadata={"source": "codex_direct_compat"},
+            locator=locator,
+            turn_id="turn-7",
+        )
+
+
+def test_direct_codex_active_observations_cover_lifecycle_and_intervention_outcomes(
+) -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=4,
+        containerId="container-1",
+        threadId="thread-4",
+    )
+    authority = {
+        "actorId": "operator-1",
+        "idempotencyKey": "control-1",
+        "expectedSessionId": locator.session_id,
+        "expectedSessionEpoch": locator.session_epoch,
+        "expectedTurnId": "turn-8",
+        "outcome": "delivery_unknown",
+        "auditRef": "artifact://audit/control-1",
+    }
+
+    events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+        observations=[
+            {"kind": "turn_completed", "metadata": {"sourceEventId": "done-1"}},
+            {"kind": "intervention_delivery_unknown", "metadata": authority},
+            {"kind": "turn_canceled", "metadata": {"sourceEventId": "cancel-1"}},
+            {"kind": "turn_timed_out", "metadata": {"sourceEventId": "timeout-1"}},
+            {
+                "kind": "continuity_published",
+                "metadata": {"artifactRef": "artifact://continuity/1"},
+            },
+            {
+                "kind": "cleanup_failed",
+                "metadata": {
+                    "sourceEventId": "cleanup-1",
+                    "failureReason": "sidecar unavailable",
+                },
+            },
+        ],
+        source_metadata={"source": "codex_direct_compat"},
+        locator=locator,
+        turn_id="turn-8",
+    )
+
+    assert [event["type"] for event in events] == [
+        "session.item.turn.completed",
+        "session.item.control.delivery_unknown",
+        "session.item.terminal.canceled",
+        "session.item.terminal.timed_out",
+        "session.item.resource_published",
+        "session.item.cleanup.failed",
+    ]
+    assert events[1]["artifactRef"] == "artifact://audit/control-1"
+    assert events[4]["artifactRef"] == "artifact://continuity/1"
+    assert events[1]["metadata"]["actorId"] == "operator-1"
+
+
+def test_direct_codex_active_intervention_rejects_wrong_turn_authority() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=4,
+        containerId="container-1",
+        threadId="thread-4",
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="does not match the active turn",
+    ):
+        TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+            observations=[
+                {
+                    "kind": "intervention_completed",
+                    "metadata": {
+                        "actorId": "operator-1",
+                        "idempotencyKey": "control-1",
+                        "expectedSessionId": locator.session_id,
+                        "expectedSessionEpoch": locator.session_epoch,
+                        "expectedTurnId": "stale-turn",
+                        "outcome": "completed",
+                        "auditRef": "artifact://audit/control-1",
+                    },
+                },
+            ],
+            source_metadata={"source": "codex_direct_compat"},
+            locator=locator,
+            turn_id="turn-8",
+        )
+
+
+def test_direct_codex_dual_write_compares_independently_persisted_streams() -> None:
+    def event(kind: str, *, status: str = "running", artifact: str | None = None, text: str | None = None) -> Any:
+        return SimpleNamespace(
+            event_type=kind,
+            normalized_status=status,
+            artifact_ref=artifact,
+            text_preview=text,
+        )
+
+    reference = [
+        event("response.output", text="answer"),
+        event("session.item.control.completed", artifact="artifact://control/1"),
+        event("session.item.resource_published", artifact="artifact://resource/1"),
+        event("response.completed", status="completed"),
+    ]
+    direct = [
+        event("session.item.control.completed", artifact="artifact://control/wrong"),
+        event("response.output", text="answer"),
+        event("response.output", text="answer"),
+        event("response.completed", status="failed"),
+    ]
+
+    comparison = TemporalAgentRuntimeActivities._compare_bridge_event_streams(
+        direct_events=direct,
+        comparison_events=reference,
+    )
+
+    assert comparison["comparisonAvailable"] is True
+    assert comparison["matched"] is False
+    assert comparison["missingEventClasses"] == ["session.item.resource_published"]
+    assert comparison["unexpectedEventClasses"] == []
+    assert comparison["droppedEventCount"] == 1
+    assert comparison["duplicateEventCount"] == 1
+    assert comparison["semanticMismatchCount"] >= 1
+    reordered = TemporalAgentRuntimeActivities._compare_bridge_event_streams(
+        direct_events=list(reversed(reference)),
+        comparison_events=reference,
+    )
+    assert reordered["reordered"] is True
+
+
+@pytest.mark.asyncio
 async def test_post_merge_github_completion_applies_done_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -755,6 +755,22 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_interventions: list[dict[str, Any]] = []
 
             async def _send_current_turn() -> CodexManagedSessionTurnResponse:
+                bridge_publication = None
+                if (
+                    self._publish_bridge_events is not None
+                    and _uses_omnigent_bridge_communication(request.parameters)
+                ):
+                    bridge_publication = {
+                        "request": request.model_dump(
+                            mode="json", by_alias=True, exclude_none=True
+                        ),
+                        "binding": binding.model_dump(mode="json", by_alias=True),
+                        "locator": current_locator.model_dump(
+                            mode="json", by_alias=True
+                        ),
+                        "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                        "producer": "direct_codex_managed_session",
+                    }
                 return await self._coerce_turn_response(
                     self._send_turn(
                         SendCodexManagedSessionTurnRequest(
@@ -764,6 +780,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             threadId=current_locator.thread_id,
                             instructions=instructions,
                             requestId=f"{request.idempotency_key}:initial",
+                            bridgePublication=bridge_publication,
                         )
                     )
                 )
@@ -980,6 +997,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             current_locator = self._locator_from_state(
                 session_state=turn_response.session_state,
                 runtime_epoch=turn_response.session_state.session_epoch,
+            )
+            await self._publish_direct_codex_bridge_active(
+                request=request,
+                binding=binding,
+                locator=current_locator,
+                turn_response=turn_response,
             )
             current_active_turn_id = turn_response.session_state.active_turn_id
             if turn_response.status != "completed":
@@ -1654,6 +1677,45 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 "compatibilityProfile": "moonmind.codex_direct_compat.v1",
                 "producer": "direct_codex_managed_session",
                 "phase": "terminal",
+            }
+        )
+
+    async def _publish_direct_codex_bridge_active(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: CodexManagedSessionBinding,
+        locator: CodexManagedSessionLocator,
+        turn_response: CodexManagedSessionTurnResponse,
+    ) -> None:
+        """Append typed runtime observations before terminal/resource synthesis.
+
+        ``observabilityEvents`` is the compact, runtime-owned event contract
+        produced by the managed-session controller.  Keeping this publication
+        separate from the terminal projection prevents terminal summaries from
+        becoming authority for assistant, tool, approval, or control evidence.
+        Activity retries are safe because every runtime observation carries its
+        source identity into the bridge append deduplication key.
+        """
+        if self._publish_bridge_events is None:
+            return
+        if not _uses_omnigent_bridge_communication(request.parameters):
+            return
+        observations = turn_response.metadata.get("observabilityEvents")
+        if not isinstance(observations, list) or not observations:
+            return
+        await self._publish_bridge_events(
+            {
+                "request": request.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "binding": binding.model_dump(mode="json", by_alias=True),
+                "locator": locator.model_dump(mode="json", by_alias=True),
+                "turnId": turn_response.turn_id,
+                "observations": observations,
+                "phase": "active",
+                "compatibilityProfile": "moonmind.codex_direct_compat.v1",
+                "producer": "direct_codex_managed_session",
             }
         )
 

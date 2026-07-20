@@ -432,6 +432,36 @@ async def test_terminal_lifecycle_event_projects_session_terminal_state(store):
 
 
 @pytest.mark.asyncio
+async def test_comparison_lifecycle_event_preserves_diagnostic_fields(store):
+    request = _request()
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="pending",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="codex_direct_compat.comparison",
+        metadata={
+            "duplicateEventCount": 2,
+            "reordered": True,
+            "semanticMismatchCount": 1,
+            "comparisonAvailable": True,
+        },
+    )
+
+    events = await store.list_events(row.bridge_session_id)
+    assert events[-1].metadata_["metadata"] == {
+        "duplicateEventCount": 2,
+        "reordered": True,
+        "semanticMismatchCount": 1,
+        "comparisonAvailable": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_mark_terminal_coalesces_and_preserves_event_stream(store):
     request = _request()
     created = await store.get_or_create(
