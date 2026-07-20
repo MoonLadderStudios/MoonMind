@@ -841,8 +841,8 @@ async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redac
         row.bridge_session_id,
         request=fake_request,
         since=None,
-        cursor=2,
-        last_event_id="1",
+        cursor=1,
+        last_event_id="0",
         _enabled=SimpleNamespace(),
         user=user,
         service=service,
@@ -852,7 +852,7 @@ async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redac
     async for chunk in response.body_iterator:
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
     sse = "".join(chunks)
-    assert "id: 3" in sse and "event: terminal" in sse
+    assert "id: 2" in sse and "event: terminal" in sse
 
     durable_events = await harness.store.list_events(row.bridge_session_id)
     durable_rendered = json.dumps(
