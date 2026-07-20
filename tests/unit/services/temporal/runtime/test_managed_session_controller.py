@@ -7315,3 +7315,38 @@ async def test_wait_for_turn_streams_typed_observations_before_terminal(
     assert streamed[0][0][0]["metadata"]["sourceEventId"] == "event-1"
     assert streamed[0][1] == "turn-7"
     assert streamed[0][2].session_epoch == 2
+
+
+def test_active_session_observations_merges_authoritative_intervention_journal() -> None:
+    authority = {
+        "sourceEventId": "control-1",
+        "actorId": "operator-1",
+        "idempotencyKey": "request-1",
+        "expectedSessionId": "session-3418",
+        "expectedSessionEpoch": 2,
+        "expectedTurnId": "turn-7",
+        "outcome": "completed",
+        "auditRef": "artifact://interventions/request-1",
+    }
+    observations = DockerCodexManagedSessionController._active_session_observations(
+        {
+            "observabilityEvents": [
+                {"kind": "tool_call_started", "metadata": {"sourceEventId": "tool-1"}},
+                {"kind": "intervention_completed", "metadata": authority},
+            ],
+            "interventionJournal": [
+                {"kind": "intervention_completed", "metadata": authority},
+                {
+                    "kind": "approval_requested",
+                    "metadata": {**authority, "sourceEventId": "approval-1", "outcome": "requested"},
+                },
+            ],
+        }
+    )
+
+    assert [item["kind"] for item in observations] == [
+        "tool_call_started",
+        "intervention_completed",
+        "approval_requested",
+    ]
+    assert observations[-1]["metadata"]["auditRef"] == "artifact://interventions/request-1"

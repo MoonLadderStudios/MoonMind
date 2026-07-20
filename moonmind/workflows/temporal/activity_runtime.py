@@ -10976,38 +10976,20 @@ class TemporalAgentRuntimeActivities:
                 event for event in durable_events
                 if event_source(event) != "codex_direct_compat"
             ]
-            actual = [str(event.event_type) for event in direct_events]
-            expected = [str(event.event_type) for event in comparison_events]
-            missing = sorted(set(expected) - set(actual))
-            extra = sorted(set(actual) - set(expected))
-            dropped_count = sum(
-                max(expected.count(value) - actual.count(value), 0)
-                for value in set(expected)
+            comparison = self._compare_bridge_event_streams(
+                direct_events=direct_events,
+                comparison_events=comparison_events,
             )
-            duplicate_count = sum(
-                max(actual.count(value) - expected.count(value), 0)
-                for value in set(actual)
-            )
-            reordered = bool(
-                expected and actual and expected != actual
-                and sorted(expected) == sorted(actual)
-            )
-            semantic_fields = ("status", "artifact_ref", "text_preview")
-            semantic_mismatch_count = sum(
-                1
-                for direct, comparison in zip(direct_events, comparison_events)
-                if direct.event_type == comparison.event_type
-                and any(
-                    getattr(direct, field, None) != getattr(comparison, field, None)
-                    for field in semantic_fields
-                )
-            )
-            comparison_available = bool(comparison_events)
-            matched = (
-                comparison_available and not missing and not extra
-                and dropped_count == 0 and duplicate_count == 0
-                and not reordered and semantic_mismatch_count == 0
-            )
+            actual = comparison.pop("actualEventClasses")
+            expected = comparison.pop("expectedEventClasses")
+            missing = comparison["missingEventClasses"]
+            extra = comparison["unexpectedEventClasses"]
+            dropped_count = comparison["droppedEventCount"]
+            duplicate_count = comparison["duplicateEventCount"]
+            reordered = comparison["reordered"]
+            semantic_mismatch_count = comparison["semanticMismatchCount"]
+            comparison_available = comparison["comparisonAvailable"]
+            matched = comparison["matched"]
             await store.record_lifecycle_event(
                 request.idempotency_key,
                 event_type="codex_direct_compat.comparison",
@@ -11036,14 +11018,7 @@ class TemporalAgentRuntimeActivities:
                 },
             )
             append_result["comparison"] = {
-                "missingEventClasses": missing,
-                "unexpectedEventClasses": extra,
-                "droppedEventCount": dropped_count,
-                "duplicateEventCount": duplicate_count,
-                "reordered": reordered,
-                "semanticMismatchCount": semantic_mismatch_count,
-                "comparisonAvailable": comparison_available,
-                "matched": matched,
+                **comparison,
             }
         await store.mark_terminal(
             request.idempotency_key,
@@ -11059,6 +11034,44 @@ class TemporalAgentRuntimeActivities:
             },
         )
         return append_result
+
+    @staticmethod
+    def _compare_bridge_event_streams(
+        *, direct_events: list[Any], comparison_events: list[Any]
+    ) -> dict[str, Any]:
+        """Compare two independently persisted producer streams."""
+        actual = [str(event.event_type) for event in direct_events]
+        expected = [str(event.event_type) for event in comparison_events]
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        dropped_count = sum(max(expected.count(value) - actual.count(value), 0) for value in set(expected))
+        duplicate_count = sum(max(actual.count(value) - expected.count(value), 0) for value in set(actual))
+        reordered = bool(expected and actual and expected != actual and sorted(expected) == sorted(actual))
+        semantic_fields = ("status", "artifact_ref", "text_preview")
+        semantic_mismatch_count = sum(
+            1
+            for direct, comparison in zip(direct_events, comparison_events)
+            if direct.event_type == comparison.event_type
+            and any(getattr(direct, field, None) != getattr(comparison, field, None) for field in semantic_fields)
+        )
+        comparison_available = bool(comparison_events)
+        matched = bool(
+            comparison_available and not missing and not extra
+            and not dropped_count and not duplicate_count and not reordered
+            and not semantic_mismatch_count
+        )
+        return {
+            "expectedEventClasses": expected,
+            "actualEventClasses": actual,
+            "missingEventClasses": missing,
+            "unexpectedEventClasses": extra,
+            "droppedEventCount": dropped_count,
+            "duplicateEventCount": duplicate_count,
+            "reordered": reordered,
+            "semanticMismatchCount": semantic_mismatch_count,
+            "comparisonAvailable": comparison_available,
+            "matched": matched,
+        }
 
     @staticmethod
     def _direct_codex_active_event_payloads(

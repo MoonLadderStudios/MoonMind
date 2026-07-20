@@ -206,6 +206,50 @@ async def test_direct_codex_bridge_dedup_keeps_same_text_in_distinct_turns() -> 
     assert appended[0]["metadata"]["moonmind"]["turnId"] == "turn-2"
 
 
+@pytest.mark.asyncio
+async def test_direct_codex_bridge_retry_after_partial_commit_appends_only_tail() -> None:
+    committed: list[Any] = []
+
+    class FakeStore:
+        async def list_events(self, _bridge_session_id: str) -> list[Any]:
+            return list(committed)
+
+        async def append_events(self, _bridge_session_id: str, events: list[dict[str, Any]]) -> None:
+            committed.extend(
+                SimpleNamespace(
+                    event_type=event["eventType"],
+                    text_preview=event.get("textPreview"),
+                    artifact_ref=event.get("artifactRef"),
+                    metadata_=event["metadata"],
+                )
+                for event in events
+            )
+
+    request = AgentExecutionRequest(agentKind="managed", agentId="codex", correlationId="wf", idempotencyKey="idem")
+    locator = CodexManagedSessionLocator(sessionId="session", sessionEpoch=4, containerId="container", threadId="thread")
+    runtime = object.__new__(TemporalAgentRuntimeActivities)
+    events = [
+        {"type": "response.output.delta", "status": "running", "text": "same", "data": {"turnId": "turn", "sourceEventId": "position-1"}},
+        {"type": "response.output.delta", "status": "running", "text": "same", "data": {"turnId": "turn", "sourceEventId": "position-2"}},
+        {"type": "response.completed", "status": "completed", "data": {"turnId": "turn", "sourceEventId": "terminal-1"}},
+    ]
+
+    first = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator, event_payloads=events[:2], compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+    retry = await runtime._append_direct_codex_bridge_events(
+        store=FakeStore(), row=SimpleNamespace(bridge_session_id="bridge"), request=request,
+        locator=locator, event_payloads=events, compatibility_profile="moonmind.codex_direct_compat.v1",
+    )
+
+    assert first["eventCount"] == 2
+    assert retry["eventCount"] == 1
+    assert [event.metadata_["moonmind"]["sourceEventId"] for event in committed] == [
+        "position-1", "position-2", "terminal-1"
+    ]
+
+
 def test_direct_codex_active_observations_use_canonical_classes_and_source_ids() -> None:
     locator = CodexManagedSessionLocator(
         sessionId="direct-session-3418",
@@ -356,6 +400,42 @@ def test_direct_codex_active_intervention_rejects_wrong_turn_authority() -> None
             locator=locator,
             turn_id="turn-8",
         )
+
+
+def test_direct_codex_dual_write_compares_independently_persisted_streams() -> None:
+    def event(kind: str, *, status: str = "running", artifact: str | None = None, text: str | None = None) -> Any:
+        return SimpleNamespace(event_type=kind, status=status, artifact_ref=artifact, text_preview=text)
+
+    reference = [
+        event("response.output", text="answer"),
+        event("session.item.control.completed", artifact="artifact://control/1"),
+        event("session.item.resource_published", artifact="artifact://resource/1"),
+        event("response.completed", status="completed"),
+    ]
+    direct = [
+        event("session.item.control.completed", artifact="artifact://control/wrong"),
+        event("response.output", text="answer"),
+        event("response.output", text="answer"),
+        event("response.completed", status="failed"),
+    ]
+
+    comparison = TemporalAgentRuntimeActivities._compare_bridge_event_streams(
+        direct_events=direct,
+        comparison_events=reference,
+    )
+
+    assert comparison["comparisonAvailable"] is True
+    assert comparison["matched"] is False
+    assert comparison["missingEventClasses"] == ["session.item.resource_published"]
+    assert comparison["unexpectedEventClasses"] == []
+    assert comparison["droppedEventCount"] == 1
+    assert comparison["duplicateEventCount"] == 1
+    assert comparison["semanticMismatchCount"] >= 1
+    reordered = TemporalAgentRuntimeActivities._compare_bridge_event_streams(
+        direct_events=list(reversed(reference)),
+        comparison_events=reference,
+    )
+    assert reordered["reordered"] is True
 
 
 @pytest.mark.asyncio

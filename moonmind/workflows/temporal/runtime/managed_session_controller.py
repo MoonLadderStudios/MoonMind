@@ -2581,6 +2581,39 @@ class DockerCodexManagedSessionController:
             metadata=metadata,
         )
 
+    @staticmethod
+    def _active_session_observations(metadata: Mapping[str, Any]) -> list[Any]:
+        """Return typed runtime observations plus the authoritative intervention journal.
+
+        The intervention journal is a runtime-neutral producer contract, distinct from
+        terminal response metadata. Entries retain their source identity and authority
+        fields and are deduplicated against the general observation stream.
+        """
+        combined: list[Any] = []
+        seen_source_ids: set[str] = set()
+        for field in ("observabilityEvents", "interventionJournal"):
+            values = metadata.get(field)
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, Mapping):
+                    continue
+                item = dict(value)
+                item_metadata = item.get("metadata")
+                source_id = ""
+                if isinstance(item_metadata, Mapping):
+                    source_id = str(
+                        item_metadata.get("sourceEventId")
+                        or item_metadata.get("idempotencyKey")
+                        or ""
+                    ).strip()
+                if source_id and source_id in seen_source_ids:
+                    continue
+                if source_id:
+                    seen_source_ids.add(source_id)
+                combined.append(item)
+        return combined
+
     async def _wait_for_terminal_turn_response(
         self,
         *,
@@ -2604,8 +2637,8 @@ class DockerCodexManagedSessionController:
             handle = CodexManagedSessionHandle.model_validate(payload)
             metadata = dict(handle.metadata)
             turn_id = str(metadata.get("lastTurnId") or turn_id).strip() or turn_id
-            observations = metadata.get("observabilityEvents")
-            if observation_sink is not None and isinstance(observations, list):
+            observations = self._active_session_observations(metadata)
+            if observation_sink is not None and observations:
                 await observation_sink(
                     observations,
                     turn_id,
