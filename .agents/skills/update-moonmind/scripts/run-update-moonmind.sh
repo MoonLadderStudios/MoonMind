@@ -449,13 +449,59 @@ if ! git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
   die "Remote branch 'origin/$BRANCH' does not exist."
 fi
 
-say "Checking out local branch '$BRANCH' tracking origin/$BRANCH"
-run_cmd git checkout -B "$BRANCH" "origin/$BRANCH"
+REMOTE_COMMIT="$(git rev-parse "origin/$BRANCH")"
+mapfile -t CHANGED_FILES < <(
+  if [[ "$PRE_PULL_COMMIT" == "$REMOTE_COMMIT" ]]; then
+    printf ''
+  else
+    git diff --name-only "${PRE_PULL_COMMIT}..${REMOTE_COMMIT}" --
+  fi
+)
 
-say "Pulling latest git changes"
-run_cmd git pull --ff-only origin "$BRANCH"
+SKILL_RESOLUTION_BARRIER_REQUIRED="false"
+for changed_file in "${CHANGED_FILES[@]}"; do
+  case "$changed_file" in
+    .agents/* | moonmind/services/skill_resolution.py | moonmind/workflows/agent_skills/*)
+      SKILL_RESOLUTION_BARRIER_REQUIRED="true"
+      break
+      ;;
+  esac
+done
+
+SKILL_RESOLUTION_SERVICE="temporal-worker-agent-runtime"
+SKILL_RESOLUTION_BARRIER_ACTIVE="false"
+
+resume_skill_resolution_worker() {
+  if [[ "$SKILL_RESOLUTION_BARRIER_ACTIVE" != "true" ]]; then
+    return
+  fi
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+    warn "Cannot restart removed Skill resolution service $SKILL_RESOLUTION_SERVICE; normal Compose reconciliation must start its replacement."
+    return
+  fi
+  warn "Update exited while the Skill resolution barrier was active; restarting $SKILL_RESOLUTION_SERVICE."
+  "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE" || true
+}
+
+if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+    die "Skill resolution source changed but $SKILL_RESOLUTION_SERVICE is unavailable."
+  fi
+  say "Quiescing $SKILL_RESOLUTION_SERVICE before updating live-mounted Skill resolution source"
+  if [[ "$DRY_RUN" != "true" ]]; then
+    SKILL_RESOLUTION_BARRIER_ACTIVE="true"
+    trap resume_skill_resolution_worker EXIT
+  fi
+  run_cmd "${COMPOSE_CMD[@]}" stop "$SKILL_RESOLUTION_SERVICE"
+fi
+
+say "Checking out local branch '$BRANCH' at fetched commit $REMOTE_COMMIT"
+run_cmd git checkout -B "$BRANCH" "$REMOTE_COMMIT"
 
 POST_PULL_COMMIT="$(git rev-parse HEAD)"
+if [[ "$POST_PULL_COMMIT" != "$REMOTE_COMMIT" ]]; then
+  die "Checked-out commit $POST_PULL_COMMIT does not match fetched commit $REMOTE_COMMIT."
+fi
 
 if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   say "Pulling updated compose images"
@@ -473,17 +519,20 @@ if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
   fi
 fi
 
+if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+  if "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+    say "Recreating $SKILL_RESOLUTION_SERVICE with coherent Skill resolver, catalog, and image source"
+    run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE"
+  else
+    say "Skill resolution service $SKILL_RESOLUTION_SERVICE was removed by the update; normal Compose reconciliation will start the replacement topology"
+  fi
+  SKILL_RESOLUTION_BARRIER_ACTIVE="false"
+  trap - EXIT
+fi
+
 if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
   say "No new commit received from origin/$BRANCH; skipping file-based restart detection."
 fi
-
-mapfile -t CHANGED_FILES < <(
-  if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
-    printf ''
-  else
-    git diff --name-only "${PRE_PULL_COMMIT}..${POST_PULL_COMMIT}" --
-  fi
-)
 
 if [[ "$PRE_PULL_COMMIT" == "$POST_PULL_COMMIT" ]]; then
   if [[ "$SKIP_COMPOSE_PULL" == "true" ]]; then
@@ -563,11 +612,14 @@ for changed_file in "${CHANGED_FILES[@]}"; do
     docker-compose*.y*ml | .env* | AGENTS.md | .env-template* | .env.vllm-template* | .gitmodules )
       add_all_services
       ;;
-    moonmind/* | api_service/* | services/*)
+    moonmind/* | api_service/* | services/* | .agents/*)
       add_all_services
       add_runtime_source_services_for_recreate
+      if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+        unset "force_recreate_services[$SKILL_RESOLUTION_SERVICE]"
+      fi
       ;;
-    tools/* | .agents/* | .gemini/* | specs/* | .specify/* | docs/* | README* | LICENSE | .gitignore)
+    tools/* | .gemini/* | specs/* | .specify/* | docs/* | README* | LICENSE | .gitignore)
       add_all_services
       ;;
     init_db/*)

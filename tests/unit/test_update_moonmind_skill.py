@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +17,14 @@ UPDATE_SCRIPT = (
     / "update-moonmind"
     / "scripts"
     / "run-update-moonmind.sh"
+)
+REPLAY_ROOT = (
+    ROOT
+    / "tests"
+    / "integration"
+    / "reliability"
+    / "replays"
+    / "skill-resolution-update-skew"
 )
 
 
@@ -44,7 +53,13 @@ def _modern_bash() -> str:
     return bash
 
 
-def _run_update_scenario(tmp_path: Path, *, changed_file: str) -> list[str]:
+def _run_update_scenario(
+    tmp_path: Path,
+    *,
+    changed_file: str,
+    include_all_commands: bool = False,
+    remove_agent_runtime_after_update: bool = False,
+) -> list[str]:
     bash = _modern_bash()
     seed = tmp_path / "seed"
     remote = tmp_path / "origin.git"
@@ -94,10 +109,20 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   "config --services")
-    printf '%s\\n' api postgres temporal-worker-deployment-control temporal-worker-workflow
+    if [[ "${REMOVE_AGENT_RUNTIME_AFTER_UPDATE:-false}" == "true" ]] \
+      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" == "$UPDATE_EXPECTED_HEAD" ]]; then
+      printf '%s\\n' api postgres temporal-worker-deployment-control temporal-worker-workflow
+    else
+      printf '%s\\n' api postgres temporal-worker-agent-runtime temporal-worker-deployment-control temporal-worker-workflow
+    fi
     ;;
   "config --format")
-    printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+    if [[ "${REMOVE_AGENT_RUNTIME_AFTER_UPDATE:-false}" == "true" ]] \
+      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" == "$UPDATE_EXPECTED_HEAD" ]]; then
+      printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+    else
+      printf '%s\\n' '{"services":{"api":{"image":"moonmind:test"},"postgres":{"image":"postgres:test"},"temporal-worker-agent-runtime":{"image":"moonmind:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
+    fi
     ;;
   "pull ")
     exit 0
@@ -117,6 +142,11 @@ esac
     env = dict(os.environ)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
     env["DOCKER_LOG"] = str(docker_log)
+    env["UPDATE_CHECKOUT"] = str(checkout)
+    env["UPDATE_EXPECTED_HEAD"] = expected_head
+    env["REMOVE_AGENT_RUNTIME_AFTER_UPDATE"] = str(
+        remove_agent_runtime_after_update
+    ).lower()
     subprocess.run(
         [bash, str(UPDATE_SCRIPT), "--repo", str(checkout), "--branch", "main"],
         cwd=ROOT,
@@ -127,11 +157,10 @@ esac
     )
 
     assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected_head
-    return [
-        line
-        for line in docker_log.read_text(encoding="utf-8").splitlines()
-        if line.startswith("compose up ")
-    ]
+    commands = docker_log.read_text(encoding="utf-8").splitlines()
+    if include_all_commands:
+        return commands
+    return [line for line in commands if line.startswith("compose up ")]
 
 
 def test_runtime_source_update_force_recreates_only_application_services(
@@ -170,3 +199,66 @@ def test_documentation_update_does_not_force_recreate_services(
     assert "postgres" in up_commands[0]
     assert "temporal-worker-workflow" in up_commands[0]
     assert "temporal-worker-deployment-control" not in up_commands[0]
+
+
+def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
+    tmp_path: Path,
+) -> None:
+    manifest = json.loads(
+        (REPLAY_ROOT / "manifest.json").read_text(encoding="utf-8")
+    )
+    expected = json.loads(
+        (REPLAY_ROOT / "expected-outcome.json").read_text(encoding="utf-8")
+    )
+    commands = _run_update_scenario(
+        tmp_path,
+        changed_file=manifest["changedFile"],
+        include_all_commands=True,
+    )
+
+    stop_command = expected["stopCommand"]
+    barrier_recreate = expected["recreateCommand"]
+    assert stop_command in commands
+    assert barrier_recreate in commands
+    assert commands.count(barrier_recreate) == 1
+    assert commands.index(stop_command) < commands.index(
+        expected["composePullCommand"]
+    )
+    assert commands.index(expected["composePullCommand"]) < commands.index(
+        barrier_recreate
+    )
+    final_force_recreates = [
+        command
+        for command in commands[commands.index(barrier_recreate) + 1 :]
+        if command.startswith("compose up ") and "--force-recreate" in command
+    ]
+    assert all(
+        expected["barrierService"] not in command
+        for command in final_force_recreates
+    )
+
+
+def test_update_uses_one_fetched_commit_without_a_second_fetching_pull() -> None:
+    script = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'git checkout -B "$BRANCH" "$REMOTE_COMMIT"' in script
+    assert 'git pull --ff-only origin "$BRANCH"' not in script
+    assert '"$POST_PULL_COMMIT" != "$REMOTE_COMMIT"' in script
+
+
+def test_skill_barrier_does_not_restart_service_removed_by_update(
+    tmp_path: Path,
+) -> None:
+    expected = json.loads(
+        (REPLAY_ROOT / "expected-outcome.json").read_text(encoding="utf-8")
+    )
+    commands = _run_update_scenario(
+        tmp_path,
+        changed_file=".agents/skills/example/SKILL.md",
+        include_all_commands=True,
+        remove_agent_runtime_after_update=True,
+    )
+
+    assert expected["stopCommand"] in commands
+    assert expected["composePullCommand"] in commands
+    assert expected["recreateCommand"] not in commands
