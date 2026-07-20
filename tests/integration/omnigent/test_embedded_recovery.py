@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.datastructures import Headers
 
 from api_service.db.models import (
     Base,
@@ -28,6 +29,8 @@ from moonmind.omnigent.bridge_embedded import (
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.bridge_store import OmnigentIdempotencyError
+from moonmind.omnigent.embedded_host_channel import EmbeddedHostChannelRegistry
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -168,6 +171,41 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(
         await store.bind_embedded_runner(
             "recovery", host_id="host-1", runner_id="stale-runner"
         )
+
+
+async def test_runner_reconnect_authority_survives_api_process_restart(
+    store, session_factory,
+) -> None:
+    await _seed(store, session_factory)
+    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
+    _, token = await store.get_embedded_runner_binding_token(
+        idempotency_key="recovery"
+    )
+    runner_id = OmnigentHostAuthAdapter(
+        allowed_tokens=frozenset({token})
+    ).runner_id_for_binding_token(token)
+    await store.transition_embedded_runner("recovery", state="launch_sent")
+    await store.transition_embedded_runner("recovery", state="launch_acknowledged")
+    await store.bind_embedded_runner(
+        "recovery", host_id="host-1", runner_id=runner_id
+    )
+
+    # A new registry models an API restart: no process-local token map is needed.
+    restarted = EmbeddedHostChannelRegistry()
+    recovered, recovered_token = await store.get_embedded_runner_binding_token(
+        runner_id=runner_id
+    )
+    assert restarted.authenticate_runner(
+        runner_id=runner_id,
+        headers=Headers({"X-Omnigent-Runner-Tunnel-Token": token}),
+        binding_token=recovered_token,
+    ) == runner_id
+    assert recovered.metadata_["embedded_runner_launch"]["version"] == 1
+    assert "runner_tunnel_waiting" in {
+        transition["state"]
+        for transition in recovered.metadata_["embedded_runner_launch"]["transitions"]
+    }
+    assert token not in str(recovered.metadata_)
 
 
 async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_janitor(

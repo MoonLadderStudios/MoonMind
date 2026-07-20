@@ -200,7 +200,29 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="system_error", status_code=409,
             )
         if row.omnigent_runner_id:
-            return {"runnerId": row.omnigent_runner_id, "reused": True}
+            ready = getattr(self._host_channels, "runner_ready", lambda _id: True)(
+                row.omnigent_runner_id
+            )
+            if not ready and hasattr(self._host_channels, "wait_runner_ready"):
+                ready = await self._host_channels.wait_runner_ready(
+                    row.omnigent_runner_id, timeout_seconds=5.0
+                )
+            lifecycle = dict((row.metadata_ or {}).get("embedded_runner_launch") or {})
+            if ready and lifecycle.get("state") not in {"failed", "stale", "stopped"}:
+                if lifecycle.get("state") != "runner_tunnel_ready":
+                    await self._run_store.transition_embedded_runner(
+                        idempotency_key, state="runner_tunnel_ready",
+                        code="live_tunnel_verified",
+                    )
+                return {"runnerId": row.omnigent_runner_id, "reused": True}
+            await self._run_store.transition_embedded_runner(
+                idempotency_key, state="stale", code="runner_tunnel_not_recoverable"
+            )
+            raise OmnigentBridgeError(
+                "Durable runner assignment is not live; janitor stop/replacement is required",
+                failure_class="integration_error", status_code=503,
+                code="omnigent_embedded_runner_stale",
+            )
         workspace = _clean(row.workspace)
         if not workspace:
             raise OmnigentBridgeError(
@@ -216,15 +238,31 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         try:
+            _, binding_token = await self._run_store.get_embedded_runner_binding_token(
+                idempotency_key=idempotency_key
+            )
+            await self._run_store.transition_embedded_runner(
+                idempotency_key, state="launch_sent"
+            )
             runner_id = await self._host_channels.launch_runner(
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
                 session_id=row.omnigent_session_id,
                 harness="codex-native",
+                binding_token=binding_token,
+            )
+            await self._run_store.transition_embedded_runner(
+                idempotency_key, state="launch_acknowledged"
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
-            await self._run_store.fail_embedded_runner_launch(
-                idempotency_key, host_id=row.omnigent_host_id
+            # Once the command crossed the socket boundary, every transport
+            # failure is response-before-persist ambiguity.  Never free the
+            # reservation for a blind retry: reconciliation/cleanup must prove
+            # the old process absent before replacement.
+            await self._run_store.transition_embedded_runner(
+                idempotency_key,
+                state="stale",
+                code="host_launch_outcome_ambiguous",
             )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
@@ -266,6 +304,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                 status_code=409,
             )
         try:
+            await self._run_store.transition_embedded_runner(
+                row.idempotency_key, state="draining", code="stop_requested"
+            )
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
             )
@@ -279,6 +320,9 @@ class OmnigentEmbeddedHostProtocolFacade:
             status="canceled",
             event_identity=f"embedded-stop:{runner_id}",
             summary="stopped by MoonMind control",
+        )
+        await self._run_store.transition_embedded_runner(
+            row.idempotency_key, state="stopped", code="host_stop_acknowledged"
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 

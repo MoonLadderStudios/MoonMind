@@ -55,6 +55,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import (
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
 )
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
@@ -1471,10 +1472,20 @@ async def embedded_omnigent_runner_tunnel(
         await websocket.close(code=4404)
         return
     try:
-        embedded_host_channels.authenticate_runner(
-            runner_id=runner_id, headers=websocket.headers
+        run_store = OmnigentBridgeSessionStore(async_session_maker)
+        row, binding_token = await run_store.get_embedded_runner_binding_token(
+            runner_id=runner_id
         )
-    except (EmbeddedHostChannelError, UpstreamHostProtocolError):
+        embedded_host_channels.authenticate_runner(
+            runner_id=runner_id,
+            headers=websocket.headers,
+            binding_token=binding_token,
+        )
+    except (
+        EmbeddedHostChannelError,
+        UpstreamHostProtocolError,
+        OmnigentIdempotencyError,
+    ):
         await websocket.close(code=4401)
         return
     await websocket.accept()
@@ -1485,6 +1496,9 @@ async def embedded_omnigent_runner_tunnel(
             send_text=websocket.send_text,
             hello_text=await websocket.receive_text(),
         )
+        await run_store.transition_embedded_runner(
+            row.idempotency_key, state="runner_tunnel_ready"
+        )
         while True:
             channel.accept_frame(await websocket.receive_text())
     except WebSocketDisconnect:
@@ -1494,6 +1508,14 @@ async def embedded_omnigent_runner_tunnel(
     finally:
         if channel is not None:
             embedded_host_channels.disconnect_runner(channel)
+            try:
+                await run_store.transition_embedded_runner(
+                    row.idempotency_key,
+                    state="runner_tunnel_waiting",
+                    code="runner_tunnel_disconnected",
+                )
+            except OmnigentIdempotencyError:
+                pass
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)

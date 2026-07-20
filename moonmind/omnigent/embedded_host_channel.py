@@ -171,7 +171,6 @@ class EmbeddedHostChannelRegistry:
 
     def __init__(self) -> None:
         self._channels: dict[str, EmbeddedHostChannel] = {}
-        self._runner_tokens: dict[str, str] = {}
         self._runners: dict[str, EmbeddedRunnerChannel] = {}
 
     def connect(self, *, host_id: str, send_text: SendText) -> EmbeddedHostChannel:
@@ -198,12 +197,12 @@ class EmbeddedHostChannelRegistry:
         return channel
 
     async def launch_runner(
-        self, *, host_id: str, workspace: str, session_id: str, harness: str
+        self, *, host_id: str, workspace: str, session_id: str, harness: str,
+        binding_token: str,
     ) -> str:
         """Launch on the exact authenticated host and verify its bound identity."""
 
         channel = self.get_ready(host_id)
-        binding_token = secrets.token_urlsafe(32)
         identity = OmnigentHostAuthAdapter(
             allowed_tokens=frozenset({binding_token})
         ).runner_id_for_binding_token(binding_token)
@@ -224,7 +223,6 @@ class EmbeddedHostChannelRegistry:
             )
         if result.runner_id != identity:
             raise EmbeddedHostChannelError("host returned an invalid runner identity")
-        self._runner_tokens[identity] = binding_token
         return identity
 
     async def stop_runner(self, *, host_id: str, runner_id: str) -> None:
@@ -241,16 +239,13 @@ class EmbeddedHostChannelRegistry:
             raise EmbeddedHostChannelError(
                 f"host rejected runner stop{': ' + error if error else ''}"
             )
-        self._runner_tokens.pop(runner_id, None)
-
-    def authenticate_runner(self, *, runner_id: str, headers: Any) -> str:
+    def authenticate_runner(
+        self, *, runner_id: str, headers: Any, binding_token: str
+    ) -> str:
         """Verify a spawned runner against its host-launch binding token."""
 
-        token = self._runner_tokens.get(runner_id)
-        if token is None:
-            raise EmbeddedHostChannelError("runner launch binding is unavailable")
         identity = OmnigentHostAuthAdapter(
-            allowed_tokens=frozenset({token})
+            allowed_tokens=frozenset({binding_token})
         ).verify(headers)
         if identity.runner_id != runner_id:
             raise EmbeddedHostChannelError("runner id does not match launch binding")
@@ -264,7 +259,6 @@ class EmbeddedHostChannelRegistry:
         a later, replayed tunnel.
         """
 
-        self._runner_tokens.pop(runner_id, None)
         channel = self._runners.pop(runner_id, None)
         if channel is not None:
             channel.disconnect()
@@ -296,6 +290,23 @@ class EmbeddedHostChannelRegistry:
         channel.disconnect()
         if self._runners.get(channel.runner_id) is channel:
             self._runners.pop(channel.runner_id, None)
+
+    def runner_ready(self, runner_id: str) -> bool:
+        """Return process-local tunnel readiness; never implies durable authority."""
+
+        return runner_id in self._runners
+
+    async def wait_runner_ready(
+        self, runner_id: str, *, timeout_seconds: float = 5.0
+    ) -> bool:
+        """Bound a reconnect/startup wait without converting absence into readiness."""
+
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            if self.runner_ready(runner_id):
+                return True
+            await asyncio.sleep(0.05)
+        return self.runner_ready(runner_id)
 
     async def post_runner_event(
         self, *, runner_id: str, session_id: str, payload: dict[str, Any]

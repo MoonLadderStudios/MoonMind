@@ -145,6 +145,7 @@ async def test_launch_runner_uses_exact_host_and_rejects_identity_substitution()
         await registry.launch_runner(
             host_id="host-1", workspace="/work/repo",
             session_id="session-1", harness="codex-native",
+            binding_token="runner-binding-token",
         )
     assert sent[0]["workspace"] == "/work/repo"
     assert sent[0]["session_id"] == "session-1"
