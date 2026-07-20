@@ -24,8 +24,11 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import (
+    FIRST_MESSAGE_NOT_PREPARED,
+    FIRST_MESSAGE_PREPARED,
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
+    FIRST_MESSAGE_TERMINAL,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
@@ -33,6 +36,7 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from tests.helpers.omnigent_conformance import (
     BRIDGE_CONFORMANCE_SCENARIOS,
     FakeOmnigentServer,
+    FakeOmnigentScenario,
     RunningFakeOmnigentServer,
     start_fake_omnigent_server,
 )
@@ -285,3 +289,105 @@ async def test_scenario_09_cancellation_via_interrupt_and_stop_session(
         "interrupt",
         "stop_session",
     ]
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 409, 429, 500, 502, 504])
+async def test_failure_matrix_preserves_status_classification_and_redacts_secrets(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]], status: int
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(route_statuses=(("create_session", status),))
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await harness.proxy.create_session(request=_request(), binding=_binding(f"status-{status}"))
+
+    assert excinfo.value.status_code == status
+    assert excinfo.value.failure_class
+    assert "fake-secret" not in str(excinfo.value)
+
+
+async def test_malformed_timeout_and_close_are_deterministic_real_transport_failures(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    malformed = await bridge_harness(
+        scenario=FakeOmnigentScenario(malformed_routes=("hosts",))
+    )
+    with pytest.raises(OmnigentBridgeError, match="unsupported response shape"):
+        await malformed.proxy.list_hosts()
+
+    delayed = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            delayed_routes=("hosts",), delay_seconds=0.05
+        )
+    )
+    delayed.proxy._client = OmnigentHttpClient(  # exercise the configured real timeout
+        base_url=delayed.running.base_url, timeout_seconds=0.01
+    )
+    with pytest.raises(OmnigentBridgeError, match="transport error"):
+        await delayed.proxy.list_hosts()
+
+    closed = await bridge_harness(
+        scenario=FakeOmnigentScenario(close_routes=("hosts",))
+    )
+    with pytest.raises(OmnigentBridgeError, match="transport error"):
+        await closed.proxy.list_hosts()
+
+
+async def test_stream_reconnect_replays_frames_and_store_deduplicates_after_restart(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    frame = '{"id":"provider-1","type":"assistant.delta","delta":"same"}'
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            stream_frames=(frame, frame), stream_disconnect_attempts=1
+        )
+    )
+    created = await _create_and_post(harness, key="idem-replay")
+    streamed = [event async for event in harness.proxy.stream_events(created["id"])]
+    row = await harness.store.get_existing("idem-replay")
+    assert row is not None
+
+    first = await harness.store.append_events(row.bridge_session_id, streamed)
+    recreated_store = OmnigentBridgeSessionStore(harness.store._session_factory)
+    second = await recreated_store.append_events(row.bridge_session_id, streamed)
+    page = await recreated_store.list_event_page(row.bridge_session_id, after=0, limit=100)
+
+    assert harness.running.server.stream_attempts == 2
+    assert len(first) == 2  # one provider delta plus the terminal frame
+    assert second == []
+    assert [event.sequence for event in page.rows] == sorted(event.sequence for event in page.rows)
+
+
+async def test_first_message_state_machine_is_durable_and_never_reposts(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness()
+    key = "idem-state-matrix"
+    created = await harness.proxy.create_session(request=_request(), binding=_binding(key))
+    row = await harness.store.get_existing(key)
+    assert row is not None and row.first_message_state == FIRST_MESSAGE_NOT_PREPARED
+    assert (await harness.store.mark_prepared(key, digest="sha256:first", marker="m")).first_message_state == FIRST_MESSAGE_PREPARED
+    assert (await harness.store.mark_posting(key)).first_message_state == FIRST_MESSAGE_POSTING
+    response = await harness.proxy.post_event(
+        session_id=created["id"], event=BridgeSessionEventRequest(type="message", text="hello")
+    )
+    assert (await harness.store.mark_posted(key, response=response)).first_message_state == FIRST_MESSAGE_POSTED
+    assert (await harness.store.mark_terminal(key, status="completed")).first_message_state == FIRST_MESSAGE_TERMINAL
+    assert len(harness.running.server.session_ids) == 1
+    assert len(harness.running.server.events) == 1
+
+
+async def test_oversized_json_and_binary_are_bounded_through_facade(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(
+            oversized_json_items=300, oversized_binary_bytes=4 * 1024 * 1024 + 1
+        )
+    )
+    created = await harness.proxy.create_session(request=_request(), binding=_binding("bounds"))
+    index = await harness.proxy.get_resource("workspace_files", created["id"])
+    assert len(index["items"]) == 250
+    with pytest.raises(OmnigentBridgeError, match="exceeds the bridge response limit"):
+        await harness.proxy.get_resource("workspace_file", created["id"], "src/app.py")

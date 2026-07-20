@@ -1174,11 +1174,16 @@ class OmnigentBridgeSessionStore:
                 )
             )
             existing = set(existing_result.scalars().all())
-            pending = [
-                (event, dedup_key)
-                for event, dedup_key in zip(events, dedup_keys, strict=True)
-                if dedup_key not in existing
-            ]
+            # A reconnect can replay the same provider frame more than once in
+            # a single received batch.  Deduplicate both against committed rows
+            # and earlier entries in this batch before assigning sequences.
+            seen = set(existing)
+            pending: list[tuple[dict[str, Any], str]] = []
+            for event, dedup_key in zip(events, dedup_keys, strict=True):
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                pending.append((event, dedup_key))
             if not pending:
                 return []
             max_sequence_result = await session.execute(
