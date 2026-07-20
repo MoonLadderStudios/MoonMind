@@ -49,6 +49,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
 )
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
@@ -716,6 +717,7 @@ async def test_dispatch_persists_launch_intent_before_host_side_effect(store) ->
         "launch_reserved",
         "launch_sent",
         "launch_acknowledged",
+        "runner_identity_bound",
         "runner_tunnel_waiting",
     ]
     assert lifecycle["providerLeaseId"] == "provider-lease-1"
@@ -853,6 +855,30 @@ async def test_first_message_uses_durable_runner_and_canonical_posting_state(sto
     }]
     assert row.first_message_state == FIRST_MESSAGE_POSTED
     assert row.first_message_item_id == "item-1"
+    assert row.metadata_["embedded_runner_lifecycle"]["state"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_embedded_lifecycle_rejects_invalid_jump_and_accepts_duplicate(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
+    await store.mark_embedded_runner_state(
+        "idem-embedded", state="launch_reserved", code="launch_reserved"
+    )
+
+    with pytest.raises(OmnigentIdempotencyError, match="invalid embedded runner lifecycle transition"):
+        await store.mark_embedded_runner_state(
+            "idem-embedded", state="running", code="impossible_jump"
+        )
+
+    row = await store.get_existing("idem-embedded")
+    timeline = row.metadata_["embedded_runner_lifecycle"]["timeline"]
+    assert [entry["state"] for entry in timeline] == ["launch_reserved"]
 
 
 @pytest.mark.asyncio

@@ -317,6 +317,11 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
+        await self._run_store.mark_embedded_runner_state(
+            row.idempotency_key,
+            state="draining",
+            code="runner_stop_requested",
+        )
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id

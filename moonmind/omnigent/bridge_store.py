@@ -70,6 +70,30 @@ EMBEDDED_RUNNER_STATES = frozenset(
     }
 )
 
+# The lifecycle journal is authority, not an observational log.  Keep the
+# transition relation explicit so retries may repeat the current state, while
+# stale activities, cross-generation callbacks, and impossible state jumps
+# fail before mutating durable evidence.
+EMBEDDED_RUNNER_TRANSITIONS: dict[str | None, frozenset[str]] = {
+    # ``runner_identity_bound`` is also a valid reconstruction entrypoint for
+    # rows created from authenticated upstream evidence during recovery.
+    None: frozenset({"launch_reserved", "runner_identity_bound"}),
+    "launch_reserved": frozenset({"launch_sent", "failed", "stale"}),
+    "launch_sent": frozenset({"launch_acknowledged", "failed", "stale"}),
+    "launch_acknowledged": frozenset({"runner_identity_bound", "failed", "stale"}),
+    "runner_identity_bound": frozenset({"runner_tunnel_waiting", "runner_tunnel_ready", "failed", "stale"}),
+    "runner_tunnel_waiting": frozenset({"runner_tunnel_ready", "first_message_prepared", "draining", "failed", "stale"}),
+    "runner_tunnel_ready": frozenset({"runner_tunnel_waiting", "first_message_prepared", "draining", "failed", "stale"}),
+    "first_message_prepared": frozenset({"first_message_posting", "runner_tunnel_waiting", "draining", "failed", "stale"}),
+    "first_message_posting": frozenset({"first_message_posted", "runner_tunnel_waiting", "draining", "failed", "stale"}),
+    "first_message_posted": frozenset({"running", "runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}),
+    "running": frozenset({"runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}),
+    "draining": frozenset({"stopped", "failed", "stale"}),
+    "stale": frozenset({"draining", "stopped", "failed", "launch_reserved"}),
+    "failed": frozenset({"launch_reserved"}),
+    "stopped": frozenset(),
+}
+
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
 
@@ -125,6 +149,13 @@ def _advance_embedded_lifecycle(
     now = datetime.now(tz=UTC).isoformat()
     metadata = dict(row.metadata_ or {})
     lifecycle = dict(metadata.get(EMBEDDED_LIFECYCLE_KEY) or {})
+    previous_state = lifecycle.get("state")
+    if previous_state != state and state not in EMBEDDED_RUNNER_TRANSITIONS.get(
+        previous_state, frozenset()
+    ):
+        raise OmnigentIdempotencyError(
+            f"invalid embedded runner lifecycle transition: {previous_state or 'none'} -> {state}"
+        )
     attempt = int(lifecycle.get("attempt") or 0)
     if state == "launch_reserved" and lifecycle.get("state") != "launch_reserved":
         attempt += 1
@@ -484,7 +515,10 @@ class OmnigentBridgeSessionStore:
             metadata[EMBEDDED_LAUNCH_KEY] = launch
             row.metadata_ = metadata
             _advance_embedded_lifecycle(
-                row, "runner_tunnel_waiting", code="runner_identity_bound", runner_id=runner_id
+                row, "runner_identity_bound", code="runner_identity_bound", runner_id=runner_id
+            )
+            _advance_embedded_lifecycle(
+                row, "runner_tunnel_waiting", code="runner_tunnel_pending", runner_id=runner_id
             )
             await session.commit()
             await session.refresh(row)
@@ -1136,6 +1170,9 @@ class OmnigentBridgeSessionStore:
             if row.omnigent_endpoint_ref == "embedded":
                 _advance_embedded_lifecycle(
                     row, "first_message_posted", code="first_message_response_persisted"
+                )
+                _advance_embedded_lifecycle(
+                    row, "running", code="first_message_delivery_complete"
                 )
             await session.commit()
             await session.refresh(row)
