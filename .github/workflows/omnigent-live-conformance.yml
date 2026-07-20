@@ -112,6 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
     steps:
       - name: Download passing case evidence
         uses: actions/download-artifact@v8
@@ -131,9 +132,18 @@ jobs:
               raise SystemExit(f"expected four passing reports, found {len(reports)}")
           manifest = {
               "schemaVersion": "moonmind.omnigent.published-matrix/v1",
-              "issue": "MoonLadderStudios/MoonMind#3368",
+              "issue": "MoonLadderStudios/MoonMind#3420",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "commit": os.environ["GITHUB_SHA"],
+              "runUrl": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+              "artifactName": (
+                  f"omnigent-live-published-matrix-{os.environ['GITHUB_RUN_ID']}-"
+                  f"{os.environ['GITHUB_RUN_ATTEMPT']}"
+              ),
               "reports": [str(path) for path in reports],
               "modes": ["stock", "static", "ondemand", "failures"],
               "status": "passed",
@@ -155,7 +165,25 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issue: \`MoonLadderStudios/MoonMind#3368\`"
+            echo "- Issue: \`MoonLadderStudios/MoonMind#3420\`"
             echo "- Result: all stock, static, on-demand, and failure cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Link passing matrix from issue 3420
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact="omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          comment_file="${RUNNER_TEMP}/omnigent-matrix-comment.md"
+          {
+            echo "Credentialed Codex–Omnigent conformance matrix: PASS"
+            echo
+            echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Modes: \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
+            echo "- Durable artifact: \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the four \`report.json\` trees in \`${artifact}\`"
+          } > "$comment_file"
+          gh issue comment 3420 --repo "${{ github.repository }}" --body-file "$comment_file"

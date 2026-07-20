@@ -87,7 +87,8 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         if step.get("name") == "Write publication manifest"
     )
     assert "expected four passing reports" in manifest["run"]
-    assert "MoonLadderStudios/MoonMind#3368" in manifest["run"]
+    assert "MoonLadderStudios/MoonMind#3420" in manifest["run"]
+    assert '"commit": os.environ["GITHUB_SHA"]' in manifest["run"]
     upload = next(
         step
         for step in job["steps"]
@@ -101,3 +102,13 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert "github.run_attempt" in download["with"]["pattern"]
     assert "github.run_attempt" in upload["with"]["name"]
     assert upload["with"]["retention-days"] == 90
+    assert job["permissions"]["issues"] == "write"
+    link = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Link passing matrix from issue 3420"
+    )
+    assert "gh issue comment 3420" in link["run"]
+    assert "github.run_id" in link["run"]
+    assert "github.run_attempt" in link["run"]
+    assert "github.sha" in link["run"]
