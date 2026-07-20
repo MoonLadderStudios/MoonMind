@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-PROFILE_VERSION = "moonmind.omnigent.conformance/v2"
-PROFILE_SHA256 = "2ec0bfddc331ecc843f3b8dcf4b0cf62bf515b614296600eda31df8631f03c68"
+PROFILE_VERSION = "moonmind.omnigent.conformance/v4"
+PROFILE_SHA256 = "7da5feef349b44dfd55224398675b4202f7c93d06a708dec97758a7e90aeea2f"
 REPORT_VERSION = "moonmind.omnigent.conformance-report/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 

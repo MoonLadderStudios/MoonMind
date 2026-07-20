@@ -410,7 +410,10 @@ async def test_close_during_sse_and_missing_terminal_active_snapshot_are_explici
         )
     )
     created = await _create_and_post(closed)
-    received = [event async for event in closed.client.stream_events(created["id"])]
+    received: list[dict[str, Any]] = []
+    with pytest.raises(OmnigentClientError):
+        async for event in closed.client.stream_events(created["id"]):
+            received.append(event)
     assert [event["event_id"] for event in received] == ["provider-1"]
 
     active = await bridge_harness(
@@ -441,9 +444,11 @@ async def test_out_of_order_optional_route_and_elicitation_schema_controls(
         scenario=FakeOmnigentScenario(unavailable_routes={"resources.diff"})
     )
     created = await _create_and_post(optional, key="optional-absence")
-    assert await optional.proxy.get_resource(
-        "workspace_diff", created["id"], "README.md"
-    ) == {"available": False, "reason": "diff unavailable"}
+    with pytest.raises(OmnigentBridgeError) as unavailable:
+        await optional.proxy.get_resource(
+            "workspace_diff", created["id"], "README.md"
+        )
+    assert unavailable.value.code == "omnigent_bridge_capability_unavailable"
 
     malformed = await bridge_harness(
         scenario=FakeOmnigentScenario(
@@ -454,7 +459,7 @@ async def test_out_of_order_optional_route_and_elicitation_schema_controls(
     result = await malformed.proxy.resolve_elicitation(
         session_id=created["id"], elicitation_id="el-1", payload={"answer": "yes"}
     )
-    assert result == {"unexpected": [{"token": "secret"}]}
+    assert result == {"unexpected": [{"token": "[REDACTED]"}]}
 
 
 async def test_scenario_11_stream_replay_identity_and_malformed_frame(
@@ -519,7 +524,10 @@ async def test_scenario_11_reconnect_persists_overlap_once_and_terminalizes_appe
             ).event
             await harness.store.append_events(row.bridge_session_id, [normalized])
 
-    received = [event async for event in harness.client.stream_events(created["id"])]
+    received: list[dict[str, Any]] = []
+    with pytest.raises(OmnigentClientError):
+        async for event in harness.client.stream_events(created["id"]):
+            received.append(event)
     await persist(received, 1)
 
     # Recreate the HTTP client boundary and reconnect with one overlapping event.
