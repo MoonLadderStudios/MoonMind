@@ -607,6 +607,9 @@ for changed_file in "${CHANGED_FILES[@]}"; do
     moonmind/* | api_service/* | services/* | .agents/*)
       add_all_services
       add_runtime_source_services_for_recreate
+      if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
+        unset "force_recreate_services[$SKILL_RESOLUTION_SERVICE]"
+      fi
       ;;
     tools/* | .gemini/* | specs/* | .specify/* | docs/* | README* | LICENSE | .gitignore)
       add_all_services

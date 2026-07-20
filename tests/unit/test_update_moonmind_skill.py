@@ -204,7 +204,17 @@ def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
     barrier_recreate = expected["recreateCommand"]
     assert stop_command in commands
     assert barrier_recreate in commands
+    assert commands.count(barrier_recreate) == 1
     assert commands.index(stop_command) < commands.index(barrier_recreate)
     assert commands.index(barrier_recreate) < commands.index(
         expected["composePullCommand"]
+    )
+    final_force_recreates = [
+        command
+        for command in commands[commands.index(expected["composePullCommand"]) + 1 :]
+        if command.startswith("compose up ") and "--force-recreate" in command
+    ]
+    assert all(
+        expected["barrierService"] not in command
+        for command in final_force_recreates
     )
