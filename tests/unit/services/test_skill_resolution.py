@@ -144,6 +144,26 @@ async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_pa
     # Parity: the general-purpose batch resolver is guaranteed by the same path.
     assert "batch-pr-resolver" in resolved_names
 
+
+async def test_built_in_batch_dependabot_resolver_declares_terminal_contract():
+    results = await BuiltInSkillLoader().load_skills(
+        SkillSelector(include=[{"name": "batch-dependabot-resolver"}]),
+        SkillResolutionContext(snapshot_id="snap-batch-dependabot-resolver"),
+    )
+
+    entry = next(
+        item for item in results if item.skill_name == "batch-dependabot-resolver"
+    )
+    assert entry.terminal_contract is not None
+    assert (
+        entry.terminal_contract.contract_id
+        == "batch_dependabot_resolver_fanout.v1"
+    )
+    assert (
+        entry.terminal_contract.relative_path
+        == "artifacts/batch_dependabot_resolver_result.json"
+    )
+
 async def test_builtin_loader_ignores_cwd_agents_skills_projection(
     monkeypatch,
     tmp_path,

@@ -49,7 +49,9 @@ def _args(**overrides: Any) -> Any:
         "max_attempts": 3,
         "priority": 0,
         "package_managers": [],
-        "title_regex": r"^Bump .+ from \S+ to \S+$",
+        "title_regex": (
+            r"^(?:Bump|[Cc]hore\(deps\): bump) .+ from \S+ to \S+(?: in /.+)?$"
+        ),
         "include_security_updates": True,
         "max_prs": None,
         "dry_run": False,
@@ -116,8 +118,24 @@ def test_title_matches_default_regex() -> None:
     assert module["_title_matches"](
         "Bump eslint from 8.0.0 to 9.0.0 in /frontend", pattern
     )
+    assert module["_title_matches"](
+        "Chore(deps): bump actions/setup-node from 6 to 7", pattern
+    )
+    assert module["_title_matches"](
+        "chore(deps): bump boto3 from 1.43.46 to 1.43.51", pattern
+    )
     assert not module["_title_matches"]("Bump the pip group with 2 updates", pattern)
     assert not module["_title_matches"]("Refactor things", pattern)
+
+
+def test_likely_version_bump_title_detects_filter_contract_drift() -> None:
+    module = _load_module()
+    assert module["_looks_like_version_bump_title"](
+        "Deps: bump package from 1.0.0 to 2.0.0"
+    )
+    assert not module["_looks_like_version_bump_title"](
+        "Bump the pip group with 2 updates"
+    )
 
 
 def test_infer_repo_from_remote_returns_none_when_git_remote_unavailable(
@@ -448,6 +466,30 @@ def test_partition_package_manager_filter() -> None:
     assert (skipped[0]["pr"], skipped[0]["reason"]) == (2, "package-manager-filtered")
 
 
+def test_partition_respects_intentionally_narrow_title_override() -> None:
+    module = _load_module()
+    prs = [
+        _dependabot_pr(
+            number=1,
+            title="Deps: bump anthropic from 1.0.0 to 2.0.0",
+            headRefOid="s1",
+        )
+    ]
+    queue_requests, skipped, _ = _partition(
+        module,
+        prs,
+        title_regex=r"^Bump .+ from \S+ to \S+$",
+    )
+    assert queue_requests == []
+    assert skipped == [
+        {
+            "pr": 1,
+            "branch": "dependabot/pip/anthropic-0.107.1",
+            "reason": "title-mismatch",
+        }
+    ]
+
+
 def test_partition_security_update_excluded_when_disabled() -> None:
     module = _load_module()
     prs = [
@@ -526,6 +568,34 @@ def test_write_run_artifacts_skips_no_op_on_errors(tmp_path: Path) -> None:
     outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
     assert outcome["status"] == "failed"
     assert outcome["reason"] == "child_workflow_queue_failed"
+
+
+def test_write_run_artifacts_fails_on_default_title_contract_drift(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    payload = {
+        "dryRun": False,
+        "requested": 1,
+        "created": 0,
+        "queued": [],
+        "wouldQueue": [],
+        "skipped": [
+            {
+                "pr": 9,
+                "branch": "dependabot/pip/x",
+                "reason": "title-mismatch",
+                "likelyVersionBump": True,
+            }
+        ],
+        "errors": [],
+        "diagnostics": {"titleContractDriftPrs": [9]},
+    }
+    module["_write_run_artifacts"](tmp_path, payload)
+    outcome = json.loads((tmp_path / "skill_outcome.json").read_text())
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "dependabot_title_contract_drift"
+    assert outcome["evidence"]["titleContractDriftPrs"] == [9]
 
 
 # ---------------------------------------------------------------------------
