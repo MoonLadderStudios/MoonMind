@@ -10626,9 +10626,9 @@ class TemporalAgentRuntimeActivities:
         binding_raw = payload.get("binding")
         locator_raw = payload.get("locator")
         phase = str(payload.get("phase") or "terminal").strip()
-        if phase not in {"started", "terminal"}:
+        if phase not in {"started", "active", "terminal"}:
             raise TemporalActivityRuntimeError(
-                "payload.phase must be 'started' or 'terminal'"
+                "payload.phase must be 'started', 'active', or 'terminal'"
             )
         if not all(isinstance(value, Mapping) for value in (binding_raw, locator_raw)):
             raise TemporalActivityRuntimeError(
@@ -10716,6 +10716,29 @@ class TemporalAgentRuntimeActivities:
                 request=request,
                 locator=locator,
                 event_payloads=event_payloads,
+                compatibility_profile=compatibility_profile,
+            )
+
+        if phase == "active":
+            observations = payload.get("observations")
+            turn_id = _string_or_none_for_activity(payload.get("turnId"))
+            if not isinstance(observations, list) or turn_id is None:
+                raise TemporalActivityRuntimeError(
+                    "active payload requires turnId and observations"
+                )
+            source_metadata["turnId"] = turn_id
+            active_event_payloads = self._direct_codex_active_event_payloads(
+                observations=observations,
+                source_metadata=source_metadata,
+                locator=locator,
+                turn_id=turn_id,
+            )
+            return await self._append_direct_codex_bridge_events(
+                store=store,
+                row=row,
+                request=request,
+                locator=locator,
+                event_payloads=active_event_payloads,
                 compatibility_profile=compatibility_profile,
             )
 
@@ -10901,38 +10924,93 @@ class TemporalAgentRuntimeActivities:
             compatibility_profile=compatibility_profile,
         )
         if str(communication.get("comparisonMode") or "").strip() == "dual_write":
-            comparison_events = communication.get("comparisonEvents")
-            if not isinstance(comparison_events, list) or not comparison_events:
-                raise TemporalActivityRuntimeError(
-                    "dual_write requires non-empty communication.comparisonEvents from the comparison producer"
+            durable_events = await store.list_events(row.bridge_session_id)
+
+            def event_source(event: Any) -> str:
+                metadata = getattr(event, "metadata_", {})
+                moonmind = (
+                    metadata.get("moonmind", {})
+                    if isinstance(metadata, Mapping)
+                    else {}
                 )
-            expected = [str(event.get("type") or "").strip() for event in comparison_events if isinstance(event, Mapping)]
-            actual = [str(event.get("type") or "").strip() for event in event_payloads]
+                return str(moonmind.get("source") or "")
+
+            direct_events = [
+                event for event in durable_events
+                if event_source(event) == "codex_direct_compat"
+            ]
+            comparison_events = [
+                event for event in durable_events
+                if event_source(event) != "codex_direct_compat"
+            ]
+            actual = [str(event.event_type) for event in direct_events]
+            expected = [str(event.event_type) for event in comparison_events]
             missing = sorted(set(expected) - set(actual))
             extra = sorted(set(actual) - set(expected))
-            dropped_count = sum(max(expected.count(value) - actual.count(value), 0) for value in set(expected))
+            dropped_count = sum(
+                max(expected.count(value) - actual.count(value), 0)
+                for value in set(expected)
+            )
+            duplicate_count = sum(
+                max(actual.count(value) - expected.count(value), 0)
+                for value in set(actual)
+            )
+            reordered = bool(
+                expected and actual and expected != actual
+                and sorted(expected) == sorted(actual)
+            )
+            semantic_fields = ("status", "artifact_ref", "text_preview")
+            semantic_mismatch_count = sum(
+                1
+                for direct, comparison in zip(direct_events, comparison_events)
+                if direct.event_type == comparison.event_type
+                and any(
+                    getattr(direct, field, None) != getattr(comparison, field, None)
+                    for field in semantic_fields
+                )
+            )
+            comparison_available = bool(comparison_events)
+            matched = (
+                comparison_available and not missing and not extra
+                and dropped_count == 0 and duplicate_count == 0
+                and not reordered and semantic_mismatch_count == 0
+            )
             await store.record_lifecycle_event(
                 request.idempotency_key,
                 event_type="codex_direct_compat.comparison",
-                code="projection_mismatch" if missing else "projection_parity",
+                code=(
+                    "comparison_source_unavailable"
+                    if not comparison_available
+                    else "projection_parity" if matched else "projection_mismatch"
+                ),
                 summary=(
-                    f"Missing compatibility event classes: {', '.join(missing)}"
-                    if missing
-                    else "Direct compatibility projection classes matched."
+                    "Independent comparison producer has not emitted durable events."
+                    if not comparison_available
+                    else "Direct compatibility and independent projections matched."
+                    if matched
+                    else "Direct compatibility projection differed from the independent projection."
                 ),
                 metadata={
-                    "expectedEventClasses": sorted(expected),
-                    "actualEventClasses": sorted(actual),
+                    "expectedEventClasses": expected,
+                    "actualEventClasses": actual,
                     "missingEventClasses": missing,
                     "unexpectedEventClasses": extra,
                     "droppedEventCount": dropped_count,
+                    "duplicateEventCount": duplicate_count,
+                    "reordered": reordered,
+                    "semanticMismatchCount": semantic_mismatch_count,
+                    "comparisonAvailable": comparison_available,
                 },
             )
             append_result["comparison"] = {
                 "missingEventClasses": missing,
                 "unexpectedEventClasses": extra,
                 "droppedEventCount": dropped_count,
-                "matched": not missing and not extra and dropped_count == 0,
+                "duplicateEventCount": duplicate_count,
+                "reordered": reordered,
+                "semanticMismatchCount": semantic_mismatch_count,
+                "comparisonAvailable": comparison_available,
+                "matched": matched,
             }
         await store.mark_terminal(
             request.idempotency_key,
@@ -10948,6 +11026,91 @@ class TemporalAgentRuntimeActivities:
             },
         )
         return append_result
+
+    @staticmethod
+    def _direct_codex_active_event_payloads(
+        *,
+        observations: list[Any],
+        source_metadata: Mapping[str, Any],
+        locator: CodexManagedSessionLocator,
+        turn_id: str,
+    ) -> list[dict[str, Any]]:
+        """Map the runtime-neutral observation contract to bridge event classes."""
+        kind_map = {
+            "assistant_message_delta": "response.output.delta",
+            "assistant_message": "response.output",
+            "assistant_message_completed": "response.output.completed",
+            "tool_call_started": "session.item.tool.started",
+            "tool_call_output": "session.item.tool.output",
+            "tool_call_completed": "session.item.tool.completed",
+            "tool_call_failed": "session.item.tool.failed",
+            "approval_requested": "session.item.approval.requested",
+            "approval_resolved": "session.item.approval.resolved",
+            "intervention_requested": "session.item.control.requested",
+            "turn_started": "session.item.turn_started",
+            "turn_completed": "session.item.turn_completed",
+            "turn_failed": "session.item.turn_failed",
+            "reset_boundary_published": "session.item.reset_boundary",
+            "summary_published": "session.item.resource_published",
+            "checkpoint_published": "session.item.resource_published",
+        }
+        intervention_kinds = {
+            "approval_requested", "approval_resolved", "intervention_requested"
+        }
+        mapped: list[dict[str, Any]] = []
+        for index, raw in enumerate(observations):
+            if not isinstance(raw, Mapping):
+                continue
+            kind = str(raw.get("kind") or raw.get("type") or "").strip()
+            event_type = kind_map.get(kind)
+            if event_type is None:
+                continue
+            metadata = raw.get("metadata")
+            metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            source_event_id = str(
+                metadata.get("sourceEventId")
+                or metadata.get("eventId")
+                or f"{locator.session_id}:{locator.session_epoch}:{turn_id}:{index}:{kind}"
+            )
+            data = {
+                **dict(source_metadata),
+                **metadata,
+                "sourceEventId": source_event_id,
+                "turnId": str(raw.get("turnId") or turn_id),
+            }
+            if kind in intervention_kinds:
+                required = {
+                    "actorId", "idempotencyKey", "expectedSessionId",
+                    "expectedSessionEpoch", "expectedTurnId", "outcome", "auditRef",
+                }
+                missing = sorted(name for name in required if not data.get(name))
+                if missing:
+                    raise TemporalActivityRuntimeError(
+                        f"{kind} requires authoritative intervention evidence: "
+                        + ", ".join(missing)
+                    )
+                if (
+                    str(data["expectedSessionId"]) != locator.session_id
+                    or int(data["expectedSessionEpoch"]) != locator.session_epoch
+                    or str(data["expectedTurnId"]) != turn_id
+                ):
+                    raise TemporalActivityRuntimeError(
+                        f"{kind} expected session/epoch/turn does not match the active turn"
+                    )
+            event: dict[str, Any] = {
+                "type": event_type,
+                "status": "running",
+                "eventId": source_event_id,
+                "data": data,
+            }
+            text = str(raw.get("text") or "").strip()
+            if text:
+                event["text"] = text[:500]
+            artifact_ref = data.get("auditRef") or data.get("artifactRef")
+            if artifact_ref:
+                event["artifactRef"] = str(artifact_ref)
+            mapped.append(event)
+        return mapped
 
     async def _append_direct_codex_bridge_events(
         self,
@@ -11032,7 +11195,10 @@ class TemporalAgentRuntimeActivities:
                     "sourceEventId": next(
                         (
                             str((event.get("data") or {}).get(name))
-                            for name in ("requestId", "idempotencyKey", "controlId", "approvalId")
+                            for name in (
+                                "sourceEventId", "requestId", "idempotencyKey",
+                                "controlId", "approvalId",
+                            )
                             if (event.get("data") or {}).get(name)
                         ),
                         None,

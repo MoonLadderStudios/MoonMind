@@ -206,6 +206,74 @@ async def test_direct_codex_bridge_dedup_keeps_same_text_in_distinct_turns() -> 
     assert appended[0]["metadata"]["moonmind"]["turnId"] == "turn-2"
 
 
+def test_direct_codex_active_observations_use_canonical_classes_and_source_ids() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=3,
+        containerId="container-1",
+        threadId="thread-3",
+    )
+
+    events = TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+        observations=[
+            {
+                "kind": "assistant_message_delta",
+                "turnId": "turn-7",
+                "text": "bounded delta",
+                "metadata": {"sourceEventId": "codex-event-1"},
+            },
+            {
+                "kind": "tool_call_started",
+                "turnId": "turn-7",
+                "metadata": {
+                    "sourceEventId": "codex-event-2",
+                    "toolName": "shell",
+                },
+            },
+        ],
+        source_metadata={
+            "source": "codex_direct_compat",
+            "directManagedSessionId": "direct-session-3418",
+            "sessionEpoch": 3,
+        },
+        locator=locator,
+        turn_id="turn-7",
+    )
+
+    assert [event["type"] for event in events] == [
+        "response.output.delta",
+        "session.item.tool.started",
+    ]
+    assert [event["eventId"] for event in events] == [
+        "codex-event-1",
+        "codex-event-2",
+    ]
+    assert all(
+        event["data"]["directManagedSessionId"] == "direct-session-3418"
+        for event in events
+    )
+
+
+def test_direct_codex_active_intervention_requires_authoritative_evidence() -> None:
+    locator = CodexManagedSessionLocator(
+        sessionId="direct-session-3418",
+        sessionEpoch=3,
+        containerId="container-1",
+        threadId="thread-3",
+    )
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="requires authoritative intervention evidence",
+    ):
+        TemporalAgentRuntimeActivities._direct_codex_active_event_payloads(
+            observations=[{"kind": "approval_requested", "metadata": {}}],
+            source_metadata={"source": "codex_direct_compat"},
+            locator=locator,
+            turn_id="turn-7",
+        )
+
+
 @pytest.mark.asyncio
 async def test_post_merge_github_completion_applies_done_status(
     monkeypatch: pytest.MonkeyPatch,

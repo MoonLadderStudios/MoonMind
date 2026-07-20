@@ -808,17 +808,24 @@ must not be assumed by the contract until that change lands.
 
 The `moonmind.codex_direct_compat.v1` producer is disabled unless that explicit
 mode is selected. It publishes the active session/start, submitted user message,
-and turn-start records before the direct turn runs, then appends output,
-tool/control/approval outcomes, reset boundaries, resource notices, and the
-terminal result. Activity retries deduplicate those records against the durable
-bridge index; raw stdout/stderr and live-log lines remain artifact-backed and are
-referenced as resources instead of copied into the chat event stream.
+and turn-start records before the direct turn runs. Typed, runtime-neutral
+`observabilityEvents` are appended through a separate `active` phase before
+terminal/resource synthesis; assistant, tool, approval, control, turn, and reset
+observations therefore do not derive their authority from a terminal summary.
+Approval and control observations are rejected unless they retain actor,
+idempotency, expected session/epoch/turn, outcome, and durable audit evidence.
+Activity retries deduplicate source event IDs against the durable bridge index;
+raw stdout/stderr and live-log lines remain artifact-backed and are referenced as
+resources instead of copied into the chat event stream.
 
 For internal parity validation, deployments may set
 `communication.comparisonMode` to `dual_write`. Workflow Detail still renders
-only the bridge projection. Comparison diagnostics report missing shared event
-classes and dropped compatibility records; they never create a second visible
-timeline or claim an Omnigent host identity.
+only the bridge projection. Comparison reads the independently persisted
+non-compatibility producer stream from the durable journal; callers do not pass
+an expected event list. Diagnostics report unavailable comparison evidence,
+missing, duplicate, dropped, or reordered records, plus terminal/resource/control
+semantic mismatches. They never create a second visible timeline or claim an
+Omnigent host identity.
 
 This producer may be removed only when all of the following are true:
 
