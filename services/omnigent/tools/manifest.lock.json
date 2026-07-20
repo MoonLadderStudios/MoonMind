@@ -1,22 +1,22 @@
 {
   "schemaVersion": 1,
-  "bundleVersion": "gh-2.74.2-1",
+  "bundleVersion": "gh-2.76.2-1",
   "tools": [
     {
       "name": "gh",
-      "version": "2.74.2",
+      "version": "2.76.2",
       "platforms": {
         "linux/amd64": {
-          "url": "https://github.com/cli/cli/releases/download/v2.74.2/gh_2.74.2_linux_amd64.tar.gz",
-          "sha256": "c421091ae5800390e6aef1f50bfda59cc1d4f2ef2200bcd4e1a662c05c28c444",
-          "executableSha256": "abc2fd6b6411776b2843f320dc08a9e99b63b662e79c5752504ea696739ad408",
-          "archivePath": "gh_2.74.2_linux_amd64/bin/gh"
+          "url": "https://github.com/cli/cli/releases/download/v2.76.2/gh_2.76.2_linux_amd64.tar.gz",
+          "sha256": "62544b0f3759bbf1155c0ac3d75838b5fe23d66dfb75cf8368f84fff8f82b93e",
+          "executableSha256": "999cfe2e886adea0edc7919f6724a49d4bf2f35b8f2e0f72377bfb2d58f43c6e",
+          "archivePath": "gh_2.76.2_linux_amd64/bin/gh"
         },
         "linux/arm64": {
-          "url": "https://github.com/cli/cli/releases/download/v2.74.2/gh_2.74.2_linux_arm64.tar.gz",
-          "sha256": "f0b07f0aeaf00f137df1bd33a76e717b1945f4b83bd6a3296b365414d3eb413f",
-          "executableSha256": "f4c95edc71e91dad4f39f4a655a37d8b9cc9ae7677a299213ab06b6dd00ab0dd",
-          "archivePath": "gh_2.74.2_linux_arm64/bin/gh"
+          "url": "https://github.com/cli/cli/releases/download/v2.76.2/gh_2.76.2_linux_arm64.tar.gz",
+          "sha256": "a77f6d709c5100cda8e9bbb8d8b7143120121233d9102ba2f2bc254134db18dc",
+          "executableSha256": "24b717fc99e0faad28eff591c9c1aa8f97fc23b0854abcaadd4eb9dc40170fbc",
+          "archivePath": "gh_2.76.2_linux_arm64/bin/gh"
         }
       },
       "path": "bin/gh",
