@@ -21,6 +21,7 @@ from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
     BridgeSessionEventRequest,
+    OmnigentBridgeError,
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import (
