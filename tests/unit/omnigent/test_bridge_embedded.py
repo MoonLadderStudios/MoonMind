@@ -378,7 +378,9 @@ async def test_registration_rejects_expired_profile_bound_lease(store) -> None:
     await _bind_active_host(store, host_id="expired-host")
     async with store._session_factory() as session:
         lease = await session.get(OmnigentOAuthHostLeaseRecord, "lease-expired-host")
-        lease.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        now = datetime.now(UTC)
+        lease.acquired_at = now - timedelta(hours=2)
+        lease.expires_at = now - timedelta(seconds=1)
         await session.commit()
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store, config=_embedded_config()
