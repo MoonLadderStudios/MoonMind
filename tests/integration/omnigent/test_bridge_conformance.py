@@ -6,16 +6,20 @@ real Omnigent HTTP client for the nine documented fake-server scenarios.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from api_service.api.routers import omnigent_bridge as bridge_router
 from api_service.db.models import OmnigentBridgeSession
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
@@ -27,7 +31,9 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
+    FIRST_MESSAGE_PREPARED,
     FIRST_MESSAGE_POSTING,
+    FIRST_MESSAGE_TERMINAL,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
@@ -477,3 +483,178 @@ async def test_scenario_13_error_diagnostics_redact_credentials(
     assert "user-cookie" not in rendered
     assert "user-jwt" not in rendered
     assert "[REDACTED]" in rendered
+
+
+async def test_first_message_crash_matrix_reconciles_response_before_persist_once(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+) -> None:
+    """Prove every durable state and the ambiguous response crash boundary."""
+
+    harness = await bridge_harness(
+        scenario=FakeOmnigentScenario(event_response_before_close=True)
+    )
+    key = "idem-first-message-matrix"
+    created = await harness.proxy.create_session(
+        request=_request(), binding=_binding(key)
+    )
+    initial = await harness.store.get_existing(key)
+    assert initial is not None and initial.first_message_state == "not_prepared"
+
+    prepared = await harness.store.mark_prepared(
+        key, digest="sha256:first", marker="message:first"
+    )
+    assert prepared.first_message_state == FIRST_MESSAGE_PREPARED
+    posting = await harness.store.mark_posting(key)
+    assert posting.first_message_state == FIRST_MESSAGE_POSTING
+
+    # The provider accepted the message, then the process crashes before the
+    # returned identifiers can be persisted. Reconciliation uses provider
+    # evidence and never invokes POST a second time.
+    response = await harness.proxy.post_event(
+        session_id=created["id"],
+        event=BridgeSessionEventRequest(type="message", text="hello"),
+    )
+    ambiguous = await harness.store.get_existing(key)
+    assert ambiguous is not None
+    assert ambiguous.first_message_state == FIRST_MESSAGE_POSTING
+    assert len(harness.running.server.events) == 1
+    snapshot = await harness.proxy.get_session(created["id"])
+    assert snapshot["status"] == "completed"
+    posted = await harness.store.mark_posted(key, response=response)
+    assert posted.first_message_state == FIRST_MESSAGE_POSTED
+    assert len(harness.running.server.events) == 1
+
+    terminal = await harness.store.mark_terminal(
+        key,
+        status="completed",
+        terminal_refs={"summary": "reconciled from provider snapshot"},
+    )
+    assert terminal.first_message_state == FIRST_MESSAGE_TERMINAL
+
+
+async def test_real_store_api_page_and_sse_project_gap_cursor_terminal_and_redaction(
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]], monkeypatch
+) -> None:
+    """Drive the durable store through the API page/SSE projection functions."""
+
+    harness = await bridge_harness()
+    key = "idem-api-projection"
+    created = await _create_and_post(harness, key=key)
+    row = await harness.store.get_existing(key)
+    assert row is not None
+    secret = "Bearer github_pat_secret-do-not-persist"
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-1",
+        idempotencyKey=key,
+    )
+    for sequence, payload in (
+        (
+            2,
+            {
+                "event_id": "provider-2",
+                "type": "response.delta",
+                "data": {"text": secret},
+            },
+        ),
+        (
+            3,
+            {
+                "event_id": "provider-3",
+                "type": "response.completed",
+                "authorization": secret,
+            },
+        ),
+    ):
+        normalized = build_omnigent_bridge_event(
+            payload=payload,
+            sequence=sequence,
+            request=request,
+            omnigent_session_id=created["id"],
+            bridge_session_id=row.bridge_session_id,
+        ).event
+        await harness.store.append_events(row.bridge_session_id, [normalized])
+    await harness.store.mark_terminal(
+        key,
+        status="completed",
+        terminal_refs={
+            "summary": f"completed {secret}",
+            "diagnosticsRef": "artifact://omnigent/diagnostics",
+            "normalizedEventsRef": "artifact://omnigent/normalized",
+        },
+    )
+
+    async def owner_principal(**_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(workflow_id="mm:w1")
+
+    monkeypatch.setattr(bridge_router, "resolve_execution_principal", owner_principal)
+    user = SimpleNamespace(id="owner")
+    service = SimpleNamespace()
+    page = await bridge_router.list_omnigent_bridge_session_events(
+        row.bridge_session_id,
+        after=0,
+        cursor=None,
+        limit=100,
+        _enabled=SimpleNamespace(),
+        user=user,
+        service=service,
+        store=harness.store,
+    )
+    page_json = page.model_dump_json(by_alias=True)
+    assert page.retention_gap is not None
+    assert page.retention_gap.earliest_available == 2
+    assert page.terminal is True
+    assert page.terminal_envelope is not None
+    assert page.terminal_envelope.diagnostics_ref == "artifact://omnigent/diagnostics"
+
+    fake_request = SimpleNamespace(is_disconnected=_always_connected)
+    response = await bridge_router.stream_omnigent_bridge_session_events(
+        row.bridge_session_id,
+        request=fake_request,
+        since=None,
+        cursor=2,
+        last_event_id="1",
+        _enabled=SimpleNamespace(),
+        user=user,
+        service=service,
+        store=harness.store,
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    sse = "".join(chunks)
+    assert "id: 3" in sse and "event: terminal" in sse
+
+    durable_events = await harness.store.list_events(row.bridge_session_id)
+    durable_rendered = json.dumps(
+        [event.metadata_ for event in durable_events], default=str
+    )
+    combined = "\n".join((page_json, sse, durable_rendered))
+    assert "github_pat_secret" not in combined
+    assert "[REDACTED]" in combined
+
+    calls_before_denial = list(harness.running.server.route_calls)
+
+    async def denied_principal(**_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(workflow_id=None)
+
+    monkeypatch.setattr(bridge_router, "resolve_execution_principal", denied_principal)
+    with pytest.raises(HTTPException) as denied:
+        await bridge_router.list_omnigent_bridge_session_events(
+            row.bridge_session_id,
+            after=0,
+            cursor=None,
+            limit=100,
+            _enabled=SimpleNamespace(),
+            user=SimpleNamespace(id="foreign"),
+            service=service,
+            store=harness.store,
+        )
+    assert denied.value.status_code == 404
+    assert denied.value.detail == {"code": "omnigent_bridge_session_unknown"}
+    assert harness.running.server.route_calls == calls_before_denial
+
+
+async def _always_connected() -> bool:
+    return False
