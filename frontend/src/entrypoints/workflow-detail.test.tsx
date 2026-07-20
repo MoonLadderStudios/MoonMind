@@ -7960,6 +7960,69 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
+  it.each([
+    ['direct Codex compatibility', 'codex_direct_compat'],
+    ['Omnigent', 'omnigent_bridge'],
+  ])('projects an active %s journey through shared history, SSE, chat, and resources', async (_label, source) => {
+    window.history.pushState({}, 'Bridge parity journey', '/workflows/test-123/chat?source=temporal');
+    const priorEventSource = window.EventSource;
+    window.EventSource = MockEventSource as unknown as typeof EventSource;
+    const bridgeSessionId = `brs-parity-${source}`;
+    const execution = {
+      taskId: 'test-123', workflowId: 'test-123', namespace: 'default', source: 'temporal',
+      temporalRunId: 'parity-run', runId: 'parity-run', title: 'Active parity journey',
+      summary: 'Streaming', status: 'running', state: 'executing', rawState: 'running',
+      createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:10Z', actions: {},
+    };
+    const event = (sequence: number, kind: string, text: string, metadata: Record<string, unknown> = {}) => ({
+      sequence, timestamp: `2026-07-09T00:00:${String(sequence).padStart(2, '0')}Z`,
+      stream: 'stdout', kind, text, sessionId: bridgeSessionId,
+      metadata: { source, directSessionId: source === 'codex_direct_compat' ? 'sess-direct' : undefined, ...metadata },
+    });
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/omnigent/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
+        bridgeSessionId, workflowId: 'test-123', status: 'running', providerSessionRef: `${source}-provider`,
+        capabilities: {},
+      }) } as Response);
+      if (url.includes(`/${bridgeSessionId}/events`)) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId,
+        items: [
+          event(1, 'assistant_message', 'Shared assistant progress'),
+          event(2, 'tool_started', 'Running tests', { toolName: 'shell' }),
+          event(3, 'approval_requested', 'Approval requested', { elicitationId: 'approval-1' }),
+        ],
+        after: 0, nextCursor: '3', hasMore: false, terminal: false, latestSequence: 3,
+      }) } as Response);
+      if (url.includes(`/${bridgeSessionId}/resources`)) return Promise.resolve({ ok: true, json: async () => ({
+        schemaVersion: 'moonmind.omnigent.resource_projection.v1', bridgeSessionId, completeness: 'harvesting',
+        groups: [{ groupKey: 'artifacts', title: 'Artifacts', resources: [{
+          label: 'test-results.txt', artifactRef: 'artifact:test-results', status: 'available',
+          previewAvailable: true, downloadAvailable: true, sourceEventSequence: 2,
+        }] }],
+      }) } as Response);
+      if (url.includes('/artifacts')) return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    try {
+      renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+      expect((await screen.findAllByText('Shared assistant progress')).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Running tests/).length).toBeGreaterThan(0);
+      expect(screen.getByText('test-results.txt')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Open test-results.txt' })).toBeTruthy();
+      await waitForEventSourceInstance();
+      const stream = MockEventSource.instances.at(-1)!;
+      expect(stream.url).toContain(`/${bridgeSessionId}/stream`);
+      act(() => stream.triggerMessage(event(4, 'assistant_message', 'Shared live delta') as any));
+      expect((await screen.findAllByText('Shared live delta')).length).toBeGreaterThan(0);
+      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+    } finally {
+      window.EventSource = priorEventSource;
+    }
+  });
+
   it('renders an understandable failed-before-stream lifecycle with zero provider events', async () => {
     window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/chat?source=temporal');
     const mockExecution = {
