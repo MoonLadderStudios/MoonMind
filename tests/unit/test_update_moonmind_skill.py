@@ -147,13 +147,18 @@ esac
     env["REMOVE_AGENT_RUNTIME_AFTER_UPDATE"] = str(
         remove_agent_runtime_after_update
     ).lower()
-    subprocess.run(
+    update = subprocess.run(
         [bash, str(UPDATE_SCRIPT), "--repo", str(checkout), "--branch", "main"],
         cwd=ROOT,
         env=env,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
+    )
+    assert update.returncode == 0, (
+        f"update script failed with exit code {update.returncode}\n"
+        f"stdout:\n{update.stdout}\n"
+        f"stderr:\n{update.stderr}"
     )
 
     assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected_head
