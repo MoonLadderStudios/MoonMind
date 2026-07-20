@@ -60,6 +60,7 @@ SUPPORTED_RUN_REFS = frozenset(
 )
 _GITHUB_RANGE_PATTERN = re.compile(r"^(?P<start>\d+)-(?P<end>\d+)$")
 _GITHUB_GRAPHQL_CHUNK_SIZE = 50
+_GITHUB_MAX_SEARCH_WIDTH = 1000
 
 
 class BatchInputError(ValueError):
@@ -191,6 +192,12 @@ def resolve_github_issue_range(
     owner, name = _github_repository_parts(repository)
     normalized_repository = f"{owner}/{name}"
     start, end = parse_github_issue_range(issue_range)
+    search_width = end - start + 1
+    if search_width > _GITHUB_MAX_SEARCH_WIDTH:
+        raise BatchInputError(
+            "GitHub issue range may span no more than "
+            f"{_GITHUB_MAX_SEARCH_WIDTH} numbers"
+        )
     targets: list[dict[str, Any]] = []
 
     for chunk_start in range(start, end + 1, _GITHUB_GRAPHQL_CHUNK_SIZE):
@@ -205,9 +212,9 @@ def resolve_github_issue_range(
                 "graphql",
                 "-f",
                 f"query={query}",
-                "-F",
+                "-f",
                 f"owner={owner}",
-                "-F",
+                "-f",
                 f"name={name}",
             ],
             capture_output=True,

@@ -85,7 +85,8 @@ Progress" with a single batch run.
    the helper's `--github-issue-range` plus `--github-repository` inputs so its
    trusted GraphQL `issue(number:)` lookup returns only real Issue objects.
    Pull requests and absent numbers are omitted normally and never become
-   targets. The helper writes the resolved target artifact before queueing.
+   targets. The helper rejects numeric spans wider than 1,000 numbers before
+   querying GitHub and writes the resolved target artifact before queueing.
 
 2. **Queue child workflows** by running the helper:
 
@@ -146,6 +147,7 @@ Progress" with a single batch run.
 - Never re-select provider/model/effort in the batch form; children inherit the
   caller runtime.
 - Cap the resolved target list at `max_workflows`; a GitHub range's numeric
-  width is not the target count.
+  width is not the target count. Bound GitHub discovery independently to a
+  maximum numeric span of 1,000.
 - Targets whose selected run capability is not auto-bindable are skipped with a
   clear `unsupported_target` reason rather than queued blindly.

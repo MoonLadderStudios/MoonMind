@@ -199,6 +199,32 @@ def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
     assert "issue40: issue(number: 40)" in query_arg
     assert "issue41: issue(number: 41)" in query_arg
     assert "issue42: issue(number: 42)" in query_arg
+    assert "-F" not in calls[0]
+    assert calls[0].count("-f") == 3
+    assert "owner=acme" in calls[0]
+    assert "name=widgets" in calls[0]
+
+
+def test_resolve_github_issue_range_rejects_unbounded_scan_before_querying():
+    module = _load_module()
+    called = False
+
+    def unexpected_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("GitHub must not be queried for an oversized range")
+
+    with pytest.raises(
+        module["BatchInputError"],
+        match="may span no more than 1000 numbers",
+    ):
+        module["resolve_github_issue_range"](
+            "acme/widgets",
+            "1-1001",
+            run_command=unexpected_run,
+        )
+
+    assert called is False
 
 
 def test_parse_args_accepts_github_range_without_targets():

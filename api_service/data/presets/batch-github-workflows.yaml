@@ -152,8 +152,9 @@ steps:
     Resolve the range and queue each matched issue with "{{ inputs.run_ref }}" and
     publish override "{{ inputs.publish_mode }}" using one helper invocation. The
     portable helper performs the trusted GitHub query, excludes pull requests and
-    absent numbers, writes artifacts/batch-workflows-targets.json, applies
-    max_workflows to the resolved Issue objects, and queues the children:
+    absent numbers, rejects numeric spans wider than 1,000 before querying, writes
+    artifacts/batch-workflows-targets.json, applies max_workflows to the resolved
+    Issue objects, and queues the children:
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
     --github-issue-range "{{ inputs.issue_range }}" \
     --github-repository "{{ inputs.repository }}" \
