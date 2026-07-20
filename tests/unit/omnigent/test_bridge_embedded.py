@@ -886,6 +886,67 @@ async def test_dispatch_does_not_repeat_ambiguous_pending_launch(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_embedded_lifecycle_rejects_invalid_and_terminal_transitions(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.begin_embedded_runner_launch("idem-embedded", host_id="host-1")
+
+    with pytest.raises(OmnigentIdempotencyError, match="invalid.*launch_reserved -> running"):
+        await store.transition_embedded_runner("idem-embedded", state="running")
+    first = await store.transition_embedded_runner(
+        "idem-embedded", state="launch_sent"
+    )
+    duplicate = await store.transition_embedded_runner(
+        "idem-embedded", state="launch_sent"
+    )
+    assert len(first.metadata_["embedded_runner_launch"]["transitions"]) == len(
+        duplicate.metadata_["embedded_runner_launch"]["transitions"]
+    )
+    await store.transition_embedded_runner("idem-embedded", state="stale")
+    with pytest.raises(OmnigentIdempotencyError, match="terminal"):
+        await store.transition_embedded_runner("idem-embedded", state="running")
+
+
+@pytest.mark.asyncio
+async def test_first_message_retry_fails_closed_before_duplicate_side_effect(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+    await store.mark_prepared("idem-embedded", digest="digest", marker="marker")
+    await store.mark_posting("idem-embedded")
+
+    class Channels:
+        calls = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.calls += 1
+            raise TimeoutError("response lost")
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    event = EmbeddedHostSessionEventRequest(type="message", data={"text": "hello"})
+    with pytest.raises(OmnigentBridgeError, match="response lost"):
+        await facade.post_event(session_id="sess-embedded", event=event)
+    with pytest.raises(OmnigentBridgeError, match="outcome is ambiguous"):
+        await facade.post_event(session_id="sess-embedded", event=event)
+    assert channels.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_dispatch_marks_uncertain_launch_stale_without_retry(store) -> None:
     await store.bind_profile_authorization(
         request=_request(), endpoint_ref="embedded",

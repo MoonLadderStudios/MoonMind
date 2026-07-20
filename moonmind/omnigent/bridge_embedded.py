@@ -345,10 +345,35 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=409,
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
+        is_first_message = row.first_message_state in {
+            "posting", "posted"
+        }
+        if is_first_message:
+            if row.first_message_state == "posted":
+                return {
+                    key: value for key, value in {
+                        "pending_id": row.first_message_pending_id,
+                        "item_id": row.first_message_item_id,
+                    }.items() if value
+                }
+            try:
+                await self._run_store.claim_embedded_first_message_post(
+                    row.idempotency_key
+                )
+            except OmnigentIdempotencyError as exc:
+                raise OmnigentBridgeError(
+                    str(exc), failure_class="integration_error", status_code=409,
+                    code="omnigent_first_message_reconciliation_required",
+                ) from exc
         try:
-            return await self._host_channels.post_runner_event(
+            response = await self._host_channels.post_runner_event(
                 runner_id=runner_id, session_id=session_id, payload=payload
             )
+            if is_first_message:
+                await self._run_store.mark_posted(
+                    row.idempotency_key, response=response
+                )
+            return response
         except (EmbeddedHostChannelError, TimeoutError) as exc:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503

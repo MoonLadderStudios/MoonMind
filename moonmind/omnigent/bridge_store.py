@@ -66,6 +66,38 @@ EMBEDDED_ACTIVE_STATES = frozenset({
     "first_message_posted", "running",
 })
 EMBEDDED_TERMINAL_STATES = frozenset({"stopped", "failed", "stale"})
+EMBEDDED_TRANSITIONS = {
+    "launch_reserved": frozenset({"launch_sent", "failed", "stale"}),
+    "launch_sent": frozenset({"launch_acknowledged", "failed", "stale"}),
+    "launch_acknowledged": frozenset(
+        {"runner_identity_bound", "failed", "stale"}
+    ),
+    "runner_identity_bound": frozenset(
+        {"runner_tunnel_waiting", "runner_tunnel_ready", "failed", "stale"}
+    ),
+    "runner_tunnel_waiting": frozenset(
+        {"runner_tunnel_ready", "first_message_prepared", "draining", "failed", "stale"}
+    ),
+    "runner_tunnel_ready": frozenset(
+        {"runner_tunnel_waiting", "first_message_prepared", "draining", "failed", "stale"}
+    ),
+    "first_message_prepared": frozenset(
+        {"first_message_posting", "draining", "stopped", "failed", "stale"}
+    ),
+    "first_message_posting": frozenset(
+        {"first_message_posted", "draining", "stopped", "failed", "stale"}
+    ),
+    "first_message_posted": frozenset(
+        {"running", "runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}
+    ),
+    "running": frozenset(
+        {"runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}
+    ),
+    "draining": frozenset({"stopped", "failed", "stale"}),
+    "stopped": frozenset(),
+    "failed": frozenset(),
+    "stale": frozenset({"draining"}),
+}
 
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
@@ -418,15 +450,34 @@ class OmnigentBridgeSessionStore:
             row.omnigent_runner_id = runner_id
             metadata = dict(row.metadata_ or {})
             launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            current_state = launch.get("state")
+            if current_state == "runner_tunnel_waiting" and row.omnigent_runner_id == runner_id:
+                return _detached(session, row)
+            # Direct binding is retained for durable recovery/import callers;
+            # the live dispatch path must have an acknowledged launch.
+            if current_state and current_state not in {
+                "launch_acknowledged", "runner_identity_bound", "runner_tunnel_waiting"
+            }:
+                raise OmnigentIdempotencyError(
+                    "embedded runner identity cannot be bound from the current lifecycle state"
+                )
             launch.update(
                 {
                     "version": EMBEDDED_LIFECYCLE_VERSION,
-                    "state": "runner_tunnel_waiting",
+                    "state": "runner_identity_bound",
                     "hostId": host_id,
                     "runnerId": runner_id,
+                    "sessionId": row.omnigent_session_id,
+                    "providerProfileId": row.provider_profile_id,
+                    "providerLeaseId": row.provider_lease_id,
+                    "hostLeaseRef": row.host_lease_ref,
+                    "credentialGeneration": row.credential_generation,
                     "runnerIdentityBoundAt": datetime.now(tz=UTC).isoformat(),
                 }
             )
+            if current_state != "runner_identity_bound":
+                _append_embedded_transition(launch, "runner_identity_bound")
+            launch["state"] = "runner_tunnel_waiting"
             _append_embedded_transition(launch, "runner_tunnel_waiting")
             metadata[EMBEDDED_LAUNCH_KEY] = launch
             row.metadata_ = metadata
@@ -543,6 +594,22 @@ class OmnigentBridgeSessionStore:
             launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
             if launch.get("state") in EMBEDDED_TERMINAL_STATES:
                 raise OmnigentIdempotencyError("runner launch binding is revoked")
+            expected = {
+                "runnerId": row.omnigent_runner_id,
+                "hostId": row.omnigent_host_id,
+                "sessionId": row.omnigent_session_id,
+                "providerProfileId": row.provider_profile_id,
+                "providerLeaseId": row.provider_lease_id,
+                "hostLeaseRef": row.host_lease_ref,
+                "credentialGeneration": row.credential_generation,
+            }
+            for field, value in expected.items():
+                if field == "runnerId" and runner_id is None and value is None:
+                    continue
+                if value is None or launch.get(field) != value:
+                    raise OmnigentIdempotencyError(
+                        f"runner launch binding has stale {field} authority"
+                    )
             ref = str(launch.get("bindingSecretRef") or "")
             if not ref.startswith("db://"):
                 raise OmnigentIdempotencyError("runner launch binding is unavailable")
@@ -573,6 +640,28 @@ class OmnigentBridgeSessionStore:
             launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
             if not launch:
                 raise OmnigentIdempotencyError("runner lifecycle is not reserved")
+            current = str(launch.get("state") or "")
+            if current == state:
+                return _detached(session, row)
+            if current in EMBEDDED_TERMINAL_STATES and state not in EMBEDDED_TRANSITIONS[current]:
+                raise OmnigentIdempotencyError("terminal runner lifecycle cannot transition")
+            if state not in EMBEDDED_TRANSITIONS.get(current, frozenset()):
+                raise OmnigentIdempotencyError(
+                    f"invalid embedded runner lifecycle transition: {current} -> {state}"
+                )
+            expected = {
+                "hostId": row.omnigent_host_id,
+                "sessionId": row.omnigent_session_id,
+                "providerProfileId": row.provider_profile_id,
+                "providerLeaseId": row.provider_lease_id,
+                "hostLeaseRef": row.host_lease_ref,
+                "credentialGeneration": row.credential_generation,
+            }
+            for field, value in expected.items():
+                if launch.get(field) != value:
+                    raise OmnigentIdempotencyError(
+                        f"runner lifecycle has stale {field} authority"
+                    )
             launch.update({
                 "version": EMBEDDED_LIFECYCLE_VERSION,
                 "state": state,
@@ -590,6 +679,31 @@ class OmnigentBridgeSessionStore:
                     ))).scalars().first()
                     if secret is not None:
                         secret.status = SecretStatus.DISABLED
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def claim_embedded_first_message_post(
+        self, idempotency_key: str
+    ) -> OmnigentBridgeSession:
+        """Claim the first-message side effect once, failing closed after ambiguity."""
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.first_message_state == FIRST_MESSAGE_POSTED:
+                return _detached(session, row)
+            if row.first_message_state != FIRST_MESSAGE_POSTING:
+                raise OmnigentIdempotencyError("first message is not prepared for posting")
+            metadata = dict(row.metadata_ or {})
+            launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            if launch.get("firstMessagePostClaimedAt"):
+                raise OmnigentIdempotencyError(
+                    "first-message posting outcome is ambiguous; runner evidence is required"
+                )
+            launch["firstMessagePostClaimedAt"] = datetime.now(tz=UTC).isoformat()
+            launch["reconciliationCode"] = "first_message_side_effect_claimed"
+            metadata[EMBEDDED_LAUNCH_KEY] = launch
+            row.metadata_ = metadata
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -1503,6 +1617,13 @@ def _set_embedded_lifecycle_state(
     launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
     if not launch:
         return
+    current = str(launch.get("state") or "")
+    if current == state:
+        return
+    if state not in EMBEDDED_TRANSITIONS.get(current, frozenset()):
+        raise OmnigentIdempotencyError(
+            f"invalid embedded runner lifecycle transition: {current} -> {state}"
+        )
     launch.update({
         "version": EMBEDDED_LIFECYCLE_VERSION,
         "state": state,
