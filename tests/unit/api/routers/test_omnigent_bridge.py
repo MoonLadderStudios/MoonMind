@@ -250,10 +250,12 @@ class _FakeStore:
         return self._session()
 
 
-class _FakeEmbeddedFacade:
+class _FakeEmbeddedFacade(_FakeProxy):
     def __init__(self) -> None:
+        super().__init__()
         self.created: list[dict[str, Any]] = []
         self.stopped: list[str] = []
+        self.stream_afters: list[int] = []
 
     async def create_session(self, *, request, binding):
         self.created.append({"request": request, "binding": binding})
@@ -272,6 +274,21 @@ class _FakeEmbeddedFacade:
 
     async def get_session_owner(self, session_id: str):
         return SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
+
+    async def stream_events(self, session_id: str, *, after: int = 0):
+        assert session_id == "sess-77"
+        self.stream_afters.append(after)
+        yield {
+            "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+            "sequence": 5,
+            "type": "response.delta",
+        }
+        yield {
+            "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+            "sequence": 5,
+            "type": "terminal",
+            "terminal": True,
+        }
 
     async def stop_runner(self, *, session_id: str):
         self.stopped.append(session_id)
@@ -471,6 +488,83 @@ def test_provider_stream_authorizes_and_proxies_sse() -> None:
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream")
     assert resp.status_code == 200
     assert '"type":"response.completed"' in resp.text
+    assert "id:" not in resp.text
+
+
+def test_embedded_stream_emits_durable_sse_cursor_and_resumes() -> None:
+    monkeypatch_config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    embedded = _FakeEmbeddedFacade()
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: monkeypatch_config
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
+
+    response = TestClient(app).get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream",
+        headers={"Last-Event-ID": "4"},
+    )
+
+    assert response.status_code == 200
+    assert embedded.stream_afters == [4]
+    assert response.text.count("id: 5\n") == 2
+    assert '"type":"response.delta"' in response.text
+    assert '"type":"terminal"' in response.text
+
+
+def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
+    config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    embedded = _FakeEmbeddedFacade()
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: config
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
+    client = TestClient(app)
+    base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77"
+
+    responses = [
+        client.get(_AGENTS_PATH),
+        client.get(_HOSTS_PATH),
+        client.get(base),
+        client.post(f"{base}/attach", json=_create_body()),
+        client.post(f"{base}/events", json={"type": "interrupt"}),
+        client.post(
+            f"{base}/elicitations/el-1/resolve", json={"answer": "yes"}
+        ),
+        client.get(f"{base}/resources/files"),
+        client.get(f"{base}/stream"),
+        client.delete(base),
+    ]
+
+    assert all(response.status_code == 200 for response in responses)
+    assert embedded.posted_events[0]["event"].type == "interrupt"
+    assert embedded.resolved_elicitations[0]["elicitation_id"] == "el-1"
+    assert embedded.resource_calls == [("session_files", "sess-77", None)]
 
 
 def test_provider_stream_encodes_async_failure_without_disclosing_details() -> None:

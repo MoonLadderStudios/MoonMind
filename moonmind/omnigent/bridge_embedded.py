@@ -575,6 +575,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             }:
                 yield {
                     "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+                    "sequence": cursor,
                     "type": "terminal",
                     "status": refreshed.status,
                     "terminal": True,

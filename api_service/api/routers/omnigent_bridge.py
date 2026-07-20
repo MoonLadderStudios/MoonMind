@@ -1276,7 +1276,15 @@ async def stream_upstream_omnigent_events(
                 else facade.stream_events(session_id)
             )
             async for event in stream:
-                yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+                event_id = ""
+                if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                    sequence = event.get("sequence")
+                    if isinstance(sequence, int) and sequence >= 0:
+                        event_id = f"id: {sequence}\n"
+                yield (
+                    f"{event_id}data: "
+                    f"{json.dumps(event, separators=(',', ':'))}\n\n"
+                )
         except OmnigentBridgeError as exc:
             payload = {
                 "code": exc.code,
