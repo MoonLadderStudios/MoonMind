@@ -34,11 +34,17 @@ from moonmind.omnigent.conformance import (  # noqa: E402
     require_pinned_images,
 )
 
-PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v1.json"
+PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 PROJECT = "moonmind-test-omnigent-live"
 PROVIDER_TEST = "tests/provider/omnigent/test_omnigent_smoke.py"
 LIVE_CASES = {
-    "stock": {"stock-images.proxy"},
+    "stock": {
+        "stock-images.proxy",
+        "proxy.routes",
+        "failures.transport-status-timeout",
+        "events.replay-overlap-schema-drift",
+        "resources.bounds-and-secret-scan",
+    },
     "static": {"compose.static-codex-oauth"},
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
