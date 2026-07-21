@@ -504,6 +504,7 @@ async def test_terminal_cleanup_failure_is_redacted_and_idempotent(store) -> Non
     assert recovered.terminal_refs["cleanupState"] == "failed"
     assert recovered.terminal_refs["leaseReleaseState"] == "failed"
     assert recovered.terminal_refs["cleanupFailureCode"] == "RuntimeError"
+    assert await store.cleanup_required_host_lease_refs() == {"host-lease-1"}
     assert len(cleanup_events) == 2
     assert cleanup_events[-1].metadata_["metadata"]["controlOutcome"] == "failed"
     assert "secret-value" not in str(cleanup_events)
@@ -606,6 +607,29 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
     row = await store.get_session_by_provider_session_id(response["id"])
     assert row is not None
     assert row.omnigent_host_id == "host-1"
+
+
+@pytest.mark.asyncio
+async def test_embedded_control_rejects_unpersistable_idempotency_key(store) -> None:
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.harvest_session(
+            "sess-embedded", payload={"idempotencyKey": "x" * 221}
+        )
+
+    assert excinfo.value.status_code == 422
+    assert excinfo.value.code == "omnigent_embedded_control_key_too_long"
 
 
 @pytest.mark.asyncio

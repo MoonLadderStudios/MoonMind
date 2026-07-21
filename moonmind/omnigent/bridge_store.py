@@ -270,7 +270,7 @@ class OmnigentBridgeSessionStore:
             for host_lease_ref, terminal_refs in result.all():
                 if host_lease_ref and (terminal_refs or {}).get(
                     "cleanupState"
-                ) == "runner_exited":
+                ) in {"runner_exited", "failed"}:
                     refs.add(str(host_lease_ref))
             return refs
 
@@ -816,6 +816,10 @@ class OmnigentBridgeSessionStore:
                         "expectedRunnerId",
                         "expectedTurnState",
                         "sourceMode",
+                        "controlKey",
+                        "captureManifestRef",
+                        "resourceProjectionRef",
+                        "evidenceCompleteness",
                     }
                 }
             journal.append(entry)

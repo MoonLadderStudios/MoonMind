@@ -58,6 +58,7 @@ MAX_EMBEDDED_CAPABILITIES = 128
 MAX_EMBEDDED_CAPABILITY_BYTES = 64 * 1024
 MAX_EMBEDDED_EVENT_ENTRIES = 1024
 MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
+MAX_EMBEDDED_CONTROL_KEY_LENGTH = 220
 
 
 def _bounded_mapping(
@@ -197,6 +198,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         self._config = config
         self._host_channels = host_channels
         self._artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
+        self._event_journal_locks: dict[str, asyncio.Lock] = {}
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
@@ -484,6 +486,9 @@ class OmnigentEmbeddedHostProtocolFacade:
             return {
                 **reconciled,
                 "captureManifestRef": refreshed.capture_manifest_ref,
+                "resourceProjectionRef": (refreshed.terminal_refs or {}).get(
+                    "resourceProjectionRef"
+                ),
             }
         claimed = await self._claim_control(
             row, control_key, "harvest", "requested",
@@ -612,9 +617,15 @@ class OmnigentEmbeddedHostProtocolFacade:
                 code="omnigent_embedded_required_evidence_unavailable",
             ) from exc
         unavailable = sorted(key for key in manifest if key.endswith("Unavailable"))
-        if unavailable:
+        item_unavailable = any(
+            isinstance(item, dict) and item.get("unavailable")
+            for group in ("changedFiles", "workspaceFiles", "sessionFiles")
+            for item in (manifest.get(group) or [])
+        )
+        if unavailable or item_unavailable:
             manifest["evidenceCompleteness"] = "optional_degradation"
-            manifest["optionalEvidenceUnavailable"] = unavailable
+            if unavailable:
+                manifest["optionalEvidenceUnavailable"] = unavailable
         projection = {
             "schemaVersion": "moonmind.omnigent.resource_projection.v1",
             "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
@@ -682,7 +693,10 @@ class OmnigentEmbeddedHostProtocolFacade:
         )
         return {
             "ok": True,
-            "status": "completed_with_diagnostics" if unavailable else "completed",
+            "status": (
+                "completed_with_diagnostics"
+                if unavailable or item_unavailable else "completed"
+            ),
             "captureManifestRef": manifest_ref,
             "resourceProjectionRef": projection_ref,
         }
@@ -793,6 +807,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         self, *, row: Any, payload: dict[str, Any], control_key: str,
         control_type: str, actor: str | None = None,
     ) -> None:
+        if len(control_key) > MAX_EMBEDDED_CONTROL_KEY_LENGTH:
+            raise OmnigentBridgeError(
+                "Embedded control idempotency key exceeds the supported length",
+                failure_class="user_error", status_code=422,
+                code="omnigent_embedded_control_key_too_long",
+            )
         expected = {
             "expectedSessionId": row.omnigent_session_id,
             "expectedHostId": row.omnigent_host_id,
@@ -967,7 +987,6 @@ class OmnigentEmbeddedHostProtocolFacade:
         return {
             "id": session_id,
             "status": row.status,
-            "capabilities": capabilities,
             "agentId": row.omnigent_agent_id or "codex-native",
             "hostId": row.omnigent_host_id,
             "runnerId": row.omnigent_runner_id,
@@ -1156,6 +1175,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         return {
             "id": session_id,
             "status": row.status,
+            "capabilities": capabilities,
             "moonmind": {
                 "workflowId": binding.workflow_id,
                 "agentRunId": binding.agent_run_id,
@@ -1313,11 +1333,24 @@ class OmnigentEmbeddedHostProtocolFacade:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=502
             ) from exc
-        raw_ref, normalized_ref = await self._publish_embedded_journals(
-            row=row, payload=payload, normalized=normalized, sequence=next_sequence
+        lock = self._event_journal_locks.setdefault(
+            row.bridge_session_id, asyncio.Lock()
         )
-        normalized["artifactRef"] = normalized_ref
-        rows = await self._run_store.append_events(row.bridge_session_id, [normalized])
+        async with lock:
+            row = await self._run_store.get_bridge_session(row.bridge_session_id)
+            existing_events = await self._run_store.list_events(row.bridge_session_id)
+            next_sequence = max(
+                (event.sequence for event in existing_events), default=0
+            ) + 1
+            normalized["sequence"] = next_sequence
+            _raw_ref, normalized_ref = await self._publish_embedded_journals(
+                row=row, payload=payload, normalized=normalized,
+                sequence=next_sequence,
+            )
+            normalized["artifactRef"] = normalized_ref
+            rows = await self._run_store.append_events(
+                row.bridge_session_id, [normalized]
+            )
         return {
             "ok": True,
             "accepted": 1,
@@ -1431,7 +1464,6 @@ def _clean(value: Any) -> str:
 def _embedded_control_capabilities(
     *, terminal: bool, disconnected: bool, host_capabilities: Any
 ) -> dict[str, bool]:
-    host = host_capabilities if isinstance(host_capabilities, dict) else {}
     live = not terminal and not disconnected
     return {
         "sendMessage": live,
