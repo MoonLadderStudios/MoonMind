@@ -7,6 +7,7 @@ workflow ownership, and bridge failure classes map onto HTTP status codes.
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -50,6 +51,21 @@ _ELICITATION_RESOLVE_PATH = (
 _UNSET = object()
 
 
+@pytest.fixture(autouse=True)
+def _validated_embedded_evidence(monkeypatch):
+    """Existing embedded-route tests exercise behavior beyond the #3425 gate."""
+
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+
+    async def resolved(_config):
+        return {
+            key: {"status": "passed"}
+            for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+        }
+
+    monkeypatch.setattr(module, "_resolve_embedded_evidence", resolved)
+
+
 def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
@@ -64,6 +80,43 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert response.json()["selectedMode"] == "upstream_omnigent_server_proxy"
     assert response.json()["protocolProfile"] == "omnigent.server.v1"
     assert response.json()["conformanceState"] == "ready"
+
+
+def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) -> None:
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+    config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "arbitrary",
+                    "liveSmokeEvidenceRef": "missing",
+                    "hostAuthConformanceEvidenceRef": "unauthorized",
+                }
+            },
+        }
+    )
+
+    async def invalid(_config):
+        return {
+            key: {
+                "status": "failed",
+                "reason": "evidence_unavailable_or_invalid",
+            }
+            for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+        }
+
+    monkeypatch.setattr(module, "_resolve_embedded_evidence", invalid)
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_require_bridge_enabled] = lambda: config
+
+    response = TestClient(app).get(_READINESS_PATH)
+
+    assert response.status_code == 200
+    assert response.json()["conformanceState"] == "gated"
+    assert response.json()["gateReason"] == "validated_embedded_evidence_required"
 
 
 def _mock_user():
@@ -699,6 +752,58 @@ def test_all_id_bearing_route_classes_reject_unknown_owner() -> None:
         lambda: client.get(f"{base}/resources/files/file-1/content"),
     ]
     assert all(call().status_code == 404 for call in requests)
+    assert proxy.attached == []
+    assert proxy.deleted == []
+    assert proxy.posted_events == []
+    assert proxy.resolved_elicitations == []
+    assert proxy.resource_calls == []
+
+
+@pytest.mark.parametrize("resolution", ["deleted_binding", "ambiguous_binding"])
+def test_all_owner_authorized_route_classes_fail_closed_before_upstream(
+    resolution: str,
+) -> None:
+    """Deleted and ambiguous bindings share the non-enumerating API policy."""
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/{resolution}"
+    requests = (
+        lambda: client.get(base),
+        lambda: client.get(f"{base}/stream"),
+        lambda: client.post(f"{base}/events", json={"type": "interrupt"}),
+        lambda: client.delete(base),
+        lambda: client.get(f"{base}/resources/environments/default/changes"),
+        lambda: client.get(f"{base}/resources/files"),
+    )
+
+    responses = [request() for request in requests]
+
+    assert {response.status_code for response in responses} == {404}
+    assert all(
+        response.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
+        for response in responses
+    )
+    assert proxy.posted_events == []
+    assert proxy.deleted == []
+    assert proxy.resource_calls == []
+
+
+def test_duplicate_authorization_headers_never_survive_api_or_sse_failures() -> None:
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    secret_values = ("Bearer ghp_duplicate_one", "Bearer github_pat_duplicate_two")
+    headers = [("Authorization", value) for value in secret_values]
+    paths = (
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown",
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown/stream",
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown/resources/files",
+    )
+
+    responses = [client.request("GET", path, headers=headers) for path in paths]
+
+    assert {response.status_code for response in responses} == {404}
+    serialized = "\n".join(response.text for response in responses)
+    assert all(secret not in serialized for secret in secret_values)
     assert proxy.resource_calls == []
 
 
@@ -1044,6 +1149,69 @@ def test_stream_resumes_from_greatest_cursor_source() -> None:
     assert "evt-1" not in resp.text
     assert "evt-2" not in resp.text
     assert "evt-3" in resp.text
+
+
+def test_event_page_projects_unavailable_replay_as_explicit_retention_gap() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id=f"evt-{sequence}",
+            bridge_session_id="brs-1",
+            sequence=sequence,
+            timestamp=SimpleNamespace(
+                isoformat=lambda: "2026-07-09T00:00:00+00:00"
+            ),
+            direction="host_to_moonmind",
+            event_type="response.completed" if sequence == 4 else "response.delta",
+            normalized_status="completed" if sequence == 4 else "running",
+            text_preview=str(sequence),
+            artifact_ref=None,
+            metadata_={},
+        )
+        for sequence in (3, 4)
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events?after=0"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["retentionGap"] == {
+        "requestedAfter": 0,
+        "earliestAvailable": 3,
+    }
+    assert [item["sequence"] for item in response.json()["items"]] == [3, 4]
+    assert response.json()["terminal"] is True
+
+
+def test_sse_projects_unavailable_replay_gap_and_stops_before_later_events() -> None:
+    rows = [
+        SimpleNamespace(
+            event_id="evt-3",
+            bridge_session_id="brs-1",
+            sequence=3,
+            timestamp=SimpleNamespace(
+                isoformat=lambda: "2026-07-09T00:00:00+00:00"
+            ),
+            direction="host_to_moonmind",
+            event_type="response.delta",
+            normalized_status="running",
+            text_preview="unavailable history follows",
+            artifact_ref=None,
+            metadata_={},
+        )
+    ]
+    client, _, _ = _build(store=_FakeStore(rows=rows))
+
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/stream?cursor=0"
+    )
+
+    assert response.status_code == 200
+    assert "event: retention_gap" in response.text
+    assert '"requestedAfter":0' in response.text
+    assert '"earliestAvailable":3' in response.text
+    assert "event: bridge_event" not in response.text
 
 
 def test_terminal_page_falls_back_to_durable_session_evidence_without_events() -> None:
