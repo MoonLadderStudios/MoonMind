@@ -297,8 +297,11 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
     class Repository:
         stopped: list[str] = []
+        ordering: list[str] = []
 
         async def list_active_host_leases(self):
+            if self.stopped:
+                return []
             now = datetime.now(UTC)
             return [SimpleNamespace(
                 lease_id="host-lease-1", provider_profile_id="profile-1",
@@ -311,15 +314,21 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
             return SimpleNamespace()
 
         async def mark_host_lease_stopped(self, lease_id):
+            self.ordering.append("host_lease_released")
             self.stopped.append(lease_id)
 
     class Runtime:
         async def container_exists(self, _name): return True
-        async def stop_host(self, **_kwargs): return None
+        async def stop_host(self, **_kwargs):
+            repository.ordering.append("credential_host_stopped")
         async def list_managed_containers(self): return []
 
     repository = Repository()
     result = await OmnigentOAuthHostJanitor(
+        repository=repository, runtime=Runtime(), client=SimpleNamespace(),
+        run_store=store,
+    ).run()
+    repeated = await OmnigentOAuthHostJanitor(
         repository=repository, runtime=Runtime(), client=SimpleNamespace(),
         run_store=store,
     ).run()
@@ -333,5 +342,107 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
     ]
     assert result["actions"][-1]["action"] == "runner_lifecycle_cleanup"
     assert repository.stopped == ["host-lease-1"]
+    assert repository.ordering == ["credential_host_stopped", "host_lease_released"]
+    assert repeated["count"] == 0
     assert row.terminal_refs["cleanupState"] == "host_stopped"
     assert row.terminal_refs["cleanupCompleted"] is True
+    assert row.terminal_refs["reconciliationAction"] == "replacement_ready"
+    assert row.terminal_refs["replacementPermitted"] is True
+
+
+@pytest.mark.parametrize(
+    ("boundary", "states", "runner_count", "message_count", "cleanup_required"),
+    [
+        ("reservation_before_send", ["launch_reserved"], 0, 0, False),
+        ("send_before_ack", ["launch_reserved", "launch_sent", "stale"], 1, 0, True),
+        (
+            "ack_before_binding",
+            ["launch_reserved", "launch_sent", "launch_acknowledged", "stale"],
+            1, 0, True,
+        ),
+        (
+            "binding_before_tunnel",
+            ["launch_reserved", "launch_sent", "launch_acknowledged",
+             "runner_identity_bound", "runner_tunnel_waiting", "stale"],
+            1, 0, True,
+        ),
+        (
+            "tunnel_before_ready_persist",
+            ["launch_reserved", "launch_sent", "launch_acknowledged",
+             "runner_identity_bound", "runner_tunnel_waiting", "runner_tunnel_ready"],
+            1, 0, False,
+        ),
+        (
+            "message_response_before_persist",
+            ["launch_reserved", "launch_sent", "launch_acknowledged",
+             "runner_identity_bound", "runner_tunnel_waiting", "runner_tunnel_ready",
+             "first_message_prepared", "first_message_posting", "first_message_posted"],
+            1, 1, False,
+        ),
+        (
+            "runner_exit_before_terminal_persist",
+            ["launch_reserved", "launch_sent", "launch_acknowledged",
+             "runner_identity_bound", "runner_tunnel_waiting", "runner_tunnel_ready",
+             "first_message_prepared", "first_message_posting", "first_message_posted",
+             "running", "failed"],
+            1, 1, True,
+        ),
+    ],
+)
+async def test_seven_boundary_durable_recovery_matrix(
+    store, session_factory, boundary, states, runner_count, message_count,
+    cleanup_required,
+) -> None:
+    """Every documented crash boundary has one durable, non-duplicating decision."""
+
+    await _seed(store, session_factory)
+    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
+    runner_id = None
+    for state in states[1:]:
+        if state == "runner_identity_bound":
+            _, token = await store.get_embedded_runner_binding_token(
+                idempotency_key="recovery"
+            )
+            runner_id = OmnigentHostAuthAdapter(
+                allowed_tokens=frozenset({token})
+            ).runner_id_for_binding_token(token)
+            await store.bind_embedded_runner(
+                "recovery", host_id="host-1", runner_id=runner_id
+            )
+        elif state == "runner_tunnel_waiting":
+            # Binding persists this state atomically.
+            continue
+        elif state == "first_message_prepared":
+            await store.mark_prepared("recovery", digest="digest", marker="marker")
+        elif state == "first_message_posting":
+            await store.mark_posting("recovery")
+            await store.claim_embedded_first_message_post("recovery")
+        elif state == "first_message_posted":
+            await store.mark_posted(
+                "recovery",
+                response={"pending_id": "pending-1", "item_id": "item-1"},
+            )
+        elif state == "failed" and runner_id:
+            await store.record_embedded_runner_exit(
+                runner_id=runner_id, error=f"crash at {boundary}"
+            )
+        else:
+            await store.transition_embedded_runner(
+                "recovery", state=state, code=f"matrix_{boundary}"
+            )
+
+    row = await store.get_existing("recovery")
+    launch = row.metadata_["embedded_runner_launch"]
+    assert [entry["state"] for entry in launch["transitions"]] == states
+    runner_side_effect_count = int("launch_sent" in states)
+    assert runner_side_effect_count == runner_count
+    assert runner_side_effect_count <= 1
+    assert (row.omnigent_runner_id is not None) is (
+        "runner_identity_bound" in states
+    )
+    assert int(row.first_message_state in {"posted", "terminal"}) == message_count
+    cleanup_refs = await store.cleanup_required_host_lease_refs()
+    assert (row.host_lease_ref in cleanup_refs) is cleanup_required
+    if cleanup_required:
+        assert row.terminal_refs["reconciliationAction"] == "stop_host_then_replace"
+        assert row.terminal_refs["replacementPermitted"] is False

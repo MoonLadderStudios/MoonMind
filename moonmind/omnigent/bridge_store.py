@@ -743,6 +743,12 @@ class OmnigentBridgeSessionStore:
                         "failureClass": "integration_error",
                         "janitorRequired": True,
                         "reconciliationCode": code,
+                        # Replacement is never authorized while the
+                        # credential-consuming host still owns its leases.
+                        # The janitor turns this into ``replacement_ready``
+                        # only after stop_host and mark_host_lease_stopped.
+                        "reconciliationAction": "stop_host_then_replace",
+                        "replacementPermitted": False,
                     })
                     row.terminal_refs = terminal_refs
             await session.commit()
@@ -792,6 +798,8 @@ class OmnigentBridgeSessionStore:
                     "hostLeaseReleased": True,
                     "janitorRequired": False,
                     "cleanupAction": action,
+                    "reconciliationAction": "replacement_ready",
+                    "replacementPermitted": True,
                 })
                 row.terminal_refs = refs
                 identities.append(row.idempotency_key)
