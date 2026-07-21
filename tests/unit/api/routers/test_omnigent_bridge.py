@@ -90,6 +90,10 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
+    host_auth_module = importlib.import_module("moonmind.omnigent.host_auth_profile")
+    monkeypatch.setattr(
+        host_auth_module, "assert_pinned_omnigent_auth_contract", lambda: None
+    )
     monkeypatch.setitem(
         embedded_host_auth_preflight.__globals__,
         "_BRIDGE_CONFIG",
