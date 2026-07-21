@@ -14,7 +14,7 @@ from moonmind.omnigent.host_auth_profile import (
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
 async def test_concurrent_rotation_has_one_generation_winner_on_postgres() -> None:
