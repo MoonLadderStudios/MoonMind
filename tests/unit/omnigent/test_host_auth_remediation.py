@@ -222,6 +222,48 @@ async def test_websocket_profile_failure_close_code_matrix(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "http_status", "ws_code", "retryable"),
+    [
+        (HostAuthProfileError("revoked", code="host_auth_revoked"), 503, 4403, False),
+        (HostAuthProfileError("disabled", code="host_auth_disabled"), 503, 4403, False),
+        (
+            HostAuthProfileError("incompatible", code="host_auth_profile_incompatible"),
+            503,
+            1013,
+            True,
+        ),
+        (
+            HostAuthProfileError("unavailable", code="host_auth_secret_unavailable"),
+            503,
+            1013,
+            True,
+        ),
+    ],
+)
+async def test_http_websocket_profile_failure_retryability_matrix(
+    monkeypatch, failure, http_status, ws_code, retryable
+) -> None:
+    """Profile failures retain stable HTTP/WS retry interpretations."""
+
+    monkeypatch.setattr(
+        bridge_router, "_active_host_auth_profile", AsyncMock(side_effect=failure)
+    )
+    with pytest.raises(HTTPException) as http_exc:
+        await bridge_router._embedded_auth_context(
+            request=SimpleNamespace(headers={}), config=_embedded_config()
+        )
+    assert http_exc.value.status_code == http_status
+    assert http_exc.value.detail["code"] == failure.code
+    assert (ws_code == 1013) is retryable
+
+    socket = _HandshakeSocket({})
+    monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
+    await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
+    assert socket.closes == [(ws_code, failure.code)]
+
+
+@pytest.mark.asyncio
 async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypatch) -> None:
     token = "sentinel-connected-token"
     runner_id = OmnigentHostAuthAdapter(
@@ -297,6 +339,15 @@ def test_http_auth_parity_and_cross_channel_sentinel_scan(caplog) -> None:
     ("headers", "http_status", "http_code", "ws_code"),
     [
         ({}, 401, "host_auth_rejected", 4401),
+        (
+            _Headers({
+                "X-Omnigent-Runner-Tunnel-Token": "current",
+                "x-omnigent-runner-tunnel-token": "duplicate",
+            }),
+            401,
+            "host_auth_rejected",
+            4401,
+        ),
         (
             _Headers({"X-Omnigent-Runner-Tunnel-Token": "invalid"}),
             401,
