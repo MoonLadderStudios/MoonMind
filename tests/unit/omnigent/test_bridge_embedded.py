@@ -953,6 +953,55 @@ async def test_embedded_message_rejects_expected_state_before_delivery(store) ->
     evidence = events[0].metadata_["embeddedControl"]
     assert evidence["actor"] == "user:user-1"
     assert "stale-runner" in evidence["requestSummary"]
+    assert evidence["evidenceRef"].startswith("artifact://omnigent/")
+    assert events[0].artifact_refs == [evidence["evidenceRef"]]
+
+
+@pytest.mark.asyncio
+async def test_embedded_elicitation_validates_caller_state_and_reconciles_timeout(store) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo", "turnState": "awaiting_approval"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = 0
+
+        async def request_runner(self, **_kwargs):
+            self.calls += 1
+            raise TimeoutError("delivery outcome unknown")
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    with pytest.raises(OmnigentBridgeError, match="delivery outcome unknown"):
+        await facade.resolve_elicitation(
+            session_id="sess-embedded", elicitation_id="approval-1",
+            payload={"decision": "approve"}, actor="user:user-1",
+            expected_state={"turnState": "awaiting_approval"},
+            idempotency_key="elicitation-control-1",
+        )
+    result = await facade.reconcile_control(
+        session_id="sess-embedded", control="elicitation",
+        idempotency_key="elicitation-control-1", outcome="completed",
+    )
+
+    assert result["outcome"] == "completed"
+    assert channels.calls == 1
+    row = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.event_type for event in events] == [
+        "control.elicitation.requested",
+        "control.elicitation.accepted",
+        "control.elicitation.delivery_unknown",
+        "control.elicitation.completed",
+    ]
+    assert events[0].metadata_["embeddedControl"]["actor"] == "user:user-1"
 
 
 @pytest.mark.asyncio
