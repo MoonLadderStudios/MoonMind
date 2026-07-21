@@ -255,7 +255,10 @@ class OmnigentEmbeddedHostProtocolFacade:
             runner_id=runner_id, error=error
         )
 
-    async def stop_runner(self, *, session_id: str) -> dict[str, Any]:
+    async def stop_runner(
+        self, *, session_id: str, payload: dict[str, Any] | None = None,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
         """Stop the exact runner durably bound to an embedded session."""
 
         self._require_embedded_mode()
@@ -274,13 +277,20 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
-        control_key = f"stop:{session_id}:{runner_id}"
+        payload = payload or {}
+        control_key = _clean(payload.get("idempotencyKey")) or (
+            f"stop:{session_id}:{runner_id}"
+        )
+        await self._validate_control_expectations(
+            row=row, payload=payload, control_key=control_key,
+            control_type="stop", actor=actor,
+        )
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             return {**reconciled, "runnerId": runner_id}
         claimed = await self._claim_control(
             row, control_key, "stop", "requested",
-            summary="Embedded stop requested",
+            summary="Embedded stop requested", actor=actor,
         )
         if not claimed:
             return {**(await self._reconcile_claimed_control(control_key)), "runnerId": runner_id}
@@ -292,7 +302,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             await self._record_control(
                 row, control_key, "stop", "delivery_unknown",
                 code="omnigent_embedded_control_delivery_unknown",
-                summary=str(exc),
+                summary=str(exc), actor=actor,
             )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503,
@@ -300,7 +310,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             ) from exc
         await self._record_control(
             row, control_key, "stop", "accepted",
-            summary="Embedded host accepted stop",
+            summary="Embedded host accepted stop", actor=actor,
         )
         await self._run_store.record_lifecycle_event(
             row.idempotency_key,
@@ -311,12 +321,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         )
         await self._record_control(
             row, control_key, "stop", "completed",
-            summary="Embedded runner stopped",
+            summary="Embedded runner stopped", actor=actor,
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 
     async def post_event(
-        self, *, session_id: str, event: Any
+        self, *, session_id: str, event: Any, actor: str | None = None
     ) -> dict[str, Any]:
         """Post a message through the exact durably bound runner tunnel."""
 
@@ -337,14 +347,15 @@ class OmnigentEmbeddedHostProtocolFacade:
         supplied_key = _clean(payload.get("idempotencyKey"))
         control_key = supplied_key or f"message:{session_id}:{_stable_payload_digest(payload)}"
         await self._validate_control_expectations(
-            row=row, payload=payload, control_key=control_key, control_type="message"
+            row=row, payload=payload, control_key=control_key,
+            control_type="message", actor=actor,
         )
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             return reconciled
         claimed = await self._claim_control(
             row, control_key, "message", "requested",
-            summary=_bounded_request_summary(payload),
+            summary=_bounded_request_summary(payload), actor=actor,
         )
         if not claimed:
             return await self._reconcile_claimed_control(control_key)
@@ -356,6 +367,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             await self._record_control(
                 row, control_key, "message", "delivery_unknown",
                 code="omnigent_embedded_control_delivery_unknown", summary=str(exc),
+                actor=actor,
             )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503,
@@ -363,11 +375,11 @@ class OmnigentEmbeddedHostProtocolFacade:
             ) from exc
         await self._record_control(
             row, control_key, "message", "accepted",
-            summary="Embedded host accepted message",
+            summary="Embedded host accepted message", actor=actor,
         )
         await self._record_control(
             row, control_key, "message", "completed",
-            summary="Embedded message delivered",
+            summary="Embedded message delivered", actor=actor,
         )
         return response
 
@@ -454,10 +466,18 @@ class OmnigentEmbeddedHostProtocolFacade:
     async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
         return await self.get_resource("session_file", session_id, file_id)
 
-    async def harvest_session(self, session_id: str) -> dict[str, Any]:
+    async def harvest_session(
+        self, session_id: str, *, payload: dict[str, Any] | None = None,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
         """Publish embedded resources through the canonical artifact contract."""
         row, _runner_id = await self._bound_runner(session_id)
-        control_key = f"harvest:{session_id}"
+        payload = payload or {}
+        control_key = _clean(payload.get("idempotencyKey")) or f"harvest:{session_id}"
+        await self._validate_control_expectations(
+            row=row, payload=payload, control_key=control_key,
+            control_type="harvest", actor=actor,
+        )
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             refreshed = await self._run_store.get_bridge_session(row.bridge_session_id)
@@ -467,13 +487,13 @@ class OmnigentEmbeddedHostProtocolFacade:
             }
         claimed = await self._claim_control(
             row, control_key, "harvest", "requested",
-            summary="Embedded resource harvest requested",
+            summary="Embedded resource harvest requested", actor=actor,
         )
         if not claimed:
             return await self._reconcile_claimed_control(control_key)
         await self._record_control(
             row, control_key, "harvest", "accepted",
-            summary="Embedded resource harvest accepted",
+            summary="Embedded resource harvest accepted", actor=actor,
         )
         request = _request_for_row(row)
         refs: dict[str, str] = {
@@ -540,7 +560,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             row, control_key, "harvest", "completed",
             summary="Embedded resource evidence published",
             code=None,
-            audit_ref=manifest_ref,
+            audit_ref=manifest_ref, actor=actor,
         )
         return {
             "ok": True,
@@ -550,7 +570,8 @@ class OmnigentEmbeddedHostProtocolFacade:
         }
 
     async def resolve_elicitation(
-        self, *, session_id: str, elicitation_id: str, payload: dict[str, Any]
+        self, *, session_id: str, elicitation_id: str, payload: dict[str, Any],
+        actor: str | None = None,
     ) -> dict[str, Any]:
         """Resolve an elicitation through the exact durably bound runner."""
 
@@ -560,7 +581,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         )
         await self._validate_control_expectations(
             row=row, payload=payload, control_key=control_key,
-            control_type="elicitation",
+            control_type="elicitation", actor=actor,
         )
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
@@ -568,7 +589,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         claimed = await self._claim_control(
             row, control_key, "elicitation", "requested",
             summary=f"Resolve elicitation {_safe_resource_identifier(elicitation_id)}",
-            control_id=elicitation_id,
+            control_id=elicitation_id, actor=actor,
         )
         if not claimed:
             return await self._reconcile_claimed_control(control_key)
@@ -588,7 +609,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             await self._record_control(
                 row, control_key, "elicitation", "delivery_unknown",
                 code="omnigent_embedded_control_delivery_unknown", summary=str(exc),
-                control_id=elicitation_id,
+                control_id=elicitation_id, actor=actor,
             )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503,
@@ -597,10 +618,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         await self._record_control(
             row, control_key, "elicitation", "accepted",
             summary="Embedded elicitation resolution accepted", control_id=elicitation_id,
+            actor=actor,
         )
         await self._record_control(
             row, control_key, "elicitation", "completed",
             summary="Embedded elicitation resolved", control_id=elicitation_id,
+            actor=actor,
         )
         return response
 
@@ -650,7 +673,7 @@ class OmnigentEmbeddedHostProtocolFacade:
 
     async def _validate_control_expectations(
         self, *, row: Any, payload: dict[str, Any], control_key: str,
-        control_type: str,
+        control_type: str, actor: str | None = None,
     ) -> None:
         expected = {
             "expectedSessionId": row.omnigent_session_id,
@@ -673,7 +696,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         await self._record_control(
             row, control_key, control_type, "rejected",
             code="omnigent_embedded_control_state_mismatch",
-            summary=f"Embedded control rejected: {field} mismatch",
+            summary=f"Embedded control rejected: {field} mismatch", actor=actor,
         )
         raise OmnigentBridgeError(
             "Embedded control expected state does not match the durable binding",
@@ -684,7 +707,7 @@ class OmnigentEmbeddedHostProtocolFacade:
     async def _record_control(
         self, row: Any, control_key: str, control_type: str, outcome: str, *,
         summary: str, code: str | None = None, control_id: str | None = None,
-        audit_ref: str | None = None,
+        audit_ref: str | None = None, actor: str | None = None,
     ) -> None:
         await self._run_store.record_lifecycle_event(
             row.idempotency_key,
@@ -695,13 +718,14 @@ class OmnigentEmbeddedHostProtocolFacade:
             summary=summary,
             diagnostics_ref=audit_ref,
             metadata=self._control_metadata(
-                row, control_key, control_type, outcome, control_id=control_id
+                row, control_key, control_type, outcome, control_id=control_id,
+                actor=actor,
             ),
         )
 
     async def _claim_control(
         self, row: Any, control_key: str, control_type: str, outcome: str, *,
-        summary: str, control_id: str | None = None,
+        summary: str, control_id: str | None = None, actor: str | None = None,
     ) -> bool:
         return await self._run_store.claim_lifecycle_event(
             row.idempotency_key,
@@ -709,7 +733,8 @@ class OmnigentEmbeddedHostProtocolFacade:
             event_identity=f"embedded-control:{control_key}:{outcome}",
             summary=summary,
             metadata=self._control_metadata(
-                row, control_key, control_type, outcome, control_id=control_id
+                row, control_key, control_type, outcome, control_id=control_id,
+                actor=actor,
             ),
         )
 
@@ -727,7 +752,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         control_id: str | None = None, actor: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "actor": actor or "moonmind_authenticated_principal",
+            "actor": actor or "moonmind_system",
             "controlType": control_type,
             "controlOutcome": outcome,
             "controlId": control_id,
@@ -853,10 +878,15 @@ class OmnigentEmbeddedHostProtocolFacade:
             },
         }
 
-    async def stop_session(self, session_id: str) -> dict[str, Any]:
+    async def stop_session(
+        self, session_id: str, *, payload: dict[str, Any] | None = None,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
         """Stop the exact bound runner through the common facade contract."""
 
-        return await self.stop_runner(session_id=session_id)
+        return await self.stop_runner(
+            session_id=session_id, payload=payload, actor=actor
+        )
 
     async def attach_session(
         self, *, session_id: str, binding: BridgePrincipalBinding

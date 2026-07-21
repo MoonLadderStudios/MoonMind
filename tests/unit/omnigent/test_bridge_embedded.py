@@ -771,12 +771,33 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store, config=_embedded_config(), host_channels=Channels()
     )
-    result = await facade.stop_runner(session_id="sess-embedded")
+    result = await facade.stop_runner(
+        session_id="sess-embedded",
+        payload={
+            "idempotencyKey": "stop-request-1",
+            "expectedSessionId": "sess-embedded",
+            "expectedHostId": "host-1",
+            "expectedRunnerId": "runner-1",
+        },
+        actor="user-42",
+    )
     row = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
 
     assert result == {"ok": True, "status": "stopped", "runnerId": "runner-1"}
     assert row.status == "canceled"
     assert "embedded_runner_exit" not in row.metadata_
+    control_metadata = [
+        event.metadata_["metadata"]
+        for event in events
+        if (event.metadata_ or {}).get("eventIdentity", "").startswith(
+            "embedded-control:stop-request-1:"
+        )
+    ]
+    assert {item["actor"] for item in control_metadata} == {"user-42"}
+    assert {item["controlIdempotencyKey"] for item in control_metadata} == {
+        "stop-request-1"
+    }
 
 
 @pytest.mark.asyncio
