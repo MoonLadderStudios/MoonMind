@@ -1061,6 +1061,62 @@ async def test_embedded_duplicate_control_does_not_repeat_live_side_effect(store
 
 
 @pytest.mark.asyncio
+async def test_embedded_control_claim_precedes_live_side_effect(store) -> None:
+    """Issue #3424 makes an in-flight duplicate reconcile without redelivery."""
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    delivery_started = asyncio.Event()
+    release_delivery = asyncio.Event()
+
+    class Channels:
+        calls = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.calls += 1
+            delivery_started.set()
+            await release_delivery.wait()
+            return {"ok": True}
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    event = BridgeSessionEventRequest(
+        type="message", data={"text": "hello"}, idempotencyKey="control-race"
+    )
+
+    first_task = asyncio.create_task(
+        facade.post_event(session_id="sess-embedded", event=event)
+    )
+    await delivery_started.wait()
+    duplicate = await facade.post_event(session_id="sess-embedded", event=event)
+    release_delivery.set()
+    first = await first_task
+
+    assert first == {"ok": True}
+    assert duplicate == {
+        "ok": False,
+        "status": "delivery_unknown",
+        "idempotencyKey": "control-race",
+        "reconciled": True,
+    }
+    assert channels.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_embedded_control_rejects_expected_turn_state_mismatch(store) -> None:
     """Issue #3424 rejects stale controls before their live side effect."""
     await store.bind_profile_authorization(

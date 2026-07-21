@@ -278,10 +278,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             return {**reconciled, "runnerId": runner_id}
-        await self._record_control(
+        claimed = await self._claim_control(
             row, control_key, "stop", "requested",
             summary="Embedded stop requested",
         )
+        if not claimed:
+            return {**(await self._reconcile_claimed_control(control_key)), "runnerId": runner_id}
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
@@ -340,10 +342,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             return reconciled
-        await self._record_control(
+        claimed = await self._claim_control(
             row, control_key, "message", "requested",
             summary=_bounded_request_summary(payload),
         )
+        if not claimed:
+            return await self._reconcile_claimed_control(control_key)
         try:
             response = await self._host_channels.post_runner_event(
                 runner_id=runner_id, session_id=session_id, payload=payload
@@ -461,10 +465,12 @@ class OmnigentEmbeddedHostProtocolFacade:
                 **reconciled,
                 "captureManifestRef": refreshed.capture_manifest_ref,
             }
-        await self._record_control(
+        claimed = await self._claim_control(
             row, control_key, "harvest", "requested",
             summary="Embedded resource harvest requested",
         )
+        if not claimed:
+            return await self._reconcile_claimed_control(control_key)
         await self._record_control(
             row, control_key, "harvest", "accepted",
             summary="Embedded resource harvest accepted",
@@ -559,11 +565,13 @@ class OmnigentEmbeddedHostProtocolFacade:
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             return reconciled
-        await self._record_control(
+        claimed = await self._claim_control(
             row, control_key, "elicitation", "requested",
             summary=f"Resolve elicitation {_safe_resource_identifier(elicitation_id)}",
             control_id=elicitation_id,
         )
+        if not claimed:
+            return await self._reconcile_claimed_control(control_key)
         path = self._config.public_api.routes.resolve_elicitation.format(
             session_id=quote(session_id, safe=""),
             elicitation_id=quote(_safe_resource_identifier(elicitation_id), safe=""),
@@ -686,18 +694,50 @@ class OmnigentEmbeddedHostProtocolFacade:
             code=code,
             summary=summary,
             diagnostics_ref=audit_ref,
-            metadata={
-                "actor": "moonmind_authenticated_principal",
-                "controlType": control_type,
-                "controlOutcome": outcome,
-                "controlId": control_id,
-                "controlIdempotencyKey": control_key,
-                "expectedSessionId": row.omnigent_session_id,
-                "expectedHostId": row.omnigent_host_id,
-                "expectedRunnerId": row.omnigent_runner_id,
-                "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
-            },
+            metadata=self._control_metadata(
+                row, control_key, control_type, outcome, control_id=control_id
+            ),
         )
+
+    async def _claim_control(
+        self, row: Any, control_key: str, control_type: str, outcome: str, *,
+        summary: str, control_id: str | None = None,
+    ) -> bool:
+        return await self._run_store.claim_lifecycle_event(
+            row.idempotency_key,
+            event_type="control",
+            event_identity=f"embedded-control:{control_key}:{outcome}",
+            summary=summary,
+            metadata=self._control_metadata(
+                row, control_key, control_type, outcome, control_id=control_id
+            ),
+        )
+
+    async def _reconcile_claimed_control(self, control_key: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "status": "delivery_unknown",
+            "idempotencyKey": control_key,
+            "reconciled": True,
+        }
+
+    @staticmethod
+    def _control_metadata(
+        row: Any, control_key: str, control_type: str, outcome: str, *,
+        control_id: str | None = None, actor: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "actor": actor or "moonmind_authenticated_principal",
+            "controlType": control_type,
+            "controlOutcome": outcome,
+            "controlId": control_id,
+            "controlIdempotencyKey": control_key,
+            "expectedSessionId": row.omnigent_session_id,
+            "expectedHostId": row.omnigent_host_id,
+            "expectedRunnerId": row.omnigent_runner_id,
+            "expectedTurnState": row.first_message_state,
+            "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        }
 
     async def _bound_runner(self, session_id: str) -> tuple[Any, str]:
         self._require_embedded_mode()

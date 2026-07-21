@@ -587,6 +587,62 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession:
         """Append a bounded, secret-safe pre-stream lifecycle event."""
 
+        row, _created = await self._record_lifecycle_event(
+            idempotency_key,
+            event_type=event_type,
+            status=status,
+            event_identity=event_identity,
+            code=code,
+            summary=summary,
+            failure_class=failure_class,
+            diagnostics_ref=diagnostics_ref,
+            remediation_action=remediation_action,
+            metadata=metadata,
+        )
+        return row
+
+    async def claim_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        event_identity: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Atomically claim a logical side effect with a durable event.
+
+        The bridge-session row lock serializes competing claimants.  Exactly one
+        caller creates the stable event identity and may perform the live side
+        effect; later callers must reconcile the already durable control state.
+        """
+
+        _row, created = await self._record_lifecycle_event(
+            idempotency_key,
+            event_type=event_type,
+            status="running",
+            event_identity=event_identity,
+            summary=summary,
+            metadata=metadata,
+        )
+        return created
+
+    async def _record_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        status: str = "running",
+        event_identity: str | None = None,
+        code: str | None = None,
+        summary: str | None = None,
+        failure_class: str | None = None,
+        diagnostics_ref: str | None = None,
+        remediation_action: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[OmnigentBridgeSession, bool]:
+        """Record one stable lifecycle identity and report whether it was new."""
+
         from moonmind.utils.logging import redact_sensitive_text
 
         async with self._session_factory() as session:
@@ -609,7 +665,7 @@ class OmnigentBridgeSessionStore:
             )
             existing = await session.get(OmnigentBridgeSessionEvent, stable_event_id)
             if existing is not None:
-                return _detached(session, row)
+                return _detached(session, row), False
             max_sequence_result = await session.execute(
                 select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
                     OmnigentBridgeSessionEvent.bridge_session_id
@@ -710,7 +766,7 @@ class OmnigentBridgeSessionStore:
                 row.first_message_state = FIRST_MESSAGE_TERMINAL
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            return _detached(session, row), True
 
     async def get_binding(self, idempotency_key: str) -> BridgeSessionBinding | None:
         """Return the MoonMind identity already bound to a bridge session.
