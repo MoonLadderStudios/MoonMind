@@ -182,7 +182,7 @@ class _FakeProxy:
             raise self.stream_error
         yield {"type": "response.completed", "session": {"status": "completed"}}
 
-    async def post_event(self, *, session_id: str, event):
+    async def post_event(self, *, session_id: str, event, actor=None):
         self.posted_events.append({"session_id": session_id, "event": event})
         return {"ok": True, "type": event.type}
 
@@ -358,7 +358,7 @@ class _FakeEmbeddedFacade(_FakeProxy):
         self.stopped.append(session_id)
         return {"ok": True, "status": "stopped", "runnerId": "runner-1"}
 
-    async def stop_session(self, session_id: str):
+    async def stop_session(self, session_id: str, *, payload=None, actor=None):
         return await self.stop_runner(session_id=session_id)
 
 
