@@ -87,7 +87,6 @@ def _event_projection(event: Any) -> dict[str, Any]:
         "normalizedStatus": event.normalized_status,
         "direction": event.direction,
         "textPreview": event.text_preview,
-        "artifactRef": event.artifact_ref,
         "moonmind": event.metadata_["moonmind"],
     }
 

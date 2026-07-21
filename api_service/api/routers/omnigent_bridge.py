@@ -1293,9 +1293,29 @@ async def post_omnigent_session_event(
     )
     try:
         if payload.type in {"stop", "session.stop", "stop_session"}:
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                assert embedded_facade is not None
+                return await embedded_facade.stop_session(
+                    session_id,
+                    payload=payload.model_dump(by_alias=True, exclude_none=True),
+                    actor=str(user.id),
+                )
             return await control_facade.stop_session(session_id)
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
+            if payload.type == "harvest_session":
+                return await embedded_facade.harvest_session(
+                    session_id,
+                    payload=payload.model_dump(by_alias=True, exclude_none=True),
+                    actor=str(user.id),
+                )
+            if payload.type in {"clear_session", "reset_session"}:
+                raise OmnigentBridgeError(
+                    "Embedded clear/reset requires a new session and idempotency key.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="omnigent_embedded_new_session_required",
+                )
             if payload.type == "interrupt":
                 raise OmnigentBridgeError(
                     "Embedded interrupt is not supported by the pinned host "
@@ -1311,7 +1331,9 @@ async def post_omnigent_session_event(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     code="omnigent_embedded_control_unsupported",
                 )
-            return await embedded_facade.post_event(session_id=session_id, event=payload)
+            return await embedded_facade.post_event(
+                session_id=session_id, event=payload, actor=str(user.id)
+            )
         assert proxy is not None
         return await proxy.post_event(session_id=session_id, event=payload)
     except OmnigentBridgeError as exc:
@@ -1361,6 +1383,7 @@ async def resolve_omnigent_elicitation(
             session_id=session_id,
             elicitation_id=elicitation_id,
             payload=payload,
+            **({"actor": str(user.id)} if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED else {}),
         )
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
