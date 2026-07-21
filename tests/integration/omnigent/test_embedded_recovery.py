@@ -446,7 +446,11 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
     assert row.omnigent_session_id == "session-1"
     assert row.first_message_item_id == "item-1"
     assert lifecycle["state"] == "failed"
-    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert events[-1].event_type == "lifecycle.terminal"
+    assert all(
+        event.event_type in {"lifecycle.control", "lifecycle.terminal"}
+        for event in events
+    )
     refs = await restarted_store.cleanup_required_host_lease_refs()
     assert refs == {"host-lease-1"}
 

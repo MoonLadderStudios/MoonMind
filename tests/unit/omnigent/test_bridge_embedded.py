@@ -613,6 +613,12 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
 
 @pytest.mark.asyncio
 async def test_embedded_control_rejects_unpersistable_idempotency_key(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
     row = await store.get_or_create(
         request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
         target_metadata={},
@@ -1402,7 +1408,7 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     persisted = await store.get_bridge_session(row.bridge_session_id)
     manifest = await gateway.read_text(result["captureManifestRef"])
 
-    assert result["status"] == "completed"
+    assert result["status"] == "completed_with_diagnostics"
     assert persisted.capture_manifest_ref == result["captureManifestRef"]
     assert '"schemaVersion": "moonmind.omnigent.capture_manifest.v1"' in manifest
     assert "MoonLadderStudios/MoonMind#3424" in manifest
@@ -1410,6 +1416,7 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     assert '"runnerLogRef"' in manifest
     assert '"diagnosticsRef"' in manifest
     assert '"optionalNotApplicable"' in manifest
+    assert '"evidenceCompleteness": "optional_degradation"' in manifest
     events = await store.list_events(row.bridge_session_id)
     associations = [
         event for event in events

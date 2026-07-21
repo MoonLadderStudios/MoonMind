@@ -367,7 +367,6 @@ class OmnigentBridgeSessionStore:
                     OmnigentBridgeSession.terminal_refs,
                 ).where(
                     OmnigentBridgeSession.host_lease_ref.is_not(None),
-                    OmnigentBridgeSession.status.in_(_TERMINAL_STATUSES),
                 )
             )
             refs: set[str] = set()
