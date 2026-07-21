@@ -693,6 +693,23 @@ async def test_append_events_deduplicates_replay_but_preserves_identical_distinc
 
 
 @pytest.mark.asyncio
+async def test_append_events_deduplicates_replay_within_one_reconnect_batch(store):
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="default", agent_id=None,
+        agent_name=None, target_metadata={},
+    )
+    replay = {
+        "eventType": "response.delta", "normalizedStatus": "running",
+        "deduplicationKey": "provider:event-1",
+    }
+
+    appended = await store.append_events(row.bridge_session_id, [replay, replay])
+
+    assert len(appended) == 1
+    assert [event.sequence for event in await store.list_events(row.bridge_session_id)] == [1]
+
+
+@pytest.mark.asyncio
 async def test_terminal_reconciliation_never_deletes_live_rows(store):
     row = await store.get_or_create(
         request=_request(), endpoint_ref="default", agent_id=None,
