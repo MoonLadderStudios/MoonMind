@@ -1266,6 +1266,10 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     assert persisted.capture_manifest_ref == result["captureManifestRef"]
     assert '"schemaVersion": "moonmind.omnigent.capture_manifest.v1"' in manifest
     assert "MoonLadderStudios/MoonMind#3424" in manifest
+    assert '"finalSnapshotRef"' in manifest
+    assert '"runnerLogRef"' in manifest
+    assert '"diagnosticsRef"' in manifest
+    assert '"optionalNotApplicable"' in manifest
     events = await store.list_events(row.bridge_session_id)
     associations = [
         event for event in events
@@ -1275,6 +1279,12 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     ]
     assert len(associations) == 1
     assert associations[0].artifact_ref == result["captureManifestRef"]
+    association_metadata = associations[0].metadata_
+    assert association_metadata["controlType"] == "harvest"
+    assert association_metadata["controlKey"] == "harvest:sess-embedded"
+    assert association_metadata["resourceProjectionRef"] == result[
+        "resourceProjectionRef"
+    ]
 
     # Association and artifacts remain durable when no live host channel exists.
     replay = OmnigentEmbeddedHostProtocolFacade(

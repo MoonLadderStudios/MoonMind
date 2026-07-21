@@ -496,6 +496,22 @@ class OmnigentEmbeddedHostProtocolFacade:
             summary="Embedded resource harvest accepted", actor=actor,
         )
         request = _request_for_row(row)
+        async def write_required_json(**kwargs: Any) -> str:
+            try:
+                return await self._artifact_gateway.write_json(**kwargs)
+            except Exception as exc:
+                await self._record_control(
+                    row, control_key, "harvest", "failed",
+                    summary="Embedded required evidence persistence failed",
+                    code="omnigent_embedded_required_evidence_unavailable",
+                    actor=actor,
+                )
+                raise OmnigentBridgeError(
+                    "Unable to persist required embedded harvest evidence",
+                    failure_class="system_error", status_code=500,
+                    code="omnigent_embedded_required_evidence_unavailable",
+                ) from exc
+
         refs: dict[str, str] = {
             key: value
             for key, value in {
@@ -505,6 +521,58 @@ class OmnigentEmbeddedHostProtocolFacade:
             }.items()
             if value
         }
+        # Embedded harvest owns the same durable, MoonMind-readable envelope as
+        # proxy capture.  These documents are derived from the compact durable
+        # projection, never from provider-native paths or live access tokens.
+        durable_snapshot = await self.get_session(session_id)
+        if "initialSnapshotRef" not in refs:
+            refs["initialSnapshotRef"] = await write_required_json(
+                request=request,
+                name="runtime.omnigent.initial_snapshot.json",
+                payload={**durable_snapshot, "capturePhase": "initial"},
+                link_type="runtime.omnigent.initial_snapshot",
+            )
+        refs["finalSnapshotRef"] = await write_required_json(
+            request=request,
+            name="output.omnigent.final_snapshot.json",
+            payload={**durable_snapshot, "capturePhase": "final"},
+            link_type="output.omnigent.final_snapshot",
+        )
+        durable_events = await self._run_store.list_events(row.bridge_session_id)
+        bounded_log = [
+            {
+                "sequence": event.sequence,
+                "type": event.event_type,
+                "status": event.normalized_status,
+                "preview": event.text_preview,
+            }
+            for event in durable_events[-100:]
+        ]
+        refs["runnerLogRef"] = await write_required_json(
+            request=request,
+            name="runtime.omnigent.embedded.runner_log.json",
+            payload={"sourceMode": HOST_PROTOCOL_MODE_EMBEDDED, "events": bounded_log},
+            link_type="runtime.omnigent.runner_log",
+        )
+        refs["diagnosticsRef"] = await write_required_json(
+            request=request,
+            name="diagnostics.omnigent.embedded.json",
+            payload={
+                "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+                "sessionStatus": durable_snapshot.get("status"),
+                "terminal": durable_snapshot.get("terminal"),
+                "eventCount": len(durable_events),
+                "evidenceClassification": {
+                    "required": ["initialSnapshotRef", "finalSnapshotRef", "diagnosticsRef"],
+                    "optionalNotApplicable": [
+                        "childSessionEvidenceRef",
+                        "externalStateRef",
+                        "stateCheckpointRef",
+                    ],
+                },
+            },
+            link_type="diagnostics.omnigent",
+        )
         manifest: dict[str, Any] = {
             "schemaVersion": "moonmind.omnigent.capture_manifest.v1",
             "sourceIssue": "MoonLadderStudios/MoonMind#3424",
@@ -512,6 +580,14 @@ class OmnigentEmbeddedHostProtocolFacade:
             "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
             "evidenceCompleteness": "complete",
             "artifactRefs": refs,
+            "evidenceClassification": {
+                "required": sorted(refs),
+                "optionalNotApplicable": [
+                    "childSessionEvidenceRef",
+                    "externalStateRef",
+                    "stateCheckpointRef",
+                ],
+            },
         }
         harvester = BridgeResourceHarvester(
             client=self,
@@ -589,7 +665,14 @@ class OmnigentEmbeddedHostProtocolFacade:
             event_identity=f"embedded-resource-association:{control_key}",
             summary="Embedded resource evidence associated",
             diagnostics_ref=manifest_ref,
-            metadata={"sourceMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            metadata={
+                "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+                "controlType": "harvest",
+                "controlKey": control_key,
+                "captureManifestRef": manifest_ref,
+                "resourceProjectionRef": projection_ref,
+                "evidenceCompleteness": manifest["evidenceCompleteness"],
+            },
         )
         await self._record_control(
             row, control_key, "harvest", "completed",
