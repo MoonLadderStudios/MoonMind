@@ -8,6 +8,7 @@ unchanged-host observations, then compare only MoonMind-facing projections.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -232,3 +233,81 @@ async def test_embedded_resources_share_the_canonical_proxy_shapes(
         ) == await proxy.get_session_file_content("proxy-session", "file-1")
     finally:
         await running.runner.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("terminal_status", "terminal_state"),
+    [("completed", "stopped"), ("failed", "failed"), ("canceled", "stopped")],
+)
+async def test_workflow_detail_terminal_envelope_projects_embedded_lifecycle_outcomes(
+    store, terminal_status, terminal_state,
+) -> None:
+    """Workflow Detail receives bounded lifecycle rows plus terminal refs."""
+
+    row = await _session(store, "embedded", "embedded-session")
+    await store.bind_profile_authorization(
+        request=_request("embedded"), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.begin_embedded_runner_launch(
+        "embedded", host_id="host-1", runner_id="runner-1", generation=1000001,
+        credential_generation=1, launch_generation=1,
+    )
+    await store.mark_embedded_runner_state(
+        "embedded", state="launch_sent", code="host_launch_command_sending"
+    )
+    await store.mark_embedded_runner_state(
+        "embedded", state="launch_acknowledged", code="host_launch_acknowledged"
+    )
+    await store.bind_embedded_runner(
+        "embedded", host_id="host-1", runner_id="runner-1"
+    )
+    await store.mark_embedded_runner_state(
+        "embedded", state="runner_tunnel_ready", code="bounded_runner_reconnect_verified"
+    )
+    await store.mark_prepared("embedded", digest="digest-1", marker="marker-1")
+    await store.mark_posting("embedded")
+    await store.mark_posted(
+        "embedded", response={"pending_id": "pending-1", "item_id": "item-1"}
+    )
+    terminal_refs = {
+        "outputRefs": ["artifact://omnigent/output"],
+        "diagnosticsRef": "artifact://omnigent/diagnostics",
+        "cleanupState": "completed",
+        "hostLeaseOutcome": "released_after_host_stop",
+    }
+    await store.record_lifecycle_event(
+        "embedded", event_type="cleanup", status="running",
+        event_identity=f"cleanup:{terminal_status}", code="runner_cleanup_started",
+        metadata={"hostStopped": True, "providerLeaseReleased": True},
+    )
+    await store.mark_terminal(
+        "embedded", status=terminal_status, terminal_refs=terminal_refs
+    )
+
+    projected = await store.get_existing("embedded")
+    lifecycle = projected.metadata_["embedded_runner_lifecycle"]
+    events = await store.list_events(row.bridge_session_id)
+    envelope = {
+        "status": projected.status,
+        "terminalRefs": projected.terminal_refs,
+        "lifecycle": lifecycle,
+        "events": [_event_projection(event) for event in events],
+    }
+    encoded = json.dumps(envelope)
+
+    assert lifecycle["state"] == terminal_state
+    states = [item["state"] for item in lifecycle["timeline"]]
+    assert "runner_tunnel_waiting" in states
+    assert "runner_tunnel_ready" in states
+    assert "first_message_posting" in states
+    assert "first_message_posted" in states
+    assert envelope["terminalRefs"]["cleanupState"] == "completed"
+    assert envelope["terminalRefs"]["hostLeaseOutcome"] == "released_after_host_stop"
+    assert [event["eventType"] for event in envelope["events"]] == [
+        "lifecycle.cleanup"
+    ]
+    assert "binding_token" not in encoded.lower()
+    assert "root-secret" not in encoded

@@ -55,6 +55,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import (
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
 )
 from moonmind.omnigent.embedded_evidence import (
     EmbeddedEvidenceError,
@@ -1765,8 +1766,31 @@ async def embedded_omnigent_runner_tunnel(
         await websocket.close(code=4403)
         return
     try:
+        store = OmnigentBridgeSessionStore(async_session_maker)
+        binding = await store.get_active_session_by_runner_identity(runner_id)
+        if (
+            binding is None
+            or not binding.omnigent_host_id
+            or not binding.omnigent_session_id
+            or binding.credential_generation is None
+        ):
+            raise EmbeddedHostChannelError("runner has no active durable binding")
+        from moonmind.omnigent.embedded_host_channel import derive_runner_binding_token
+
+        binding_token = derive_runner_binding_token(
+            resolved_host_runner_token(),
+            host_id=binding.omnigent_host_id,
+            session_id=binding.omnigent_session_id,
+            generation=int(
+                ((binding.metadata_ or {}).get("embedded_runner_launch") or {}).get(
+                    "generation"
+                )
+                or binding.credential_generation
+            ),
+        )
         embedded_host_channels.authenticate_runner(
-            runner_id=runner_id, headers=websocket.headers
+            runner_id=runner_id, headers=websocket.headers,
+            binding_token=binding_token,
         )
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4401)
@@ -1779,6 +1803,10 @@ async def embedded_omnigent_runner_tunnel(
             send_text=websocket.send_text,
             hello_text=await websocket.receive_text(),
         )
+        facade = OmnigentEmbeddedHostProtocolFacade(
+            run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
+        )
+        await facade.record_runner_tunnel_ready(runner_id=runner_id)
         while True:
             channel.accept_frame(await websocket.receive_text())
     except WebSocketDisconnect:
@@ -1788,6 +1816,15 @@ async def embedded_omnigent_runner_tunnel(
     finally:
         if channel is not None:
             embedded_host_channels.disconnect_runner(channel)
+            facade = OmnigentEmbeddedHostProtocolFacade(
+                run_store=OmnigentBridgeSessionStore(async_session_maker), config=config
+            )
+            try:
+                await facade.record_runner_tunnel_disconnected(runner_id=runner_id)
+            except (EmbeddedHostChannelError, OmnigentIdempotencyError):
+                # Terminal exit processing may have won the race. Its durable
+                # terminal evidence remains authoritative over disconnect.
+                pass
 
 
 @router.post("/v1/hosts/{host_id}/heartbeat", response_model=dict)
