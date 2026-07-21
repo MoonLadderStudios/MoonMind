@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         type=Path,
-        default=Path("tests/fixtures/omnigent/conformance-v1.json"),
+        default=Path("tests/fixtures/omnigent/conformance-v4.json"),
     )
     parser.add_argument(
         "--allow-partial",

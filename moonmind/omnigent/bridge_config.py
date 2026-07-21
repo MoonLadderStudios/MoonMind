@@ -34,6 +34,8 @@ errors.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -601,7 +603,23 @@ class OmnigentBridgeConfig(BaseModel):
             "liveExecution": self.authority.live_execution,
         }
 
-    def readiness(self) -> dict[str, Any]:
+    def evidence_policy_sha256(self) -> str:
+        """Bind evidence to execution-relevant config without self-referential refs."""
+
+        payload = self.model_dump(mode="json", by_alias=True)
+        embedded = payload["hostConnection"]["embedded"]
+        for key in (
+            "proxyConformanceEvidenceRef",
+            "liveSmokeEvidenceRef",
+            "hostAuthConformanceEvidenceRef",
+        ):
+            embedded[key] = None
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def readiness(
+        self, *, evidence_validation: Mapping[str, Mapping[str, Any]] | None = None
+    ) -> dict[str, Any]:
         """Return non-secret, operator-visible mode/conformance readiness."""
 
         embedded = self.host_connection.embedded
@@ -612,7 +630,11 @@ class OmnigentBridgeConfig(BaseModel):
         }
         selected_embedded = self.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
         proxy_ready = build_omnigent_gate().enabled
-        return {
+        validation = dict(evidence_validation or {})
+        evidence_ready = bool(validation) and all(
+            validation.get(key, {}).get("status") == "passed" for key in evidence
+        )
+        result = {
             "enabled": self.enabled,
             "selectedMode": self.host_protocol_mode,
             "protocolProfile": (
@@ -629,12 +651,17 @@ class OmnigentBridgeConfig(BaseModel):
                 "ready"
                 if self.enabled
                 and (
-                    all(evidence.values()) if selected_embedded else proxy_ready
+                    evidence_ready if selected_embedded else proxy_ready
                 )
                 else "disabled" if not self.enabled else "gated"
             ),
             "evidenceRefs": evidence if selected_embedded else {},
         }
+        if selected_embedded:
+            result["evidenceValidation"] = validation
+            if not evidence_ready:
+                result["gateReason"] = "validated_embedded_evidence_required"
+        return result
 
 
 # ---------------------------------------------------------------------------
