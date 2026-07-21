@@ -408,6 +408,18 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
     else:
         await restarted_store.mark_posted("recovery", response=response)
 
+    # Retrying execute after either posting boundary must only revalidate the
+    # digest; it must not regress the durable embedded lifecycle.
+    await restarted_store.mark_prepared(
+        "recovery", digest="digest-1", marker="marker-1"
+    )
+    assert (
+        (await restarted_store.get_existing("recovery")).metadata_[
+            "embedded_runner_lifecycle"
+        ]["state"]
+        == "first_message_posted"
+    )
+
     if crash_boundary == "runner_exit_before_terminal_bridge_persist":
         with pytest.raises(RuntimeError, match="injected crash"):
             await facade.record_runner_exit(runner_id=runner_id, error="exit 1")
@@ -426,10 +438,8 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
     assert row.first_message_item_id == "item-1"
     assert lifecycle["state"] == "failed"
     assert [event.event_type for event in events] == ["lifecycle.terminal"]
-    refs = await restarted_store.embedded_reconciliation_host_lease_refs(
-        abandoned_before=datetime.now(UTC)
-    )
-    assert refs == {"host-lease-1": "runner_exit_cleanup"}
+    refs = await restarted_store.cleanup_required_host_lease_refs()
+    assert refs == {"host-lease-1"}
 
 
 async def test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(

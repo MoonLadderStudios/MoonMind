@@ -87,7 +87,7 @@ EMBEDDED_RUNNER_TRANSITIONS: dict[str | None, frozenset[str]] = {
     "first_message_prepared": frozenset({"first_message_posting", "runner_tunnel_waiting", "draining", "failed", "stale"}),
     "first_message_posting": frozenset({"first_message_posted", "runner_tunnel_waiting", "draining", "failed", "stale"}),
     "first_message_posted": frozenset({"running", "runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}),
-    "running": frozenset({"runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}),
+    "running": frozenset({"runner_tunnel_waiting", "runner_tunnel_ready", "draining", "stopped", "failed", "stale"}),
     "draining": frozenset({"stopped", "failed", "stale"}),
     "stale": frozenset({"draining", "stopped", "failed", "launch_reserved"}),
     "failed": frozenset({"launch_reserved"}),
@@ -800,6 +800,27 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             return _detached(session, row) if row is not None else None
 
+    async def get_active_session_by_runner_identity(
+        self, runner_id: str
+    ) -> OmnigentBridgeSession | None:
+        """Resolve a bound or launch-reserved runner, excluding terminal rows."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession).where(
+                    OmnigentBridgeSession.omnigent_endpoint_ref == "embedded",
+                    OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES),
+                )
+            )
+            for row in result.scalars():
+                launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
+                if row.omnigent_runner_id == runner_id or (
+                    launch.get("state") in {"pending", "launched"}
+                    and launch.get("runnerId") == runner_id
+                ):
+                    return _detached(session, row)
+            return None
+
     async def record_lifecycle_event(
         self,
         idempotency_key: str,
@@ -1249,7 +1270,14 @@ class OmnigentBridgeSessionStore:
                 row.first_message_state = FIRST_MESSAGE_PREPARED
             row.first_message_digest = digest
             row.first_message_marker = marker
-            if row.omnigent_endpoint_ref == "embedded":
+            lifecycle_state = (
+                (row.metadata_ or {}).get(EMBEDDED_LIFECYCLE_KEY) or {}
+            ).get("state")
+            if row.omnigent_endpoint_ref == "embedded" and lifecycle_state in {
+                "runner_tunnel_waiting",
+                "runner_tunnel_ready",
+                "first_message_prepared",
+            }:
                 _advance_embedded_lifecycle(
                     row, "first_message_prepared", code="first_message_digest_persisted"
                 )

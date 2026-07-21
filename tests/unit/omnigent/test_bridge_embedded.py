@@ -791,6 +791,7 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
 
     assert result == {"ok": True, "status": "stopped", "runnerId": "runner-1"}
     assert row.status == "canceled"
+    assert row.metadata_["embedded_runner_lifecycle"]["state"] == "stopped"
     assert "embedded_runner_exit" not in row.metadata_
 
 

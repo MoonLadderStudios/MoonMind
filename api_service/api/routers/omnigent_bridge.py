@@ -1473,7 +1473,7 @@ async def embedded_omnigent_runner_tunnel(
         return
     try:
         store = OmnigentBridgeSessionStore(async_session_maker)
-        binding = await store.get_session_by_runner_id(runner_id)
+        binding = await store.get_active_session_by_runner_identity(runner_id)
         if (
             binding is None
             or not binding.omnigent_host_id

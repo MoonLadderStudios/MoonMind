@@ -301,6 +301,13 @@ class OmnigentEmbeddedHostProtocolFacade:
                         runner_id=expected_runner_id,
                     )
                     return {"runnerId": expected_runner_id, "reused": True}
+                raise OmnigentBridgeError(
+                    "Embedded runner launch already crossed the host boundary; "
+                    "the reserved runner did not reconnect before the bounded deadline",
+                    failure_class="integration_error",
+                    status_code=503,
+                    code="embedded_runner_launch_unconfirmed",
+                )
             if lifecycle_state == "launch_reserved":
                 await self._run_store.mark_embedded_runner_state(
                     idempotency_key,
@@ -402,6 +409,11 @@ class OmnigentEmbeddedHostProtocolFacade:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
+        await self._run_store.mark_embedded_runner_state(
+            row.idempotency_key,
+            state="stopped",
+            code="runner_stop_confirmed",
+        )
         await self._run_store.record_lifecycle_event(
             row.idempotency_key,
             event_type="terminal",
