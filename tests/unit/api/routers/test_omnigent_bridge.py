@@ -192,6 +192,7 @@ class _FakeProxy:
         session_id: str,
         elicitation_id: str,
         payload,
+        actor=None,
     ):
         self.resolved_elicitations.append(
             {
