@@ -1,0 +1,73 @@
+name: Provider / Omnigent Embedded Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      evidence_artifact:
+        description: "Artifact containing embedded-acceptance-input.json from the complete matrix"
+        required: true
+        type: string
+      evidence_run_id:
+        description: "Workflow run that produced the matrix artifact"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-embedded-acceptance
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Validate and publish the final embedded gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Download complete matrix evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.evidence_artifact }}
+          run-id: ${{ inputs.evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/omnigent-embedded-acceptance/input
+      - name: Build protected acceptance report
+        run: |
+          python tools/build_omnigent_embedded_acceptance.py \
+            artifacts/omnigent-embedded-acceptance/input/embedded-acceptance-input.json \
+            artifacts/omnigent-embedded-acceptance/report.json
+      - name: Upload passing report
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-embedded-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-embedded-acceptance/report.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Link passing report from issue 3425
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          report_artifact="omnigent-embedded-acceptance-${{ github.run_id }}-${{ github.run_attempt }}"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          comment_file="${RUNNER_TEMP}/omnigent-embedded-acceptance.md"
+          {
+            echo "Embedded Omnigent acceptance gate: PASS"
+            echo
+            echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Durable report: \`${report_artifact}\`"
+            echo "- Source matrix: \`${{ inputs.evidence_artifact }}\` from run \`${{ inputs.evidence_run_id }}\`"
+          } > "$comment_file"
+          gh issue comment 3425 --repo "${{ github.repository }}" --body-file "$comment_file"
+
