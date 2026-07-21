@@ -129,6 +129,8 @@ def validate_embedded_evidence(
     if claim.bridge_config_sha256 != bridge_config_sha256:
         raise EmbeddedEvidenceError("evidence is for a different bridge configuration")
     current = now or datetime.now(timezone.utc)
+    if current < claim.generated_at:
+        raise EmbeddedEvidenceError("embedded evidence is not yet valid")
     if current >= claim.expires_at:
         raise EmbeddedEvidenceError("embedded evidence has expired")
     return claim

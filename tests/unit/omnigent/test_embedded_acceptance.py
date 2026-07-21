@@ -100,6 +100,11 @@ def test_complete_matrix_builds_publishable_issue_3425_report() -> None:
     assert set(report["sections"]) == set(REQUIRED_SECTIONS)
 
 
+def test_expected_commit_must_match_evidence_identity() -> None:
+    with pytest.raises(ConformanceContractError, match="different commit"):
+        build_embedded_acceptance_report(_source(), expected_commit="def456")
+
+
 @pytest.mark.parametrize("kind,key", [("prerequisites", "3422"), ("sections", "mode-transition-rollback")])
 def test_missing_or_failed_controlling_lane_refuses_publication(kind: str, key: str) -> None:
     source = _source()

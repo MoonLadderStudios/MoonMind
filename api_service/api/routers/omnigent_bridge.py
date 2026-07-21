@@ -269,7 +269,6 @@ async def _resolve_embedded_evidence(
                     "schemaVersion": claim.schema_version,
                     "generatedAt": claim.generated_at.isoformat(),
                     "expiresAt": claim.expires_at.isoformat(),
-                    "producer": claim.producer,
                 }
             except Exception:  # noqa: BLE001 - every resolver failure gates mode
                 # Read/auth/schema failures intentionally share one bounded,
@@ -419,11 +418,12 @@ def _get_embedded_host_facade(
     )
 
 
-def _get_create_embedded_facade(
+async def _get_create_embedded_facade(
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> OmnigentEmbeddedHostProtocolFacade | None:
     if _config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         return None
+    await _require_embedded_mode(_config)
     return OmnigentEmbeddedHostProtocolFacade(
         run_store=OmnigentBridgeSessionStore(async_session_maker),
         config=_config,
@@ -1704,6 +1704,11 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
+        try:
+            await _require_embedded_mode(config)
+        except HTTPException:
+            await websocket.close(code=4403)
+            return
         auth = verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
@@ -1753,6 +1758,11 @@ async def embedded_omnigent_runner_tunnel(
     config = get_bridge_config()
     if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
         await websocket.close(code=4404)
+        return
+    try:
+        await _require_embedded_mode(config)
+    except HTTPException:
+        await websocket.close(code=4403)
         return
     try:
         embedded_host_channels.authenticate_runner(

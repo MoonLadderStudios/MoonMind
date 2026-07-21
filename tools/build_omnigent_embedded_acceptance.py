@@ -19,9 +19,24 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("evidence", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument("--expected-commit")
     args = parser.parse_args()
     source = json.loads(args.evidence.read_text(encoding="utf-8"))
-    report = build_embedded_acceptance_report(source)
+    resolver = None
+    if args.evidence_root is not None:
+        root = args.evidence_root.resolve()
+
+        def resolver(ref: str):
+            if not ref.startswith("artifact://"):
+                raise ValueError("evidence refs must use artifact://")
+            path = (root / (ref.removeprefix("artifact://") + ".json")).resolve()
+            if root not in path.parents:
+                raise ValueError("evidence ref escapes evidence root")
+            return json.loads(path.read_text(encoding="utf-8"))
+    report = build_embedded_acceptance_report(
+        source, expected_commit=args.expected_commit, evidence_resolver=resolver
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
@@ -29,4 +44,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

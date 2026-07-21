@@ -46,7 +46,9 @@ jobs:
         run: |
           python tools/build_omnigent_embedded_acceptance.py \
             artifacts/omnigent-embedded-acceptance/input/embedded-acceptance-input.json \
-            artifacts/omnigent-embedded-acceptance/report.json
+            artifacts/omnigent-embedded-acceptance/report.json \
+            --evidence-root artifacts/omnigent-embedded-acceptance/input/evidence \
+            --expected-commit "${{ github.sha }}"
       - name: Upload passing report
         uses: actions/upload-artifact@v7
         with:
@@ -70,4 +72,3 @@ jobs:
             echo "- Source matrix: \`${{ inputs.evidence_artifact }}\` from run \`${{ inputs.evidence_run_id }}\`"
           } > "$comment_file"
           gh issue comment 3425 --repo "${{ github.repository }}" --body-file "$comment_file"
-

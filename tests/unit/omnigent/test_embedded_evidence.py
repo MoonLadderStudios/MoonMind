@@ -103,3 +103,17 @@ def test_rejects_stale_or_incompatible_policy(kwargs, match) -> None:
     arguments.update(kwargs)
     with pytest.raises(EmbeddedEvidenceError, match=match):
         validate_embedded_evidence(_claim(), **arguments)
+
+
+def test_rejects_not_yet_valid_claim() -> None:
+    with pytest.raises(EmbeddedEvidenceError, match="not yet valid"):
+        validate_embedded_evidence(
+            _claim(
+                generatedAt=(NOW + timedelta(minutes=1)).isoformat(),
+                expiresAt=(NOW + timedelta(days=1)).isoformat(),
+            ),
+            expected_claim_type="live_smoke",
+            moonmind_build_identity="build-3425",
+            bridge_config_sha256=SHA,
+            now=NOW,
+        )

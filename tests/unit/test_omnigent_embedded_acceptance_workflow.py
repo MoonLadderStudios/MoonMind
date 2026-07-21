@@ -13,6 +13,8 @@ def test_embedded_acceptance_workflow_uses_prior_durable_matrix_and_fail_closed_
     assert download["with"]["run-id"] == "${{ inputs.evidence_run_id }}"
     build = next(step for step in steps if step["name"] == "Build protected acceptance report")
     assert "build_omnigent_embedded_acceptance.py" in build["run"]
+    assert "--expected-commit \"${{ github.sha }}\"" in build["run"]
+    assert "--evidence-root" in build["run"]
     assert "--allow-partial" not in build["run"]
 
 

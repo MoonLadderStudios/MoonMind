@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from moonmind.omnigent.conformance import ConformanceContractError, assert_secret_free
 
@@ -141,7 +141,11 @@ def _passed_evidence(
 
 
 def build_embedded_acceptance_report(
-    source: Mapping[str, Any], *, now: datetime | None = None
+    source: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    expected_commit: str | None = None,
+    evidence_resolver: Callable[[str], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Validate all controlling lanes and return the publishable report.
 
@@ -168,6 +172,8 @@ def build_embedded_acceptance_report(
         raise ConformanceContractError(
             "complete build, profile, and protocol identities are required"
         )
+    if expected_commit is not None and identities["moonmindCommit"] != expected_commit:
+        raise ConformanceContractError("acceptance evidence is for a different commit")
     images = identities.get("images")
     if not isinstance(images, Mapping) or any(
         not isinstance(images.get(role), str) or not _DIGEST_REF.fullmatch(images[role])
@@ -177,9 +183,33 @@ def build_embedded_acceptance_report(
             "published server and unchanged host images must be digest-pinned"
         )
 
-    evidence_objects = source.get("evidenceObjects")
-    if not isinstance(evidence_objects, Mapping):
-        raise ConformanceContractError("resolved acceptance evidence objects are required")
+    if evidence_resolver is None:
+        evidence_objects = source.get("evidenceObjects")
+        if not isinstance(evidence_objects, Mapping):
+            raise ConformanceContractError("resolved acceptance evidence objects are required")
+    else:
+        refs: set[str] = set()
+        for collection in (source.get("prerequisites"), source.get("sections")):
+            if isinstance(collection, Mapping):
+                for item in collection.values():
+                    if isinstance(item, Mapping):
+                        refs.update(item.get("evidenceRefs") or [])
+        cleanup_source = source.get("cleanup")
+        if isinstance(cleanup_source, Mapping):
+            refs.update(cleanup_source.get("evidenceRefs") or [])
+        evidence_objects = {}
+        pending = list(refs)
+        while pending:
+            ref = pending.pop()
+            if ref in evidence_objects:
+                continue
+            resolved = dict(evidence_resolver(ref))
+            evidence_objects[ref] = resolved
+            cases = resolved.get("cases")
+            if isinstance(cases, Mapping):
+                for case in cases.values():
+                    if isinstance(case, Mapping):
+                        pending.extend(case.get("evidenceRefs") or [])
     prerequisites = source.get("prerequisites")
     if not isinstance(prerequisites, Mapping):
         raise ConformanceContractError("embedded prerequisites are required")
