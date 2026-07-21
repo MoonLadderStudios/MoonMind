@@ -54,6 +54,9 @@ from api_service.db.models import (
 from moonmind.capabilities.input_contracts import validate_capability_inputs
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
+from moonmind.config.container_backend_settings import (
+    resolve_container_backend_settings,
+)
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
@@ -85,9 +88,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
-)
-from moonmind.config.container_backend_settings import (
-    resolve_container_backend_settings,
 )
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.workers import (
