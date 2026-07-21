@@ -469,6 +469,47 @@ async def test_runner_exit_without_terminal_event_creates_terminal_evidence(stor
 
 
 @pytest.mark.asyncio
+async def test_terminal_cleanup_failure_is_redacted_and_idempotent(store) -> None:
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.bind_profile_authorization(
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id=None,
+    )
+
+    for _ in range(2):
+        await store.record_terminal_cleanup(
+            host_lease_ref="host-lease-1",
+            completed=False,
+            code="RuntimeError",
+            summary="cleanup failed token=secret-value",
+        )
+
+    recovered = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
+    cleanup_events = [
+        event for event in events
+        if (event.metadata_ or {}).get("eventIdentity", "").startswith(
+            "embedded-control:terminal-cleanup:host-lease-1:"
+        )
+    ]
+    assert recovered.terminal_refs["cleanupState"] == "failed"
+    assert recovered.terminal_refs["leaseReleaseState"] == "failed"
+    assert recovered.terminal_refs["cleanupFailureCode"] == "RuntimeError"
+    assert len(cleanup_events) == 2
+    assert cleanup_events[-1].metadata_["metadata"]["controlOutcome"] == "failed"
+    assert "secret-value" not in str(cleanup_events)
+
+
+@pytest.mark.asyncio
 async def test_embedded_session_events_append_to_same_bridge_event_model(store) -> None:
     row = await store.get_or_create(
         request=_request(),

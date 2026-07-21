@@ -274,6 +274,90 @@ class OmnigentBridgeSessionStore:
                     refs.add(str(host_lease_ref))
             return refs
 
+    async def record_terminal_cleanup(
+        self,
+        *,
+        host_lease_ref: str,
+        completed: bool,
+        code: str | None = None,
+        summary: str | None = None,
+    ) -> OmnigentBridgeSession | None:
+        """Persist the authoritative host/Profile lease cleanup outcome.
+
+        The janitor owns the cleanup side effect.  This method projects its
+        result back onto the durable bridge contract without making the host
+        lease or container name an access authority.
+        """
+
+        from moonmind.utils.logging import redact_sensitive_text
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.host_lease_ref == host_lease_ref)
+                .order_by(OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            safe_summary = redact_sensitive_text(str(summary or ""))[:512]
+            safe_code = str(code or "")[:96] or None
+            refs = dict(row.terminal_refs or {})
+            refs.update(
+                {
+                    "cleanupState": "completed" if completed else "failed",
+                    "leaseReleaseState": "released" if completed else "failed",
+                }
+            )
+            if safe_code:
+                refs["cleanupFailureCode"] = safe_code
+            else:
+                refs.pop("cleanupFailureCode", None)
+            row.terminal_refs = refs
+            idempotency_key = row.idempotency_key
+            await session.commit()
+            await session.refresh(row)
+            detached = _detached(session, row)
+
+        control_key = f"terminal-cleanup:{host_lease_ref}"
+        common_metadata = {
+            "actor": "moonmind_janitor",
+            "controlType": "terminal_cleanup",
+            "controlIdempotencyKey": control_key,
+            "sourceMode": "embedded",
+        }
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="control",
+            event_identity=f"embedded-control:{control_key}:requested",
+            summary="Embedded terminal cleanup requested",
+            metadata={**common_metadata, "controlOutcome": "requested"},
+        )
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="control",
+            status="completed" if completed else "failed",
+            event_identity=(
+                f"embedded-control:{control_key}:"
+                f"{'completed' if completed else 'failed'}"
+            ),
+            code=safe_code,
+            summary=safe_summary or (
+                "Embedded terminal cleanup completed"
+                if completed
+                else "Embedded terminal cleanup failed"
+            ),
+            failure_class=None if completed else "integration_error",
+            metadata={
+                **common_metadata,
+                "controlOutcome": "completed" if completed else "failed",
+                "cleanupCompleted": completed,
+                "leaseReleased": completed,
+            },
+        )
+        return detached
+
     async def get_or_create(
         self,
         *,

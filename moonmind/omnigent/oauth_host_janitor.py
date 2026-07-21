@@ -79,9 +79,24 @@ class OmnigentOAuthHostJanitor:
                             "errorCode": type(exc).__name__,
                         }
                     )
-            if not missing:
-                await self._runtime.stop_host(binding=binding, host_lease=lease)
-            await self._repository.mark_host_lease_stopped(lease.lease_id)
+            try:
+                if not missing:
+                    await self._runtime.stop_host(binding=binding, host_lease=lease)
+                await self._repository.mark_host_lease_stopped(lease.lease_id)
+            except Exception as exc:
+                if self._run_store is not None and terminal_cleanup:
+                    await self._run_store.record_terminal_cleanup(
+                        host_lease_ref=lease.lease_id,
+                        completed=False,
+                        code=type(exc).__name__,
+                        summary=str(exc),
+                    )
+                raise
+            if self._run_store is not None and terminal_cleanup:
+                await self._run_store.record_terminal_cleanup(
+                    host_lease_ref=lease.lease_id,
+                    completed=True,
+                )
             actions.append(
                 {
                     "hostLeaseRef": lease.lease_id,

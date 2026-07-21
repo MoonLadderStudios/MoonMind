@@ -211,7 +211,11 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
     events = await store.list_events(row.bridge_session_id)
 
     assert row.status == "failed"
-    assert row.terminal_refs["cleanupState"] == "runner_exited"
-    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert row.terminal_refs["cleanupState"] == "completed"
+    assert row.terminal_refs["leaseReleaseState"] == "released"
+    assert [event.event_type for event in events] == [
+        "lifecycle.terminal", "lifecycle.control", "lifecycle.control",
+    ]
+    assert events[-1].metadata_["metadata"]["controlOutcome"] == "completed"
     assert result["actions"][-1]["action"] == "runner_exit_cleanup"
     assert repository.stopped == ["host-lease-1"]
