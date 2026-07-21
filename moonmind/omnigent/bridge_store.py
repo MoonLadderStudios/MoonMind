@@ -147,6 +147,38 @@ class OmnigentBridgeSessionStore:
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
 
+    async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
+        """Return bounded, non-secret readiness for active embedded host leases."""
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentOAuthHostLeaseRecord)
+                .where(
+                    OmnigentOAuthHostLeaseRecord.status.in_(
+                        {"starting", "ready", "assigned", "draining"}
+                    ),
+                    OmnigentOAuthHostLeaseRecord.expires_at > now,
+                    OmnigentOAuthHostLeaseRecord.omnigent_host_id.is_not(None),
+                )
+                .order_by(OmnigentOAuthHostLeaseRecord.acquired_at)
+                .limit(250)
+            )
+            return [
+                {
+                    "id": row.omnigent_host_id,
+                    "status": row.host_readiness or row.status,
+                    "ready": (
+                        row.disconnected_at is None
+                        and (row.host_readiness or row.status) in {"ready", "assigned"}
+                    ),
+                    "capabilities": dict(row.host_capabilities_json or {}),
+                    "disconnected": row.disconnected_at is not None,
+                }
+                for row in result.scalars().all()
+            ]
+
     async def record_embedded_host_lifecycle(
         self,
         *,

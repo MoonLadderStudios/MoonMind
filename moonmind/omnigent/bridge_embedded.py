@@ -10,6 +10,7 @@ and persists them into the canonical bridge session store.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 from typing import Any, Mapping
@@ -92,7 +93,7 @@ class EmbeddedHostHeartbeatRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    status: str = "running"
+    status: str | None = None
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("capabilities")
@@ -419,6 +420,179 @@ class OmnigentEmbeddedHostProtocolFacade:
 
         return await self._run_store.get_session_owner(session_id)
 
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        """Expose bounded readiness without lease, profile, or credential data."""
+        self._require_embedded_mode()
+        hosts = await self._run_store.list_embedded_host_readiness()
+        if not hosts:
+            raise OmnigentBridgeError(
+                "No compatible embedded Omnigent host capability is available",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_capability_unavailable",
+            )
+        return hosts
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        """Derive the pinned Codex-first catalog from registered host evidence."""
+        hosts = await self.list_hosts()
+        compatible = [
+            host
+            for host in hosts
+            if host.get("ready") and _supports_codex(host.get("capabilities"))
+        ]
+        if not compatible:
+            raise OmnigentBridgeError(
+                "No ready embedded host advertises the supported Codex harness",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_capability_unavailable",
+            )
+        return [
+            {
+                "id": "codex-native",
+                "name": "Codex",
+                "harness": "codex-native",
+                "ready": True,
+                "capabilities": {"embedded": True},
+            }
+        ]
+
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        """Build an Omnigent-shaped snapshot exclusively from durable evidence."""
+        self._require_embedded_mode()
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error", status_code=404,
+                code="omnigent_bridge_session_unknown",
+            )
+        metadata = dict(row.metadata_ or {})
+        terminal = row.status in {"completed", "failed", "canceled", "timed_out"}
+        hosts = await self._run_store.list_embedded_host_readiness()
+        live_host = next(
+            (host for host in hosts if host.get("id") == row.omnigent_host_id), None
+        )
+        disconnected = bool(row.omnigent_host_id) and (
+            live_host is None or bool(live_host.get("disconnected"))
+        )
+        return {
+            "id": session_id,
+            "status": row.status,
+            "agentId": row.omnigent_agent_id or "codex-native",
+            "hostId": row.omnigent_host_id,
+            "runnerId": row.omnigent_runner_id,
+            "firstMessageState": row.first_message_state,
+            "capabilities": (
+                metadata.get("interventionCapabilities")
+                or metadata.get("capabilities")
+                or {}
+            ),
+            "terminal": terminal,
+            "terminalEvidenceAvailable": bool(
+                row.terminal_refs or row.diagnostics_ref or row.final_snapshot_ref
+            ),
+            "disconnected": disconnected,
+            "degraded": disconnected and not terminal,
+            "summary": (
+                str((row.terminal_refs or {}).get("summary") or "")[:2000] or None
+            ),
+            "diagnosticsRef": row.diagnostics_ref,
+            "moonmind": {
+                "workflowId": row.moonmind_workflow_id,
+                "agentRunId": row.moonmind_agent_run_id,
+                "idempotencyKey": row.idempotency_key,
+                "bridgeSessionId": row.bridge_session_id,
+                "bridgeLocal": True,
+                "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+                "protocolProfile": (
+                    self._config.host_connection.embedded.protocol_profile
+                ),
+            },
+        }
+
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        """Stop the exact bound runner through the common facade contract."""
+
+        return await self.stop_runner(session_id=session_id)
+
+    async def attach_session(
+        self, *, session_id: str, binding: BridgePrincipalBinding
+    ) -> dict[str, Any]:
+        """Reconcile only the exact already-bound embedded session."""
+        row = await self._run_store.get_existing(binding.idempotency_key)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No durable MoonMind binding exists for this idempotency key",
+                failure_class="user_error", status_code=404,
+                code="omnigent_bridge_session_unknown",
+            )
+        _assert_row_owner(row, binding)
+        if _clean(row.omnigent_session_id) != _clean(session_id):
+            raise OmnigentBridgeError(
+                "The durable binding is attached to another embedded session",
+                failure_class="user_error", status_code=409,
+                code="omnigent_bridge_session_conflict",
+            )
+        return await self.get_session(session_id)
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        """Reject provider-style deletion while preserving durable evidence."""
+        await self.get_session(session_id)
+        raise OmnigentBridgeError(
+            "Embedded session deletion is unavailable because MoonMind retains "
+            "bridge evidence",
+            failure_class="user_error", status_code=409,
+            code="omnigent_bridge_capability_unavailable",
+        )
+
+    async def stream_events(self, session_id: str, *, after: int = 0):
+        """Replay committed canonical events and terminal state by durable sequence."""
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error", status_code=404,
+                code="omnigent_bridge_session_unknown",
+            )
+        cursor = max(after, 0)
+        while True:
+            page = await self._run_store.list_event_page(
+                row.bridge_session_id, after=cursor, limit=500
+            )
+            for event in page.rows:
+                cursor = event.sequence
+                yield {
+                    "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+                    "id": event.event_id,
+                    "sequence": event.sequence,
+                    "type": event.event_type,
+                    "timestamp": event.timestamp.isoformat(),
+                    "status": event.normalized_status,
+                    "text": event.text_preview,
+                    "artifactRef": event.artifact_ref,
+                    "metadata": dict(event.metadata_ or {}),
+                }
+            refreshed = await self._run_store.get_bridge_session(row.bridge_session_id)
+            if refreshed and not page.has_more and refreshed.status in {
+                "completed", "failed", "canceled", "timed_out"
+            }:
+                yield {
+                    "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+                    "sequence": cursor,
+                    "type": "terminal",
+                    "status": refreshed.status,
+                    "terminal": True,
+                    "evidenceAvailable": bool(
+                        refreshed.terminal_refs
+                        or refreshed.diagnostics_ref
+                        or refreshed.final_snapshot_ref
+                    ),
+                }
+                return
+            await asyncio.sleep(1.0)
+
     async def create_session(
         self,
         *,
@@ -730,6 +904,18 @@ def _request_for_row(row: Any) -> AgentExecutionRequest:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _supports_codex(capabilities: Any) -> bool:
+    if not isinstance(capabilities, dict):
+        return False
+    values = capabilities.get("harnesses") or capabilities.get("agents") or []
+    if isinstance(values, str):
+        values = [values]
+    return any(
+        str(value).strip().lower() in {"codex", "codex-native"}
+        for value in values
+    )
 
 
 __all__ = [

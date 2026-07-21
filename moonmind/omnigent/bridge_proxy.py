@@ -24,7 +24,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, AsyncIterator, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,6 +122,60 @@ class BridgePrincipalBinding:
         """Return the durable AgentRun owner used by the bridge store."""
 
         return str(self.agent_run_id or "").strip() or self.correlation_id
+
+
+class OmnigentSessionFacade(Protocol):
+    """Mode-neutral public Session API contract for issue #3421."""
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    async def create_session(
+        self, *, request: BridgeSessionCreateRequest, binding: BridgePrincipalBinding
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def get_session_owner(
+        self, session_id: str
+    ) -> BridgeSessionBinding | None:
+        raise NotImplementedError
+
+    async def attach_session(
+        self, *, session_id: str, binding: BridgePrincipalBinding
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def post_event(
+        self, *, session_id: str, event: BridgeSessionEventRequest
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def resolve_elicitation(
+        self, *, session_id: str, elicitation_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def get_resource(
+        self, operation: str, session_id: str, value: str | None = None
+    ) -> Any:
+        raise NotImplementedError
+
+    def stream_events(
+        self, session_id: str, *, after: int = 0
+    ) -> AsyncIterator[dict[str, Any]]:
+        raise NotImplementedError
 
 
 def validate_bridge_host_fields(
@@ -524,8 +578,15 @@ class OmnigentBridgeSessionProxy:
             if isinstance(host, dict)
         ]
 
-    async def stream_events(self, session_id: str):
+    async def stream_events(self, session_id: str, *, after: int = 0):
         self._require_proxy_mode()
+        if after:
+            raise OmnigentBridgeError(
+                "The upstream proxy does not support durable event cursors",
+                failure_class="user_error",
+                status_code=409,
+                code="omnigent_bridge_capability_unavailable",
+            )
         for attempt in range(_MAX_STREAM_RECONNECTS + 1):
             try:
                 async for event in self._client.stream_events(session_id):
@@ -544,6 +605,14 @@ class OmnigentBridgeSessionProxy:
             failure_class="integration_error",
             status_code=502,
             code="omnigent_bridge_upstream_transport",
+        )
+
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        """Stop a provider session through the common lifecycle contract."""
+
+        return await self.post_event(
+            session_id=session_id,
+            event=BridgeSessionEventRequest(type="stop_session"),
         )
 
     async def delete_session(self, session_id: str) -> dict[str, Any]:
