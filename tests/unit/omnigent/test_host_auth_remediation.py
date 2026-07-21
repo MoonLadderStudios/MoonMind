@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -14,7 +15,10 @@ from api_service.api.routers import omnigent_bridge as bridge_router
 from api_service.db.models import OmnigentHostAuthProfileRecord
 from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
-from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
+from moonmind.omnigent.host_auth_adapter import (
+    OmnigentHostAuthAdapter,
+    UpstreamHostAuthError,
+)
 from moonmind.omnigent.host_auth_profile import (
     HostAuthCredentialProfile,
     HostAuthProfileError,
@@ -64,6 +68,51 @@ async def test_database_lifecycle_is_atomic_generation_checked_and_redacted(
     assert sentinel not in durable
     assert "HOST_TWO" in durable  # Safe SecretRefs are durable; bodies are not.
     assert "previousSecretRef': None" in durable
+
+
+@pytest.mark.asyncio
+async def test_database_lifecycle_allows_exactly_one_concurrent_rotation(
+    host_auth_store,
+) -> None:
+    """Two writers observing one generation cannot both publish successors."""
+
+    store, _ = host_auth_store
+    await store.put(HostAuthCredentialProfile("managed", "env://HOST_ONE", 1))
+    start = asyncio.Event()
+
+    async def rotate(secret_ref: str):
+        current = await store.get_active()
+        assert current is not None and current.current_generation == 1
+        await start.wait()
+        candidate = HostAuthCredentialProfile(
+            profile_id=current.profile_id,
+            current_secret_ref=secret_ref,
+            current_generation=2,
+            previous_secret_ref=current.current_secret_ref,
+            previous_generation=1,
+        )
+        try:
+            return await store.put(candidate, expected_generation=1)
+        except RuntimeError as exc:
+            return exc
+
+    writers = [
+        asyncio.create_task(rotate("env://HOST_TWO_A")),
+        asyncio.create_task(rotate("env://HOST_TWO_B")),
+    ]
+    await asyncio.sleep(0)
+    start.set()
+    results = await asyncio.gather(*writers)
+
+    winners = [
+        result for result in results if isinstance(result, HostAuthCredentialProfile)
+    ]
+    losers = [result for result in results if isinstance(result, RuntimeError)]
+    assert len(winners) == len(losers) == 1
+    durable = await store.get_active()
+    assert durable is not None
+    assert durable.current_secret_ref == winners[0].current_secret_ref
+    assert durable.current_generation == 2
 
 
 @pytest.mark.asyncio
@@ -241,6 +290,58 @@ def test_http_auth_parity_and_cross_channel_sentinel_scan(caplog) -> None:
         "artifacts": [{"code": "host_auth_rejected"}],
     }
     assert token not in str(durable_or_temporal)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "http_status", "http_code", "ws_code"),
+    [
+        ({}, 401, "host_auth_rejected", 4401),
+        (
+            _Headers({"X-Omnigent-Runner-Tunnel-Token": "invalid"}),
+            401,
+            "host_auth_rejected",
+            4401,
+        ),
+        (
+            _Headers({"X-Omnigent-Runner-Tunnel-Token": "stale"}),
+            401,
+            "host_auth_rejected",
+            4401,
+        ),
+        ({"Authorization": "Bearer current"}, 401, "host_auth_rejected", 4401),
+    ],
+)
+async def test_pinned_upstream_http_websocket_rejection_parity(
+    monkeypatch, headers, http_status, http_code, ws_code
+) -> None:
+    """The same pinned-verifier rejection retains HTTP and WS retry semantics."""
+
+    token = "current"
+    profile = HostAuthCredentialProfile("managed", "env://HOST", 2)
+    resolved = ResolvedHostAuthCredentials(profile, {2: token})
+    adapter = OmnigentHostAuthAdapter(allowed_tokens=frozenset({token}))
+    with pytest.raises(UpstreamHostAuthError):
+        adapter.verify(headers)
+
+    monkeypatch.setattr(
+        bridge_router, "_active_host_auth_profile", AsyncMock(return_value=profile)
+    )
+    monkeypatch.setattr(
+        bridge_router,
+        "resolve_host_auth_credentials",
+        AsyncMock(return_value=resolved),
+    )
+    request = SimpleNamespace(headers=headers)
+    with pytest.raises(HTTPException) as http_exc:
+        await bridge_router._embedded_auth_context(request=request, config=_embedded_config())
+    assert http_exc.value.status_code == http_status
+    assert http_exc.value.detail["code"] == http_code
+
+    socket = _HandshakeSocket(headers)
+    monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
+    await bridge_router.embedded_omnigent_host_tunnel(socket, "untrusted-host")
+    assert socket.closes == [(ws_code, http_code)]
 
 
 def _embedded_config():
