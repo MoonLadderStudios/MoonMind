@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -598,6 +599,43 @@ def test_provider_stream_encodes_async_failure_without_disclosing_details() -> N
     assert "upstream unavailable" not in resp.text
 
 
+@pytest.mark.parametrize(
+    ("upstream_status", "expected_status"),
+    [(401, 401), (403, 403), (404, 404), (409, 409), (429, 429),
+     (500, 500), (502, 502), (504, 504)],
+)
+def test_owner_routes_preserve_bounded_http_and_sse_failure_contract(
+    upstream_status: int, expected_status: int
+) -> None:
+    code = f"omnigent_bridge_upstream_{upstream_status}"
+    proxy = _FakeProxy()
+    proxy.create_error = OmnigentBridgeError(
+        "credential-shaped Bearer secret must stay bounded",
+        failure_class="integration_error",
+        status_code=upstream_status,
+        code=code,
+    )
+    create_client, _, _ = _build(proxy=proxy)
+    http_response = create_client.post(_CREATE_PATH, json=_create_body())
+    assert http_response.status_code == expected_status
+    assert http_response.json()["detail"]["code"] == code
+
+    proxy.create_error = None
+    proxy.stream_error = OmnigentBridgeError(
+        "credential-shaped Bearer secret must stay bounded",
+        failure_class="integration_error",
+        status_code=upstream_status,
+        code=code,
+    )
+    sse_response = create_client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream"
+    )
+    assert sse_response.status_code == 200
+    assert "event: error" in sse_response.text
+    assert code in sse_response.text
+    assert "Bearer secret" not in sse_response.text
+
+
 def test_all_resource_route_classes_delegate() -> None:
     client, proxy, _ = _build()
     base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/resources"
@@ -641,6 +679,57 @@ def test_all_id_bearing_route_classes_reject_unknown_owner() -> None:
         lambda: client.get(f"{base}/resources/files/file-1/content"),
     ]
     assert all(call().status_code == 404 for call in requests)
+    assert proxy.resource_calls == []
+
+
+@pytest.mark.parametrize("binding_state", ["unknown", "deleted", "ambiguous"])
+def test_every_id_route_non_enumerates_unresolvable_bindings_without_upstream(
+    binding_state: str,
+) -> None:
+    """All unresolved durable-binding states share the no-upstream policy."""
+
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    base = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/session-{binding_state}"
+    calls = [
+        lambda: client.get(base),
+        lambda: client.delete(base),
+        lambda: client.post(f"{base}/events", json={"type": "interrupt"}),
+        lambda: client.post(
+            f"{base}/elicitations/el-1/resolve", json={"answer": "yes"}
+        ),
+        lambda: client.get(f"{base}/stream"),
+        lambda: client.get(f"{base}/resources/environments/default/changes"),
+        lambda: client.get(f"{base}/resources/environments/default/filesystem"),
+        lambda: client.get(f"{base}/resources/environments/default/filesystem/a.txt"),
+        lambda: client.get(f"{base}/resources/environments/default/diff/a.txt"),
+        lambda: client.get(f"{base}/resources/files"),
+        lambda: client.get(f"{base}/resources/files/file-1/content"),
+    ]
+    responses = [call() for call in calls]
+    assert {response.status_code for response in responses} == {404}
+    assert {
+        response.json()["detail"]["code"] for response in responses
+    } == {"omnigent_bridge_session_unknown"}
+    assert proxy.posted_events == []
+    assert proxy.resolved_elicitations == []
+    assert proxy.resource_calls == []
+    assert proxy.deleted == []
+
+
+def test_duplicate_authorization_headers_never_reach_upstream_or_response() -> None:
+    proxy = _FakeProxy(session_owner=None)
+    client, _, _ = _build(proxy=proxy)
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/unknown/resources/files",
+        headers=[
+            ("Authorization", "Bearer user-jwt-secret-one"),
+            ("Authorization", "Bearer user-jwt-secret-two"),
+        ],
+    )
+    assert response.status_code == 404
+    rendered = response.text
+    assert "user-jwt-secret" not in rendered
     assert proxy.resource_calls == []
 
 
