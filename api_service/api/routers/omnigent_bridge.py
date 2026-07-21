@@ -439,6 +439,7 @@ async def _resolve_bridge_binding(
 @router.post(
     _ROUTES.create_session,
     response_model=OmnigentSessionResponse,
+    response_model_exclude_none=True,
     responses=_PUBLIC_ERROR_RESPONSES,
 )
 async def create_omnigent_session(
@@ -490,6 +491,7 @@ async def create_omnigent_session(
 @router.get(
     _ROUTES.get_session,
     response_model=OmnigentSessionResponse,
+    response_model_exclude_none=True,
     responses=_PUBLIC_ERROR_RESPONSES,
 )
 async def get_omnigent_session(
@@ -565,6 +567,7 @@ async def get_omnigent_session(
 @router.post(
     _ROUTES.attach_session,
     response_model=OmnigentSessionResponse,
+    response_model_exclude_none=True,
     responses=_PUBLIC_ERROR_RESPONSES,
 )
 async def attach_omnigent_session(
@@ -1275,6 +1278,7 @@ async def resolve_omnigent_elicitation(
 @router.get(
     _ROUTES.agents,
     response_model=list[OmnigentAgentResponse],
+    response_model_exclude_none=True,
     responses=_PUBLIC_ERROR_RESPONSES,
 )
 async def list_omnigent_agents(
@@ -1303,6 +1307,7 @@ async def list_omnigent_agents(
 @router.get(
     _ROUTES.hosts,
     response_model=list[OmnigentHostResponse],
+    response_model_exclude_none=True,
     responses=_PUBLIC_ERROR_RESPONSES,
 )
 async def list_omnigent_hosts(

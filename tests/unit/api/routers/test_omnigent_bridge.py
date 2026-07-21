@@ -314,6 +314,7 @@ def _build(
     owner_id: Any = _USER_ID,
     proxy: _FakeProxy | None = None,
     store: _FakeStore | None = None,
+    config: Any | None = None,
 ) -> tuple[TestClient, _FakeProxy, _FakeStore]:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
@@ -323,6 +324,11 @@ def _build(
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: store
+    if config is not None:
+        app.dependency_overrides[_require_bridge_enabled] = lambda: config
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+            app.dependency_overrides[_get_bridge_proxy] = lambda: None
+            app.dependency_overrides[_get_create_embedded_facade] = lambda: proxy
     return TestClient(app), proxy, store
 
 
@@ -580,7 +586,7 @@ def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
         client.get(_HOSTS_PATH),
         client.get(base),
         client.post(f"{base}/attach", json=_create_body()),
-        client.post(f"{base}/events", json={"type": "interrupt"}),
+        client.post(f"{base}/events", json={"type": "message"}),
         client.post(
             f"{base}/elicitations/el-1/resolve", json={"answer": "yes"}
         ),
@@ -590,7 +596,7 @@ def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
     ]
 
     assert all(response.status_code == 200 for response in responses)
-    assert embedded.posted_events[0]["event"].type == "interrupt"
+    assert embedded.posted_events[0]["event"].type == "message"
     assert embedded.resolved_elicitations[0]["elicitation_id"] == "el-1"
     assert embedded.resource_calls == [("session_files", "sess-77", None)]
 
@@ -1248,7 +1254,19 @@ def test_unknown_stream_schema_version_emits_stable_visible_error() -> None:
                 "type": "response.delta",
             }
 
-    client, _, _ = _build(proxy=_FutureSchemaProxy())
+    config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    client, _, _ = _build(proxy=_FutureSchemaProxy(), config=config)
     response = client.get(
         f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream"
     )
