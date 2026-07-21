@@ -190,6 +190,29 @@ class OmnigentBridgeSessionStore:
                 lease.host_readiness = readiness[:32]
             await session.commit()
 
+    async def get_embedded_host_capabilities(
+        self, *, host_id: str
+    ) -> dict[str, Any]:
+        """Return the bounded capabilities advertised by an active host lease."""
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            lease = (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord).where(
+                        OmnigentOAuthHostLeaseRecord.omnigent_host_id == host_id,
+                        OmnigentOAuthHostLeaseRecord.status.in_(
+                            {"starting", "ready", "assigned", "draining"}
+                        ),
+                        OmnigentOAuthHostLeaseRecord.expires_at > now,
+                    )
+                )
+            ).scalar_one_or_none()
+            if lease is None:
+                return {}
+            return dict(lease.host_capabilities_json or {})
+
     async def active_host_protocol_modes(
         self, *, exclude_idempotency_key: str | None = None
     ) -> dict[str, int]:

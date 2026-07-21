@@ -536,6 +536,12 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
     row = await store.get_session_by_provider_session_id(response["id"])
     assert row is not None
     assert row.omnigent_host_id == "host-1"
+    assert row.metadata_["interventionCapabilities"] == {
+        "sendFollowUp": True,
+        "clearSession": False,
+        "interruptTurn": False,
+        "cancelSession": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -611,7 +617,7 @@ async def test_embedded_event_rejects_cross_host_binding(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedded_session_events_preserve_full_payload_and_errors(
+async def test_embedded_session_events_keep_compact_index_and_errors(
     store,
 ) -> None:
     await store.bind_profile_authorization(
@@ -651,11 +657,10 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         auth=auth,
     )
     events = await store.list_events(row.bridge_session_id)
-    assert events[0].metadata_["embeddedRawEvent"]["data"]["nested"] == {"answer": 42}
-    assert (
-        events[0].metadata_["embeddedNormalizedEvent"]["eventType"]
-        == "response.delta"
-    )
+    assert events[0].metadata_["embeddedEventIndexed"] is True
+    assert events[0].metadata_["sourceMode"] == HOST_PROTOCOL_MODE_EMBEDDED
+    assert "embeddedRawEvent" not in events[0].metadata_
+    assert "embeddedNormalizedEvent" not in events[0].metadata_
 
     with pytest.raises(OmnigentBridgeError) as excinfo:
         await facade.ingest_session_event(

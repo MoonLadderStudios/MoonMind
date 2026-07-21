@@ -53,6 +53,23 @@ MAX_EMBEDDED_EVENT_ENTRIES = 1024
 MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
 
 
+def _embedded_intervention_capabilities(
+    host_capabilities: Mapping[str, Any],
+) -> dict[str, bool]:
+    """Project pinned host capabilities onto the runtime-neutral UI contract."""
+
+    def advertised(*names: str) -> bool:
+        return any(host_capabilities.get(name) is True for name in names)
+
+    return {
+        # These operations are part of the pinned embedded runner tunnel.
+        "sendFollowUp": True,
+        "clearSession": False,
+        "interruptTurn": advertised("interrupt", "interruptTurn", "interrupt_turn"),
+        "cancelSession": True,
+    }
+
+
 def _bounded_mapping(
     value: dict[str, Any], *, label: str, max_entries: int, max_bytes: int
 ) -> dict[str, Any]:
@@ -479,11 +496,15 @@ class OmnigentEmbeddedHostProtocolFacade:
             row = await self._run_store.attach_session(
                 binding.idempotency_key, session_id
             )
+        host_capabilities = await self._run_store.get_embedded_host_capabilities(
+            host_id=str(authorized.omnigent_host_id)
+        )
         await self._run_store.record_session_created(
             binding.idempotency_key,
             session_id=session_id,
             agent_id=(request.agent_id or "").strip() or None,
             endpoint_ref=(request.endpoint_ref or "").strip() or "embedded",
+            capabilities=_embedded_intervention_capabilities(host_capabilities),
         )
         return {
             "id": session_id,
@@ -645,11 +666,13 @@ class OmnigentEmbeddedHostProtocolFacade:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=502
             ) from exc
-        normalized_body = dict(normalized)
-        normalized_body["metadata"] = dict(normalized.get("metadata") or {})
         metadata = dict(normalized.get("metadata") or {})
-        metadata["embeddedRawEvent"] = payload
-        metadata["embeddedNormalizedEvent"] = normalized_body
+        # Event rows are a compact query/projection index. The execution capture
+        # pipeline persists the complete redacted raw and normalized streams in
+        # artifact-backed journals; copying either payload here amplifies storage
+        # and turns the database into an unintended evidence authority.
+        metadata["embeddedEventIndexed"] = True
+        metadata["sourceMode"] = HOST_PROTOCOL_MODE_EMBEDDED
         normalized["metadata"] = metadata
         rows = await self._run_store.append_events(row.bridge_session_id, [normalized])
         return {
