@@ -328,6 +328,7 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
     assert row.status == "failed"
     assert [event.event_type for event in events] == [
+        "lifecycle.embedded_runner.runner_tunnel_waiting",
         "lifecycle.terminal", "lifecycle.host_cleanup",
     ]
     assert result["actions"][-1]["action"] == "runner_lifecycle_cleanup"

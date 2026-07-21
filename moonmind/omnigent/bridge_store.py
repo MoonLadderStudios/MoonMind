@@ -486,9 +486,13 @@ class OmnigentBridgeSessionStore:
             detached = _detached(session, row)
         await self.record_lifecycle_event(
             idempotency_key,
-            event_type="embedded_runner.launch_reserved",
-            event_identity=f"embedded-runner:{attempt}:launch_reserved",
-            summary="embedded runner launch durably reserved",
+            event_type="embedded_runner.runner_tunnel_waiting",
+            event_identity=(
+                f"embedded-runner:{launch.get('attempt', 0)}:"
+                f"runner_tunnel_waiting:{len(launch.get('transitions') or [])}"
+            ),
+            status="waiting",
+            summary="embedded runner identity bound; waiting for runner tunnel",
             metadata={
                 "providerProfileId": detached.provider_profile_id,
                 "providerLeaseId": detached.provider_lease_id,

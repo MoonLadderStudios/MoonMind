@@ -705,10 +705,14 @@ async def test_dispatch_persists_launch_intent_before_host_side_effect(store) ->
     )
     result = await facade.dispatch_runner(idempotency_key="idem-embedded")
     row = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
 
     assert result == {"runnerId": "runner-1", "reused": False}
     assert row.omnigent_runner_id == "runner-1"
     assert row.metadata_["embedded_runner_launch"]["state"] == "runner_tunnel_waiting"
+    assert events[-1].event_type == (
+        "lifecycle.embedded_runner.runner_tunnel_waiting"
+    )
 
 
 @pytest.mark.asyncio
