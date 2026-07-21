@@ -282,6 +282,25 @@ class OmnigentEmbeddedHostProtocolFacade:
             lifecycle_state = (
                 (reserved.metadata_ or {}).get("embedded_runner_lifecycle") or {}
             ).get("state")
+            # A retry after the launch command crossed the host boundary must
+            # first reconcile the deterministic runner identity.  A freshly
+            # authenticated tunnel is authoritative evidence that the command
+            # succeeded, so resending it would only create a duplicate launch.
+            if lifecycle_state in {"launch_sent", "launch_acknowledged"}:
+                wait_ready = getattr(self._host_channels, "wait_runner_ready", None)
+                if wait_ready is not None and await wait_ready(expected_runner_id):
+                    if lifecycle_state == "launch_sent":
+                        await self._run_store.mark_embedded_runner_state(
+                            idempotency_key,
+                            state="launch_acknowledged",
+                            code="runner_tunnel_reconciled_launch_acknowledgement",
+                        )
+                    await self._run_store.bind_embedded_runner(
+                        idempotency_key,
+                        host_id=row.omnigent_host_id,
+                        runner_id=expected_runner_id,
+                    )
+                    return {"runnerId": expected_runner_id, "reused": True}
             if lifecycle_state == "launch_reserved":
                 await self._run_store.mark_embedded_runner_state(
                     idempotency_key,
@@ -419,6 +438,38 @@ class OmnigentEmbeddedHostProtocolFacade:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
+
+    async def reconcile_first_message(self, *, session_id: str) -> dict[str, Any]:
+        """Resolve response-before-persist from the runner's session evidence."""
+
+        from moonmind.omnigent.execute import _snapshot_contains_first_message_marker
+
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None or not _clean(row.omnigent_runner_id):
+            raise OmnigentBridgeError(
+                "Embedded first-message reconciliation requires a durable runner",
+                failure_class="integration_error", status_code=409,
+            )
+        if row.first_message_state != "posting":
+            return {"reconciled": row.first_message_state == "posted"}
+        snapshot = await self._host_channels.request_runner(
+            runner_id=row.omnigent_runner_id,
+            method="GET",
+            path=f"/v1/sessions/{quote(session_id, safe='')}",
+        )
+        if not _snapshot_contains_first_message_marker(
+            snapshot,
+            digest=str(row.first_message_digest or ""),
+            marker=str(row.first_message_marker or ""),
+        ):
+            raise OmnigentBridgeError(
+                "Runner session does not contain durable first-message evidence",
+                failure_class="integration_error", status_code=503,
+                code="omnigent_first_message_reconcile_failed",
+            )
+        response = snapshot.get("firstMessageResponse") or {}
+        await self._run_store.mark_posted(row.idempotency_key, response=response)
+        return {"reconciled": True, **response}
 
     async def get_resource(
         self, operation: str, session_id: str, value: str | None = None
