@@ -11,7 +11,6 @@ tags:
 requiredCapabilities:
 - git
 - gh
-- python_container_tests
 annotations:
   sourceSkill: issue-implement-work-pr
   issueProvider: neutral
@@ -110,7 +109,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify implementation
   enabled: '{{ inputs.run_verify }}'
   instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
@@ -184,7 +182,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Remediate verification gaps — attempt 1 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -229,7 +226,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify remediation attempt 1 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -290,7 +286,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Remediate remaining gaps — attempt 2 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -335,7 +330,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify remediation attempt 2 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -396,7 +390,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Remediate remaining gaps — attempt 3 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -441,7 +434,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify remediation attempt 3 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -502,7 +494,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Remediate remaining gaps — attempt 4 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -547,7 +538,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify remediation attempt 4 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -608,7 +598,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Remediate remaining gaps — attempt 5 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -653,7 +642,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify remediation attempt 5 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -714,7 +702,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Remediate remaining gaps — attempt 6 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -759,7 +746,6 @@ steps:
     args: {}
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Verify remediation attempt 6 of {{ inputs.remediation_max_attempts }}
   enabled: '{{ inputs.run_verify }}'
   annotations:
@@ -819,7 +805,6 @@ steps:
       verify_artifact_path: '{{ inputs.verify_artifact_path }}'
     requiredCapabilities:
     - git
-    - python_container_tests
 - title: Create pull request
   annotations:
     issueImplementRole: pull-request-handoff

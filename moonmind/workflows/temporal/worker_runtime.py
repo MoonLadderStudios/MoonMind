@@ -54,6 +54,9 @@ from api_service.db.models import (
 from moonmind.capabilities.input_contracts import validate_capability_inputs
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
+from moonmind.config.container_backend_settings import (
+    resolve_container_backend_settings,
+)
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
@@ -85,9 +88,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
-)
-from moonmind.config.container_backend_settings import (
-    resolve_container_backend_settings,
 )
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.workers import (
@@ -1024,62 +1024,6 @@ def _required_capability_blockers(
                 check="docker_runtime",
                 reason="Docker capability is required but no Docker endpoint is visible to this worker.",
                 remediation="Run on a Docker-capable worker fleet or disable Docker-required execution.",
-            )
-
-    if "python_container_tests" in capabilities:
-        backend = resolve_container_backend_settings()
-        python_test_image = str(os.getenv("MOONMIND_PYTHON_TEST_IMAGE") or "").strip()
-        if not settings.feature_flags.container_jobs_enabled:
-            add(
-                "python_container_tests",
-                check="container_jobs_api_surface",
-                reason=(
-                    "MoonMind Python container-test backend is unavailable because "
-                    "container jobs are disabled at the API boundary."
-                ),
-                remediation=(
-                    "Enable MOONMIND_CONTAINER_JOBS_ENABLED on the API and "
-                    "agent-runtime services."
-                ),
-            )
-        elif not backend.enabled or not backend.endpoint:
-            add(
-                "python_container_tests",
-                check="container_jobs_worker_backend",
-                reason=(
-                    "MoonMind Python container-test backend is unavailable because "
-                    "the trusted worker backend is disabled or has no endpoint."
-                ),
-                remediation=(
-                    "Enable the container backend and configure SYSTEM_DOCKER_HOST "
-                    "on the trusted agent-runtime worker."
-                ),
-            )
-        elif not python_test_image:
-            add(
-                "python_container_tests",
-                check="python_test_image",
-                reason=(
-                    "MoonMind Python container-test backend is unavailable because "
-                    "no Python test image is configured."
-                ),
-                remediation=(
-                    "Configure MOONMIND_PYTHON_TEST_IMAGE and provision the image "
-                    "before starting the agent-runtime worker."
-                ),
-            )
-        elif not repository:
-            add(
-                "python_container_tests",
-                check="managed_test_workspace",
-                reason=(
-                    "MoonMind Python container-test backend requires a "
-                    "repository-backed managed workspace."
-                ),
-                remediation=(
-                    "Select an allowed repository so MoonMind can prepare the "
-                    "managed test workspace."
-                ),
             )
 
     return blockers

@@ -10,7 +10,6 @@ tags:
 requiredCapabilities:
 - git
 - gh
-- python_container_tests
 annotations:
   sourceSkill: github-issue-implement
   issueProvider: github
