@@ -475,7 +475,7 @@ resume_skill_resolution_worker() {
   if [[ "$SKILL_RESOLUTION_BARRIER_ACTIVE" != "true" ]]; then
     return
   fi
-  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fx "$SKILL_RESOLUTION_SERVICE" >/dev/null; then
     warn "Cannot restart removed Skill resolution service $SKILL_RESOLUTION_SERVICE; normal Compose reconciliation must start its replacement."
     return
   fi
@@ -484,7 +484,7 @@ resume_skill_resolution_worker() {
 }
 
 if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
-  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+  if ! "${COMPOSE_CMD[@]}" config --services | grep -Fx "$SKILL_RESOLUTION_SERVICE" >/dev/null; then
     die "Skill resolution source changed but $SKILL_RESOLUTION_SERVICE is unavailable."
   fi
   say "Quiescing $SKILL_RESOLUTION_SERVICE before updating live-mounted Skill resolution source"
@@ -520,7 +520,7 @@ if [[ "$SKIP_COMPOSE_PULL" != "true" ]]; then
 fi
 
 if [[ "$SKILL_RESOLUTION_BARRIER_REQUIRED" == "true" ]]; then
-  if "${COMPOSE_CMD[@]}" config --services | grep -Fxq "$SKILL_RESOLUTION_SERVICE"; then
+  if "${COMPOSE_CMD[@]}" config --services | grep -Fx "$SKILL_RESOLUTION_SERVICE" >/dev/null; then
     say "Recreating $SKILL_RESOLUTION_SERVICE with coherent Skill resolver, catalog, and image source"
     run_cmd "${COMPOSE_CMD[@]}" up -d --no-deps --force-recreate "$SKILL_RESOLUTION_SERVICE"
   else
