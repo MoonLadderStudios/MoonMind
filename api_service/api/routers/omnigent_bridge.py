@@ -1653,7 +1653,17 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
     )
     try:
         while True:
-            frame = channel.accept_host_frame(await websocket.receive_text())
+            frame_text = await websocket.receive_text()
+            # Re-resolve safe profile state for every frame so immediate
+            # revocation and overlap expiry drain already-connected tunnels.
+            active = await resolve_host_auth_credentials()
+            if (
+                active.profile.profile_id != auth.credential_profile_id
+                or auth.credential_generation not in active.tokens_by_generation
+            ):
+                await websocket.close(code=4403)
+                break
+            frame = channel.accept_host_frame(frame_text)
             if isinstance(frame, channel.adapter.frames.HostRunnerExitedFrame):
                 await facade.record_runner_exit(
                     runner_id=frame.runner_id, error=frame.error

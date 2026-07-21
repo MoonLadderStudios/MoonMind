@@ -184,6 +184,7 @@ class OmnigentBridgeSessionStore:
         *,
         host_id: str,
         credential_generation: int,
+        credential_profile_id: str = "bootstrap-local",
         capabilities: dict[str, Any] | None = None,
         readiness: str | None = None,
         disconnected: bool = False,
@@ -220,8 +221,6 @@ class OmnigentBridgeSessionStore:
                     )
                     .where(
                         OmnigentOAuthHostLeaseRecord.omnigent_host_id == host_id,
-                        OmnigentOAuthHostLeaseRecord.credential_generation
-                        == credential_generation,
                         OmnigentOAuthHostLeaseRecord.status.in_(
                             {"starting", "ready", "assigned", "draining"}
                         ),
@@ -240,6 +239,15 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "embedded host credential generation is stale for its profile binding"
                 ) from exc
+            if lease.host_auth_profile_id not in (None, credential_profile_id):
+                raise OmnigentIdempotencyError(
+                    "embedded host authentication profile does not match its lease"
+                )
+            # The upstream-verified host credential is a separate authority from
+            # the Provider Profile OAuth generation above. Bind it only after the
+            # preassigned host identity and OAuth lease have both matched.
+            lease.host_auth_profile_id = credential_profile_id
+            lease.host_auth_generation = credential_generation
             lease.last_heartbeat_at = now
             lease.disconnected_at = now if disconnected else None
             if capabilities is not None:

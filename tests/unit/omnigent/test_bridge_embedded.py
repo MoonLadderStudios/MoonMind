@@ -49,6 +49,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
 )
 from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
@@ -1066,6 +1067,23 @@ async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> 
         }
     ]
     assert agents[0]["id"] == "codex-native"
+
+
+@pytest.mark.asyncio
+async def test_host_auth_profile_is_durably_bound_to_preassigned_lease(store) -> None:
+    await _bind_active_host(store, host_id="host-auth-bound")
+    await store.record_embedded_host_lifecycle(
+        host_id="host-auth-bound",
+        credential_generation=8,
+        credential_profile_id="host-auth-primary",
+        readiness="ready",
+    )
+    with pytest.raises(OmnigentIdempotencyError, match="profile does not match"):
+        await store.record_embedded_host_lifecycle(
+            host_id="host-auth-bound",
+            credential_generation=9,
+            credential_profile_id="unrelated-host-auth",
+        )
 
 
 @pytest.mark.asyncio

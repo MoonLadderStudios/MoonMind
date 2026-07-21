@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 import os
 from typing import Any, Mapping
@@ -118,6 +118,56 @@ class HostAuthCredentialProfile:
 class ResolvedHostAuthCredentials:
     profile: HostAuthCredentialProfile
     tokens_by_generation: Mapping[int, str]
+
+
+def rotate_host_auth_profile(
+    profile: HostAuthCredentialProfile,
+    *,
+    new_secret_ref: str,
+    now: datetime | None = None,
+    overlap: timedelta = MAX_ROTATION_OVERLAP,
+) -> HostAuthCredentialProfile:
+    """Build a validated next generation without mutating the current profile.
+
+    Persistence owners can commit the returned value atomically; validation
+    failure leaves the durable/current value untouched.
+    """
+    now = now or datetime.now(tz=UTC)
+    if not new_secret_ref or overlap < timedelta(0) or overlap > MAX_ROTATION_OVERLAP:
+        raise HostAuthProfileError(
+            "host credential rotation is invalid", code="host_auth_rotation_invalid"
+        )
+    rotated = replace(
+        profile,
+        current_secret_ref=new_secret_ref,
+        current_generation=profile.current_generation + 1,
+        previous_secret_ref=profile.current_secret_ref if overlap else None,
+        previous_generation=profile.current_generation if overlap else None,
+        previous_expires_at=now + overlap if overlap else None,
+        rotated_at=now,
+        bootstrap_fallback=False,
+    )
+    rotated.validate(now=now)
+    logger.info(
+        "embedded_host_auth_rotated",
+        profile_id=rotated.profile_id,
+        current_generation=rotated.current_generation,
+        previous_generation=rotated.previous_generation,
+        overlap_seconds=int(overlap.total_seconds()),
+    )
+    return rotated
+
+
+def revoke_host_auth_profile(profile: HostAuthCredentialProfile) -> HostAuthCredentialProfile:
+    """Return immediately revoked safe metadata without resolving either secret."""
+    revoked = replace(profile, revoked=True, previous_secret_ref=None,
+                      previous_generation=None, previous_expires_at=None)
+    logger.info(
+        "embedded_host_auth_revoked",
+        profile_id=profile.profile_id,
+        current_generation=profile.current_generation,
+    )
+    return revoked
 
 
 def _clean(value: object | None) -> str:
@@ -276,4 +326,6 @@ __all__ = [
     "host_auth_readiness",
     "load_host_auth_profile",
     "resolve_host_auth_credentials",
+    "revoke_host_auth_profile",
+    "rotate_host_auth_profile",
 ]

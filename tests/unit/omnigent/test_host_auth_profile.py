@@ -12,6 +12,8 @@ from moonmind.omnigent.host_auth_profile import (
     MAX_ROTATION_OVERLAP,
     load_host_auth_profile,
     resolve_host_auth_credentials,
+    revoke_host_auth_profile,
+    rotate_host_auth_profile,
 )
 from moonmind.omnigent.host_auth_adapter import PINNED_PROTOCOL_PROFILE
 
@@ -121,3 +123,30 @@ def test_environment_token_is_explicit_bootstrap_fallback() -> None:
     assert profile.bootstrap_fallback is True
     assert profile.current_secret_ref == "env://OMNIGENT_HOST_RUNNER_TOKEN"
     assert profile.protocol_profile == PINNED_PROTOCOL_PROFILE
+
+
+def test_rotation_is_bounded_and_failure_does_not_mutate_current_profile() -> None:
+    now = datetime.now(tz=UTC)
+    current = HostAuthCredentialProfile("managed", "env://CURRENT", 4)
+    rotated = rotate_host_auth_profile(
+        current, new_secret_ref="env://NEXT", now=now, overlap=timedelta(minutes=5)
+    )
+    assert (rotated.current_generation, rotated.previous_generation) == (5, 4)
+    assert current.current_generation == 4
+    with pytest.raises(HostAuthProfileError) as excinfo:
+        rotate_host_auth_profile(
+            current,
+            new_secret_ref="env://BAD",
+            now=now,
+            overlap=MAX_ROTATION_OVERLAP + timedelta(seconds=1),
+        )
+    assert excinfo.value.code == "host_auth_rotation_invalid"
+    assert current.current_generation == 4
+
+
+def test_revocation_removes_overlap_without_exposing_secret_refs() -> None:
+    current = HostAuthCredentialProfile("managed", "env://CURRENT", 4)
+    revoked = revoke_host_auth_profile(current)
+    assert revoked.revoked is True
+    assert revoked.previous_secret_ref is None
+    assert "CURRENT" not in str(revoked.metadata())

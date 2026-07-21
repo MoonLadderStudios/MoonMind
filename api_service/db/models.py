@@ -2802,6 +2802,10 @@ class OmnigentOAuthHostLeaseRecord(Base):
             name="ck_omnigent_oauth_host_lease_generation",
         ),
         CheckConstraint(
+            "host_auth_generation IS NULL OR host_auth_generation >= 1",
+            name="ck_omnigent_oauth_host_lease_host_auth_generation",
+        ),
+        CheckConstraint(
             "expires_at > acquired_at",
             name="ck_omnigent_oauth_host_lease_expiry",
         ),
@@ -2824,6 +2828,10 @@ class OmnigentOAuthHostLeaseRecord(Base):
     provider_lease_id: Mapped[str] = mapped_column(String(255), nullable=False)
     binding_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Embedded host/server authentication is intentionally distinct from the
+    # Provider Profile OAuth credential generation above.
+    host_auth_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    host_auth_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     holder_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
