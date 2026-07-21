@@ -38,6 +38,10 @@ COMMANDS = (
         "pytest",
         "tests/unit/omnigent",
         "tests/integration/omnigent",
+        # This production-Postgres serialization check belongs to the
+        # compose-backed integration-ci job; the deterministic runner does not
+        # provision a database service.
+        "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
         "-q",
         "--tb=short",
     ),
