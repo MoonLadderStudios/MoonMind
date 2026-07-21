@@ -10,6 +10,7 @@ from moonmind.omnigent.conformance import ConformanceContractError, assert_secre
 
 SCHEMA_VERSION = "moonmind.omnigent.embedded-acceptance/v1"
 EVIDENCE_SCHEMA_VERSION = "moonmind.omnigent.embedded-acceptance-evidence/v1"
+CASE_EVIDENCE_SCHEMA_VERSION = "moonmind.omnigent.embedded-acceptance-case-evidence/v1"
 REQUIRED_PREREQUISITES = ("3417", "3420", "3421", "3422", "3423", "3424")
 REQUIRED_SECTIONS = (
     "evidence-validation",
@@ -26,6 +27,56 @@ REQUIRED_SECTIONS = (
 _DIGEST_REF = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 
 
+def _active_evidence(item: Mapping[str, Any], *, label: str, now: datetime) -> None:
+    try:
+        generated_at = datetime.fromisoformat(str(item["generatedAt"]).replace("Z", "+00:00"))
+        expires_at = datetime.fromisoformat(str(item["expiresAt"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConformanceContractError(f"{label} has invalid generation or expiry time") from exc
+    if generated_at.tzinfo is None or expires_at.tzinfo is None:
+        raise ConformanceContractError(f"{label} timestamps must include a timezone")
+    if generated_at > now or expires_at <= generated_at or expires_at <= now:
+        raise ConformanceContractError(f"{label} is not within its validity period")
+    if item.get("revokedAt") is not None:
+        raise ConformanceContractError(f"{label} is revoked")
+    if item.get("supersededBy") is not None:
+        raise ConformanceContractError(f"{label} is superseded")
+
+
+def _passed_case_evidence(
+    evidence: Any,
+    *,
+    label: str,
+    claim: str,
+    case_name: str,
+    identities: Mapping[str, Any],
+    now: datetime,
+) -> None:
+    if not isinstance(evidence, Mapping):
+        raise ConformanceContractError(f"{label} evidence ref is unresolved")
+    if evidence.get("schemaVersion") != CASE_EVIDENCE_SCHEMA_VERSION:
+        raise ConformanceContractError(f"{label} evidence has an unsupported schema")
+    if (
+        evidence.get("claim") != claim
+        or evidence.get("case") != case_name
+        or evidence.get("status") != "passed"
+    ):
+        raise ConformanceContractError(f"{label} evidence does not prove its case")
+    if evidence.get("identities") != identities:
+        raise ConformanceContractError(f"{label} evidence is for different identities")
+    if evidence.get("secretScan") != "passed" or evidence.get("cleanup") != "passed":
+        raise ConformanceContractError(f"{label} evidence failed safety checks")
+    channel_refs = evidence.get("evidenceRefs")
+    if not isinstance(channel_refs, list) or not channel_refs or not all(
+        isinstance(ref, str) and ref.strip() for ref in channel_refs
+    ):
+        raise ConformanceContractError(f"{label} evidence lacks channel refs")
+    if not isinstance(evidence.get("producer"), str) or not evidence["producer"].strip():
+        raise ConformanceContractError(f"{label} evidence lacks provenance")
+    _active_evidence(evidence, label=f"{label} evidence", now=now)
+    assert_secret_free(evidence)
+
+
 def _passed_evidence(
     item: Any,
     *,
@@ -33,6 +84,7 @@ def _passed_evidence(
     claim: str,
     evidence_objects: Mapping[str, Any],
     identities: Mapping[str, Any],
+    now: datetime,
 ) -> dict[str, Any]:
     if not isinstance(item, Mapping) or item.get("status") != "passed":
         raise ConformanceContractError(f"{label} did not pass")
@@ -51,6 +103,7 @@ def _passed_evidence(
             raise ConformanceContractError(f"{label} evidence does not prove its claim")
         if evidence.get("identities") != identities:
             raise ConformanceContractError(f"{label} evidence is for different identities")
+        _active_evidence(evidence, label=f"{label} evidence", now=now)
         cases = evidence.get("cases")
         if not isinstance(cases, Mapping) or not cases or any(
             not isinstance(case, Mapping)
@@ -64,6 +117,16 @@ def _passed_evidence(
             for case in cases.values()
         ):
             raise ConformanceContractError(f"{label} evidence cases are incomplete")
+        for case_name, case in cases.items():
+            for case_ref in case["evidenceRefs"]:
+                _passed_case_evidence(
+                    evidence_objects.get(case_ref),
+                    label=f"{label} case {case_name}",
+                    claim=claim,
+                    case_name=case_name,
+                    identities=identities,
+                    now=now,
+                )
         if evidence.get("secretScan") != "passed" or evidence.get("cleanup") != "passed":
             raise ConformanceContractError(f"{label} evidence failed safety checks")
         if (
@@ -77,13 +140,18 @@ def _passed_evidence(
     return dict(item)
 
 
-def build_embedded_acceptance_report(source: Mapping[str, Any]) -> dict[str, Any]:
+def build_embedded_acceptance_report(
+    source: Mapping[str, Any], *, now: datetime | None = None
+) -> dict[str, Any]:
     """Validate all controlling lanes and return the publishable report.
 
     Live/provider execution may produce the input in separate jobs, but no
     partial, skipped, mutable-image, or unattested result can become the final
     support gate.
     """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ConformanceContractError("acceptance validation time must include a timezone")
     identities = source.get("identities")
     if not isinstance(identities, Mapping):
         raise ConformanceContractError("acceptance identities are required")
@@ -122,6 +190,7 @@ def build_embedded_acceptance_report(source: Mapping[str, Any]) -> dict[str, Any
             claim=f"prerequisite:{issue}",
             evidence_objects=evidence_objects,
             identities=identities,
+            now=now,
         )
         for issue in REQUIRED_PREREQUISITES
     }
@@ -136,6 +205,7 @@ def build_embedded_acceptance_report(source: Mapping[str, Any]) -> dict[str, Any
             claim=f"section:{section}",
             evidence_objects=evidence_objects,
             identities=identities,
+            now=now,
         )
         for section in REQUIRED_SECTIONS
     }
@@ -146,6 +216,7 @@ def build_embedded_acceptance_report(source: Mapping[str, Any]) -> dict[str, Any
         claim="cleanup",
         evidence_objects=evidence_objects,
         identities=identities,
+        now=now,
     )
     if (
         cleanup.get("historicalEvidencePreserved") is not True
@@ -157,7 +228,7 @@ def build_embedded_acceptance_report(source: Mapping[str, Any]) -> dict[str, Any
         "schemaVersion": SCHEMA_VERSION,
         "issue": "MoonLadderStudios/MoonMind#3425",
         "status": "passed",
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "generatedAt": now.isoformat(),
         "producer": source.get("producer"),
         "identities": dict(identities),
         "prerequisites": accepted_prerequisites,

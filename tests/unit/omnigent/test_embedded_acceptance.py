@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 
 import pytest
 
 from moonmind.omnigent.conformance import ConformanceContractError
 from moonmind.omnigent.embedded_acceptance import (
+    CASE_EVIDENCE_SCHEMA_VERSION,
     EVIDENCE_SCHEMA_VERSION,
     REQUIRED_PREREQUISITES,
     REQUIRED_SECTIONS,
@@ -49,19 +51,39 @@ def _source() -> dict:
         "cleanup": "cleanup",
     }
     for name, claim in claims.items():
+        case_ref = f"artifact://case/{name}"
         evidence_objects[f"artifact://{name}"] = {
             "schemaVersion": EVIDENCE_SCHEMA_VERSION,
             "claim": claim,
             "status": "passed",
             "identities": copy.deepcopy(source["identities"]),
+            "evidenceRefs": [f"artifact://channel/{name}"],
             "cases": {
                 "controlling-case": {
                     "status": "passed",
-                    "evidenceRefs": [f"artifact://case/{name}"],
+                    "evidenceRefs": [case_ref],
                 }
             },
             "generatedAt": "2026-07-21T00:00:00Z",
+            "expiresAt": "2026-07-22T00:00:00Z",
+            "revokedAt": None,
+            "supersededBy": None,
             "producer": "github-actions:matrix",
+            "secretScan": "passed",
+            "cleanup": "passed",
+        }
+        evidence_objects[case_ref] = {
+            "schemaVersion": CASE_EVIDENCE_SCHEMA_VERSION,
+            "claim": claim,
+            "case": "controlling-case",
+            "status": "passed",
+            "identities": copy.deepcopy(source["identities"]),
+            "evidenceRefs": [f"artifact://channel/case/{name}"],
+            "generatedAt": "2026-07-21T00:00:00Z",
+            "expiresAt": "2026-07-22T00:00:00Z",
+            "revokedAt": None,
+            "supersededBy": None,
+            "producer": "github-actions:case-runner",
             "secretScan": "passed",
             "cleanup": "passed",
         }
@@ -70,7 +92,9 @@ def _source() -> dict:
 
 
 def test_complete_matrix_builds_publishable_issue_3425_report() -> None:
-    report = build_embedded_acceptance_report(_source())
+    report = build_embedded_acceptance_report(
+        _source(), now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+    )
     assert report["status"] == "passed"
     assert report["issue"] == "MoonLadderStudios/MoonMind#3425"
     assert set(report["sections"]) == set(REQUIRED_SECTIONS)
@@ -123,3 +147,43 @@ def test_failed_or_incomplete_resolved_case_refuses_publication() -> None:
     evidence["cases"]["controlling-case"]["status"] = "skipped"
     with pytest.raises(ConformanceContractError, match="cases are incomplete"):
         build_embedded_acceptance_report(source)
+
+
+def test_unresolved_or_mismatched_leaf_case_refuses_publication() -> None:
+    unresolved = _source()
+    del unresolved["evidenceObjects"]["artifact://case/mixed-mode-history"]
+    with pytest.raises(
+        ConformanceContractError,
+        match="case controlling-case evidence ref is unresolved",
+    ):
+        build_embedded_acceptance_report(
+            unresolved, now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+        )
+
+    mismatched = _source()
+    leaf = mismatched["evidenceObjects"]["artifact://case/mixed-mode-history"]
+    leaf["case"] = "another-case"
+    with pytest.raises(ConformanceContractError, match="does not prove its case"):
+        build_embedded_acceptance_report(
+            mismatched, now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+        )
+
+
+@pytest.mark.parametrize(
+    "override,match",
+    [
+        ({"expiresAt": "2026-07-21T11:59:59Z"}, "validity period"),
+        ({"revokedAt": "2026-07-21T11:00:00Z"}, "revoked"),
+        ({"supersededBy": "artifact://replacement"}, "superseded"),
+        ({"generatedAt": "not-a-time"}, "invalid generation"),
+    ],
+)
+def test_stale_revoked_superseded_or_malformed_evidence_refuses_publication(
+    override: dict, match: str
+) -> None:
+    source = _source()
+    source["evidenceObjects"]["artifact://mode-transition-rollback"].update(override)
+    with pytest.raises(ConformanceContractError, match=match):
+        build_embedded_acceptance_report(
+            source, now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+        )
