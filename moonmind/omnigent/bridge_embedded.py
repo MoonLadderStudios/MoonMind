@@ -275,13 +275,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                 status_code=409,
             )
         control_key = f"stop:{session_id}:{runner_id}"
-        if await self._control_already_requested(row, control_key):
-            return {
-                "ok": False,
-                "status": "delivery_unknown",
-                "runnerId": runner_id,
-                "idempotencyKey": control_key,
-            }
+        reconciled = await self._reconcile_control(row, control_key)
+        if reconciled is not None:
+            return {**reconciled, "runnerId": runner_id}
         await self._record_control(
             row, control_key, "stop", "requested",
             summary="Embedded stop requested",
@@ -341,12 +337,9 @@ class OmnigentEmbeddedHostProtocolFacade:
         await self._validate_control_expectations(
             row=row, payload=payload, control_key=control_key, control_type="message"
         )
-        if await self._control_already_requested(row, control_key):
-            return {
-                "ok": False,
-                "status": "delivery_unknown",
-                "idempotencyKey": control_key,
-            }
+        reconciled = await self._reconcile_control(row, control_key)
+        if reconciled is not None:
+            return reconciled
         await self._record_control(
             row, control_key, "message", "requested",
             summary=_bounded_request_summary(payload),
@@ -461,16 +454,20 @@ class OmnigentEmbeddedHostProtocolFacade:
         """Publish embedded resources through the canonical artifact contract."""
         row, _runner_id = await self._bound_runner(session_id)
         control_key = f"harvest:{session_id}"
-        if await self._control_already_requested(row, control_key):
+        reconciled = await self._reconcile_control(row, control_key)
+        if reconciled is not None:
             refreshed = await self._run_store.get_bridge_session(row.bridge_session_id)
             return {
-                "ok": True,
-                "status": "reconciled",
+                **reconciled,
                 "captureManifestRef": refreshed.capture_manifest_ref,
             }
         await self._record_control(
             row, control_key, "harvest", "requested",
             summary="Embedded resource harvest requested",
+        )
+        await self._record_control(
+            row, control_key, "harvest", "accepted",
+            summary="Embedded resource harvest accepted",
         )
         request = _request_for_row(row)
         refs: dict[str, str] = {
@@ -555,8 +552,13 @@ class OmnigentEmbeddedHostProtocolFacade:
         control_key = _clean(payload.get("idempotencyKey")) or (
             f"elicitation:{session_id}:{elicitation_id}"
         )
-        if await self._control_already_requested(row, control_key):
-            return {"ok": False, "status": "delivery_unknown", "idempotencyKey": control_key}
+        await self._validate_control_expectations(
+            row=row, payload=payload, control_key=control_key,
+            control_type="elicitation",
+        )
+        reconciled = await self._reconcile_control(row, control_key)
+        if reconciled is not None:
+            return reconciled
         await self._record_control(
             row, control_key, "elicitation", "requested",
             summary=f"Resolve elicitation {_safe_resource_identifier(elicitation_id)}",
@@ -602,6 +604,42 @@ class OmnigentEmbeddedHostProtocolFacade:
             for event in events
         )
 
+    async def _reconcile_control(
+        self, row: Any, control_key: str
+    ) -> dict[str, Any] | None:
+        """Return the durable outcome for a retried logical control."""
+        events = await self._run_store.list_events(row.bridge_session_id)
+        prefix = f"embedded-control:{control_key}:"
+        outcomes: dict[str, Any] = {}
+        for event in events:
+            metadata = event.metadata_ or {}
+            if not str(metadata.get("eventIdentity") or "").startswith(prefix):
+                continue
+            details = metadata.get("metadata")
+            outcome = str(
+                (details.get("controlOutcome") if isinstance(details, dict) else None)
+                or metadata.get("controlOutcome")
+                or ""
+            )
+            outcomes[outcome] = event
+        for outcome, ok in (("completed", True), ("failed", False),
+                            ("rejected", False), ("delivery_unknown", False)):
+            if outcome in outcomes:
+                return {
+                    "ok": ok,
+                    "status": outcome,
+                    "idempotencyKey": control_key,
+                    "reconciled": True,
+                }
+        if "requested" in outcomes or "accepted" in outcomes:
+            return {
+                "ok": False,
+                "status": "delivery_unknown",
+                "idempotencyKey": control_key,
+                "reconciled": True,
+            }
+        return None
+
     async def _validate_control_expectations(
         self, *, row: Any, payload: dict[str, Any], control_key: str,
         control_type: str,
@@ -610,6 +648,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             "expectedSessionId": row.omnigent_session_id,
             "expectedHostId": row.omnigent_host_id,
             "expectedRunnerId": row.omnigent_runner_id,
+            "expectedTurnState": row.first_message_state,
         }
         mismatch = next(
             (
@@ -745,6 +784,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         return {
             "id": session_id,
             "status": row.status,
+            "capabilities": capabilities,
             "agentId": row.omnigent_agent_id or "codex-native",
             "hostId": row.omnigent_host_id,
             "runnerId": row.omnigent_runner_id,
@@ -1209,7 +1249,10 @@ def _embedded_control_capabilities(
         "sendMessage": live,
         "resolveElicitation": live,
         "stop": live,
-        "interrupt": live and bool(host.get("interrupt")),
+        # The pinned embedded router has no interrupt operation. Capability
+        # projection and routing must share that contract even if a future host
+        # sends an unrecognized interrupt capability bit.
+        "interrupt": False,
         "harvest": live,
         "clearSession": False,
         "newSession": True,

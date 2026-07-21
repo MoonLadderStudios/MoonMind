@@ -560,6 +560,8 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
     assert response["id"].startswith("emb_brs_")
     assert response["moonmind"]["bridgeLocal"] is True
     assert response["moonmind"]["reused"] is False
+    assert response["capabilities"]["sendMessage"] is True
+    assert response["capabilities"]["interrupt"] is False
     row = await store.get_session_by_provider_session_id(response["id"])
     assert row is not None
     assert row.omnigent_host_id == "host-1"
@@ -1049,8 +1051,54 @@ async def test_embedded_duplicate_control_does_not_repeat_live_side_effect(store
     retry = await facade.post_event(session_id="sess-embedded", event=event)
 
     assert first == {"ok": True}
-    assert retry["status"] == "delivery_unknown"
+    assert retry == {
+        "ok": True,
+        "status": "completed",
+        "idempotencyKey": "control-1",
+        "reconciled": True,
+    }
     assert channels.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_embedded_control_rejects_expected_turn_state_mismatch(store) -> None:
+    """Issue #3424 rejects stale controls before their live side effect."""
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.calls += 1
+            return {"ok": True}
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    event = BridgeSessionEventRequest(
+        type="message", idempotencyKey="stale-turn",
+        expectedTurnState="posted",
+    )
+
+    with pytest.raises(OmnigentBridgeError) as exc_info:
+        await facade.post_event(session_id="sess-embedded", event=event)
+
+    assert exc_info.value.code == "omnigent_embedded_control_state_mismatch"
+    assert channels.calls == 0
 
 
 @pytest.mark.asyncio
