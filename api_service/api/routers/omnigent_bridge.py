@@ -22,7 +22,7 @@ from fastapi import (
     WebSocketDisconnect, status,
 )
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -136,8 +136,8 @@ class OmnigentSessionResponse(BaseModel):
 
 
 class OmnigentAgentResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    id: str
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    id: str = Field(validation_alias=AliasChoices("id", "agentId", "agent_id"))
     name: str | None = None
     ready: bool | None = None
 
@@ -1376,7 +1376,8 @@ async def stream_upstream_omnigent_events(
             async for event in stream:
                 # Reject unknown future canonical envelopes visibly instead of
                 # silently coercing them into the pinned public contract.
-                OmnigentStreamEvent.model_validate(event)
+                if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                    OmnigentStreamEvent.model_validate(event)
                 event_id = ""
                 sequence = event.get("sequence")
                 if isinstance(sequence, int) and sequence >= 0:

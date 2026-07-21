@@ -451,6 +451,20 @@ def test_list_agents_returns_catalog() -> None:
     assert resp.json() == [{"id": "agent-1", "name": "codex"}]
 
 
+@pytest.mark.parametrize("alias", ["agentId", "agent_id"])
+def test_list_agents_accepts_upstream_identifier_aliases(alias: str) -> None:
+    class _AliasedAgentProxy(_FakeProxy):
+        async def list_agents(self):
+            return [{alias: "agent-1", "name": "codex"}]
+
+    client, _, _ = _build(proxy=_AliasedAgentProxy())
+
+    response = client.get(_AGENTS_PATH)
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == "agent-1"
+
+
 def test_list_hosts_returns_bounded_profile_discovery() -> None:
     client, _, _ = _build()
     resp = client.get(_HOSTS_PATH)
@@ -1243,6 +1257,24 @@ def test_unknown_stream_schema_version_emits_stable_visible_error() -> None:
     assert "event: error" in response.text
     assert "omnigent_bridge_schema_version_unsupported" in response.text
     assert "moonmind.omnigent_bridge.event.v2" not in response.text
+
+
+def test_proxy_stream_passes_through_untyped_upstream_frames() -> None:
+    class _UntypedStreamProxy(_FakeProxy):
+        async def stream_events(self, session_id: str, *, after: int = 0):
+            yield {"session": {"status": "running"}}
+            yield {"type": "response.completed", "session": {"status": "completed"}}
+
+    client, _, _ = _build(proxy=_UntypedStreamProxy())
+
+    response = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/stream"
+    )
+
+    assert response.status_code == 200
+    assert 'data: {"session":{"status":"running"}}' in response.text
+    assert 'data: {"type":"response.completed"' in response.text
+    assert "event: error" not in response.text
 
 
 def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> None:

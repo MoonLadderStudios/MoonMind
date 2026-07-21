@@ -127,32 +127,55 @@ class BridgePrincipalBinding:
 class OmnigentSessionFacade(Protocol):
     """Mode-neutral public Session API contract for issue #3421."""
 
-    async def list_agents(self) -> list[dict[str, Any]]: ...
-    async def list_hosts(self) -> list[dict[str, Any]]: ...
+    async def list_agents(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
     async def create_session(
         self, *, request: BridgeSessionCreateRequest, binding: BridgePrincipalBinding
-    ) -> dict[str, Any]: ...
-    async def get_session(self, session_id: str) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
     async def get_session_owner(
         self, session_id: str
-    ) -> BridgeSessionBinding | None: ...
+    ) -> BridgeSessionBinding | None:
+        raise NotImplementedError
+
     async def attach_session(
         self, *, session_id: str, binding: BridgePrincipalBinding
-    ) -> dict[str, Any]: ...
-    async def delete_session(self, session_id: str) -> dict[str, Any]: ...
-    async def stop_session(self, session_id: str) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
     async def post_event(
         self, *, session_id: str, event: BridgeSessionEventRequest
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
     async def resolve_elicitation(
         self, *, session_id: str, elicitation_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
     async def get_resource(
         self, operation: str, session_id: str, value: str | None = None
-    ) -> Any: ...
+    ) -> Any:
+        raise NotImplementedError
+
     def stream_events(
         self, session_id: str, *, after: int = 0
-    ) -> AsyncIterator[dict[str, Any]]: ...
+    ) -> AsyncIterator[dict[str, Any]]:
+        raise NotImplementedError
 
 
 def validate_bridge_host_fields(
@@ -589,7 +612,7 @@ class OmnigentBridgeSessionProxy:
 
         return await self.post_event(
             session_id=session_id,
-            event=BridgeSessionEventRequest(type="stop"),
+            event=BridgeSessionEventRequest(type="stop_session"),
         )
 
     async def delete_session(self, session_id: str) -> dict[str, Any]:

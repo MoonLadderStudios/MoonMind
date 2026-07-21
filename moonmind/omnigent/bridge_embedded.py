@@ -93,7 +93,7 @@ class EmbeddedHostHeartbeatRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    status: str = "running"
+    status: str | None = None
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("capabilities")
@@ -575,7 +575,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                     "metadata": dict(event.metadata_ or {}),
                 }
             refreshed = await self._run_store.get_bridge_session(row.bridge_session_id)
-            if refreshed and refreshed.status in {
+            if refreshed and not page.has_more and refreshed.status in {
                 "completed", "failed", "canceled", "timed_out"
             }:
                 yield {

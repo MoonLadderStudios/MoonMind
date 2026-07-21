@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -351,6 +352,31 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
         lease = await session.get(OmnigentOAuthHostLeaseRecord, "lease-runner-1")
         assert lease.host_readiness == "disconnected"
         assert lease.disconnected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_without_status_preserves_ready_host(store) -> None:
+    await _bind_active_host(store)
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_embedded_config(),
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="runner-1",
+        credential_generation=1,
+    )
+
+    await facade.heartbeat(
+        host_id="runner-1",
+        request=EmbeddedHostHeartbeatRequest(),
+        auth=auth,
+    )
+
+    hosts = await store.list_embedded_host_readiness()
+    assert hosts[0]["status"] == "ready"
+    assert hosts[0]["ready"] is True
 
 
 @pytest.mark.asyncio
@@ -1064,3 +1090,51 @@ async def test_embedded_snapshot_attach_and_stream_survive_disconnect(store) -> 
     with pytest.raises(OmnigentBridgeError) as excinfo:
         await facade.delete_session("sess-embedded")
     assert excinfo.value.code == "omnigent_bridge_capability_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_embedded_terminal_stream_drains_all_pages() -> None:
+    class _PagedStore:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session_by_provider_session_id(self, session_id: str):
+            return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def list_event_page(self, bridge_session_id: str, *, after: int, limit: int):
+            self.calls += 1
+            sequence = self.calls
+            return SimpleNamespace(
+                rows=[
+                    SimpleNamespace(
+                        sequence=sequence,
+                        event_id=f"event-{sequence}",
+                        event_type="response.delta",
+                        timestamp=datetime.now(UTC),
+                        normalized_status="active",
+                        text_preview=f"page-{sequence}",
+                        artifact_ref=None,
+                        metadata_={},
+                    )
+                ],
+                has_more=self.calls == 1,
+            )
+
+        async def get_bridge_session(self, bridge_session_id: str):
+            return SimpleNamespace(
+                status="completed",
+                terminal_refs={},
+                diagnostics_ref=None,
+                final_snapshot_ref=None,
+            )
+
+    store = _PagedStore()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+
+    events = [event async for event in facade.stream_events("sess-embedded")]
+
+    assert [event["sequence"] for event in events] == [1, 2, 2]
+    assert events[-1]["type"] == "terminal"
+    assert store.calls == 2
