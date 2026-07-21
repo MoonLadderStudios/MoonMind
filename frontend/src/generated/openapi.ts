@@ -3102,6 +3102,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/host-auth/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Embedded Host Auth Profile
+         * @description Atomically select safe managed metadata after resolving its SecretRef.
+         */
+        put: operations["put_embedded_host_auth_profile_api_omnigent_host_auth_profile_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/host-auth/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Embedded Host Auth Profile
+         * @description Validate a new generation before atomically replacing durable metadata.
+         */
+        post: operations["rotate_embedded_host_auth_profile_api_omnigent_host_auth_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/host-auth/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Embedded Host Auth Profile */
+        post: operations["revoke_embedded_host_auth_profile_api_omnigent_host_auth_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/v1/hosts/register": {
         parameters: {
             query?: never;
@@ -7928,6 +7985,28 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HostAuthProfilePutRequest */
+        HostAuthProfilePutRequest: {
+            /** Profileid */
+            profileId: string;
+            /** Currentsecretref */
+            currentSecretRef: string;
+            /**
+             * Currentgeneration
+             * @default 1
+             */
+            currentGeneration: number;
+        };
+        /** HostAuthRotateRequest */
+        HostAuthRotateRequest: {
+            /** Newsecretref */
+            newSecretRef: string;
+            /**
+             * Overlapseconds
+             * @default 900
+             */
+            overlapSeconds: number;
         };
         /** ImageObservation */
         ImageObservation: {
@@ -19210,6 +19289,98 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_embedded_host_auth_profile_api_omnigent_host_auth_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostAuthProfilePutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_embedded_host_auth_profile_api_omnigent_host_auth_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostAuthRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_embedded_host_auth_profile_api_omnigent_host_auth_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

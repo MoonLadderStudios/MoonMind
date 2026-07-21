@@ -1534,17 +1534,18 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error",
                 status_code=403,
             )
-        try:
-            await self._run_store.record_embedded_host_lifecycle(
-                host_id=auth.runner_id,
-                credential_generation=auth.credential_generation,
-                credential_profile_id=auth.credential_profile_id,
-            )
-        except OmnigentIdempotencyError as exc:
-            raise OmnigentBridgeError(
-                str(exc), failure_class="user_error", status_code=403,
-                code="host_auth_lease_mismatch",
-            ) from exc
+        if auth.credential_profile_id is not None:
+            try:
+                await self._run_store.record_embedded_host_lifecycle(
+                    host_id=auth.runner_id,
+                    credential_generation=auth.credential_generation,
+                    credential_profile_id=auth.credential_profile_id,
+                )
+            except OmnigentIdempotencyError as exc:
+                raise OmnigentBridgeError(
+                    str(exc), failure_class="user_error", status_code=403,
+                    code="host_auth_lease_mismatch",
+                ) from exc
         payload = request.model_dump(by_alias=True)
         payload.setdefault("direction", "host_to_moonmind")
         payload.setdefault("data", {})

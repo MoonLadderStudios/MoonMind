@@ -30,7 +30,10 @@ from moonmind.omnigent.host_auth_profile import (
     profile_persistence_metadata,
     rotate_host_auth_profile,
 )
-from moonmind.omnigent.bridge_config import parse_bridge_config
+from moonmind.omnigent.bridge_config import (
+    HOST_PROTOCOL_MODE_EMBEDDED,
+    parse_bridge_config,
+)
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 import moonmind.utils.logging as mm_logging
@@ -481,7 +484,7 @@ def _embedded_config():
     return parse_bridge_config(
         {
             "enabled": True,
-            "compatibility": {"hostProtocolMode": "embedded"},
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
                     "proxyConformanceEvidenceRef": "artifact://proxy",

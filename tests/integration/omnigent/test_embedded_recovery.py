@@ -166,7 +166,7 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(
     assert row.first_message_digest == "digest-1"
 
     stale = replace(auth, credential_generation=2)
-    with pytest.raises(OmnigentBridgeError, match="active profile lease"):
+    with pytest.raises(OmnigentBridgeError, match="generation does not match"):
         await restarted.heartbeat(
             host_id="host-1", request=EmbeddedHostHeartbeatRequest(), auth=stale
         )

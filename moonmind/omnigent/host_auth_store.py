@@ -44,6 +44,22 @@ class HostAuthProfileStore:
         ):
             raise ValueError("revoked host-auth metadata is incomplete")
         async with self._session_factory() as session, session.begin():
+            if expected_generation is not None and expected_generation > 0:
+                claimed = await session.execute(
+                    update(OmnigentHostAuthProfileRecord)
+                    .where(
+                        OmnigentHostAuthProfileRecord.active.is_(True),
+                        OmnigentHostAuthProfileRecord.metadata_json[
+                            "currentGeneration"
+                        ].as_integer()
+                        == expected_generation,
+                    )
+                    .values(active=False)
+                )
+                if claimed.rowcount != 1:
+                    raise RuntimeError(
+                        "host-auth profile changed during lifecycle update"
+                    )
             active = await session.scalar(
                 select(OmnigentHostAuthProfileRecord)
                 .where(OmnigentHostAuthProfileRecord.active.is_(True))
@@ -52,10 +68,7 @@ class HostAuthProfileStore:
             active_generation = (
                 int(active.metadata_json.get("currentGeneration", 0)) if active else 0
             )
-            if (
-                expected_generation is not None
-                and active_generation != expected_generation
-            ):
+            if expected_generation == 0 and active_generation != 0:
                 raise RuntimeError("host-auth profile changed during lifecycle update")
             await session.execute(
                 update(OmnigentHostAuthProfileRecord).values(active=False)

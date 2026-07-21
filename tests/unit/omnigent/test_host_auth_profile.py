@@ -4,7 +4,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from moonmind.omnigent.bridge_config import parse_bridge_config
+from moonmind.omnigent.bridge_config import (
+    HOST_PROTOCOL_MODE_EMBEDDED,
+    parse_bridge_config,
+)
 from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
 from moonmind.omnigent.host_auth_profile import (
     HostAuthCredentialProfile,
@@ -24,10 +27,9 @@ def _embedded_config():
     return parse_bridge_config(
         {
             "enabled": True,
-            "compatibility": {"hostProtocolMode": "embedded"},
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
             "hostConnection": {
                 "embedded": {
-                    "enabled": True,
                     "protocolProfile": PINNED_PROTOCOL_PROFILE,
                     "authMode": "upstream_runner_tunnel",
                     "proxyConformanceEvidenceRef": "artifact://proxy",
