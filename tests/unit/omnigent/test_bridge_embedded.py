@@ -541,6 +541,10 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
         "clearSession": False,
         "interruptTurn": False,
         "cancelSession": True,
+        "resolveElicitation": True,
+        "harvestResources": False,
+        "newSession": False,
+        "terminalCleanup": False,
     }
 
 
@@ -862,6 +866,46 @@ async def test_embedded_message_records_typed_control_lifecycle_and_reconciles_r
         "sessionStatus": "created",
         "turnState": "unknown",
     }
+
+
+@pytest.mark.asyncio
+async def test_embedded_message_does_not_redeliver_delivery_unknown_retry(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded", provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1", credential_generation=1,
+        host_binding_ref="binding-1", host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.calls += 1
+            raise TimeoutError("unknown delivery")
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    event = EmbeddedHostSessionEventRequest(type="message", data={"text": "hello"})
+    with pytest.raises(OmnigentBridgeError, match="unknown delivery"):
+        await facade.post_event(session_id="sess-embedded", event=event)
+    with pytest.raises(
+        OmnigentBridgeError, match="requires reconciliation"
+    ) as retry_error:
+        await facade.post_event(session_id="sess-embedded", event=event)
+
+    assert retry_error.value.code == "embedded_control_reconciliation_required"
+    assert channels.calls == 1
 
 
 @pytest.mark.asyncio

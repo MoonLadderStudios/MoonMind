@@ -70,9 +70,11 @@ def _embedded_intervention_capabilities(
         "interruptTurn": advertised("interrupt", "interruptTurn", "interrupt_turn"),
         "cancelSession": True,
         "resolveElicitation": True,
-        "harvestResources": True,
-        "newSession": True,
-        "terminalCleanup": True,
+        # Live resource reads are not durable harvest, and session creation and
+        # cleanup are not exposed as intervention controls by this facade.
+        "harvestResources": False,
+        "newSession": False,
+        "terminalCleanup": False,
     }
 
 
@@ -289,8 +291,10 @@ class OmnigentEmbeddedHostProtocolFacade:
                 status_code=409,
             )
         control_key = self._control_key("stop", session_id, {})
-        if await self._control_completed(row, control_key):
+        prior_outcome = await self._control_outcome(row, control_key)
+        if prior_outcome == "completed":
             return {"ok": True, "status": "stopped", "runnerId": runner_id, "reconciled": True}
+        self._reject_ambiguous_retry(prior_outcome)
         await self._append_control(row, "stop", control_key, "requested")
         await self._append_control(row, "stop", control_key, "accepted")
         try:
@@ -336,8 +340,10 @@ class OmnigentEmbeddedHostProtocolFacade:
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
         control_key = self._control_key("message", session_id, payload)
-        if await self._control_completed(row, control_key):
+        prior_outcome = await self._control_outcome(row, control_key)
+        if prior_outcome == "completed":
             return {"ok": True, "reconciled": True, "idempotencyKey": control_key}
+        self._reject_ambiguous_retry(prior_outcome)
         await self._append_control(row, "message", control_key, "requested", summary=payload)
         await self._append_control(row, "message", control_key, "accepted")
         try:
@@ -430,8 +436,10 @@ class OmnigentEmbeddedHostProtocolFacade:
         control_key = self._control_key(
             "elicitation", session_id, {"elicitationId": elicitation_id, "payload": payload}
         )
-        if await self._control_completed(row, control_key):
+        prior_outcome = await self._control_outcome(row, control_key)
+        if prior_outcome == "completed":
             return {"ok": True, "reconciled": True, "idempotencyKey": control_key}
+        self._reject_ambiguous_retry(prior_outcome)
         await self._append_control(row, "elicitation", control_key, "requested", summary={"elicitationId": elicitation_id})
         await self._append_control(row, "elicitation", control_key, "accepted")
         path = self._config.public_api.routes.resolve_elicitation.format(
@@ -463,11 +471,28 @@ class OmnigentEmbeddedHostProtocolFacade:
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()[:24]
         return f"embedded:{control}:{session_id}:{digest}"[:100]
 
-    async def _control_completed(self, row: Any, control_key: str) -> bool:
+    async def _control_outcome(self, row: Any, control_key: str) -> str | None:
         events = await self._run_store.list_events(row.bridge_session_id)
-        return any(
-            event.deduplication_key == f"{control_key}:completed"
+        prefix = f"{control_key}:"
+        outcomes = [
+            event.deduplication_key.removeprefix(prefix)
             for event in events
+            if event.deduplication_key.startswith(prefix)
+        ]
+        for outcome in ("completed", "delivery_unknown", "failed", "accepted", "requested"):
+            if outcome in outcomes:
+                return outcome
+        return None
+
+    @staticmethod
+    def _reject_ambiguous_retry(prior_outcome: str | None) -> None:
+        if prior_outcome is None:
+            return
+        raise OmnigentBridgeError(
+            "Embedded control retry requires reconciliation before another live delivery",
+            failure_class="integration_error",
+            status_code=409,
+            code="embedded_control_reconciliation_required",
         )
 
     async def _append_control(
