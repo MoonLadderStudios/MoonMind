@@ -521,7 +521,20 @@ class OmnigentEmbeddedHostProtocolFacade:
             manifest=manifest,
             refs=refs,
         )
-        await harvester.harvest_resources(capture_policy=None)
+        try:
+            await harvester.harvest_resources(capture_policy=None)
+        except Exception as exc:
+            await self._record_control(
+                row, control_key, "harvest", "failed",
+                summary="Embedded resource harvest failed",
+                code="omnigent_embedded_required_evidence_unavailable",
+                actor=actor,
+            )
+            raise OmnigentBridgeError(
+                "Unable to persist required embedded harvest evidence",
+                failure_class="system_error", status_code=500,
+                code="omnigent_embedded_required_evidence_unavailable",
+            ) from exc
         unavailable = sorted(key for key in manifest if key.endswith("Unavailable"))
         if unavailable:
             manifest["evidenceCompleteness"] = "optional_degradation"
@@ -536,19 +549,32 @@ class OmnigentEmbeddedHostProtocolFacade:
             "artifactRefs": refs,
             "evidenceCompleteness": manifest["evidenceCompleteness"],
         }
-        projection_ref = await self._artifact_gateway.write_json(
-            request=request,
-            name="output.omnigent.resource_projection.json",
-            payload=projection,
-            link_type="output.omnigent.resource_projection",
-        )
-        refs["resourceProjectionRef"] = projection_ref
-        manifest_ref = await self._artifact_gateway.write_json(
-            request=request,
-            name="output.omnigent.capture_manifest.json",
-            payload=manifest,
-            link_type="output.omnigent.capture_manifest",
-        )
+        try:
+            projection_ref = await self._artifact_gateway.write_json(
+                request=request,
+                name="output.omnigent.resource_projection.json",
+                payload=projection,
+                link_type="output.omnigent.resource_projection",
+            )
+            refs["resourceProjectionRef"] = projection_ref
+            manifest_ref = await self._artifact_gateway.write_json(
+                request=request,
+                name="output.omnigent.capture_manifest.json",
+                payload=manifest,
+                link_type="output.omnigent.capture_manifest",
+            )
+        except Exception as exc:
+            await self._record_control(
+                row, control_key, "harvest", "failed",
+                summary="Embedded harvest manifest persistence failed",
+                code="omnigent_embedded_required_evidence_unavailable",
+                actor=actor,
+            )
+            raise OmnigentBridgeError(
+                "Unable to persist required embedded harvest evidence",
+                failure_class="system_error", status_code=500,
+                code="omnigent_embedded_required_evidence_unavailable",
+            ) from exc
         await self._run_store.attach_capture_evidence(
             row.bridge_session_id,
             capture_manifest_ref=manifest_ref,
@@ -556,6 +582,15 @@ class OmnigentEmbeddedHostProtocolFacade:
             evidence_completeness=manifest["evidenceCompleteness"],
         )
         await self._run_store.record_resource_harvest_completed(session_id)
+        await self._run_store.record_lifecycle_event(
+            row.idempotency_key,
+            event_type="resource_association",
+            status="completed",
+            event_identity=f"embedded-resource-association:{control_key}",
+            summary="Embedded resource evidence associated",
+            diagnostics_ref=manifest_ref,
+            metadata={"sourceMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        )
         await self._record_control(
             row, control_key, "harvest", "completed",
             summary="Embedded resource evidence published",

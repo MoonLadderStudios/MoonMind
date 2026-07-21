@@ -1225,6 +1225,68 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     assert persisted.capture_manifest_ref == result["captureManifestRef"]
     assert '"schemaVersion": "moonmind.omnigent.capture_manifest.v1"' in manifest
     assert "MoonLadderStudios/MoonMind#3424" in manifest
+    events = await store.list_events(row.bridge_session_id)
+    associations = [
+        event for event in events
+        if (event.metadata_ or {}).get("eventIdentity", "").startswith(
+            "embedded-resource-association:"
+        )
+    ]
+    assert len(associations) == 1
+    assert associations[0].artifact_ref == result["captureManifestRef"]
+
+    # Association and artifacts remain durable when no live host channel exists.
+    replay = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), artifact_gateway=gateway
+    )
+    snapshot = await replay.get_session("sess-embedded")
+    assert snapshot["terminalEvidenceAvailable"] is True
+
+
+@pytest.mark.asyncio
+async def test_embedded_harvest_required_persistence_failure_is_typed(store) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        async def request_runner(self, **kwargs):
+            return {"items": []} if kwargs["expect_json"] else b""
+
+    class FailingGateway:
+        async def write_json(self, **_kwargs):
+            raise OSError("disk unavailable token=must-not-persist")
+
+        async def write_bytes(self, **_kwargs):
+            raise OSError("disk unavailable")
+
+        async def read_text(self, _ref):
+            return ""
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels(),
+        artifact_gateway=FailingGateway(),
+    )
+    with pytest.raises(OmnigentBridgeError) as exc_info:
+        await facade.harvest_session("sess-embedded", payload={"idempotencyKey": "h1"})
+
+    assert exc_info.value.code == "omnigent_embedded_required_evidence_unavailable"
+    events = await store.list_events(row.bridge_session_id)
+    failed = [event for event in events if (event.metadata_ or {}).get(
+        "eventIdentity") == "embedded-control:h1:failed"]
+    assert len(failed) == 1
+    assert "must-not-persist" not in str(failed[0].metadata_)
 
 
 @pytest.mark.asyncio
