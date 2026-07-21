@@ -2048,6 +2048,8 @@ def _build_runtime_planner():
                     if is_agent_runtime_step and has_explicit_step_skill
                     else ""
                 )
+                if effective_step_skill_name.lower() != "pr-resolver":
+                    step_node_inputs.pop("timeoutPolicy", None)
                 if is_agent_runtime_step and has_explicit_step_skill:
                     step_node_inputs["selectedSkill"] = step_tool_name
                     step_skill_payload = _coerce_mapping(step_entry.get("skill"))
