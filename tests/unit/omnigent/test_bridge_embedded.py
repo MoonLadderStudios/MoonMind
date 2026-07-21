@@ -619,7 +619,7 @@ async def test_embedded_control_rejects_unpersistable_idempotency_key(store) -> 
         credential_generation=1, host_binding_ref="binding-1",
         host_lease_ref="host-lease-1", omnigent_host_id="host-1",
     )
-    row = await store.get_or_create(
+    await store.get_or_create(
         request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
         target_metadata={},
     )
