@@ -78,7 +78,7 @@ EMBEDDED_RUNNER_STATES = frozenset(
 EMBEDDED_RUNNER_TRANSITIONS: dict[str | None, frozenset[str]] = {
     # ``runner_identity_bound`` is also a valid reconstruction entrypoint for
     # rows created from authenticated upstream evidence during recovery.
-    None: frozenset({"launch_reserved", "runner_identity_bound"}),
+    None: frozenset({"launch_reserved", "runner_identity_bound", "failed"}),
     "launch_reserved": frozenset({"launch_sent", "failed", "stale"}),
     "launch_sent": frozenset({"launch_acknowledged", "failed", "stale"}),
     "launch_acknowledged": frozenset({"runner_identity_bound", "failed", "stale"}),
@@ -589,6 +589,23 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "embedded session is already bound to another runner"
                 )
+            lifecycle_state = (
+                (row.metadata_ or {}).get(EMBEDDED_LIFECYCLE_KEY) or {}
+            ).get("state")
+            if row.omnigent_runner_id == runner_id and lifecycle_state in {
+                "runner_identity_bound",
+                "runner_tunnel_waiting",
+                "runner_tunnel_ready",
+                "first_message_prepared",
+                "first_message_posting",
+                "first_message_posted",
+                "running",
+                "draining",
+                "stopped",
+                "failed",
+                "stale",
+            }:
+                return _detached(session, row)
             launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
             if launch.get("runnerId") not in {None, runner_id}:
                 raise OmnigentIdempotencyError(
@@ -957,6 +974,10 @@ class OmnigentBridgeSessionStore:
             safe_summary = redact_sensitive_text(summary or "")[:512] or None
             event_metadata = dict(entry)
             event_metadata["eventIdentity"] = str(event_identity)[:255]
+            event_metadata["moonmind"] = {
+                "workflowChatVisible": False,
+                "source": "bridge_lifecycle",
+            }
             session.add(
                 OmnigentBridgeSessionEvent(
                     event_id=stable_event_id,

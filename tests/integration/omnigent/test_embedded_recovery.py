@@ -410,6 +410,11 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
 
     # Retrying execute after either posting boundary must only revalidate the
     # digest; it must not regress the durable embedded lifecycle.
+    lifecycle_before_retry = (
+        (await restarted_store.get_existing("recovery")).metadata_[
+            "embedded_runner_lifecycle"
+        ]["state"]
+    )
     await restarted_store.mark_prepared(
         "recovery", digest="digest-1", marker="marker-1"
     )
@@ -417,7 +422,7 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
         (await restarted_store.get_existing("recovery")).metadata_[
             "embedded_runner_lifecycle"
         ]["state"]
-        == "first_message_posted"
+        == lifecycle_before_retry
     )
 
     if crash_boundary == "runner_exit_before_terminal_bridge_persist":
