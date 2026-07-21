@@ -288,6 +288,7 @@ class OmnigentBridgeSessionStore:
         *,
         host_id: str,
         credential_generation: int,
+        credential_profile_id: str = "bootstrap-local",
         capabilities: dict[str, Any] | None = None,
         readiness: str | None = None,
         disconnected: bool = False,
@@ -297,31 +298,73 @@ class OmnigentBridgeSessionStore:
         A host must already have been selected by the profile/lease coordinator;
         the embedded protocol is not allowed to create or claim a lease.
         """
-        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+        from api_service.db.models import (
+            ManagedAgentProviderProfile,
+            OmnigentOAuthHostBindingRecord,
+            OmnigentOAuthHostLeaseRecord,
+        )
 
         now = datetime.now(tz=UTC)
         async with self._session_factory() as session:
-            lease = (
+            matched = (
                 await session.execute(
-                    select(OmnigentOAuthHostLeaseRecord).where(
+                    select(
+                        OmnigentOAuthHostLeaseRecord,
+                        OmnigentOAuthHostBindingRecord,
+                        ManagedAgentProviderProfile,
+                    )
+                    .join(
+                        OmnigentOAuthHostBindingRecord,
+                        OmnigentOAuthHostBindingRecord.binding_ref
+                        == OmnigentOAuthHostLeaseRecord.binding_ref,
+                    )
+                    .join(
+                        ManagedAgentProviderProfile,
+                        ManagedAgentProviderProfile.profile_id
+                        == OmnigentOAuthHostLeaseRecord.provider_profile_id,
+                    )
+                    .where(
                         OmnigentOAuthHostLeaseRecord.omnigent_host_id == host_id,
-                        OmnigentOAuthHostLeaseRecord.credential_generation
-                        == credential_generation,
                         OmnigentOAuthHostLeaseRecord.status.in_(
                             {"starting", "ready", "assigned", "draining"}
                         ),
                         OmnigentOAuthHostLeaseRecord.expires_at > now,
                     )
                 )
-            ).scalar_one_or_none()
-            if lease is None:
+            ).one_or_none()
+            if matched is None:
                 raise OmnigentIdempotencyError(
                     "embedded host is not bound to an active profile lease"
                 )
+            lease, binding, profile = matched
+            try:
+                lease.validate_binding_generation(binding=binding, profile=profile)
+            except ValueError as exc:
+                raise OmnigentIdempotencyError(
+                    "embedded host credential generation is stale for its profile binding"
+                ) from exc
+            if lease.host_auth_profile_id not in (None, credential_profile_id):
+                raise OmnigentIdempotencyError(
+                    "embedded host authentication profile does not match its lease"
+                )
+            if lease.host_auth_generation not in (None, credential_generation):
+                raise OmnigentIdempotencyError(
+                    "embedded host authentication generation does not match its lease"
+                )
+            # The upstream-verified host credential is a separate authority from
+            # the Provider Profile OAuth generation above. Bind it only after the
+            # preassigned host identity and OAuth lease have both matched.
+            lease.host_auth_profile_id = credential_profile_id
+            lease.host_auth_generation = credential_generation
             lease.last_heartbeat_at = now
             lease.disconnected_at = now if disconnected else None
             if capabilities is not None:
-                lease.host_capabilities_json = dict(capabilities)
+                safe_capabilities = redact_sensitive_payload(dict(capabilities))
+                if not isinstance(safe_capabilities, dict):
+                    raise OmnigentIdempotencyError(
+                        "invalid embedded host capabilities payload"
+                    )
+                lease.host_capabilities_json = safe_capabilities
             if readiness is not None:
                 lease.host_readiness = readiness[:32]
             await session.commit()

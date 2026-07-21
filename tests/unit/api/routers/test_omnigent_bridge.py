@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -23,6 +24,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_create_embedded_facade,
     _get_execution_service,
     _require_bridge_enabled,
+    embedded_host_auth_preflight,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -33,6 +35,10 @@ from moonmind.omnigent.bridge_config import (
 from moonmind.omnigent.bridge_proxy import (
     BridgeSessionEventRequest,
     OmnigentBridgeError,
+)
+from moonmind.omnigent.host_auth_profile import (
+    HostAuthCredentialProfile,
+    HostAuthProfileError,
 )
 
 _USER_ID = uuid4()
@@ -82,6 +88,39 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert response.json()["conformanceState"] == "ready"
 
 
+@pytest.mark.asyncio
+async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
+    host_auth_module = importlib.import_module("moonmind.omnigent.host_auth_profile")
+    monkeypatch.setattr(
+        host_auth_module, "assert_pinned_omnigent_auth_contract", lambda: None
+    )
+    monkeypatch.setitem(
+        embedded_host_auth_preflight.__globals__,
+        "_BRIDGE_CONFIG",
+        parse_bridge_config({
+            "enabled": True,
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {"embedded": {
+                "proxyConformanceEvidenceRef": "artifact://proxy",
+                "liveSmokeEvidenceRef": "artifact://smoke",
+                "hostAuthConformanceEvidenceRef": "artifact://auth",
+            }},
+        }),
+    )
+    monkeypatch.setitem(
+        embedded_host_auth_preflight.__globals__, "_active_host_auth_profile",
+        AsyncMock(
+            return_value=HostAuthCredentialProfile(
+                "managed", "env://ABSENT_HOST_TOKEN", 1
+            )
+        ),
+    )
+    result = await embedded_host_auth_preflight()
+    assert result["ready"] is False
+    assert result["code"] == "host_auth_secret_unavailable"
+    assert "ABSENT_HOST_TOKEN" not in str(result)
+
+
 def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) -> None:
     module = importlib.import_module("api_service.api.routers.omnigent_bridge")
     config = parse_bridge_config(
@@ -107,6 +146,16 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
         }
 
     monkeypatch.setattr(module, "_resolve_embedded_evidence", invalid)
+    monkeypatch.setattr(
+        module,
+        "_active_host_auth_profile",
+        AsyncMock(
+            side_effect=HostAuthProfileError(
+                "host authentication is unavailable",
+                code="host_auth_secret_unavailable",
+            )
+        ),
+    )
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     app.dependency_overrides[get_current_user()] = _mock_user

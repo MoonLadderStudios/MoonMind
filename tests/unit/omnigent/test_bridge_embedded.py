@@ -430,6 +430,37 @@ async def test_registration_rejects_expired_profile_bound_lease(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_rejects_lease_after_provider_profile_rotation(store) -> None:
+    """MoonLadderStudios/MoonMind#3423: stale generation cannot keep a lease."""
+
+    await _bind_active_host(store, host_id="stale-host")
+    async with store._session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        profile.credential_generation = 2
+        await session.commit()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="stale-host",
+        credential_generation=1,
+        credential_profile_id="managed-host-auth",
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.heartbeat(
+            host_id="stale-host",
+            request=EmbeddedHostHeartbeatRequest(status="ready"),
+            auth=auth,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert "credential generation" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_runner_exit_without_terminal_event_creates_terminal_evidence(store) -> None:
     row = await store.get_or_create(
         request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
@@ -1509,11 +1540,15 @@ async def test_embedded_resource_rejects_traversal_before_runner_request(store) 
 @pytest.mark.asyncio
 async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> None:
     """MoonLadderStudios/MoonMind#3421: discovery is durable and bounded."""
+    sentinel = "sentinel-host-secret-never-persisted"
     await _bind_active_host(store, host_id="host-codex")
     await store.record_embedded_host_lifecycle(
         host_id="host-codex",
         credential_generation=1,
-        capabilities={"harnesses": ["codex-native"]},
+        capabilities={
+            "harnesses": ["codex-native"],
+            "hostCredential": sentinel,
+        },
         readiness="ready",
     )
     facade = OmnigentEmbeddedHostProtocolFacade(
@@ -1528,11 +1563,38 @@ async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> 
             "id": "host-codex",
             "status": "ready",
             "ready": True,
-            "capabilities": {"harnesses": ["codex-native"]},
+            "capabilities": {
+                "harnesses": ["codex-native"],
+                "hostCredential": "[REDACTED]",
+            },
             "disconnected": False,
         }
     ]
+    assert sentinel not in str(hosts)
     assert agents[0]["id"] == "codex-native"
+
+
+@pytest.mark.asyncio
+async def test_host_auth_profile_is_durably_bound_to_preassigned_lease(store) -> None:
+    await _bind_active_host(store, host_id="host-auth-bound")
+    await store.record_embedded_host_lifecycle(
+        host_id="host-auth-bound",
+        credential_generation=8,
+        credential_profile_id="host-auth-primary",
+        readiness="ready",
+    )
+    with pytest.raises(OmnigentIdempotencyError, match="profile does not match"):
+        await store.record_embedded_host_lifecycle(
+            host_id="host-auth-bound",
+            credential_generation=9,
+            credential_profile_id="unrelated-host-auth",
+        )
+    with pytest.raises(OmnigentIdempotencyError, match="generation does not match"):
+        await store.record_embedded_host_lifecycle(
+            host_id="host-auth-bound",
+            credential_generation=9,
+            credential_profile_id="host-auth-primary",
+        )
 
 
 @pytest.mark.asyncio

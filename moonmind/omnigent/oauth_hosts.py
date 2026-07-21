@@ -422,6 +422,8 @@ class OmnigentOAuthHostRepository:
             record.omnigent_host_id = None
             record.omnigent_session_id = None
             record.bridge_session_id = None
+            record.host_auth_profile_id = None
+            record.host_auth_generation = None
             record.ready_at = None
             record.assigned_at = None
             record.draining_at = None

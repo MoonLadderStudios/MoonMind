@@ -1642,6 +1642,14 @@ async def startup_event():
         )
     await _sync_preset_seed_catalog()
     await _sync_env_managed_secrets()
+    # Embedded mode is an authority-sensitive enablement boundary. Evidence
+    # refs cannot make it ready when its pinned verifier or SecretRef fails.
+    from api_service.api.routers.omnigent_bridge import embedded_host_auth_preflight
+    embedded_auth = await embedded_host_auth_preflight()
+    if not embedded_auth["ready"]:
+        raise RuntimeError(
+            f"Embedded Omnigent host authentication preflight failed: {embedded_auth['code']}"
+        )
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":

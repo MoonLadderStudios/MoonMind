@@ -2777,6 +2777,19 @@ class OmnigentOAuthHostBindingRecord(Base):
             )
 
 
+class OmnigentHostAuthProfileRecord(Base):
+    """Singleton durable owner for safe embedded host-auth lifecycle metadata."""
+
+    __tablename__ = "omnigent_host_auth_profiles"
+
+    profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class OmnigentOAuthHostLeaseRecord(Base):
     """Durable lifecycle state for the single host consuming an OAuth profile."""
 
@@ -2802,6 +2815,10 @@ class OmnigentOAuthHostLeaseRecord(Base):
             name="ck_omnigent_oauth_host_lease_generation",
         ),
         CheckConstraint(
+            "host_auth_generation IS NULL OR host_auth_generation >= 1",
+            name="ck_omnigent_oauth_host_lease_host_auth_generation",
+        ),
+        CheckConstraint(
             "expires_at > acquired_at",
             name="ck_omnigent_oauth_host_lease_expiry",
         ),
@@ -2824,6 +2841,10 @@ class OmnigentOAuthHostLeaseRecord(Base):
     provider_lease_id: Mapped[str] = mapped_column(String(255), nullable=False)
     binding_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Embedded host/server authentication is intentionally distinct from the
+    # Provider Profile OAuth credential generation above.
+    host_auth_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    host_auth_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     holder_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
