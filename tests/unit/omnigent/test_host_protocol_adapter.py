@@ -35,6 +35,17 @@ def test_reuses_one_pinned_frames_module() -> None:
     assert OmnigentHostProtocolAdapter().frames is OmnigentHostProtocolAdapter().frames
 
 
+def test_decodes_host_harness_readiness_refresh() -> None:
+    adapter = OmnigentHostProtocolAdapter()
+
+    refresh = adapter.decode_host_frame(
+        '{"kind":"host.harness_readiness","configured_harnesses":{"pi":true}}'
+    )
+
+    assert isinstance(refresh, adapter.frames.HostHarnessReadinessFrame)
+    assert refresh.configured_harnesses == {"pi": True}
+
+
 def test_encodes_exact_stock_host_launch_and_stop_commands() -> None:
     adapter = OmnigentHostProtocolAdapter()
     frames = adapter.frames
