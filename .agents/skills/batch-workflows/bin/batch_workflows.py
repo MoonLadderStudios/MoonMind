@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Queue one child MoonMind workflow per resolved issue target.
+"""Resolve issue targets and queue one child MoonMind workflow per target.
 
-The agent resolves Jira status or other issue targets into the canonical
-resolved-target shape (see SKILL.md) and writes them to a JSON file. This helper
-reads that file plus the selected child run capability / publish policy and
-submits one child execution per target through the internal Temporal execution
-API. Every child inherits the parent runtime via ``runtimeInheritance="caller"``
+The agent resolves Jira status targets into the canonical resolved-target shape
+(see SKILL.md) and writes them to a JSON file. GitHub issue-number ranges are
+resolved directly by this portable helper so a numeric range remains search
+criteria rather than being mistaken for a target list. The helper submits one
+child execution per resolved target through the internal Temporal execution API.
+Every child inherits the parent runtime via ``runtimeInheritance="caller"``
 (with a fallback copy of the effective runtime fields) and shares a single
 publish policy. A summary artifact links every queued child workflow.
 """
@@ -18,6 +19,8 @@ import importlib.util
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
 import traceback
 import urllib.error
@@ -55,6 +58,13 @@ SUPPORTED_RUN_REFS = frozenset(
         ("github", "preset", "github-issue-orchestrate"),
     }
 )
+_GITHUB_RANGE_PATTERN = re.compile(r"^(?P<start>\d+)-(?P<end>\d+)$")
+_GITHUB_GRAPHQL_CHUNK_SIZE = 50
+_GITHUB_MAX_SEARCH_WIDTH = 1000
+
+
+class BatchInputError(ValueError):
+    """Raised when provider-specific batch search input is invalid."""
 
 
 @dataclass
@@ -116,6 +126,177 @@ def _normalize_repo(value: Any) -> str | None:
     if candidate.endswith(".git"):
         candidate = candidate[:-4]
     return candidate or None
+
+
+def parse_github_issue_range(value: str) -> tuple[int, int]:
+    """Parse an inclusive GitHub issue-number search range."""
+
+    candidate = str(value or "").strip()
+    match = _GITHUB_RANGE_PATTERN.fullmatch(candidate)
+    if match is None:
+        raise BatchInputError("GitHub issue range must use START-END")
+    start = int(match.group("start"))
+    end = int(match.group("end"))
+    if start <= 0 or end <= 0:
+        raise BatchInputError("GitHub issue range numbers must be positive integers")
+    if start > end:
+        raise BatchInputError(
+            "GitHub issue range START must be less than or equal to END"
+        )
+    return start, end
+
+
+def _github_repository_parts(repository: str) -> tuple[str, str]:
+    normalized = _normalize_repo(repository)
+    parts = normalized.split("/") if normalized else []
+    if len(parts) != 2 or not all(parts):
+        raise BatchInputError("GitHub repository must use owner/repository")
+    return parts[0], parts[1]
+
+
+def _github_issue_range_query(numbers: list[int]) -> str:
+    issue_fields = """
+      number
+      title
+      body
+      url
+      state
+      labels(first: 100) { nodes { name } }
+    """.strip()
+    selections = "\n".join(
+        f"issue{number}: issue(number: {number}) {{ {issue_fields} }}"
+        for number in numbers
+    )
+    return (
+        "query($owner: String!, $name: String!) {\n"
+        "  repository(owner: $owner, name: $name) {\n"
+        f"{selections}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def resolve_github_issue_range(
+    repository: str,
+    issue_range: str,
+    *,
+    run_command: Any = subprocess.run,
+) -> list[dict[str, Any]]:
+    """Return only GitHub Issue objects whose numbers fall in ``issue_range``.
+
+    GitHub's shared issue/PR numbering means numeric members of the range may be
+    pull requests or may not exist. Querying the GraphQL ``issue(number:)`` field
+    makes those entries resolve to null, so neither can become a workflow target.
+    """
+
+    owner, name = _github_repository_parts(repository)
+    normalized_repository = f"{owner}/{name}"
+    start, end = parse_github_issue_range(issue_range)
+    search_width = end - start + 1
+    if search_width > _GITHUB_MAX_SEARCH_WIDTH:
+        raise BatchInputError(
+            "GitHub issue range may span no more than "
+            f"{_GITHUB_MAX_SEARCH_WIDTH} numbers"
+        )
+    targets: list[dict[str, Any]] = []
+
+    for chunk_start in range(start, end + 1, _GITHUB_GRAPHQL_CHUNK_SIZE):
+        numbers = list(
+            range(chunk_start, min(end + 1, chunk_start + _GITHUB_GRAPHQL_CHUNK_SIZE))
+        )
+        query = _github_issue_range_query(numbers)
+        completed = run_command(
+            [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            detail = _text(completed.stderr) or "invalid JSON"
+            raise RuntimeError(
+                f"GitHub issue discovery failed: {detail[:1024]}"
+            ) from exc
+        if not isinstance(response, dict):
+            raise RuntimeError("GitHub issue discovery returned an invalid response")
+        errors = (
+            response.get("errors")
+            if isinstance(response.get("errors"), list)
+            else []
+        )
+        expected_missing_aliases = {f"issue{number}" for number in numbers}
+        unexpected_errors = [
+            error
+            for error in errors
+            if not (
+                isinstance(error, dict)
+                and error.get("type") == "NOT_FOUND"
+                and isinstance(error.get("path"), list)
+                and len(error["path"]) == 2
+                and error["path"][0] == "repository"
+                and error["path"][1] in expected_missing_aliases
+                and str(error.get("message") or "").startswith(
+                    "Could not resolve to an Issue with the number of "
+                )
+            )
+        ]
+        if unexpected_errors:
+            raise RuntimeError(
+                f"GitHub issue discovery failed: {json.dumps(unexpected_errors)[:1024]}"
+            )
+        if completed.returncode != 0 and not errors:
+            detail = _text(completed.stderr) or "unknown error"
+            raise RuntimeError(f"GitHub issue discovery failed: {detail[:1024]}")
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        repository_data = data.get("repository")
+        if not isinstance(repository_data, dict):
+            raise RuntimeError(
+                f"GitHub repository was not found or is not readable: {normalized_repository}"
+            )
+
+        for number in numbers:
+            issue = repository_data.get(f"issue{number}")
+            if not isinstance(issue, dict):
+                continue
+            labels_node = (
+                issue.get("labels") if isinstance(issue.get("labels"), dict) else {}
+            )
+            labels = [
+                str(node.get("name"))
+                for node in labels_node.get("nodes", [])
+                if isinstance(node, dict) and _text(node.get("name"))
+            ]
+            resolved_number = int(issue.get("number"))
+            targets.append(
+                {
+                    "provider": "github",
+                    "ref": f"{normalized_repository}#{resolved_number}",
+                    "githubIssue": {
+                        "repository": normalized_repository,
+                        "number": resolved_number,
+                        "title": str(issue.get("title") or ""),
+                        "body": str(issue.get("body") or ""),
+                        "url": str(issue.get("url") or ""),
+                        "state": str(issue.get("state") or "").lower(),
+                        "labels": labels,
+                    },
+                    "repository": normalized_repository,
+                }
+            )
+
+    return targets
 
 
 def parse_run_ref(value: str | None) -> tuple[str, str]:
@@ -804,10 +985,18 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Queue one child MoonMind workflow per resolved issue target."
+        description="Resolve issue targets and queue one child MoonMind workflow per target."
     )
     parser.add_argument(
-        "--targets", required=True, help="Path to resolved targets JSON."
+        "--targets", help="Path to resolved targets JSON."
+    )
+    parser.add_argument(
+        "--github-issue-range",
+        help="Inclusive GitHub issue-number search range in START-END form.",
+    )
+    parser.add_argument(
+        "--github-repository",
+        help="GitHub owner/repository; defaults to the parent task repository.",
     )
     parser.add_argument("--run-ref", required=True)
     parser.add_argument("--publish-mode", default="pr")
@@ -827,6 +1016,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="For skill:jira-verify children, update Jira status only on PASS.",
     )
     parser.add_argument("--max-workflows", type=int, default=25)
+    parser.add_argument(
+        "--preflight-error",
+        default=None,
+        help=(
+            "Record an input-validation failure without reading targets or "
+            "queueing child workflows."
+        ),
+    )
+    parser.add_argument(
+        "--requested-count",
+        type=int,
+        default=0,
+        help="Number of requested targets reported with --preflight-error.",
+    )
     parser.add_argument("--task-context-path", default=None)
     parser.add_argument("--artifacts-dir", default="artifacts")
     return parser.parse_args(argv)
@@ -834,7 +1037,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    targets_path = Path(args.targets)
+    targets_path = Path(args.targets) if args.targets else None
     artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir)
     result_path = artifacts_dir / "batch-workflows-result.json"
     try:
@@ -844,7 +1047,7 @@ def main(argv: list[str] | None = None) -> int:
     execution_ref = _text(os.getenv("MOONMIND_STEP_EXECUTION_ID"))
     targets_digest = (
         hashlib.sha256(targets_path.read_bytes()).hexdigest()
-        if targets_path.exists() and targets_path.is_file()
+        if targets_path is not None and targets_path.exists() and targets_path.is_file()
         else None
     )
     base_result: dict[str, Any] = {
@@ -865,12 +1068,60 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not execution_ref:
             raise RuntimeError("MOONMIND_STEP_EXECUTION_ID is required")
-        if not targets_path.exists():
-            raise RuntimeError(f"targets file not found: {targets_path}")
-        targets = _read_targets(targets_path)
+        preflight_error = _text(args.preflight_error)
+        if preflight_error:
+            if args.requested_count < 0:
+                preflight_error = "--requested-count must be zero or greater"
+            requested_count = max(0, args.requested_count)
+            failed = {
+                **base_result,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "status": "failed",
+                "requested": requested_count,
+                "failure": {
+                    "code": "BATCH_FANOUT_INPUT_INVALID",
+                    "message": preflight_error[:1024],
+                },
+                "errors": [
+                    {
+                        "code": "BATCH_FANOUT_INPUT_INVALID",
+                        "error": preflight_error[:1024],
+                    }
+                ],
+            }
+            _write_artifacts(result_path, failed)
+            print(json.dumps(failed, indent=2))
+            return 2
+        if args.github_issue_range and targets_path is not None:
+            raise BatchInputError(
+                "use either --targets or --github-issue-range, not both"
+            )
+        batch_repository = _load_parent_repository(args.task_context_path)
+        if args.github_issue_range:
+            github_repository = (
+                _normalize_repo(args.github_repository) or batch_repository
+            )
+            if not github_repository:
+                raise BatchInputError(
+                    "--github-repository is required when parent repository context is unavailable"
+                )
+            targets = resolve_github_issue_range(
+                github_repository,
+                args.github_issue_range,
+            )
+            targets_path = artifacts_dir / "batch-workflows-targets.json"
+            _write_artifacts(targets_path, {"targets": targets})
+            base_result["targetsSha256"] = hashlib.sha256(
+                targets_path.read_bytes()
+            ).hexdigest()
+        else:
+            if targets_path is None:
+                raise BatchInputError("--targets or --github-issue-range is required")
+            if not targets_path.exists():
+                raise RuntimeError(f"targets file not found: {targets_path}")
+            targets = _read_targets(targets_path)
         constraints = _read_constraints(args)
         runtime = _resolve_runtime_selection(args.task_context_path)
-        batch_repository = _load_parent_repository(args.task_context_path)
         batch_scope = _parent_run_scope(args.task_context_path) or execution_ref
         inherit_from_caller = _task_workflow_id_from_env() is not None
         target_kind, target_slug = parse_run_ref(args.run_ref)
@@ -895,15 +1146,20 @@ def main(argv: list[str] | None = None) -> int:
     )
         created, errors = _submit_jobs(submissions)
     except Exception as exc:  # evidence must survive every reachable preflight failure
+        failure_code = (
+            "BATCH_FANOUT_INPUT_INVALID"
+            if isinstance(exc, BatchInputError)
+            else "BATCH_FANOUT_FAILED"
+        )
         failed = {
             **base_result,
             "status": "failed",
-            "failure": {"code": "BATCH_FANOUT_FAILED", "message": str(exc)[:1024]},
-            "errors": [{"error": str(exc)[:1024]}],
+            "failure": {"code": failure_code, "message": str(exc)[:1024]},
+            "errors": [{"code": failure_code, "error": str(exc)[:1024]}],
         }
         _write_artifacts(result_path, failed)
         print(json.dumps(failed, indent=2))
-        return 1
+        return 2 if isinstance(exc, BatchInputError) else 1
 
     payload = {
         **base_result,

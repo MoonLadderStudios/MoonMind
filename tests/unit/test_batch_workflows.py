@@ -7,9 +7,9 @@ and unsupported-target skips.
 
 from __future__ import annotations
 
-import runpy
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -101,6 +101,149 @@ _GITHUB_TARGET: dict[str, Any] = {
     },
     "repository": "MoonLadderStudios/MoonMind",
 }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1-1", (1, 1)),
+        ("3370-3425", (3370, 3425)),
+    ],
+)
+def test_parse_github_issue_range(value, expected):
+    module = _load_module()
+
+    assert module["parse_github_issue_range"](value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "1", "1..2", "0-2", "3-2"])
+def test_parse_github_issue_range_rejects_invalid_search_criteria(value):
+    module = _load_module()
+
+    with pytest.raises(ValueError):
+        module["parse_github_issue_range"](value)
+
+
+def test_resolve_github_issue_range_excludes_pull_requests_and_absent_numbers():
+    module = _load_module()
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {
+            "capture_output": True,
+            "text": True,
+            "timeout": 60,
+            "check": False,
+        }
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue40": {
+                                "number": 40,
+                                "title": "Existing issue",
+                                "body": "Body",
+                                "url": "https://github.com/acme/widgets/issues/40",
+                                "state": "OPEN",
+                                "labels": {"nodes": [{"name": "bug"}]},
+                            },
+                            # GraphQL issue(number:) returns null for both a pull
+                            # request number and a number that does not exist.
+                            "issue41": None,
+                            "issue42": None,
+                        }
+                    },
+                    "errors": [
+                        {
+                            "type": "NOT_FOUND",
+                            "path": ["repository", "issue41"],
+                            "message": (
+                                "Could not resolve to an Issue with the number of 41."
+                            ),
+                        },
+                        {
+                            "type": "NOT_FOUND",
+                            "path": ["repository", "issue42"],
+                            "message": (
+                                "Could not resolve to an Issue with the number of 42."
+                            ),
+                        },
+                    ],
+                }
+            ),
+            stderr="gh: some issues were not found",
+        )
+
+    targets = module["resolve_github_issue_range"](
+        "acme/widgets",
+        "40-42",
+        run_command=fake_run,
+    )
+
+    assert [target["ref"] for target in targets] == ["acme/widgets#40"]
+    assert targets[0]["githubIssue"] == {
+        "repository": "acme/widgets",
+        "number": 40,
+        "title": "Existing issue",
+        "body": "Body",
+        "url": "https://github.com/acme/widgets/issues/40",
+        "state": "open",
+        "labels": ["bug"],
+    }
+    assert len(calls) == 1
+    query_arg = next(arg for arg in calls[0] if arg.startswith("query="))
+    assert "issue40: issue(number: 40)" in query_arg
+    assert "issue41: issue(number: 41)" in query_arg
+    assert "issue42: issue(number: 42)" in query_arg
+    assert "-F" not in calls[0]
+    assert calls[0].count("-f") == 3
+    assert "owner=acme" in calls[0]
+    assert "name=widgets" in calls[0]
+
+
+def test_resolve_github_issue_range_rejects_unbounded_scan_before_querying():
+    module = _load_module()
+    called = False
+
+    def unexpected_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("GitHub must not be queried for an oversized range")
+
+    with pytest.raises(
+        module["BatchInputError"],
+        match="may span no more than 1000 numbers",
+    ):
+        module["resolve_github_issue_range"](
+            "acme/widgets",
+            "1-1001",
+            run_command=unexpected_run,
+        )
+
+    assert called is False
+
+
+def test_parse_args_accepts_github_range_without_targets():
+    module = _load_module()
+
+    args = module["_parse_args"](
+        [
+            "--github-issue-range",
+            "3370-3425",
+            "--github-repository",
+            "MoonLadderStudios/MoonMind",
+            "--run-ref",
+            "preset:github-issue-implement",
+        ]
+    )
+
+    assert args.targets is None
+    assert args.github_issue_range == "3370-3425"
+    assert args.github_repository == "MoonLadderStudios/MoonMind"
 
 
 def _jira_config(module, **overrides):
@@ -696,6 +839,72 @@ def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
     assert evidence["executionRef"] == "step-external-1"
     assert evidence["created"] == 5
     assert [item["ref"] for item in evidence["queued"]] == [f"THOR-{n}" for n in range(705, 710)]
+
+
+def test_helper_records_preflight_failure_without_targets_or_queueing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-invalid-range")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+    monkeypatch.delenv("MOONMIND_URL", raising=False)
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Range 3370-3425 contains 56 issues; maximum is 25.",
+            "--requested-count",
+            "56",
+        ]
+    )
+
+    assert return_code == 2
+    assert not (tmp_path / "artifacts/batch-workflows-targets.json").exists()
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert evidence["executionRef"] == "step-invalid-range"
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 56
+    assert evidence["created"] == 0
+    assert evidence["queued"] == []
+    assert evidence["failure"]["code"] == "BATCH_FANOUT_INPUT_INVALID"
+
+
+def test_helper_preserves_preflight_classification_for_negative_requested_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    spool = tmp_path / "spool"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step-negative-count")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+
+    return_code = module["main"](
+        [
+            "--targets",
+            "artifacts/batch-workflows-targets.json",
+            "--run-ref",
+            "preset:github-issue-implement",
+            "--preflight-error",
+            "Invalid range.",
+            "--requested-count",
+            "-1",
+        ]
+    )
+
+    evidence = json.loads((spool / "batch-workflows-result.json").read_text())
+    assert return_code == 2
+    assert evidence["status"] == "failed"
+    assert evidence["requested"] == 0
+    assert evidence["failure"] == {
+        "code": "BATCH_FANOUT_INPUT_INVALID",
+        "message": "--requested-count must be zero or greater",
+    }
 
 
 def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp_path):

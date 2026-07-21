@@ -39,11 +39,94 @@ def _success(metadata: dict[str, Any] | None = None) -> TerminalEvidenceEvaluati
     )
 
 
+def _evaluate_batch_dependabot_resolver_evidence(
+    payload: Mapping[str, Any],
+    *,
+    contract_id: str,
+    relative_path: str,
+) -> TerminalEvidenceEvaluation:
+    """Validate the authoritative discovery and child-enqueue result."""
+
+    requested = payload.get("requested")
+    created = payload.get("created")
+    queued = payload.get("queued")
+    would_queue = payload.get("wouldQueue")
+    skipped = payload.get("skipped")
+    errors = payload.get("errors")
+    metadata = {
+        "terminalContractId": contract_id,
+        "terminalContractEvidencePath": relative_path,
+        "queuedChildCount": created if isinstance(created, int) else 0,
+        "queuedChildren": queued if isinstance(queued, list) else [],
+    }
+    status = payload.get("status")
+    if status == "running":
+        return _failure("INCOMPLETE_TERMINAL_CONTRACT", metadata=metadata)
+    accounted = (
+        len(would_queue)
+        if status == "dry_run" and isinstance(would_queue, list)
+        else created
+    )
+    if (
+        not isinstance(requested, int)
+        or requested < 0
+        or not isinstance(created, int)
+        or created < 0
+        or not isinstance(queued, list)
+        or not isinstance(would_queue, list)
+        or not isinstance(skipped, list)
+        or not isinstance(errors, list)
+        or len(queued) != created
+        or not isinstance(accounted, int)
+        or accounted + len(skipped) + len(errors) != requested
+    ):
+        return _failure("INVALID_TERMINAL_EVIDENCE", metadata=metadata)
+
+    failure_code = str(payload.get("failureCode") or "").strip()
+    if status == "partial_failure":
+        return _failure(
+            failure_code or "BATCH_FANOUT_PARTIAL_FAILURE", metadata=metadata
+        )
+    if status == "failed":
+        return _failure(failure_code or "BATCH_FANOUT_FAILED", metadata=metadata)
+    if status == "dry_run":
+        if (
+            payload.get("dryRun") is True
+            and created == 0
+            and not errors
+            and len(would_queue) + len(skipped) == requested
+        ):
+            return _success(metadata)
+        return _failure("INVALID_TERMINAL_EVIDENCE", metadata=metadata)
+    if status == "no_op":
+        if created == 0 and not errors and len(skipped) == requested:
+            return _success(metadata)
+        return _failure("INVALID_TERMINAL_EVIDENCE", metadata=metadata)
+    if status == "queued":
+        if (
+            created > 0
+            and not errors
+            and created + len(skipped) == requested
+            and all(
+                isinstance(item, Mapping)
+                and str(item.get("workflowId") or "").strip()
+                for item in queued
+            )
+        ):
+            return _success(metadata)
+        return _failure("INVALID_TERMINAL_EVIDENCE", metadata=metadata)
+    return _failure("INCOMPLETE_TERMINAL_CONTRACT", metadata=metadata)
+
+
 def evaluate_terminal_evidence(
     contract: Mapping[str, Any], *, workspace_path: str, artifact_spool_path: str = ""
 ) -> TerminalEvidenceEvaluation:
     contract_id = str(contract.get("contractId") or contract.get("contract_id") or "")
-    if contract_id not in {"batch_workflows_fanout.v1", "pr_resolver_terminal.v1"}:
+    if contract_id not in {
+        "batch_dependabot_resolver_fanout.v1",
+        "batch_workflows_fanout.v1",
+        "pr_resolver_terminal.v1",
+    }:
         return _failure("UNSUPPORTED_TERMINAL_CONTRACT")
     relative = str(contract.get("relativePath") or contract.get("relative_path") or "")
     normalized_relative = relative.replace("\\", "/")
@@ -156,6 +239,53 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
     if not expected_execution or payload.get("executionRef") != expected_execution:
         return TerminalEvidenceEvaluation(False, "STALE_TERMINAL_EVIDENCE")
+    if contract_id == "batch_dependabot_resolver_fanout.v1":
+        return _evaluate_batch_dependabot_resolver_evidence(
+            payload,
+            contract_id=contract_id,
+            relative_path=relative,
+        )
+
+    status = payload.get("status")
+    queued = payload.get("queued")
+    requested, created = payload.get("requested"), payload.get("created")
+    skipped = payload.get("skipped")
+    errors = payload.get("errors")
+    failure = payload.get("failure")
+    failure_payload = dict(failure) if isinstance(failure, Mapping) else {}
+    failure_code = str(failure_payload.get("code") or "").strip()
+    failure_message = str(failure_payload.get("message") or "").strip()
+    metadata = {
+        "terminalContractId": contract_id,
+        "terminalContractEvidencePath": relative,
+        "terminalContractExecutionRef": expected_execution,
+        "queuedChildCount": created if isinstance(created, int) else 0,
+        "queuedChildren": queued if isinstance(queued, list) else [],
+    }
+    if failure_code:
+        metadata["terminalFailureCode"] = failure_code
+    if failure_message:
+        metadata["terminalFailureMessage"] = failure_message
+
+    # Input validation can fail before a trustworthy target list exists. The
+    # portable helper still binds that terminal failure to this execution and
+    # guarantees that no child side effect occurred.
+    if status == "failed" and failure_code == "BATCH_FANOUT_INPUT_INVALID":
+        if (
+            not isinstance(requested, int)
+            or requested < 0
+            or created != 0
+            or queued != []
+            or skipped != []
+            or not isinstance(errors, list)
+            or not errors
+            or not failure_message
+        ):
+            return TerminalEvidenceEvaluation(
+                False, "INVALID_TERMINAL_EVIDENCE", metadata=metadata
+            )
+        return _failure("BATCH_FANOUT_INPUT_INVALID", metadata=metadata)
+
     targets_relative = str(contract.get("targetsRelativePath") or "artifacts/batch-workflows-targets.json").replace("\\", "/")
     targets_path = (workspace / targets_relative).resolve()
     try:
@@ -165,17 +295,6 @@ def evaluate_terminal_evidence(
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
     if payload.get("targetsSha256") != expected_digest:
         return TerminalEvidenceEvaluation(False, "STALE_TERMINAL_EVIDENCE")
-    status = payload.get("status")
-    queued = payload.get("queued")
-    requested, created = payload.get("requested"), payload.get("created")
-    skipped = payload.get("skipped")
-    errors = payload.get("errors")
-    metadata = {
-        "terminalContractId": contract_id,
-        "terminalContractEvidencePath": relative,
-        "queuedChildCount": created if isinstance(created, int) else 0,
-        "queuedChildren": queued if isinstance(queued, list) else [],
-    }
     if status == "running":
         return TerminalEvidenceEvaluation(
             False, "INCOMPLETE_TERMINAL_CONTRACT", metadata=metadata

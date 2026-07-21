@@ -83,6 +83,16 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     assert orchestration["publish"]["mode"] == "pr_with_merge_automation"
     assert orchestration["runtime"]["inherit"] == "caller"
     assert "--run-verify" in step["instructions"]
+    assert '--github-issue-range "3142-3150"' in step["instructions"]
+    assert (
+        '--github-repository "MoonLadderStudios/MoonMind"'
+        in step["instructions"]
+    )
+    assert "only for Issue objects returned by GitHub" in step["instructions"]
+    assert (
+        "--targets artifacts/batch-workflows-targets.json"
+        not in step["instructions"]
+    )
 
 
 async def test_batch_github_workflows_uses_repository_context(tmp_path):

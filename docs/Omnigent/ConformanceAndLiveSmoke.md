@@ -6,7 +6,7 @@
 **Authority:** MoonLadderStudios/MoonMind#3368 conformance evidence contract
 
 MoonMind uses the versioned profile at
-`tests/fixtures/omnigent/conformance-v1.json` as the single inventory for the
+`tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
 Omnigent bridge conformance program. Deterministic unit, fake-server, API, and
 frontend tests run in normal PR CI. Credentialed stock-image, static Compose
 Codex OAuth, and on-demand Codex OAuth cases remain provider verification and

@@ -441,6 +441,82 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             parent.run_id,
         )
 
+    async def test_batch_dependabot_terminal_contract_reaches_agent_run(
+        self,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-batch-dependabot",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/batch-dependabot",
+            skills=[
+                ResolvedSkillEntry(
+                    skill_name="batch-dependabot-resolver",
+                    provenance=AgentSkillProvenance(
+                        source_kind=AgentSkillSourceKind.BUILT_IN
+                    ),
+                    terminal_contract=SkillTerminalContract(
+                        contract_id="batch_dependabot_resolver_fanout.v1",
+                        relative_path=(
+                            "artifacts/batch_dependabot_resolver_result.json"
+                        ),
+                        expected_schema_version=(
+                            "moonmind.batch-dependabot-resolver-result.v1"
+                        ),
+                    ),
+                )
+            ],
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="batch:dependabot",
+            run_id="batch-run-1",
+            parent=None,
+        )
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                new=AsyncMock(return_value=resolved),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+        ):
+            resolved_ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"selectedSkill": "batch-dependabot-resolver"},
+                node_id="node-1",
+                existing_skillset_ref=None,
+            )
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "codex_cli",
+                    "selectedSkill": "batch-dependabot-resolver",
+                },
+                node_id="node-1",
+                tool_name="codex_cli",
+                resolved_skillset_ref=resolved_ref,
+                workflow_parameters={},
+            )
+
+        self.assertIsNotNone(request.terminal_contract)
+        self.assertEqual(
+            request.terminal_contract.contract_id,
+            "batch_dependabot_resolver_fanout.v1",
+        )
+        self.assertEqual(
+            request.terminal_contract.execution_ref,
+            "batch:dependabot:batch-run-1:node-1:execution:1",
+        )
+        self.assertIsNone(request.terminal_continuation_authority)
+
     async def test_existing_history_does_not_change_agent_request_shape(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"

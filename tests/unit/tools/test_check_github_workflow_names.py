@@ -32,6 +32,7 @@ def test_current_workflows_have_stable_names() -> None:
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
         "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
+        "omnigent-embedded-acceptance.yml": "Provider / Omnigent Embedded Acceptance",
         "pentestgpt-runner.yml": "Security / Build PentestGPT Runner",
         "promote-ghcr-stable.yml": "Release / Promote Stable",
         "pytest-unit-tests.yml": "CI / Test Suite",

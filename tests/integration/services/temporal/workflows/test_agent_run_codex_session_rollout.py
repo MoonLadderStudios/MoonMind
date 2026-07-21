@@ -9,7 +9,7 @@ from temporalio import activity as _activity
 from temporalio import workflow
 from temporalio.service import RPCError
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -404,6 +404,9 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
         },
     )
 
+    original_patched = agent_run_module.workflow.patched
+    legacy_history = None
+
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
@@ -455,6 +458,40 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                     )
 
                     try:
+                        # Record a real AgentRun history from before the bridge-events
+                        # Activity patch. Replaying this history with current workflow
+                        # code must not schedule the newly introduced Activity.
+                        legacy_request = request.model_copy(deep=True)
+                        legacy_request.correlation_id = "corr-codex-rollout-legacy"
+                        legacy_request.idempotency_key = "idem-codex-rollout-legacy"
+
+                        def patched_without_bridge_activity(patch_id: str) -> bool:
+                            if patch_id == agent_run_module.MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID:
+                                return False
+                            return original_patched(patch_id)
+
+                        monkeypatch.setattr(
+                            agent_run_module.workflow,
+                            "patched",
+                            patched_without_bridge_activity,
+                        )
+                        legacy_handle = await env.client.start_workflow(
+                            MoonMindAgentRun.run,
+                            legacy_request,
+                            id="test-agent-run-managed-codex-rollout-pre-bridge-patch",
+                            task_queue="agent-run-task-queue",
+                        )
+                        legacy_result = await legacy_handle.result()
+                        assert isinstance(legacy_result, AgentRunResult)
+                        assert legacy_result.failure_class is None
+                        legacy_history = await legacy_handle.fetch_history()
+                        assert bridge_event_payloads == []
+                        monkeypatch.setattr(
+                            agent_run_module.workflow,
+                            "patched",
+                            original_patched,
+                        )
+
                         result = await env.client.execute_workflow(
                             MoonMindAgentRun.run,
                             request,
@@ -495,6 +532,12 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                     assert bridge_payload["turnResponse"]["metadata"][
                         "assistantText"
                     ] == "Recovered final answer without vendor turn id"
+
+    assert legacy_history is not None
+    await Replayer(
+        workflows=[MoonMindAgentRun],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(legacy_history)
 
 
 def test_agent_execution_request_rejects_top_level_communication_field() -> None:

@@ -1637,6 +1637,63 @@ async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> 
 
     assert summary == "jira.add_comment failed with HTTP 403: policy denied"
 
+
+@pytest.mark.asyncio
+async def test_direct_bridge_publishes_typed_active_observations_separately() -> None:
+    payloads: list[dict[str, Any]] = []
+
+    async def publish(payload: dict[str, Any]) -> None:
+        payloads.append(payload)
+
+    adapter = object.__new__(CodexSessionAdapter)
+    adapter._publish_bridge_events = publish
+    binding = CodexManagedSessionBinding(
+        workflowId="workflow-3418",
+        agentRunId="run-3418",
+        sessionId="session-3418",
+        sessionEpoch=1,
+        runtimeId="codex_cli",
+        executionProfileRef="codex-default",
+    )
+    request = _request(binding, workspace_path="/tmp/workspace-3418")
+    request.parameters["communication"] = {"mode": "omnigent_bridge"}
+    response = _turn_response(
+        session_id=binding.session_id,
+        session_epoch=1,
+        container_id="container-1",
+        thread_id="thread-1",
+        assistant_text="done",
+    ).model_copy(
+        update={
+            "metadata": {
+                "observabilityEvents": [
+                    {
+                        "kind": "tool_call_started",
+                        "turnId": "turn-1",
+                        "metadata": {"sourceEventId": "source-1"},
+                    }
+                ]
+            }
+        }
+    )
+
+    await adapter._publish_direct_codex_bridge_active(
+        request=request,
+        binding=binding,
+        locator=CodexManagedSessionLocator(
+            sessionId=binding.session_id,
+            sessionEpoch=1,
+            containerId="container-1",
+            threadId="thread-1",
+        ),
+        turn_response=response,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["phase"] == "active"
+    assert payloads[0]["turnId"] == response.turn_id
+    assert payloads[0]["observations"][0]["kind"] == "tool_call_started"
+
 async def test_jira_verify_blocker_summary_detects_auth_error_code() -> None:
     summary = _jira_skill_blocker_summary(
         parameters={

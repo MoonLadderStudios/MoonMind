@@ -2907,6 +2907,45 @@ async def test_fetch_result_fails_when_expected_pr_resolver_artifact_missing(
     assert "mergeAutomationDisposition" not in result.metadata
 
 
+async def test_fetch_result_omits_pr_resolver_metadata_when_not_expected(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-batch-skill",
+            agent_id="codex_cli",
+            runtime_id="codex_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-batch-skill",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-batch-skill")
+
+    assert result.failure_class is None
+    assert "contractId" not in result.metadata
+    assert "failureCode" not in result.metadata
+    assert "terminalResultPresent" not in result.metadata
+    assert "missingEvidence" not in result.metadata
+
+
 async def test_fetch_result_fails_when_pr_resolver_artifact_and_attempts_missing(
     tmp_path: Path,
 ):
