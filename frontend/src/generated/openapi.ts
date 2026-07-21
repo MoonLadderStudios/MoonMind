@@ -6562,11 +6562,8 @@ export interface components {
          * @description Host heartbeat payload.
          */
         EmbeddedHostHeartbeatRequest: {
-            /**
-             * Status
-             * @default running
-             */
-            status: string;
+            /** Status */
+            status?: string | null;
             /** Capabilities */
             capabilities?: {
                 [key: string]: unknown;
