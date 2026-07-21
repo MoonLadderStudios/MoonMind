@@ -265,6 +265,29 @@ class OmnigentBridgeSessionStore:
                     refs.add(str(host_lease_ref))
             return refs
 
+    async def embedded_lease_state(self, idempotency_key: str) -> dict[str, Any]:
+        """Return compact durable host/provider lease evidence for terminal capture."""
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            lease = None
+            if row.host_lease_ref:
+                lease = await session.get(
+                    OmnigentOAuthHostLeaseRecord, row.host_lease_ref
+                )
+            return {
+                "providerProfileId": row.provider_profile_id,
+                "providerLeaseId": row.provider_lease_id,
+                "hostLeaseRef": row.host_lease_ref,
+                "hostLeaseStatus": getattr(lease, "status", None),
+                "hostReadiness": getattr(lease, "host_readiness", None),
+                "disconnectedAt": (
+                    lease.disconnected_at.isoformat()
+                    if lease is not None and lease.disconnected_at else None
+                ),
+            }
+
     async def get_or_create(
         self,
         *,

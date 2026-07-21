@@ -1085,6 +1085,14 @@ async def post_omnigent_session_event(
                 "stop_session",
             }:
                 return await embedded_facade.stop_runner(session_id=session_id)
+            if payload.type in {"harvest", "harvest_session"}:
+                return await embedded_facade.harvest_resources(
+                    session_id=session_id,
+                    idempotency_key=str(
+                        (payload.model_extra or {}).get("clientEventKey")
+                        or f"workflow-detail-harvest:{session_id}"
+                    ),
+                )
             if payload.type == "interrupt":
                 raise OmnigentBridgeError(
                     "Embedded interrupt is not supported by the pinned host "

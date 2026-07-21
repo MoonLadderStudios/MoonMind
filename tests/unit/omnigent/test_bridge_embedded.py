@@ -1232,5 +1232,22 @@ async def test_embedded_harvest_persists_terminal_bundle_and_replays_without_del
     assert row.raw_events_ref and row.normalized_events_ref
     assert row.final_snapshot_ref and row.diagnostics_ref
     assert row.terminal_refs["resourceProjection"]["schemaVersion"].endswith(".v1")
+    assert row.terminal_refs["cleanupState"] == "cleanup_required"
+    assert row.terminal_refs["leaseState"] == {
+        "providerProfileId": "profile-1",
+        "providerLeaseId": "provider-lease-1",
+        "hostLeaseRef": "host-lease-1",
+        "hostLeaseStatus": "assigned",
+        "hostReadiness": "ready",
+        "disconnectedAt": None,
+    }
+    events = await store.list_events(row.bridge_session_id)
+    pending = [event for event in events if event.kind == "resource_evidence_pending"]
+    associations = [event for event in events if event.kind == "resource_evidence_published"]
+    assert len(pending) == 1
+    assert len(associations) == 1
+    assert pending[0].metadata_["associationKey"] == associations[0].metadata_["associationKey"]
+    assert associations[0].metadata_["associationState"] == "published"
+    assert "resourceProjection" not in associations[0].metadata_
     assert replay["reconciled"] is True
     assert channels.calls == calls

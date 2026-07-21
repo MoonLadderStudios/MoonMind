@@ -82,7 +82,9 @@ def _embedded_intervention_capabilities(
         "resolveElicitation": controllable,
         "harvestResources": controllable,
         "newSession": False,
-        "terminalCleanup": False,
+        # Cleanup is a durable handoff to the lease janitor after terminal
+        # evidence exists; it does not require the runner to remain reachable.
+        "terminalCleanup": not live,
     }
 
 
@@ -500,6 +502,22 @@ class OmnigentEmbeddedHostProtocolFacade:
         self._reject_ambiguous_retry(prior)
         await self._append_control(row, "harvest", control_key, "requested", actor=actor)
         await self._append_control(row, "harvest", control_key, "accepted", actor=actor)
+        association_key = f"embedded-resource-association:{control_key}"
+        await self._run_store.append_events(row.bridge_session_id, [{
+            "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "bridgeSessionId": row.bridge_session_id,
+            "direction": "moonmind_system",
+            "kind": "resource_evidence_pending",
+            "status": "running",
+            "text": "Embedded resource evidence is being harvested",
+            "deduplicationKey": f"{association_key}:pending",
+            "metadata": {
+                "associationKey": association_key,
+                "idempotencyKey": control_key,
+                "associationState": "pending",
+            },
+        }])
         try:
             raw_events = await self._read_journal(row.raw_events_ref)
             normalized_events = await self._read_journal(row.normalized_events_ref)
@@ -524,6 +542,14 @@ class OmnigentEmbeddedHostProtocolFacade:
             terminal_refs = build_omnigent_terminal_refs(
                 bundle, terminal_status=terminal_status, final_snapshot=snapshot
             )
+            terminal_refs["leaseState"] = await self._run_store.embedded_lease_state(
+                row.idempotency_key
+            )
+            terminal_refs["cleanupState"] = (
+                "cleanup_required"
+                if terminal_status in {"completed", "failed", "canceled", "timed_out"}
+                else "not_terminal"
+            )
             if terminal_status in {"completed", "failed", "canceled", "timed_out"}:
                 await self._run_store.mark_terminal(
                     row.idempotency_key, status=terminal_status,
@@ -541,6 +567,23 @@ class OmnigentEmbeddedHostProtocolFacade:
             )
             raise
         await self._append_control(row, "harvest", control_key, "completed", actor=actor)
+        await self._run_store.append_events(row.bridge_session_id, [{
+            "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "bridgeSessionId": row.bridge_session_id,
+            "direction": "moonmind_system",
+            "kind": "resource_evidence_published",
+            "status": terminal_status,
+            "text": "Embedded resource evidence published",
+            "deduplicationKey": f"{association_key}:published",
+            "metadata": {
+                "associationKey": association_key,
+                "idempotencyKey": control_key,
+                "captureManifestRef": bundle.capture_manifest_ref,
+                "evidenceCompleteness": bundle.resource_projection.get("completeness"),
+                "associationState": "published",
+            },
+        }])
         return {
             "ok": True, "captureManifestRef": bundle.capture_manifest_ref,
             "resourceProjection": bundle.resource_projection,
