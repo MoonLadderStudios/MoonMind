@@ -218,6 +218,8 @@ class FakeOmnigentServer:
         return web.json_response({"pending_id": "pending-1", "item_id": "item-1"})
 
     async def resolve_elicitation(self, request: web.Request) -> web.Response:
+        if fault := await self._fault(request, "resolve_elicitation"):
+            return fault
         payload = await request.json()
         self.events.append(
             {"type": "elicitation.resolve", "id": request.match_info["elicitation_id"], **payload}
@@ -225,6 +227,8 @@ class FakeOmnigentServer:
         return web.json_response({"ok": True})
 
     async def delete_session(self, request: web.Request) -> web.Response:
+        if fault := await self._fault(request, "delete_session"):
+            return fault
         self.events.append(
             {
                 "type": "delete_session",
@@ -269,7 +273,9 @@ class FakeOmnigentServer:
         await response.write_eof()
         return response
 
-    async def list_changed_files(self, _request: web.Request) -> web.Response:
+    async def list_changed_files(self, request: web.Request) -> web.Response:
+        if fault := await self._fault(request, "changed_files"):
+            return fault
         return web.json_response({"items": [{"path": "src/app.py"}]})
 
     async def list_workspace_files(self, request: web.Request) -> web.Response:
@@ -320,6 +326,8 @@ class FakeOmnigentServer:
         return web.Response(body=body, content_type="text/plain")
 
     async def get_workspace_diff(self, request: web.Request) -> web.Response:
+        if fault := await self._fault(request, "workspace_diff"):
+            return fault
         if not self.supports_diff:
             return web.json_response({"error": "diff unavailable"}, status=404)
         path = request.match_info["path"]
@@ -328,12 +336,16 @@ class FakeOmnigentServer:
             content_type="text/x-diff",
         )
 
-    async def list_session_files(self, _request: web.Request) -> web.Response:
+    async def list_session_files(self, request: web.Request) -> web.Response:
+        if fault := await self._fault(request, "session_files"):
+            return fault
         return web.json_response(
             {"items": [{"id": "file-1", "filename": "session.log"}]}
         )
 
-    async def get_session_file_content(self, _request: web.Request) -> web.Response:
+    async def get_session_file_content(self, request: web.Request) -> web.Response:
+        if fault := await self._fault(request, "session_file"):
+            return fault
         return web.Response(body=b"session file evidence\n", content_type="text/plain")
 
 

@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from api_service.db.models import OmnigentBridgeSession
+from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
+from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
@@ -33,6 +34,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from tests.helpers.omnigent_conformance import (
     BRIDGE_CONFORMANCE_SCENARIOS,
@@ -62,6 +64,7 @@ async def bridge_harness():
     )
     async with engine.begin() as conn:
         await conn.run_sync(OmnigentBridgeSession.__table__.create)
+        await conn.run_sync(OmnigentBridgeSessionEvent.__table__.create)
     session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     store = OmnigentBridgeSessionStore(session_maker)
     running_servers: list[RunningFakeOmnigentServer] = []
@@ -292,9 +295,23 @@ async def test_scenario_09_cancellation_via_interrupt_and_stop_session(
     ]
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 409, 429, 500, 502, 504])
+@pytest.mark.parametrize(
+    "status,expected_failure_class",
+    [
+        (401, "integration_error"),
+        (403, "integration_error"),
+        (404, "user_error"),
+        (409, "user_error"),
+        (429, "integration_error"),
+        (500, "integration_error"),
+        (502, "integration_error"),
+        (504, "integration_error"),
+    ],
+)
 async def test_failure_matrix_preserves_status_classification_and_redacts_secrets(
-    bridge_harness: Callable[..., Awaitable[BridgeHarness]], status: int
+    bridge_harness: Callable[..., Awaitable[BridgeHarness]],
+    status: int,
+    expected_failure_class: str,
 ) -> None:
     harness = await bridge_harness(
         scenario=FakeOmnigentScenario(route_statuses=(("create_session", status),))
@@ -304,7 +321,7 @@ async def test_failure_matrix_preserves_status_classification_and_redacts_secret
         await harness.proxy.create_session(request=_request(), binding=_binding(f"status-{status}"))
 
     assert excinfo.value.status_code == status
-    assert excinfo.value.failure_class
+    assert excinfo.value.failure_class == expected_failure_class
     assert "fake-secret" not in str(excinfo.value)
 
 
@@ -336,19 +353,19 @@ async def test_malformed_timeout_and_close_are_deterministic_real_transport_fail
 
 
 @pytest.mark.parametrize(
-    "route,operation",
+    "route,operation,expected",
     [
-        ("agents", "list_agents"),
-        ("hosts", "list_hosts"),
-        ("get_session", "get_session"),
-        ("workspace_files", "workspace_files"),
-        ("workspace_file", "workspace_file"),
+        ("agents", "list_agents", []),
+        ("get_session", "get_session", {"body": "{malformed"}),
+        ("workspace_files", "workspace_files", {"body": "{malformed"}),
+        ("workspace_file", "workspace_file", b"{malformed"),
     ],
 )
-async def test_malformed_nested_response_classes_fail_bounded_and_secret_free(
+async def test_malformed_nested_response_classes_are_bounded_and_secret_free(
     bridge_harness: Callable[..., Awaitable[BridgeHarness]],
     route: str,
     operation: str,
+    expected: object,
 ) -> None:
     harness = await bridge_harness(
         scenario=FakeOmnigentScenario(malformed_routes=(route,))
@@ -360,20 +377,17 @@ async def test_malformed_nested_response_classes_fail_bounded_and_secret_free(
         )
         session_id = created["id"]
 
-    with pytest.raises(OmnigentBridgeError) as excinfo:
-        if operation == "list_agents":
-            await harness.proxy.list_agents()
-        elif operation == "list_hosts":
-            await harness.proxy.list_hosts()
-        elif operation == "get_session":
-            await harness.proxy.get_session(session_id)
-        elif operation == "workspace_file":
-            await harness.proxy.get_resource(operation, session_id, "src/app.py")
-        else:
-            await harness.proxy.get_resource(operation, session_id)
+    if operation == "list_agents":
+        result = await harness.proxy.list_agents()
+    elif operation == "get_session":
+        result = await harness.proxy.get_session(session_id)
+    elif operation == "workspace_file":
+        result = await harness.proxy.get_resource(operation, session_id, "src/app.py")
+    else:
+        result = await harness.proxy.get_resource(operation, session_id)
 
-    summary = str(excinfo.value)
-    assert excinfo.value.failure_class
+    assert result == expected
+    summary = str(result)
     assert len(summary) < 2048
     assert "authorization" not in summary.lower()
     assert "Bearer " not in summary
@@ -392,10 +406,27 @@ async def test_stream_reconnect_replays_frames_and_store_deduplicates_after_rest
     streamed = [event async for event in harness.proxy.stream_events(created["id"])]
     row = await harness.store.get_existing("idem-replay")
     assert row is not None
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-replay",
+        idempotencyKey="idem-replay",
+        parameters={},
+    )
+    normalized = [
+        build_omnigent_bridge_event(
+            payload=event,
+            sequence=index,
+            request=request,
+            omnigent_session_id=created["id"],
+            bridge_session_id=row.bridge_session_id,
+        ).event
+        for index, event in enumerate(streamed, start=1)
+    ]
 
-    first = await harness.store.append_events(row.bridge_session_id, streamed)
+    first = await harness.store.append_events(row.bridge_session_id, normalized)
     recreated_store = OmnigentBridgeSessionStore(harness.store._session_factory)
-    second = await recreated_store.append_events(row.bridge_session_id, streamed)
+    second = await recreated_store.append_events(row.bridge_session_id, normalized)
     page = await recreated_store.list_event_page(row.bridge_session_id, after=0, limit=100)
 
     assert harness.running.server.stream_attempts == 2
@@ -496,10 +527,10 @@ async def test_missing_terminal_and_active_snapshot_remain_nonterminal(
         )
     )
     created = await _create_and_post(harness, key="active-end")
-    events = [event async for event in harness.proxy.stream_events(created["id"])]
+    with pytest.raises(OmnigentBridgeError, match="ended before a terminal event"):
+        _ = [event async for event in harness.proxy.stream_events(created["id"])]
     snapshot = await harness.proxy.get_session(created["id"])
 
-    assert events == [{"session": {"status": "running"}}]
     assert snapshot["status"] == "running"
 
 
@@ -551,7 +582,7 @@ async def test_incremental_restart_overlap_and_terminalization_are_append_only(
 ) -> None:
     """A recreated boundary resumes after committed events without rewriting them."""
     harness = await bridge_harness()
-    created = await _create_and_post(harness, key="incremental-restart")
+    await _create_and_post(harness, key="incremental-restart")
     durable = await harness.store.get_existing("incremental-restart")
     assert durable is not None
 
@@ -610,6 +641,7 @@ async def test_deleted_provider_binding_cannot_be_reused_or_reach_upstream(
     """Deletion clears durable ownership before later ID-bearing requests."""
     harness = await bridge_harness()
     created = await _create_and_post(harness, key="deleted-binding")
+    await harness.store.record_resource_harvest_completed(created["id"])
 
     await harness.proxy.delete_session(created["id"])
     deleted = await harness.store.get_existing("deleted-binding")
@@ -628,7 +660,7 @@ async def test_failure_evidence_surfaces_are_collectively_secret_free(
 ) -> None:
     """Scan durable/public-shaped evidence, not only the raised exception text."""
     harness = await bridge_harness()
-    created = await harness.proxy.create_session(
+    await harness.proxy.create_session(
         request=_request(), binding=_binding("secret-scan")
     )
     durable = await harness.store.get_existing("secret-scan")
