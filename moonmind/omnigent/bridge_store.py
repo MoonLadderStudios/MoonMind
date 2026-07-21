@@ -251,7 +251,12 @@ class OmnigentBridgeSessionStore:
             lease.last_heartbeat_at = now
             lease.disconnected_at = now if disconnected else None
             if capabilities is not None:
-                lease.host_capabilities_json = dict(capabilities)
+                safe_capabilities = redact_sensitive_payload(dict(capabilities))
+                if not isinstance(safe_capabilities, dict):
+                    raise OmnigentIdempotencyError(
+                        "invalid embedded host capabilities payload"
+                    )
+                lease.host_capabilities_json = safe_capabilities
             if readiness is not None:
                 lease.host_readiness = readiness[:32]
             await session.commit()

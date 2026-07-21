@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import omnigent_bridge as bridge_router
 from api_service.db.models import OmnigentHostAuthProfileRecord
+from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway, capture_artifact_json
+from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
 from moonmind.omnigent.host_auth_adapter import (
@@ -26,6 +29,8 @@ from moonmind.omnigent.host_auth_profile import (
     profile_persistence_metadata,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
+from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+from moonmind.utils.logging import SecretRedactor
 
 
 @pytest.fixture
@@ -255,7 +260,11 @@ async def test_http_websocket_profile_failure_retryability_matrix(
         )
     assert http_exc.value.status_code == http_status
     assert http_exc.value.detail["code"] == failure.code
-    assert (ws_code == 1013) is retryable
+    # RFC 6455 1013 is the stock-host-compatible retry signal; policy failures
+    # use the permanent 4403 close. This is an explicit transport contract,
+    # independent of the router result being tested below.
+    authoritative_retryable_close_codes = frozenset({1013})
+    assert (ws_code in authoritative_retryable_close_codes) is retryable
 
     socket = _HandshakeSocket({})
     monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
@@ -299,7 +308,17 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
     facade.disconnect_host.assert_awaited_once()
 
 
-def test_http_auth_parity_and_cross_channel_sentinel_scan(caplog) -> None:
+class _RecordingArtifactGateway(OmnigentArtifactGateway):
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def write_json(self, *, request, name, payload, link_type):
+        self.payloads.append(payload)
+        return f"artifact://{name}"
+
+
+@pytest.mark.asyncio
+async def test_cross_channel_serializers_redact_or_reject_host_secret(caplog) -> None:
     token = "sentinel-http-token"
     config = _embedded_config()
     cases = [
@@ -318,20 +337,50 @@ def test_http_auth_parity_and_cross_channel_sentinel_scan(caplog) -> None:
             )
         assert token not in str(excinfo.value)
 
-    assert token not in caplog.text
+    # The real raw-event persistence serializer removes credential-shaped data.
+    persisted_events = redact_raw_events(
+        [{"type": "host.failure", "hostCredential": token}]
+    )
+    assert token not in str(persisted_events)
 
-    durable_or_temporal = {
-        "profile": profile_persistence_metadata(
-            HostAuthCredentialProfile("managed", "env://HOST", 9)
-        ),
-        "authContext": {
-            "credentialProfileId": "managed",
-            "credentialGeneration": 9,
-        },
-        "diagnostics": {"code": "host_auth_rejected"},
-        "artifacts": [{"code": "host_auth_rejected"}],
-    }
-    assert token not in str(durable_or_temporal)
+    # The Temporal-facing checkpoint contract rejects credential material.
+    with pytest.raises(ValueError, match="reference, not credential data"):
+        OmnigentCheckpointIdentity(
+            providerProfileId="provider",
+            credentialGeneration=9,
+            hostBindingRef="binding",
+            endpointRef=f"token={token}",
+            bridgeSessionId="bridge",
+            externalStateRef="artifact://external",
+            idempotencyKey="idem",
+        )
+
+    # The actual artifact gateway boundary redacts structured diagnostics.
+    gateway = _RecordingArtifactGateway()
+    await capture_artifact_json(
+        gateway,
+        SimpleNamespace(),
+        {},
+        key="diagnosticsRef",
+        name="diagnostics.json",
+        payload={"hostCredential": token, "code": "host_auth_rejected"},
+        link_type="diagnostics.omnigent",
+    )
+    assert token not in str(gateway.payloads)
+
+    # Structured logging uses the production redactor with the resolved secret.
+    caplog.set_level(logging.ERROR)
+    logging.getLogger(__name__).error(
+        "host handshake failed: %s", SecretRedactor([token]).scrub(token)
+    )
+    assert token not in caplog.text
+    assert "***" in caplog.text
+
+    # Safe profile metadata remains reference-only at its persistence boundary.
+    metadata = profile_persistence_metadata(
+        HostAuthCredentialProfile("managed", "env://HOST", 9)
+    )
+    assert token not in str(metadata)
 
 
 @pytest.mark.asyncio
@@ -374,6 +423,12 @@ async def test_pinned_upstream_http_websocket_rejection_parity(
     adapter = OmnigentHostAuthAdapter(allowed_tokens=frozenset({token}))
     with pytest.raises(UpstreamHostAuthError):
         adapter.verify(headers)
+
+    # The pinned verifier exposes one credential-rejection class. MoonMind maps
+    # every such failure to permanent authentication rejection on both
+    # transports; only server/profile availability uses the retryable 1013 path.
+    assert http_status == 401
+    assert ws_code == 4401
 
     monkeypatch.setattr(
         bridge_router, "_active_host_auth_profile", AsyncMock(return_value=profile)

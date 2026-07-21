@@ -23,6 +23,7 @@ from moonmind.omnigent.failure_classification import (
 )
 from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.utils.logging import redact_sensitive_payload
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
@@ -248,10 +249,14 @@ async def _capture_artifact_json(
     payload: Any,
     link_type: str,
 ) -> str:
+    # Artifact payloads are durable evidence. Apply the common structured
+    # redactor at the gateway boundary as defense in depth for diagnostics and
+    # other capture paths that should never receive host credential material.
+    safe_payload = redact_sensitive_payload(payload)
     ref = await gateway.write_json(
         request=request,
         name=name,
-        payload=payload,
+        payload=safe_payload,
         link_type=link_type,
     )
     refs[key] = ref

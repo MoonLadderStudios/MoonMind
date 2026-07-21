@@ -1043,11 +1043,15 @@ async def test_embedded_resource_rejects_traversal_before_runner_request(store) 
 @pytest.mark.asyncio
 async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> None:
     """MoonLadderStudios/MoonMind#3421: discovery is durable and bounded."""
+    sentinel = "sentinel-host-secret-never-persisted"
     await _bind_active_host(store, host_id="host-codex")
     await store.record_embedded_host_lifecycle(
         host_id="host-codex",
         credential_generation=1,
-        capabilities={"harnesses": ["codex-native"]},
+        capabilities={
+            "harnesses": ["codex-native"],
+            "hostCredential": sentinel,
+        },
         readiness="ready",
     )
     facade = OmnigentEmbeddedHostProtocolFacade(
@@ -1062,10 +1066,14 @@ async def test_embedded_discovery_uses_registered_codex_host_evidence(store) -> 
             "id": "host-codex",
             "status": "ready",
             "ready": True,
-            "capabilities": {"harnesses": ["codex-native"]},
+            "capabilities": {
+                "harnesses": ["codex-native"],
+                "hostCredential": "[REDACTED]",
+            },
             "disconnected": False,
         }
     ]
+    assert sentinel not in str(hosts)
     assert agents[0]["id"] == "codex-native"
 
 
