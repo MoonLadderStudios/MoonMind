@@ -24,6 +24,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     parse_bridge_config,
 )
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostAuthContext,
     EmbeddedHostHeartbeatRequest,
@@ -548,7 +549,7 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
         "interruptTurn": False,
         "cancelSession": True,
         "resolveElicitation": True,
-        "harvestResources": False,
+        "harvestResources": True,
         "newSession": False,
         "terminalCleanup": False,
     }
@@ -1176,3 +1177,60 @@ async def test_embedded_resource_rejects_traversal_before_runner_request(store) 
     )
     with pytest.raises(OmnigentBridgeError, match="traversal-unsafe"):
         await facade.get_resource("workspace_file", "sess-embedded", "../secret")
+
+
+@pytest.mark.asyncio
+async def test_embedded_harvest_persists_terminal_bundle_and_replays_without_delivery(
+    store, tmp_path
+) -> None:
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = 0
+
+        async def request_runner(self, **kwargs):
+            self.calls += 1
+            if kwargs["expect_json"]:
+                if "/resources/files" in kwargs["path"]:
+                    return {"items": [{"id": "log-1", "filename": "run.log"}]}
+                return {"items": [{"path": "src/main.py"}]}
+            if "diff" in kwargs["path"]:
+                return b"+changed\n"
+            return b"print('safe')\n"
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels,
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path / "artifacts"),
+    )
+    result = await facade.harvest_resources(
+        session_id="sess-embedded", terminal_status="completed",
+        idempotency_key="harvest-1",
+    )
+    calls = channels.calls
+    replay = await facade.harvest_resources(
+        session_id="sess-embedded", terminal_status="completed",
+        idempotency_key="harvest-1",
+    )
+    row = await store.get_existing("idem-embedded")
+
+    assert result["evidenceCompleteness"] == "complete"
+    assert result["captureManifestRef"] == row.capture_manifest_ref
+    assert row.raw_events_ref and row.normalized_events_ref
+    assert row.final_snapshot_ref and row.diagnostics_ref
+    assert row.terminal_refs["resourceProjection"]["schemaVersion"].endswith(".v1")
+    assert replay["reconciled"] is True
+    assert channels.calls == calls

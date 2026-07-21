@@ -27,6 +27,8 @@ from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactGateway,
     OmnigentContractError,
+    _build_capture_bundle,
+    build_omnigent_terminal_refs,
 )
 from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
@@ -78,9 +80,7 @@ def _embedded_intervention_capabilities(
         "interruptTurn": controllable and advertised("interrupt", "interruptTurn", "interrupt_turn"),
         "cancelSession": controllable,
         "resolveElicitation": controllable,
-        # Live resource reads are not durable harvest, and session creation and
-        # cleanup are not exposed as intervention controls by this facade.
-        "harvestResources": False,
+        "harvestResources": controllable,
         "newSession": False,
         "terminalCleanup": False,
     }
@@ -166,6 +166,35 @@ class EmbeddedHostAuthContext:
     protocol_profile: str
     runner_id: str
     credential_generation: int
+
+
+class _EmbeddedCaptureClient:
+    """Adapt pinned embedded resource routes to the shared capture pipeline."""
+
+    def __init__(self, facade: "OmnigentEmbeddedHostProtocolFacade", session_id: str):
+        self._facade = facade
+        self._session_id = session_id
+
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        return {"id": session_id, "status": "captured"}
+
+    async def list_changed_files(self, session_id: str) -> Any:
+        return await self._facade.get_resource("changed_files", session_id)
+
+    async def list_workspace_files(self, session_id: str) -> Any:
+        return await self._facade.get_resource("workspace_files", session_id)
+
+    async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+        return await self._facade.get_resource("workspace_file", session_id, path)
+
+    async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
+        return await self._facade.get_resource("workspace_diff", session_id, path)
+
+    async def list_session_files(self, session_id: str) -> Any:
+        return await self._facade.get_resource("session_files", session_id)
+
+    async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
+        return await self._facade.get_resource("session_file", session_id, file_id)
 
 
 def verify_embedded_host_auth(
@@ -444,6 +473,93 @@ class OmnigentEmbeddedHostProtocolFacade:
                 code="omnigent_bridge_response_too_large",
             )
         return bounded
+
+    async def harvest_resources(
+        self, *, session_id: str, terminal_status: str = "running",
+        actor: str = "authenticated_session_owner",
+        idempotency_key: str | None = None,
+        expected_state: Mapping[str, Any] | None = None,
+        capture_policy: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Publish embedded resources through the canonical capture contract."""
+
+        row, _ = await self._bound_runner(session_id)
+        control_key = idempotency_key or self._control_key(
+            "harvest", session_id, {"terminalStatus": terminal_status}
+        )
+        await self._validate_expected_state(
+            row, "harvest", control_key, expected_state, actor
+        )
+        prior = await self._control_outcome(row, control_key)
+        if prior == "completed" and row.capture_manifest_ref:
+            return {
+                "ok": True, "reconciled": True,
+                "captureManifestRef": row.capture_manifest_ref,
+                "resourceProjection": dict((row.terminal_refs or {}).get("resourceProjection") or {}),
+            }
+        self._reject_ambiguous_retry(prior)
+        await self._append_control(row, "harvest", control_key, "requested", actor=actor)
+        await self._append_control(row, "harvest", control_key, "accepted", actor=actor)
+        try:
+            raw_events = await self._read_journal(row.raw_events_ref)
+            normalized_events = await self._read_journal(row.normalized_events_ref)
+            snapshot = {
+                "id": session_id,
+                "status": terminal_status,
+                "hostId": row.omnigent_host_id,
+                "runnerId": row.omnigent_runner_id,
+            }
+            bundle = await _build_capture_bundle(
+                client=_EmbeddedCaptureClient(self, session_id),
+                artifact_gateway=self._artifact_gateway,
+                request=_request_for_row(row), session_id=session_id,
+                agent_id=row.omnigent_agent_id, initial_snapshot=None,
+                final_snapshot=snapshot, first_message_request=None,
+                first_message_response=None, first_message_posted=False,
+                first_message_response_identifiers=None, raw_events=raw_events,
+                normalized_events=normalized_events,
+                terminal_status=terminal_status, diagnostics={"sourceMode": HOST_PROTOCOL_MODE_EMBEDDED},
+                harvest_resources=True, capture_policy=dict(capture_policy or {}),
+            )
+            terminal_refs = build_omnigent_terminal_refs(
+                bundle, terminal_status=terminal_status, final_snapshot=snapshot
+            )
+            if terminal_status in {"completed", "failed", "canceled", "timed_out"}:
+                await self._run_store.mark_terminal(
+                    row.idempotency_key, status=terminal_status,
+                    terminal_refs=terminal_refs,
+                )
+            else:
+                await self._run_store.attach_capture_evidence(
+                    row.idempotency_key, terminal_refs=terminal_refs
+                )
+        except Exception as exc:
+            await self._append_control(
+                row, "harvest", control_key, "failed", actor=actor,
+                code="embedded_resource_harvest_failed",
+                summary={"error": str(exc)[:512]},
+            )
+            raise
+        await self._append_control(row, "harvest", control_key, "completed", actor=actor)
+        return {
+            "ok": True, "captureManifestRef": bundle.capture_manifest_ref,
+            "resourceProjection": bundle.resource_projection,
+            "evidenceCompleteness": bundle.resource_projection.get("completeness"),
+        }
+
+    async def _read_journal(self, artifact_ref: str | None) -> list[dict[str, Any]]:
+        if not artifact_ref:
+            return []
+        payload = await self._artifact_gateway.read_text(artifact_ref)
+        values: list[dict[str, Any]] = []
+        for line in payload.splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                values.append(value)
+        return values
 
     async def resolve_elicitation(
         self, *, session_id: str, elicitation_id: str, payload: dict[str, Any],

@@ -1261,6 +1261,22 @@ class OmnigentBridgeSessionStore:
             row.normalized_events_ref = normalized_ref
             await session.commit()
 
+    async def attach_capture_evidence(
+        self, idempotency_key: str, *, terminal_refs: dict[str, Any]
+    ) -> OmnigentBridgeSession:
+        """Persist a harvest bundle without changing the live session state."""
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            safe_refs = redact_sensitive_payload(terminal_refs)
+            if not isinstance(safe_refs, dict):
+                raise OmnigentIdempotencyError("invalid capture evidence payload")
+            row.terminal_refs = safe_refs
+            for column, value in _canonical_ref_columns(safe_refs).items():
+                setattr(row, column, value)
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
     async def _get(
         self, session: AsyncSession, idempotency_key: str
     ) -> OmnigentBridgeSession | None:
