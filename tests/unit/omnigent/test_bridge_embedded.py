@@ -1426,7 +1426,7 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     ]
     assert len(associations) == 1
     assert associations[0].artifact_ref == result["captureManifestRef"]
-    association_metadata = associations[0].metadata_
+    association_metadata = associations[0].metadata_["metadata"]
     assert association_metadata["controlType"] == "harvest"
     assert association_metadata["controlKey"] == "harvest:sess-embedded"
     assert association_metadata["resourceProjectionRef"] == result[
