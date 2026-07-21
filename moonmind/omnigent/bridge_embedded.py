@@ -23,7 +23,12 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     OmnigentBridgeConfig,
 )
-from moonmind.omnigent.bridge_artifacts import OmnigentContractError
+from moonmind.omnigent.bridge_artifacts import (
+    LocalOmnigentArtifactGateway,
+    OmnigentArtifactGateway,
+    OmnigentContractError,
+)
+from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_proxy import (
     _MAX_FACADE_RESOURCE_BYTES,
@@ -56,20 +61,23 @@ MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
 
 
 def _embedded_intervention_capabilities(
-    host_capabilities: Mapping[str, Any],
+    host_capabilities: Mapping[str, Any], *, session_status: str = "running",
+    runner_bound: bool = True,
 ) -> dict[str, bool]:
     """Project pinned host capabilities onto the runtime-neutral UI contract."""
 
     def advertised(*names: str) -> bool:
         return any(host_capabilities.get(name) is True for name in names)
 
+    live = session_status not in {"completed", "failed", "canceled", "timed_out"}
+    controllable = live and runner_bound
     return {
         # These operations are part of the pinned embedded runner tunnel.
-        "sendFollowUp": True,
+        "sendFollowUp": controllable,
         "clearSession": False,
-        "interruptTurn": advertised("interrupt", "interruptTurn", "interrupt_turn"),
-        "cancelSession": True,
-        "resolveElicitation": True,
+        "interruptTurn": controllable and advertised("interrupt", "interruptTurn", "interrupt_turn"),
+        "cancelSession": controllable,
+        "resolveElicitation": controllable,
         # Live resource reads are not durable harvest, and session creation and
         # cleanup are not exposed as intervention controls by this facade.
         "harvestResources": False,
@@ -209,10 +217,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         run_store: OmnigentBridgeSessionStore,
         config: OmnigentBridgeConfig,
         host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
+        artifact_gateway: OmnigentArtifactGateway | None = None,
     ) -> None:
         self._run_store = run_store
         self._config = config
         self._host_channels = host_channels
+        self._artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
@@ -271,7 +281,9 @@ class OmnigentEmbeddedHostProtocolFacade:
             runner_id=runner_id, error=error
         )
 
-    async def stop_runner(self, *, session_id: str) -> dict[str, Any]:
+    async def stop_runner(self, *, session_id: str, actor: str = "authenticated_session_owner",
+                          expected_state: Mapping[str, Any] | None = None,
+                          idempotency_key: str | None = None) -> dict[str, Any]:
         """Stop the exact runner durably bound to an embedded session."""
 
         self._require_embedded_mode()
@@ -290,13 +302,14 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
-        control_key = self._control_key("stop", session_id, {})
+        control_key = idempotency_key or self._control_key("stop", session_id, {})
+        await self._validate_expected_state(row, "stop", control_key, expected_state, actor)
         prior_outcome = await self._control_outcome(row, control_key)
         if prior_outcome == "completed":
             return {"ok": True, "status": "stopped", "runnerId": runner_id, "reconciled": True}
         self._reject_ambiguous_retry(prior_outcome)
-        await self._append_control(row, "stop", control_key, "requested")
-        await self._append_control(row, "stop", control_key, "accepted")
+        await self._append_control(row, "stop", control_key, "requested", actor=actor)
+        await self._append_control(row, "stop", control_key, "accepted", actor=actor)
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
@@ -321,7 +334,9 @@ class OmnigentEmbeddedHostProtocolFacade:
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 
     async def post_event(
-        self, *, session_id: str, event: Any
+        self, *, session_id: str, event: Any, actor: str = "authenticated_session_owner",
+        expected_state: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Post a message through the exact durably bound runner tunnel."""
 
@@ -339,13 +354,14 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=409,
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
-        control_key = self._control_key("message", session_id, payload)
+        control_key = idempotency_key or self._control_key("message", session_id, payload)
+        await self._validate_expected_state(row, "message", control_key, expected_state, actor)
         prior_outcome = await self._control_outcome(row, control_key)
         if prior_outcome == "completed":
             return {"ok": True, "reconciled": True, "idempotencyKey": control_key}
         self._reject_ambiguous_retry(prior_outcome)
-        await self._append_control(row, "message", control_key, "requested", summary=payload)
-        await self._append_control(row, "message", control_key, "accepted")
+        await self._append_control(row, "message", control_key, "requested", summary=payload, actor=actor)
+        await self._append_control(row, "message", control_key, "accepted", actor=actor)
         try:
             result = await self._host_channels.post_runner_event(
                 runner_id=runner_id, session_id=session_id, payload=payload
@@ -484,6 +500,31 @@ class OmnigentEmbeddedHostProtocolFacade:
                 return outcome
         return None
 
+    async def _validate_expected_state(
+        self, row: Any, control: str, control_key: str,
+        expected: Mapping[str, Any] | None, actor: str,
+    ) -> None:
+        if not expected:
+            return
+        actual = {
+            "sessionId": row.omnigent_session_id, "hostId": row.omnigent_host_id,
+            "runnerId": row.omnigent_runner_id, "sessionStatus": row.status,
+        }
+        mismatches = {key: {"expected": value, "actual": actual.get(key)}
+                      for key, value in expected.items()
+                      if key in actual and value != actual.get(key)}
+        if not mismatches:
+            return
+        await self._append_control(
+            row, control, control_key, "rejected", actor=actor,
+            summary={"stateMismatch": mismatches}, code="embedded_control_state_mismatch",
+        )
+        raise OmnigentBridgeError(
+            "Embedded control expected state does not match durable session state",
+            failure_class="user_error", status_code=409,
+            code="embedded_control_state_mismatch",
+        )
+
     @staticmethod
     def _reject_ambiguous_retry(prior_outcome: str | None) -> None:
         if prior_outcome is None:
@@ -498,13 +539,14 @@ class OmnigentEmbeddedHostProtocolFacade:
     async def _append_control(
         self, row: Any, control: str, control_key: str, outcome: str, *,
         summary: Mapping[str, Any] | None = None, code: str | None = None,
+        actor: str = "authenticated_session_owner",
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         summary_json = json.dumps(dict(summary or {}), sort_keys=True, default=str)
         data = {
             "control": control,
             "outcome": outcome,
-            "actor": "authenticated_session_owner",
+            "actor": str(actor)[:256],
             "idempotencyKey": control_key,
             "expectedState": {
                 "sessionId": row.omnigent_session_id,
@@ -629,7 +671,13 @@ class OmnigentEmbeddedHostProtocolFacade:
             session_id=session_id,
             agent_id=(request.agent_id or "").strip() or None,
             endpoint_ref=(request.endpoint_ref or "").strip() or "embedded",
-            capabilities=_embedded_intervention_capabilities(host_capabilities),
+            capabilities=_embedded_intervention_capabilities(
+                host_capabilities,
+                session_status=row.status,
+                # Dispatch follows creation; the durable host assignment makes
+                # these controls available and dispatch failures terminalize it.
+                runner_bound=True,
+            ),
         )
         return {
             "id": session_id,
@@ -799,6 +847,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         metadata["embeddedEventIndexed"] = True
         metadata["sourceMode"] = HOST_PROTOCOL_MODE_EMBEDDED
         normalized["metadata"] = metadata
+        raw_ref, normalized_ref = await self._publish_embedded_journals(
+            row=row, raw_event=payload, normalized_event=normalized,
+            sequence=next_sequence,
+        )
+        normalized["artifactRef"] = normalized_ref
+        normalized["artifactRefs"] = [normalized_ref, raw_ref]
         rows = await self._run_store.append_events(row.bridge_session_id, [normalized])
         return {
             "ok": True,
@@ -812,6 +866,51 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "protocolProfile": auth.protocol_profile,
             },
         }
+
+    async def _publish_embedded_journals(
+        self, *, row: Any, raw_event: dict[str, Any],
+        normalized_event: dict[str, Any], sequence: int,
+    ) -> tuple[str, str]:
+        """Publish the redacted journal prefix before indexing its new event."""
+
+        async def restored(ref: str | None) -> list[dict[str, Any]]:
+            if not ref:
+                return []
+            payload = await self._artifact_gateway.read_text(ref)
+            values: list[dict[str, Any]] = []
+            for line in payload.splitlines():
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    values.append(value)
+            return values
+
+        raw_events = await restored(row.raw_events_ref)
+        normalized_events = await restored(row.normalized_events_ref)
+        raw_events.extend(redact_raw_events([raw_event]))
+        normalized_events.append(normalized_event)
+        request = _request_for_row(row)
+        prefix = f"{sequence:08d}"
+        encode = lambda values: "".join(
+            json.dumps(value, sort_keys=True, default=str, separators=(",", ":")) + "\n"
+            for value in values
+        )
+        raw_ref = await self._artifact_gateway.write_text(
+            request=request, name=f"runtime.omnigent.sse.raw.{prefix}.jsonl",
+            payload=encode(raw_events), link_type="runtime.omnigent.sse.raw",
+            content_type="application/x-ndjson",
+        )
+        normalized_ref = await self._artifact_gateway.write_text(
+            request=request, name=f"runtime.omnigent.sse.normalized.{prefix}.jsonl",
+            payload=encode(normalized_events), link_type="runtime.omnigent.sse.normalized",
+            content_type="application/x-ndjson",
+        )
+        await self._run_store.attach_active_journal_refs(
+            row.bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref,
+        )
+        return raw_ref, normalized_ref
 
     def _require_embedded_mode(self) -> None:
         if self._config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:

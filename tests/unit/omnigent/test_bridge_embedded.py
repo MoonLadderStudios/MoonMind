@@ -486,6 +486,12 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
     assert events[0].event_type == "response.delta"
     assert events[0].normalized_status == "running"
     assert events[0].metadata_["moonmind"]["source"] == "omnigent_stream"
+    assert len(events[0].artifact_refs) == 2
+    durable = await store.get_existing("idem-embedded")
+    assert durable.raw_events_ref in events[0].artifact_refs
+    assert durable.normalized_events_ref in events[0].artifact_refs
+    assert "embeddedRawEvent" not in events[0].metadata_
+    assert "embeddedNormalizedEvent" not in events[0].metadata_
 
 
 @pytest.mark.asyncio
@@ -906,6 +912,47 @@ async def test_embedded_message_does_not_redeliver_delivery_unknown_retry(store)
 
     assert retry_error.value.code == "embedded_control_reconciliation_required"
     assert channels.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_embedded_message_rejects_expected_state_before_delivery(store) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.calls += 1
+            return {"ok": True}
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.post_event(
+            session_id="sess-embedded",
+            event=EmbeddedHostSessionEventRequest(type="message", data={"text": "hello"}),
+            actor="user:user-1",
+            idempotency_key="control-1",
+            expected_state={"runnerId": "stale-runner"},
+        )
+
+    assert excinfo.value.code == "embedded_control_state_mismatch"
+    assert channels.calls == 0
+    row = await store.get_existing("idem-embedded")
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.event_type for event in events] == ["control.message.rejected"]
+    evidence = events[0].metadata_["embeddedControl"]
+    assert evidence["actor"] == "user:user-1"
+    assert "stale-runner" in evidence["requestSummary"]
 
 
 @pytest.mark.asyncio
