@@ -44,6 +44,7 @@ from moonmind.omnigent.host_auth_adapter import (
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
+    BridgeSessionEventRequest,
     OmnigentBridgeError,
 )
 from moonmind.omnigent.bridge_store import (
@@ -637,9 +638,11 @@ async def test_embedded_event_rejects_cross_host_binding(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedded_session_events_preserve_full_payload_and_errors(
-    store,
+async def test_embedded_session_events_use_artifact_journals_and_compact_index(
+    store, tmp_path,
 ) -> None:
+    """MoonLadderStudios/MoonMind#3424 keeps full events out of DB metadata."""
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
     await store.bind_profile_authorization(
         request=_request(), endpoint_ref="embedded",
         provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
@@ -659,6 +662,7 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
     facade = OmnigentEmbeddedHostProtocolFacade(
         run_store=store,
         config=_embedded_config(),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
@@ -677,11 +681,16 @@ async def test_embedded_session_events_preserve_full_payload_and_errors(
         auth=auth,
     )
     events = await store.list_events(row.bridge_session_id)
-    assert events[0].metadata_["embeddedRawEvent"]["data"]["nested"] == {"answer": 42}
-    assert (
-        events[0].metadata_["embeddedNormalizedEvent"]["eventType"]
-        == "response.delta"
+    persisted = await store.get_bridge_session(row.bridge_session_id)
+    assert "embeddedRawEvent" not in events[0].metadata_
+    assert "embeddedNormalizedEvent" not in events[0].metadata_
+    assert events[0].artifact_ref == persisted.normalized_events_ref
+    raw_journal = await facade._artifact_gateway.read_text(persisted.raw_events_ref)
+    normalized_journal = await facade._artifact_gateway.read_text(
+        persisted.normalized_events_ref
     )
+    assert '"nested":{"answer":42}' in raw_journal
+    assert '"eventType":"response.delta"' in normalized_journal
 
     with pytest.raises(OmnigentBridgeError) as excinfo:
         await facade.ingest_session_event(
@@ -987,6 +996,110 @@ async def test_embedded_resources_and_elicitation_use_exact_bound_runner(store) 
     assert {call["runner_id"] for call in channels.calls} == {"runner-1"}
     assert channels.calls[1]["path"].endswith("/filesystem/src/main.py")
     assert channels.calls[2]["path"].endswith("/approval-1/resolve")
+
+    # MoonLadderStudios/MoonMind#3424: supported controls leave typed,
+    # replayable request/outcome evidence without storing the request body.
+    events = await store.list_events(
+        (await store.get_existing("idem-embedded")).bridge_session_id
+    )
+    control_events = [event for event in events if event.event_type == "lifecycle.control"]
+    assert [event.metadata_["metadata"]["controlOutcome"] for event in control_events] == [
+        "requested", "accepted", "completed"
+    ]
+    assert all(
+        event.metadata_["metadata"]["expectedRunnerId"] == "runner-1"
+        for event in control_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_embedded_duplicate_control_does_not_repeat_live_side_effect(store) -> None:
+    """MoonLadderStudios/MoonMind#3424 reconciles ambiguous control retries."""
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        calls = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.calls += 1
+            return {"ok": True}
+
+    channels = Channels()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=channels
+    )
+    event = BridgeSessionEventRequest(
+        type="message", data={"text": "hello"}, idempotencyKey="control-1"
+    )
+
+    first = await facade.post_event(session_id="sess-embedded", event=event)
+    retry = await facade.post_event(session_id="sess-embedded", event=event)
+
+    assert first == {"ok": True}
+    assert retry["status"] == "delivery_unknown"
+    assert channels.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) -> None:
+    """MoonLadderStudios/MoonMind#3424 preserves resources after host cleanup."""
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+    await store.bind_profile_authorization(
+        request=_request(), endpoint_ref="embedded",
+        provider_profile_id="profile-1", provider_lease_id="provider-lease-1",
+        credential_generation=1, host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1", omnigent_host_id="host-1",
+    )
+    row = await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        async def request_runner(self, **kwargs):
+            path = kwargs["path"]
+            if kwargs["expect_json"]:
+                if path.endswith("/changes"):
+                    return {"items": [{"path": "src/main.py"}]}
+                if path.endswith("/filesystem"):
+                    return {"items": [{"path": "src/main.py", "type": "file"}]}
+                return {"items": [{"id": "report", "filename": "report.txt"}]}
+            if "/diff/" in path:
+                return b"+changed\n"
+            return b"durable content"
+
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "artifacts")
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels(),
+        artifact_gateway=gateway,
+    )
+
+    result = await facade.harvest_session("sess-embedded")
+    persisted = await store.get_bridge_session(row.bridge_session_id)
+    manifest = await gateway.read_text(result["captureManifestRef"])
+
+    assert result["status"] == "completed"
+    assert persisted.capture_manifest_ref == result["captureManifestRef"]
+    assert '"schemaVersion": "moonmind.omnigent.capture_manifest.v1"' in manifest
+    assert "MoonLadderStudios/MoonMind#3424" in manifest
 
 
 @pytest.mark.asyncio

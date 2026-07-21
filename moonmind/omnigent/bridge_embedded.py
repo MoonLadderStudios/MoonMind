@@ -22,8 +22,14 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     OmnigentBridgeConfig,
 )
-from moonmind.omnigent.bridge_artifacts import OmnigentContractError
+from moonmind.omnigent.bridge_artifacts import (
+    BridgeResourceHarvester,
+    LocalOmnigentArtifactGateway,
+    OmnigentArtifactGateway,
+    OmnigentContractError,
+)
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
+from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.bridge_proxy import (
     _MAX_FACADE_RESOURCE_BYTES,
     _bound_resource_lists,
@@ -185,10 +191,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         run_store: OmnigentBridgeSessionStore,
         config: OmnigentBridgeConfig,
         host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
+        artifact_gateway: OmnigentArtifactGateway | None = None,
     ) -> None:
         self._run_store = run_store
         self._config = config
         self._host_channels = host_channels
+        self._artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
@@ -266,20 +274,46 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
+        control_key = f"stop:{session_id}:{runner_id}"
+        if await self._control_already_requested(row, control_key):
+            return {
+                "ok": False,
+                "status": "delivery_unknown",
+                "runnerId": runner_id,
+                "idempotencyKey": control_key,
+            }
+        await self._record_control(
+            row, control_key, "stop", "requested",
+            summary="Embedded stop requested",
+        )
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._record_control(
+                row, control_key, "stop", "delivery_unknown",
+                code="omnigent_embedded_control_delivery_unknown",
+                summary=str(exc),
+            )
             raise OmnigentBridgeError(
-                str(exc), failure_class="integration_error", status_code=503
+                str(exc), failure_class="integration_error", status_code=503,
+                code="omnigent_embedded_control_delivery_unknown",
             ) from exc
+        await self._record_control(
+            row, control_key, "stop", "accepted",
+            summary="Embedded host accepted stop",
+        )
         await self._run_store.record_lifecycle_event(
             row.idempotency_key,
             event_type="terminal",
             status="canceled",
             event_identity=f"embedded-stop:{runner_id}",
             summary="stopped by MoonMind control",
+        )
+        await self._record_control(
+            row, control_key, "stop", "completed",
+            summary="Embedded runner stopped",
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 
@@ -302,14 +336,43 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=409,
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
+        supplied_key = _clean(payload.get("idempotencyKey"))
+        control_key = supplied_key or f"message:{session_id}:{_stable_payload_digest(payload)}"
+        await self._validate_control_expectations(
+            row=row, payload=payload, control_key=control_key, control_type="message"
+        )
+        if await self._control_already_requested(row, control_key):
+            return {
+                "ok": False,
+                "status": "delivery_unknown",
+                "idempotencyKey": control_key,
+            }
+        await self._record_control(
+            row, control_key, "message", "requested",
+            summary=_bounded_request_summary(payload),
+        )
         try:
-            return await self._host_channels.post_runner_event(
+            response = await self._host_channels.post_runner_event(
                 runner_id=runner_id, session_id=session_id, payload=payload
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._record_control(
+                row, control_key, "message", "delivery_unknown",
+                code="omnigent_embedded_control_delivery_unknown", summary=str(exc),
+            )
             raise OmnigentBridgeError(
-                str(exc), failure_class="integration_error", status_code=503
+                str(exc), failure_class="integration_error", status_code=503,
+                code="omnigent_embedded_control_delivery_unknown",
             ) from exc
+        await self._record_control(
+            row, control_key, "message", "accepted",
+            summary="Embedded host accepted message",
+        )
+        await self._record_control(
+            row, control_key, "message", "completed",
+            summary="Embedded message delivered",
+        )
+        return response
 
     async def get_resource(
         self, operation: str, session_id: str, value: str | None = None
@@ -376,18 +439,135 @@ class OmnigentEmbeddedHostProtocolFacade:
             )
         return bounded
 
+    async def list_changed_files(self, session_id: str) -> Any:
+        return await self.get_resource("changed_files", session_id)
+
+    async def list_workspace_files(self, session_id: str) -> Any:
+        return await self.get_resource("workspace_files", session_id)
+
+    async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+        return await self.get_resource("workspace_file", session_id, path)
+
+    async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
+        return await self.get_resource("workspace_diff", session_id, path)
+
+    async def list_session_files(self, session_id: str) -> Any:
+        return await self.get_resource("session_files", session_id)
+
+    async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
+        return await self.get_resource("session_file", session_id, file_id)
+
+    async def harvest_session(self, session_id: str) -> dict[str, Any]:
+        """Publish embedded resources through the canonical artifact contract."""
+        row, _runner_id = await self._bound_runner(session_id)
+        control_key = f"harvest:{session_id}"
+        if await self._control_already_requested(row, control_key):
+            refreshed = await self._run_store.get_bridge_session(row.bridge_session_id)
+            return {
+                "ok": True,
+                "status": "reconciled",
+                "captureManifestRef": refreshed.capture_manifest_ref,
+            }
+        await self._record_control(
+            row, control_key, "harvest", "requested",
+            summary="Embedded resource harvest requested",
+        )
+        request = _request_for_row(row)
+        refs: dict[str, str] = {
+            key: value
+            for key, value in {
+                "rawSseStreamRef": row.raw_events_ref,
+                "normalizedEventStreamRef": row.normalized_events_ref,
+                "initialSnapshotRef": row.initial_snapshot_ref,
+            }.items()
+            if value
+        }
+        manifest: dict[str, Any] = {
+            "schemaVersion": "moonmind.omnigent.capture_manifest.v1",
+            "sourceIssue": "MoonLadderStudios/MoonMind#3424",
+            "provider": "omnigent",
+            "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+            "evidenceCompleteness": "complete",
+            "artifactRefs": refs,
+        }
+        harvester = BridgeResourceHarvester(
+            client=self,
+            artifact_gateway=self._artifact_gateway,
+            request=request,
+            session_id=session_id,
+            manifest=manifest,
+            refs=refs,
+        )
+        await harvester.harvest_resources(capture_policy=None)
+        unavailable = sorted(key for key in manifest if key.endswith("Unavailable"))
+        if unavailable:
+            manifest["evidenceCompleteness"] = "optional_degradation"
+            manifest["optionalEvidenceUnavailable"] = unavailable
+        projection = {
+            "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+            "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+            "resources": {
+                key: value for key, value in manifest.items()
+                if key in {"changedFiles", "workspaceFiles", "workspaceDiffs", "sessionFiles"}
+            },
+            "artifactRefs": refs,
+            "evidenceCompleteness": manifest["evidenceCompleteness"],
+        }
+        projection_ref = await self._artifact_gateway.write_json(
+            request=request,
+            name="output.omnigent.resource_projection.json",
+            payload=projection,
+            link_type="output.omnigent.resource_projection",
+        )
+        refs["resourceProjectionRef"] = projection_ref
+        manifest_ref = await self._artifact_gateway.write_json(
+            request=request,
+            name="output.omnigent.capture_manifest.json",
+            payload=manifest,
+            link_type="output.omnigent.capture_manifest",
+        )
+        await self._run_store.attach_capture_evidence(
+            row.bridge_session_id,
+            capture_manifest_ref=manifest_ref,
+            resource_projection_ref=projection_ref,
+            evidence_completeness=manifest["evidenceCompleteness"],
+        )
+        await self._run_store.record_resource_harvest_completed(session_id)
+        await self._record_control(
+            row, control_key, "harvest", "completed",
+            summary="Embedded resource evidence published",
+            code=None,
+            audit_ref=manifest_ref,
+        )
+        return {
+            "ok": True,
+            "status": "completed_with_diagnostics" if unavailable else "completed",
+            "captureManifestRef": manifest_ref,
+            "resourceProjectionRef": projection_ref,
+        }
+
     async def resolve_elicitation(
         self, *, session_id: str, elicitation_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Resolve an elicitation through the exact durably bound runner."""
 
-        _, runner_id = await self._bound_runner(session_id)
+        row, runner_id = await self._bound_runner(session_id)
+        control_key = _clean(payload.get("idempotencyKey")) or (
+            f"elicitation:{session_id}:{elicitation_id}"
+        )
+        if await self._control_already_requested(row, control_key):
+            return {"ok": False, "status": "delivery_unknown", "idempotencyKey": control_key}
+        await self._record_control(
+            row, control_key, "elicitation", "requested",
+            summary=f"Resolve elicitation {_safe_resource_identifier(elicitation_id)}",
+            control_id=elicitation_id,
+        )
         path = self._config.public_api.routes.resolve_elicitation.format(
             session_id=quote(session_id, safe=""),
             elicitation_id=quote(_safe_resource_identifier(elicitation_id), safe=""),
         )
         try:
-            return await self._host_channels.request_runner(
+            response = await self._host_channels.request_runner(
                 runner_id=runner_id,
                 method="POST",
                 path=path,
@@ -395,9 +575,90 @@ class OmnigentEmbeddedHostProtocolFacade:
                 expect_json=True,
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._record_control(
+                row, control_key, "elicitation", "delivery_unknown",
+                code="omnigent_embedded_control_delivery_unknown", summary=str(exc),
+                control_id=elicitation_id,
+            )
             raise OmnigentBridgeError(
-                str(exc), failure_class="integration_error", status_code=503
+                str(exc), failure_class="integration_error", status_code=503,
+                code="omnigent_embedded_control_delivery_unknown",
             ) from exc
+        await self._record_control(
+            row, control_key, "elicitation", "accepted",
+            summary="Embedded elicitation resolution accepted", control_id=elicitation_id,
+        )
+        await self._record_control(
+            row, control_key, "elicitation", "completed",
+            summary="Embedded elicitation resolved", control_id=elicitation_id,
+        )
+        return response
+
+    async def _control_already_requested(self, row: Any, control_key: str) -> bool:
+        events = await self._run_store.list_events(row.bridge_session_id)
+        identity = f"embedded-control:{control_key}:requested"
+        return any(
+            (event.metadata_ or {}).get("eventIdentity") == identity
+            for event in events
+        )
+
+    async def _validate_control_expectations(
+        self, *, row: Any, payload: dict[str, Any], control_key: str,
+        control_type: str,
+    ) -> None:
+        expected = {
+            "expectedSessionId": row.omnigent_session_id,
+            "expectedHostId": row.omnigent_host_id,
+            "expectedRunnerId": row.omnigent_runner_id,
+        }
+        mismatch = next(
+            (
+                (field, _clean(payload.get(field)), _clean(actual))
+                for field, actual in expected.items()
+                if payload.get(field) is not None
+                and _clean(payload.get(field)) != _clean(actual)
+            ),
+            None,
+        )
+        if mismatch is None:
+            return
+        field, _requested, _actual = mismatch
+        await self._record_control(
+            row, control_key, control_type, "rejected",
+            code="omnigent_embedded_control_state_mismatch",
+            summary=f"Embedded control rejected: {field} mismatch",
+        )
+        raise OmnigentBridgeError(
+            "Embedded control expected state does not match the durable binding",
+            failure_class="user_error", status_code=409,
+            code="omnigent_embedded_control_state_mismatch",
+        )
+
+    async def _record_control(
+        self, row: Any, control_key: str, control_type: str, outcome: str, *,
+        summary: str, code: str | None = None, control_id: str | None = None,
+        audit_ref: str | None = None,
+    ) -> None:
+        await self._run_store.record_lifecycle_event(
+            row.idempotency_key,
+            event_type="control",
+            status="running",
+            event_identity=f"embedded-control:{control_key}:{outcome}",
+            code=code,
+            summary=summary,
+            diagnostics_ref=audit_ref,
+            metadata={
+                "actor": "moonmind_authenticated_principal",
+                "controlType": control_type,
+                "controlOutcome": outcome,
+                "controlId": control_id,
+                "controlIdempotencyKey": control_key,
+                "expectedSessionId": row.omnigent_session_id,
+                "expectedHostId": row.omnigent_host_id,
+                "expectedRunnerId": row.omnigent_runner_id,
+                "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+            },
+        )
 
     async def _bound_runner(self, session_id: str) -> tuple[Any, str]:
         self._require_embedded_mode()
@@ -468,7 +729,6 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error", status_code=404,
                 code="omnigent_bridge_session_unknown",
             )
-        metadata = dict(row.metadata_ or {})
         terminal = row.status in {"completed", "failed", "canceled", "timed_out"}
         hosts = await self._run_store.list_embedded_host_readiness()
         live_host = next(
@@ -477,6 +737,11 @@ class OmnigentEmbeddedHostProtocolFacade:
         disconnected = bool(row.omnigent_host_id) and (
             live_host is None or bool(live_host.get("disconnected"))
         )
+        capabilities = _embedded_control_capabilities(
+            terminal=terminal,
+            disconnected=disconnected,
+            host_capabilities=(live_host or {}).get("capabilities"),
+        )
         return {
             "id": session_id,
             "status": row.status,
@@ -484,11 +749,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             "hostId": row.omnigent_host_id,
             "runnerId": row.omnigent_runner_id,
             "firstMessageState": row.first_message_state,
-            "capabilities": (
-                metadata.get("interventionCapabilities")
-                or metadata.get("capabilities")
-                or {}
-            ),
+            "capabilities": capabilities,
             "terminal": terminal,
             "terminalEvidenceAvailable": bool(
                 row.terminal_refs or row.diagnostics_ref or row.final_snapshot_ref
@@ -653,11 +914,16 @@ class OmnigentEmbeddedHostProtocolFacade:
             row = await self._run_store.attach_session(
                 binding.idempotency_key, session_id
             )
+        capabilities = _embedded_control_capabilities(
+            terminal=False, disconnected=False,
+            host_capabilities=(authorized.metadata_ or {}).get("capabilities"),
+        )
         await self._run_store.record_session_created(
             binding.idempotency_key,
             session_id=session_id,
             agent_id=(request.agent_id or "").strip() or None,
             endpoint_ref=(request.endpoint_ref or "").strip() or "embedded",
+            capabilities=capabilities,
         )
         return {
             "id": session_id,
@@ -819,12 +1085,10 @@ class OmnigentEmbeddedHostProtocolFacade:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=502
             ) from exc
-        normalized_body = dict(normalized)
-        normalized_body["metadata"] = dict(normalized.get("metadata") or {})
-        metadata = dict(normalized.get("metadata") or {})
-        metadata["embeddedRawEvent"] = payload
-        metadata["embeddedNormalizedEvent"] = normalized_body
-        normalized["metadata"] = metadata
+        raw_ref, normalized_ref = await self._publish_embedded_journals(
+            row=row, payload=payload, normalized=normalized, sequence=next_sequence
+        )
+        normalized["artifactRef"] = normalized_ref
         rows = await self._run_store.append_events(row.bridge_session_id, [normalized])
         return {
             "ok": True,
@@ -838,6 +1102,36 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "protocolProfile": auth.protocol_profile,
             },
         }
+
+    async def _publish_embedded_journals(
+        self, *, row: Any, payload: dict[str, Any], normalized: dict[str, Any],
+        sequence: int,
+    ) -> tuple[str, str]:
+        request = _request_for_row(row)
+        raw_history = await _read_jsonl(self._artifact_gateway, row.raw_events_ref)
+        normalized_history = await _read_jsonl(
+            self._artifact_gateway, row.normalized_events_ref
+        )
+        raw_history.extend(redact_raw_events([payload]))
+        normalized_history.extend(redact_raw_events([normalized]))
+        raw_ref = await self._artifact_gateway.write_text(
+            request=request,
+            name=f"runtime.omnigent.embedded.sse.raw/{sequence}.jsonl",
+            payload=_jsonl(raw_history),
+            link_type="runtime.omnigent.sse.raw",
+            content_type="application/x-ndjson",
+        )
+        normalized_ref = await self._artifact_gateway.write_text(
+            request=request,
+            name=f"runtime.omnigent.embedded.sse.normalized/{sequence}.jsonl",
+            payload=_jsonl(normalized_history),
+            link_type="runtime.omnigent.sse.normalized",
+            content_type="application/x-ndjson",
+        )
+        await self._run_store.attach_active_journal_refs(
+            row.bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref
+        )
+        return raw_ref, normalized_ref
 
     def _require_embedded_mode(self) -> None:
         if self._config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
@@ -904,6 +1198,69 @@ def _request_for_row(row: Any) -> AgentExecutionRequest:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _embedded_control_capabilities(
+    *, terminal: bool, disconnected: bool, host_capabilities: Any
+) -> dict[str, bool]:
+    host = host_capabilities if isinstance(host_capabilities, dict) else {}
+    live = not terminal and not disconnected
+    return {
+        "sendMessage": live,
+        "resolveElicitation": live,
+        "stop": live,
+        "interrupt": live and bool(host.get("interrupt")),
+        "harvest": live,
+        "clearSession": False,
+        "newSession": True,
+        "terminalCleanup": terminal,
+    }
+
+
+def _stable_payload_digest(payload: dict[str, Any]) -> str:
+    import hashlib
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+def _bounded_request_summary(payload: dict[str, Any]) -> str:
+    event_type = _clean(payload.get("type"))[:96] or "message"
+    data = payload.get("data")
+    text = _clean(data.get("text")) if isinstance(data, dict) else ""
+    return f"{event_type}: {text[:256]}" if text else event_type
+
+
+def _jsonl(rows: list[dict[str, Any]]) -> str:
+    return "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
+
+
+async def _read_jsonl(
+    gateway: OmnigentArtifactGateway, artifact_ref: str | None
+) -> list[dict[str, Any]]:
+    if not artifact_ref:
+        return []
+    try:
+        content = await gateway.read_text(artifact_ref)
+    except Exception as exc:
+        raise OmnigentBridgeError(
+            "Unable to extend embedded event journal",
+            failure_class="system_error", status_code=500,
+            code="omnigent_embedded_required_evidence_unavailable",
+        ) from exc
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in content.splitlines():
+            if line.strip():
+                value = json.loads(line)
+                if isinstance(value, dict):
+                    rows.append(value)
+    except (TypeError, ValueError) as exc:
+        raise OmnigentBridgeError(
+            "Embedded event journal is malformed",
+            failure_class="system_error", status_code=500,
+            code="omnigent_embedded_required_evidence_unavailable",
+        ) from exc
+    return rows
 
 
 def _supports_codex(capabilities: Any) -> bool:

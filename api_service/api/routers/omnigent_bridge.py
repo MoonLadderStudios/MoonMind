@@ -1205,6 +1205,15 @@ async def post_omnigent_session_event(
             return await control_facade.stop_session(session_id)
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
+            if payload.type == "harvest_session":
+                return await embedded_facade.harvest_session(session_id)
+            if payload.type in {"clear_session", "reset_session"}:
+                raise OmnigentBridgeError(
+                    "Embedded clear/reset requires a new session and idempotency key.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code="omnigent_embedded_new_session_required",
+                )
             if payload.type == "interrupt":
                 raise OmnigentBridgeError(
                     "Embedded interrupt is not supported by the pinned host "

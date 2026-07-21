@@ -666,6 +666,16 @@ class OmnigentBridgeSessionStore:
                         "hostCleanupMode",
                         "stateResourcesCleaned",
                         "hostLeaseReleased",
+                        "actor",
+                        "controlType",
+                        "controlOutcome",
+                        "controlId",
+                        "controlIdempotencyKey",
+                        "expectedSessionId",
+                        "expectedHostId",
+                        "expectedRunnerId",
+                        "expectedTurnState",
+                        "sourceMode",
                     }
                 }
             journal.append(entry)
@@ -1268,6 +1278,34 @@ class OmnigentBridgeSessionStore:
             row = result.scalar_one()
             row.raw_events_ref = raw_ref
             row.normalized_events_ref = normalized_ref
+            await session.commit()
+
+    async def attach_capture_evidence(
+        self,
+        bridge_session_id: str,
+        *,
+        capture_manifest_ref: str,
+        resource_projection_ref: str,
+        evidence_completeness: str,
+    ) -> None:
+        """Attach MoonMind-owned embedded harvest evidence without terminalizing."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            row.capture_manifest_ref = str(capture_manifest_ref)[:1024]
+            refs = dict(row.terminal_refs or {})
+            refs.update(
+                {
+                    "captureManifestRef": str(capture_manifest_ref)[:1024],
+                    "resourceProjectionRef": str(resource_projection_ref)[:1024],
+                    "evidenceCompleteness": str(evidence_completeness)[:64],
+                }
+            )
+            row.terminal_refs = refs
             await session.commit()
 
     async def _get(
