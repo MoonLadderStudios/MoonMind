@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.utils.logging import redact_sensitive_payload
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
 # first-message idempotency state machine onto it from the superseded mapping.
@@ -249,6 +250,38 @@ class OmnigentBridgeSessionStore:
 
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
+
+    async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
+        """Return bounded, non-secret readiness for active embedded host leases."""
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentOAuthHostLeaseRecord)
+                .where(
+                    OmnigentOAuthHostLeaseRecord.status.in_(
+                        {"starting", "ready", "assigned", "draining"}
+                    ),
+                    OmnigentOAuthHostLeaseRecord.expires_at > now,
+                    OmnigentOAuthHostLeaseRecord.omnigent_host_id.is_not(None),
+                )
+                .order_by(OmnigentOAuthHostLeaseRecord.acquired_at)
+                .limit(250)
+            )
+            return [
+                {
+                    "id": row.omnigent_host_id,
+                    "status": row.host_readiness or row.status,
+                    "ready": (
+                        row.disconnected_at is None
+                        and (row.host_readiness or row.status) in {"ready", "assigned"}
+                    ),
+                    "capabilities": dict(row.host_capabilities_json or {}),
+                    "disconnected": row.disconnected_at is not None,
+                }
+                for row in result.scalars().all()
+            ]
 
     async def record_embedded_host_lifecycle(
         self,
@@ -1359,11 +1392,14 @@ class OmnigentBridgeSessionStore:
                     row, lifecycle_state, code=f"terminal_{row.status}"
                 )
             if terminal_refs:
-                row.terminal_refs = terminal_refs
+                safe_terminal_refs = redact_sensitive_payload(terminal_refs)
+                if not isinstance(safe_terminal_refs, dict):
+                    raise OmnigentIdempotencyError("invalid terminal evidence payload")
+                row.terminal_refs = safe_terminal_refs
                 # Keep the first-class evidence ref columns in sync with the
                 # capture bundle instead of leaving them NULL for post-migration
                 # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
-                for column, value in _canonical_ref_columns(terminal_refs).items():
+                for column, value in _canonical_ref_columns(safe_terminal_refs).items():
                     setattr(row, column, value)
             if events:
                 # Replace only provider events. Lifecycle rows are independent
@@ -1488,11 +1524,16 @@ class OmnigentBridgeSessionStore:
                 )
             )
             existing = set(existing_result.scalars().all())
-            pending = [
-                (event, dedup_key)
-                for event, dedup_key in zip(events, dedup_keys, strict=True)
-                if dedup_key not in existing
-            ]
+            # A reconnect can replay the same provider frame more than once in
+            # a single received batch.  Deduplicate both against committed rows
+            # and earlier entries in this batch before assigning sequences.
+            seen = set(existing)
+            pending: list[tuple[dict[str, Any], str]] = []
+            for event, dedup_key in zip(events, dedup_keys, strict=True):
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                pending.append((event, dedup_key))
             if not pending:
                 return []
             max_sequence_result = await session.execute(

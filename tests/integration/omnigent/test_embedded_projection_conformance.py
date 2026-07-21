@@ -161,6 +161,13 @@ async def test_proxy_and_embedded_events_have_equivalent_public_projections(
         proxy_terminal.first_message_state == embedded_terminal.first_message_state
     )
 
+    snapshot = await facade.get_session("embedded-session")
+    replay = [event async for event in facade.stream_events("embedded-session", after=1)]
+    assert snapshot["hostId"] == "host-1"
+    assert snapshot["terminal"] is True
+    assert [event["sequence"] for event in replay] == [2, 3, 3]
+    assert replay[-1]["type"] == "terminal"
+
 
 class _ResourceChannel:
     def __init__(self) -> None:
