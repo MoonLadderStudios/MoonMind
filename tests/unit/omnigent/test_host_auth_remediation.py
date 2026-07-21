@@ -249,6 +249,9 @@ async def test_websocket_profile_failure_close_code_matrix(
     socket = _HandshakeSocket({})
     monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
     monkeypatch.setattr(
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+    )
+    monkeypatch.setattr(
         bridge_router, "_active_host_auth_profile", AsyncMock(side_effect=failure)
     )
     await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
@@ -298,6 +301,9 @@ async def test_http_websocket_profile_failure_retryability_matrix(
 
     socket = _HandshakeSocket({})
     monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+    )
     await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
     assert socket.closes == [(ws_code, failure.code)]
 
@@ -314,6 +320,9 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
     facade = SimpleNamespace(disconnect_host=AsyncMock())
     channel = SimpleNamespace()
     monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+    )
     monkeypatch.setattr(
         bridge_router, "_active_host_auth_profile", AsyncMock(return_value=profile)
     )
@@ -476,6 +485,9 @@ async def test_pinned_upstream_http_websocket_rejection_parity(
 
     socket = _HandshakeSocket(headers)
     monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
+    monkeypatch.setattr(
+        bridge_router, "_require_embedded_mode", AsyncMock(return_value=_embedded_config())
+    )
     await bridge_router.embedded_omnigent_host_tunnel(socket, "untrusted-host")
     assert socket.closes == [(ws_code, http_code)]
 

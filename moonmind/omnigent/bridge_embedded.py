@@ -146,7 +146,7 @@ class EmbeddedHostAuthContext:
     protocol_profile: str
     runner_id: str
     credential_generation: int
-    credential_profile_id: str = "bootstrap-local"
+    credential_profile_id: str | None = None
 
 
 def verify_embedded_host_auth(
