@@ -1407,13 +1407,29 @@ async def test_run_omnigent_execution_fails_closed_when_posting_state_cannot_rec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "durable_state",
+    [
+        "not_prepared",
+        "prepared",
+        "posting",
+        "response_before_posted_persistence",
+        "posted",
+        "terminal",
+    ],
+)
 async def test_run_omnigent_execution_digest_mismatch_is_non_retryable_with_diagnostics(
     monkeypatch,
     tmp_path,
+    durable_state: str,
 ) -> None:
     class Row:
         omnigent_session_id = "persisted-session"
-        first_message_state = "prepared"
+        first_message_state = (
+            "posting"
+            if durable_state == "response_before_posted_persistence"
+            else durable_state
+        )
 
     class Store:
         async def get_or_create(self, **_: object) -> Row:
@@ -2284,3 +2300,14 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     }
     assert normalized_events[-1]["type"] == "response.completed"
     assert normalized_events[-1]["normalizedStatus"] == "completed"
+
+    # Scan the actual durable artifact bodies emitted by the execution, rather
+    # than reconstructed projections. This includes the raw and normalized
+    # journals, diagnostics, manifest, snapshots, and external-state evidence.
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(tmp_path.rglob("*"))
+        if path.is_file()
+    )
+    assert "sk-should-not-persist" not in persisted
+    assert "[REDACTED]" in persisted

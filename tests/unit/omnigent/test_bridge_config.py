@@ -233,13 +233,23 @@ def test_host_protocol_mode_accepts_embedded() -> None:
         "selectedMode": HOST_PROTOCOL_MODE_EMBEDDED,
         "protocolProfile": "omnigent.runner_tunnel.7da32637",
         "upstreamComponentVersion": "7da32637",
-        "conformanceState": "ready",
+        "conformanceState": "gated",
         "evidenceRefs": {
             "proxyConformance": "artifact://omnigent/proxy-conformance",
             "liveSmoke": "artifact://omnigent/live-smoke",
             "hostAuthConformance": "artifact://omnigent/host-auth",
         },
+        "evidenceValidation": {},
+        "gateReason": "validated_embedded_evidence_required",
     }
+
+    validation = {
+        key: {"status": "passed"}
+        for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+    }
+    assert (
+        config.readiness(evidence_validation=validation)["conformanceState"] == "ready"
+    )
 
 
 def test_proxy_readiness_exposes_supported_fallback_without_embedded_evidence(

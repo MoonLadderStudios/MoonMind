@@ -1322,12 +1322,18 @@ const InterventionCapabilitiesSchema = z
     clearSession: z.boolean().default(false),
     interruptTurn: z.boolean().default(false),
     cancelSession: z.boolean().default(false),
+    resolveElicitation: z.boolean().default(false),
+    harvestResources: z.boolean().default(false),
+    terminalCleanup: z.boolean().default(false),
   })
   .default({
     sendFollowUp: false,
     clearSession: false,
     interruptTurn: false,
     cancelSession: false,
+    resolveElicitation: false,
+    harvestResources: false,
+    terminalCleanup: false,
   });
 
 const SessionSnapshotSchema = z
@@ -2573,6 +2579,8 @@ type BridgeTerminalEnvelope = {
   rawEventsRef?: string | null | undefined;
   normalizedEventsRef?: string | null | undefined;
   externalStateRef?: string | null | undefined;
+  cleanupState?: string | null | undefined;
+  leaseReleaseState?: string | null | undefined;
   evidenceIncompleteReason?: string | null | undefined;
 };
 
@@ -2596,6 +2604,10 @@ function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelo
       {links.map(({ label, href }) => <a key={label} className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
     </div> : null}
     {envelope.evidenceIncompleteReason ? <p className="small">Evidence incomplete: {envelope.evidenceIncompleteReason}</p> : null}
+    {envelope.cleanupState || envelope.leaseReleaseState ? <p className="small">{[
+      envelope.cleanupState ? `Cleanup: ${formatStatusLabel(envelope.cleanupState)}` : null,
+      envelope.leaseReleaseState ? `Lease release: ${formatStatusLabel(envelope.leaseReleaseState)}` : null,
+    ].filter(Boolean).join(' — ')}</p> : null}
     {envelope.failureClass || envelope.failureCode ? <p className="small">Failure: {[envelope.failureClass, envelope.failureCode].filter(Boolean).join(' — ')}</p> : null}
   </section>;
 }
@@ -5973,6 +5985,7 @@ function BridgeSessionLogsPanel({
   const canInterrupt = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.interruptTurn && !isTerminal);
   const canClear = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
   const canCancel = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
+  const canHarvest = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.harvestResources && !isTerminal);
   const canResolveElicitation = Boolean(
     actionsEnabled && projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
   );
@@ -6115,7 +6128,7 @@ function BridgeSessionLogsPanel({
           </div>
         )}
       </div>
-      {(canSend || canInterrupt || canClear || canCancel || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
+      {(canSend || canInterrupt || canClear || canCancel || canHarvest || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
         <section className="stack chat-session-controls" aria-label="Bridge session controls">
           <h3>Session Controls</h3>
           {controlError ? <div className="notice error">{controlError}</div> : null}
@@ -6136,6 +6149,7 @@ function BridgeSessionLogsPanel({
             </section>
           ))}
           {canInterrupt ? <button type="button" className="secondary" onClick={() => void interrupt()} disabled={controlBusy}>Interrupt turn</button> : null}
+          {canHarvest ? <button type="button" className="secondary" onClick={() => void runControl({ type: 'harvest_session', clientEventKey: crypto.randomUUID() }).then(() => resourcesQuery.refetch())} disabled={controlBusy}>Harvest evidence</button> : null}
           {canClear ? <button type="button" className="secondary" onClick={() => { if (window.confirm('Clear this bridge session?')) void runControl({ type: 'clear_session' }); }} disabled={controlBusy}>Clear session</button> : null}
           {canCancel ? <button type="button" className="danger" onClick={() => { if (window.confirm('Cancel this bridge session?')) void runControl({ type: 'session.cancel' }); }} disabled={controlBusy}>Cancel session</button> : null}
         </section>

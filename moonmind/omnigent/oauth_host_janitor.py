@@ -49,6 +49,14 @@ class OmnigentOAuthHostJanitor:
             else set()
         )
         now = datetime.now(UTC)
+        reconciliation_required = (
+            await self._run_store.embedded_reconciliation_host_lease_refs(
+                abandoned_before=now - self._heartbeat_timeout
+            )
+            if self._run_store is not None
+            and hasattr(self._run_store, "embedded_reconciliation_host_lease_refs")
+            else {}
+        )
         known_containers = {
             lease.container_name: lease for lease in leases if lease.container_name
         }
@@ -58,11 +66,12 @@ class OmnigentOAuthHostJanitor:
             expired = lease.expires_at <= now
             stale = lease.last_heartbeat_at <= now - self._heartbeat_timeout
             terminal_cleanup = lease.lease_id in cleanup_required
+            reconciliation_action = reconciliation_required.get(lease.lease_id)
             missing = bool(
                 lease.container_name
                 and not await self._runtime.container_exists(lease.container_name)
             )
-            if not force and not expired and not missing and not stale and not terminal_cleanup:
+            if not force and not expired and not missing and not stale and not terminal_cleanup and not reconciliation_action:
                 continue
             binding = await self._repository.validate_binding(lease.binding_ref)
             if lease.omnigent_session_id:
@@ -79,9 +88,32 @@ class OmnigentOAuthHostJanitor:
                             "errorCode": type(exc).__name__,
                         }
                     )
-            if not missing:
-                await self._runtime.stop_host(binding=binding, host_lease=lease)
-            await self._repository.mark_host_lease_stopped(lease.lease_id)
+            try:
+                if not missing:
+                    await self._runtime.stop_host(binding=binding, host_lease=lease)
+                await self._repository.mark_host_lease_stopped(lease.lease_id)
+            except Exception as exc:
+                if (
+                    self._run_store is not None
+                    and terminal_cleanup
+                    and hasattr(self._run_store, "record_terminal_cleanup")
+                ):
+                    await self._run_store.record_terminal_cleanup(
+                        host_lease_ref=lease.lease_id,
+                        completed=False,
+                        code=type(exc).__name__,
+                        summary=str(exc),
+                    )
+                raise
+            if (
+                self._run_store is not None
+                and terminal_cleanup
+                and hasattr(self._run_store, "record_terminal_cleanup")
+            ):
+                await self._run_store.record_terminal_cleanup(
+                    host_lease_ref=lease.lease_id,
+                    completed=True,
+                )
             actions.append(
                 {
                     "hostLeaseRef": lease.lease_id,
@@ -91,9 +123,9 @@ class OmnigentOAuthHostJanitor:
                         "stale_heartbeat_cleanup"
                         if stale
                         else (
-                            "runner_exit_cleanup"
-                            if terminal_cleanup
-                            else "missing_container_repair"
+                            "runner_exit_cleanup" if terminal_cleanup else (
+                                reconciliation_action or "missing_container_repair"
+                            )
                         )
                     ),
                 }
