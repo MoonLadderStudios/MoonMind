@@ -7,6 +7,7 @@ workflow ownership, and bridge failure classes map onto HTTP status codes.
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -50,6 +51,21 @@ _ELICITATION_RESOLVE_PATH = (
 _UNSET = object()
 
 
+@pytest.fixture(autouse=True)
+def _validated_embedded_evidence(monkeypatch):
+    """Existing embedded-route tests exercise behavior beyond the #3425 gate."""
+
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+
+    async def resolved(_config):
+        return {
+            key: {"status": "passed"}
+            for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+        }
+
+    monkeypatch.setattr(module, "_resolve_embedded_evidence", resolved)
+
+
 def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
@@ -64,6 +80,43 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert response.json()["selectedMode"] == "upstream_omnigent_server_proxy"
     assert response.json()["protocolProfile"] == "omnigent.server.v1"
     assert response.json()["conformanceState"] == "ready"
+
+
+def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) -> None:
+    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
+    config = parse_bridge_config(
+        {
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "arbitrary",
+                    "liveSmokeEvidenceRef": "missing",
+                    "hostAuthConformanceEvidenceRef": "unauthorized",
+                }
+            },
+        }
+    )
+
+    async def invalid(_config):
+        return {
+            key: {
+                "status": "failed",
+                "reason": "evidence_unavailable_or_invalid",
+            }
+            for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
+        }
+
+    monkeypatch.setattr(module, "_resolve_embedded_evidence", invalid)
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_require_bridge_enabled] = lambda: config
+
+    response = TestClient(app).get(_READINESS_PATH)
+
+    assert response.status_code == 200
+    assert response.json()["conformanceState"] == "gated"
+    assert response.json()["gateReason"] == "validated_embedded_evidence_required"
 
 
 def _mock_user():
