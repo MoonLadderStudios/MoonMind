@@ -10,6 +10,7 @@ and persists them into the canonical bridge session store.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -53,7 +54,10 @@ from moonmind.omnigent.embedded_host_channel import (
     EmbeddedHostChannelError,
     EmbeddedHostChannelRegistry,
     embedded_host_channels,
+    derive_runner_binding_token,
 )
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
+from moonmind.omnigent.settings import resolved_host_runner_token
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 MAX_EMBEDDED_CAPABILITIES = 128
@@ -127,7 +131,7 @@ class EmbeddedHostHeartbeatRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    status: str = "running"
+    status: str | None = None
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("capabilities")
@@ -249,11 +253,13 @@ class OmnigentEmbeddedHostProtocolFacade:
         config: OmnigentBridgeConfig,
         host_channels: EmbeddedHostChannelRegistry = embedded_host_channels,
         artifact_gateway: OmnigentArtifactGateway | None = None,
+        runner_binding_root_secret: str | None = None,
     ) -> None:
         self._run_store = run_store
         self._config = config
         self._host_channels = host_channels
         self._artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
+        self._runner_binding_root_secret = runner_binding_root_secret
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
@@ -266,7 +272,45 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="system_error", status_code=409,
             )
         if row.omnigent_runner_id:
-            return {"runnerId": row.omnigent_runner_id, "reused": True}
+            if self._host_channels.is_runner_ready(row.omnigent_runner_id):
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key,
+                    state="runner_tunnel_ready",
+                    code="live_tunnel_verified",
+                )
+                return {"runnerId": row.omnigent_runner_id, "reused": True}
+            wait_ready = getattr(self._host_channels, "wait_runner_ready", None)
+            if wait_ready is not None and await wait_ready(row.omnigent_runner_id):
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key, state="runner_tunnel_ready",
+                    code="bounded_runner_reconnect_verified",
+                )
+                return {"runnerId": row.omnigent_runner_id, "reused": True}
+            await self._run_store.mark_embedded_runner_state(
+                idempotency_key,
+                state="stale",
+                code="durable_runner_tunnel_unavailable",
+            )
+            stop_runner = getattr(self._host_channels, "stop_runner", None)
+            if stop_runner is not None:
+                try:
+                    await stop_runner(
+                        host_id=row.omnigent_host_id, runner_id=row.omnigent_runner_id
+                    )
+                except (EmbeddedHostChannelError, TimeoutError):
+                    pass
+                else:
+                    await self._run_store.prepare_embedded_runner_replacement(
+                        idempotency_key, runner_id=row.omnigent_runner_id
+                    )
+                    return await self.dispatch_runner(idempotency_key=idempotency_key)
+            raise OmnigentBridgeError(
+                "Durable embedded runner assignment did not reconnect before the "
+                "bounded deadline; it was marked stale for safe replacement",
+                failure_class="integration_error",
+                status_code=503,
+                code="embedded_runner_stale",
+            )
         workspace = _clean(row.workspace)
         if not workspace:
             raise OmnigentBridgeError(
@@ -274,20 +318,84 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="user_error", status_code=422,
             )
         try:
-            await self._run_store.begin_embedded_runner_launch(
-                idempotency_key, host_id=row.omnigent_host_id
+            credential_generation = int(row.credential_generation or 0)
+            prior_launch = dict(
+                (row.metadata_ or {}).get("embedded_runner_launch") or {}
             )
-        except OmnigentIdempotencyError as exc:
+            launch_generation = int(prior_launch.get("launchGeneration") or 0)
+            if prior_launch.get("state") not in {"pending", "launched"}:
+                launch_generation += 1
+            launch_generation = max(launch_generation, 1)
+            binding_generation = credential_generation * 1_000_000 + launch_generation
+            binding_token = derive_runner_binding_token(
+                self._runner_binding_root_secret or resolved_host_runner_token(),
+                host_id=row.omnigent_host_id,
+                session_id=row.omnigent_session_id, generation=binding_generation,
+            )
+            expected_runner_id = OmnigentHostAuthAdapter(
+                allowed_tokens=frozenset({binding_token})
+            ).runner_id_for_binding_token(binding_token)
+            reserved = await self._run_store.begin_embedded_runner_launch(
+                idempotency_key, host_id=row.omnigent_host_id,
+                runner_id=expected_runner_id, generation=binding_generation,
+                credential_generation=credential_generation,
+                launch_generation=launch_generation,
+            )
+        except (OmnigentIdempotencyError, EmbeddedHostChannelError) as exc:
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         try:
+            lifecycle_state = (
+                (reserved.metadata_ or {}).get("embedded_runner_lifecycle") or {}
+            ).get("state")
+            # A retry after the launch command crossed the host boundary must
+            # first reconcile the deterministic runner identity.  A freshly
+            # authenticated tunnel is authoritative evidence that the command
+            # succeeded, so resending it would only create a duplicate launch.
+            if lifecycle_state in {"launch_sent", "launch_acknowledged"}:
+                wait_ready = getattr(self._host_channels, "wait_runner_ready", None)
+                if wait_ready is not None and await wait_ready(expected_runner_id):
+                    if lifecycle_state == "launch_sent":
+                        await self._run_store.mark_embedded_runner_state(
+                            idempotency_key,
+                            state="launch_acknowledged",
+                            code="runner_tunnel_reconciled_launch_acknowledgement",
+                        )
+                    await self._run_store.bind_embedded_runner(
+                        idempotency_key,
+                        host_id=row.omnigent_host_id,
+                        runner_id=expected_runner_id,
+                    )
+                    return {"runnerId": expected_runner_id, "reused": True}
+                raise OmnigentBridgeError(
+                    "Embedded runner launch already crossed the host boundary; "
+                    "the reserved runner did not reconnect before the bounded deadline",
+                    failure_class="integration_error",
+                    status_code=503,
+                    code="embedded_runner_launch_unconfirmed",
+                )
+            if lifecycle_state == "launch_reserved":
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key,
+                    state="launch_sent",
+                    code="host_launch_command_sending",
+                )
             runner_id = await self._host_channels.launch_runner(
                 host_id=row.omnigent_host_id,
                 workspace=workspace,
                 session_id=row.omnigent_session_id,
                 harness="codex-native",
+                binding_token=binding_token,
             )
+            if runner_id != expected_runner_id:
+                raise EmbeddedHostChannelError("host returned a stale launch generation")
+            if lifecycle_state != "launch_acknowledged":
+                await self._run_store.mark_embedded_runner_state(
+                    idempotency_key,
+                    state="launch_acknowledged",
+                    code="host_launch_acknowledged",
+                )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
             await self._run_store.fail_embedded_runner_launch(
                 idempotency_key, host_id=row.omnigent_host_id
@@ -304,6 +412,30 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         return {"runnerId": runner_id, "reused": False}
+
+    async def record_runner_tunnel_ready(self, *, runner_id: str) -> None:
+        row = await self._run_store.get_session_by_runner_id(runner_id)
+        if row is None:
+            raise EmbeddedHostChannelError("runner has no durable session binding")
+        await self._run_store.mark_embedded_runner_state(
+            row.idempotency_key,
+            state="runner_tunnel_ready",
+            code="authenticated_runner_handshake",
+        )
+
+    async def record_runner_tunnel_disconnected(self, *, runner_id: str) -> None:
+        row = await self._run_store.get_session_by_runner_id(runner_id)
+        if row is not None and row.status not in {
+            "completed",
+            "failed",
+            "canceled",
+            "timed_out",
+        }:
+            await self._run_store.mark_embedded_runner_state(
+                row.idempotency_key,
+                state="runner_tunnel_waiting",
+                code="runner_tunnel_disconnected",
+            )
 
     async def record_runner_exit(self, *, runner_id: str, error: str) -> None:
         """Record a stock host's authoritative runner process failure."""
@@ -341,6 +473,11 @@ class OmnigentEmbeddedHostProtocolFacade:
         self._reject_ambiguous_retry(prior_outcome)
         await self._append_control(row, "stop", control_key, "requested", actor=actor)
         await self._append_control(row, "stop", control_key, "accepted", actor=actor)
+        await self._run_store.mark_embedded_runner_state(
+            row.idempotency_key,
+            state="draining",
+            code="runner_stop_requested",
+        )
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
@@ -356,6 +493,11 @@ class OmnigentEmbeddedHostProtocolFacade:
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
         await self._append_control(row, "stop", control_key, "completed", actor=actor)
+        await self._run_store.mark_embedded_runner_state(
+            row.idempotency_key,
+            state="stopped",
+            code="runner_stop_confirmed",
+        )
         await self._run_store.record_lifecycle_event(
             row.idempotency_key,
             event_type="terminal",
@@ -410,6 +552,38 @@ class OmnigentEmbeddedHostProtocolFacade:
             ) from exc
         await self._append_control(row, "message", control_key, "completed", actor=actor)
         return result
+
+    async def reconcile_first_message(self, *, session_id: str) -> dict[str, Any]:
+        """Resolve response-before-persist from the runner's session evidence."""
+
+        from moonmind.omnigent.execute import _snapshot_contains_first_message_marker
+
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None or not _clean(row.omnigent_runner_id):
+            raise OmnigentBridgeError(
+                "Embedded first-message reconciliation requires a durable runner",
+                failure_class="integration_error", status_code=409,
+            )
+        if row.first_message_state != "posting":
+            return {"reconciled": row.first_message_state == "posted"}
+        snapshot = await self._host_channels.request_runner(
+            runner_id=row.omnigent_runner_id,
+            method="GET",
+            path=f"/v1/sessions/{quote(session_id, safe='')}",
+        )
+        if not _snapshot_contains_first_message_marker(
+            snapshot,
+            digest=str(row.first_message_digest or ""),
+            marker=str(row.first_message_marker or ""),
+        ):
+            raise OmnigentBridgeError(
+                "Runner session does not contain durable first-message evidence",
+                failure_class="integration_error", status_code=503,
+                code="omnigent_first_message_reconcile_failed",
+            )
+        response = snapshot.get("firstMessageResponse") or {}
+        await self._run_store.mark_posted(row.idempotency_key, response=response)
+        return {"reconciled": True, **response}
 
     async def get_resource(
         self, operation: str, session_id: str, value: str | None = None
@@ -839,6 +1013,179 @@ class OmnigentEmbeddedHostProtocolFacade:
 
         return await self._run_store.get_session_owner(session_id)
 
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        """Expose bounded readiness without lease, profile, or credential data."""
+        self._require_embedded_mode()
+        hosts = await self._run_store.list_embedded_host_readiness()
+        if not hosts:
+            raise OmnigentBridgeError(
+                "No compatible embedded Omnigent host capability is available",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_capability_unavailable",
+            )
+        return hosts
+
+    async def list_agents(self) -> list[dict[str, Any]]:
+        """Derive the pinned Codex-first catalog from registered host evidence."""
+        hosts = await self.list_hosts()
+        compatible = [
+            host
+            for host in hosts
+            if host.get("ready") and _supports_codex(host.get("capabilities"))
+        ]
+        if not compatible:
+            raise OmnigentBridgeError(
+                "No ready embedded host advertises the supported Codex harness",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_capability_unavailable",
+            )
+        return [
+            {
+                "id": "codex-native",
+                "name": "Codex",
+                "harness": "codex-native",
+                "ready": True,
+                "capabilities": {"embedded": True},
+            }
+        ]
+
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        """Build an Omnigent-shaped snapshot exclusively from durable evidence."""
+        self._require_embedded_mode()
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error", status_code=404,
+                code="omnigent_bridge_session_unknown",
+            )
+        metadata = dict(row.metadata_ or {})
+        terminal = row.status in {"completed", "failed", "canceled", "timed_out"}
+        hosts = await self._run_store.list_embedded_host_readiness()
+        live_host = next(
+            (host for host in hosts if host.get("id") == row.omnigent_host_id), None
+        )
+        disconnected = bool(row.omnigent_host_id) and (
+            live_host is None or bool(live_host.get("disconnected"))
+        )
+        return {
+            "id": session_id,
+            "status": row.status,
+            "agentId": row.omnigent_agent_id or "codex-native",
+            "hostId": row.omnigent_host_id,
+            "runnerId": row.omnigent_runner_id,
+            "firstMessageState": row.first_message_state,
+            "capabilities": (
+                metadata.get("interventionCapabilities")
+                or metadata.get("capabilities")
+                or {}
+            ),
+            "terminal": terminal,
+            "terminalEvidenceAvailable": bool(
+                row.terminal_refs or row.diagnostics_ref or row.final_snapshot_ref
+            ),
+            "disconnected": disconnected,
+            "degraded": disconnected and not terminal,
+            "summary": (
+                str((row.terminal_refs or {}).get("summary") or "")[:2000] or None
+            ),
+            "diagnosticsRef": row.diagnostics_ref,
+            "moonmind": {
+                "workflowId": row.moonmind_workflow_id,
+                "agentRunId": row.moonmind_agent_run_id,
+                "idempotencyKey": row.idempotency_key,
+                "bridgeSessionId": row.bridge_session_id,
+                "bridgeLocal": True,
+                "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+                "protocolProfile": (
+                    self._config.host_connection.embedded.protocol_profile
+                ),
+            },
+        }
+
+    async def stop_session(self, session_id: str) -> dict[str, Any]:
+        """Stop the exact bound runner through the common facade contract."""
+
+        return await self.stop_runner(session_id=session_id)
+
+    async def attach_session(
+        self, *, session_id: str, binding: BridgePrincipalBinding
+    ) -> dict[str, Any]:
+        """Reconcile only the exact already-bound embedded session."""
+        row = await self._run_store.get_existing(binding.idempotency_key)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No durable MoonMind binding exists for this idempotency key",
+                failure_class="user_error", status_code=404,
+                code="omnigent_bridge_session_unknown",
+            )
+        _assert_row_owner(row, binding)
+        if _clean(row.omnigent_session_id) != _clean(session_id):
+            raise OmnigentBridgeError(
+                "The durable binding is attached to another embedded session",
+                failure_class="user_error", status_code=409,
+                code="omnigent_bridge_session_conflict",
+            )
+        return await self.get_session(session_id)
+
+    async def delete_session(self, session_id: str) -> dict[str, Any]:
+        """Reject provider-style deletion while preserving durable evidence."""
+        await self.get_session(session_id)
+        raise OmnigentBridgeError(
+            "Embedded session deletion is unavailable because MoonMind retains "
+            "bridge evidence",
+            failure_class="user_error", status_code=409,
+            code="omnigent_bridge_capability_unavailable",
+        )
+
+    async def stream_events(self, session_id: str, *, after: int = 0):
+        """Replay committed canonical events and terminal state by durable sequence."""
+        row = await self._run_store.get_session_by_provider_session_id(session_id)
+        if row is None:
+            raise OmnigentBridgeError(
+                "No Omnigent bridge session is bound to the requested session id.",
+                failure_class="user_error", status_code=404,
+                code="omnigent_bridge_session_unknown",
+            )
+        cursor = max(after, 0)
+        while True:
+            page = await self._run_store.list_event_page(
+                row.bridge_session_id, after=cursor, limit=500
+            )
+            for event in page.rows:
+                cursor = event.sequence
+                yield {
+                    "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+                    "id": event.event_id,
+                    "sequence": event.sequence,
+                    "type": event.event_type,
+                    "timestamp": event.timestamp.isoformat(),
+                    "status": event.normalized_status,
+                    "text": event.text_preview,
+                    "artifactRef": event.artifact_ref,
+                    "metadata": dict(event.metadata_ or {}),
+                }
+            refreshed = await self._run_store.get_bridge_session(row.bridge_session_id)
+            if refreshed and not page.has_more and refreshed.status in {
+                "completed", "failed", "canceled", "timed_out"
+            }:
+                yield {
+                    "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+                    "sequence": cursor,
+                    "type": "terminal",
+                    "status": refreshed.status,
+                    "terminal": True,
+                    "evidenceAvailable": bool(
+                        refreshed.terminal_refs
+                        or refreshed.diagnostics_ref
+                        or refreshed.final_snapshot_ref
+                    ),
+                }
+                return
+            await asyncio.sleep(1.0)
+
     async def create_session(
         self,
         *,
@@ -1213,6 +1560,18 @@ def _request_for_row(row: Any) -> AgentExecutionRequest:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _supports_codex(capabilities: Any) -> bool:
+    if not isinstance(capabilities, dict):
+        return False
+    values = capabilities.get("harnesses") or capabilities.get("agents") or []
+    if isinstance(values, str):
+        values = [values]
+    return any(
+        str(value).strip().lower() in {"codex", "codex-native"}
+        for value in values
+    )
 
 
 __all__ = [

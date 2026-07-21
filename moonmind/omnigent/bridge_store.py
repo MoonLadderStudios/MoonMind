@@ -49,6 +49,51 @@ SESSION_CREATED_EVENT_TYPE = "session.created"
 RESOURCE_HARVEST_COMPLETED_KEY = "resource_harvest_completed_at"
 PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
 EMBEDDED_LAUNCH_KEY = "embedded_runner_launch"
+EMBEDDED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
+EMBEDDED_LIFECYCLE_VERSION = 1
+
+EMBEDDED_RUNNER_STATES = frozenset(
+    {
+        "launch_reserved",
+        "launch_sent",
+        "launch_acknowledged",
+        "runner_identity_bound",
+        "runner_tunnel_waiting",
+        "runner_tunnel_ready",
+        "first_message_prepared",
+        "first_message_posting",
+        "first_message_posted",
+        "running",
+        "draining",
+        "stopped",
+        "failed",
+        "stale",
+    }
+)
+
+# The lifecycle journal is authority, not an observational log.  Keep the
+# transition relation explicit so retries may repeat the current state, while
+# stale activities, cross-generation callbacks, and impossible state jumps
+# fail before mutating durable evidence.
+EMBEDDED_RUNNER_TRANSITIONS: dict[str | None, frozenset[str]] = {
+    # ``runner_identity_bound`` is also a valid reconstruction entrypoint for
+    # rows created from authenticated upstream evidence during recovery.
+    None: frozenset({"launch_reserved", "runner_identity_bound", "failed"}),
+    "launch_reserved": frozenset({"launch_sent", "failed", "stale"}),
+    "launch_sent": frozenset({"launch_acknowledged", "failed", "stale"}),
+    "launch_acknowledged": frozenset({"runner_identity_bound", "failed", "stale"}),
+    "runner_identity_bound": frozenset({"runner_tunnel_waiting", "runner_tunnel_ready", "failed", "stale"}),
+    "runner_tunnel_waiting": frozenset({"runner_tunnel_ready", "first_message_prepared", "draining", "failed", "stale"}),
+    "runner_tunnel_ready": frozenset({"runner_tunnel_waiting", "first_message_prepared", "draining", "failed", "stale"}),
+    "first_message_prepared": frozenset({"first_message_posting", "runner_tunnel_waiting", "draining", "failed", "stale"}),
+    "first_message_posting": frozenset({"first_message_posted", "runner_tunnel_waiting", "draining", "failed", "stale"}),
+    "first_message_posted": frozenset({"running", "runner_tunnel_waiting", "draining", "stopped", "failed", "stale"}),
+    "running": frozenset({"runner_tunnel_waiting", "runner_tunnel_ready", "draining", "stopped", "failed", "stale"}),
+    "draining": frozenset({"stopped", "failed", "stale"}),
+    "stale": frozenset({"draining", "stopped", "failed", "launch_reserved"}),
+    "failed": frozenset({"launch_reserved"}),
+    "stopped": frozenset(),
+}
 
 BRIDGE_PROVIDER = "omnigent"
 BRIDGE_COMPATIBILITY_PROFILE = "omnigent.server.v1"
@@ -89,6 +134,65 @@ class OmnigentIdempotencyError(RuntimeError):
 
 class OmnigentDigestMismatchError(OmnigentIdempotencyError):
     """Raised when an idempotency key is reused for different first-message text."""
+
+
+def _advance_embedded_lifecycle(
+    row: OmnigentBridgeSession,
+    state: str,
+    *,
+    code: str,
+    runner_id: str | None = None,
+) -> None:
+    """Append secret-free, versioned evidence for one runner transition."""
+
+    if state not in EMBEDDED_RUNNER_STATES:
+        raise ValueError(f"unknown embedded runner lifecycle state: {state}")
+    now = datetime.now(tz=UTC).isoformat()
+    metadata = dict(row.metadata_ or {})
+    lifecycle = dict(metadata.get(EMBEDDED_LIFECYCLE_KEY) or {})
+    previous_state = lifecycle.get("state")
+    if previous_state != state and state not in EMBEDDED_RUNNER_TRANSITIONS.get(
+        previous_state, frozenset()
+    ):
+        raise OmnigentIdempotencyError(
+            f"invalid embedded runner lifecycle transition: {previous_state or 'none'} -> {state}"
+        )
+    attempt = int(lifecycle.get("attempt") or 0)
+    if state == "launch_reserved" and lifecycle.get("state") != "launch_reserved":
+        attempt += 1
+    identity = {
+        "hostId": row.omnigent_host_id,
+        "runnerId": runner_id or row.omnigent_runner_id,
+        "sessionId": row.omnigent_session_id,
+        "providerProfileId": row.provider_profile_id,
+        "providerLeaseId": row.provider_lease_id,
+        "hostBindingRef": row.host_binding_ref,
+        "hostLeaseRef": row.host_lease_ref,
+        "credentialGeneration": row.credential_generation,
+    }
+    transition = {
+        "state": state,
+        "at": now,
+        "attempt": attempt,
+        "code": code,
+        **identity,
+    }
+    timeline = list(lifecycle.get("timeline") or [])
+    if not timeline or any(timeline[-1].get(k) != transition.get(k) for k in ("state", "code")):
+        timeline.append(transition)
+    lifecycle.update(
+        {
+            "version": EMBEDDED_LIFECYCLE_VERSION,
+            "state": state,
+            "updatedAt": now,
+            "attempt": attempt,
+            "reconciliationCode": code,
+            "timeline": timeline[-64:],
+            **identity,
+        }
+    )
+    metadata[EMBEDDED_LIFECYCLE_KEY] = lifecycle
+    row.metadata_ = metadata
 
 
 class BridgeProjectionAmbiguousError(RuntimeError):
@@ -146,6 +250,38 @@ class OmnigentBridgeSessionStore:
 
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
+
+    async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
+        """Return bounded, non-secret readiness for active embedded host leases."""
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        now = datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentOAuthHostLeaseRecord)
+                .where(
+                    OmnigentOAuthHostLeaseRecord.status.in_(
+                        {"starting", "ready", "assigned", "draining"}
+                    ),
+                    OmnigentOAuthHostLeaseRecord.expires_at > now,
+                    OmnigentOAuthHostLeaseRecord.omnigent_host_id.is_not(None),
+                )
+                .order_by(OmnigentOAuthHostLeaseRecord.acquired_at)
+                .limit(250)
+            )
+            return [
+                {
+                    "id": row.omnigent_host_id,
+                    "status": row.host_readiness or row.status,
+                    "ready": (
+                        row.disconnected_at is None
+                        and (row.host_readiness or row.status) in {"ready", "assigned"}
+                    ),
+                    "capabilities": dict(row.host_capabilities_json or {}),
+                    "disconnected": row.disconnected_at is not None,
+                }
+                for row in result.scalars().all()
+            ]
 
     async def record_embedded_host_lifecycle(
         self,
@@ -287,6 +423,60 @@ class OmnigentBridgeSessionStore:
                     if lease is not None and lease.disconnected_at else None
                 ),
             }
+    async def embedded_reconciliation_host_lease_refs(
+        self, *, abandoned_before: datetime
+    ) -> dict[str, str]:
+        """Return durable embedded generations that require ordered host cleanup.
+
+        The janitor deliberately consumes bridge authority instead of socket
+        registries: process-local channels disappear on restart.  Stopping the
+        credential-consuming host before releasing its lease is the safe common
+        repair for every generation that can no longer be proven recoverable.
+        """
+        from api_service.db.models import ManagedAgentProviderProfile
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(
+                    OmnigentBridgeSession.host_lease_ref,
+                    OmnigentBridgeSession.metadata_,
+                    OmnigentBridgeSession.credential_generation,
+                    ManagedAgentProviderProfile.credential_generation,
+                )
+                .outerjoin(
+                    ManagedAgentProviderProfile,
+                    ManagedAgentProviderProfile.profile_id
+                    == OmnigentBridgeSession.provider_profile_id,
+                )
+                .where(
+                    OmnigentBridgeSession.omnigent_endpoint_ref == "embedded",
+                    OmnigentBridgeSession.host_lease_ref.is_not(None),
+                    OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES),
+                )
+            )
+            required: dict[str, str] = {}
+            for lease_ref, metadata, bound_generation, current_generation in result.all():
+                lifecycle = dict((metadata or {}).get(EMBEDDED_LIFECYCLE_KEY) or {})
+                state = str(lifecycle.get("state") or "")
+                updated_raw = lifecycle.get("updatedAt")
+                try:
+                    updated_at = datetime.fromisoformat(str(updated_raw))
+                except (TypeError, ValueError):
+                    updated_at = None
+                if (
+                    current_generation is not None
+                    and bound_generation != current_generation
+                ):
+                    required[str(lease_ref)] = "credential_generation_cleanup"
+                elif state == "launch_acknowledged" and updated_at and updated_at <= abandoned_before:
+                    required[str(lease_ref)] = "acknowledgement_without_binding_cleanup"
+                elif state in {"runner_identity_bound", "runner_tunnel_waiting"} and updated_at and updated_at <= abandoned_before:
+                    required[str(lease_ref)] = "binding_without_tunnel_cleanup"
+                elif state == "launch_reserved" and updated_at and updated_at <= abandoned_before:
+                    required[str(lease_ref)] = "abandoned_launch_cleanup"
+                elif state in {"stopped", "failed", "stale"}:
+                    required[str(lease_ref)] = "stale_binding_cleanup"
+            return required
 
     async def get_or_create(
         self,
@@ -444,6 +634,34 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "embedded session is already bound to another runner"
                 )
+            lifecycle_state = (
+                (row.metadata_ or {}).get(EMBEDDED_LIFECYCLE_KEY) or {}
+            ).get("state")
+            if row.omnigent_runner_id == runner_id and lifecycle_state in {
+                "runner_identity_bound",
+                "runner_tunnel_waiting",
+                "runner_tunnel_ready",
+                "first_message_prepared",
+                "first_message_posting",
+                "first_message_posted",
+                "running",
+                "draining",
+                "stopped",
+                "failed",
+                "stale",
+            }:
+                return _detached(session, row)
+            launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
+            if launch.get("runnerId") not in {None, runner_id}:
+                raise OmnigentIdempotencyError(
+                    "embedded runner does not match the reserved launch generation"
+                )
+            if launch.get("credentialGeneration") not in {
+                None, row.credential_generation
+            }:
+                raise OmnigentIdempotencyError(
+                    "embedded runner callback uses a stale credential generation"
+                )
             row.omnigent_runner_id = runner_id
             metadata = dict(row.metadata_ or {})
             launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
@@ -457,12 +675,21 @@ class OmnigentBridgeSessionStore:
             )
             metadata[EMBEDDED_LAUNCH_KEY] = launch
             row.metadata_ = metadata
+            _advance_embedded_lifecycle(
+                row, "runner_identity_bound", code="runner_identity_bound", runner_id=runner_id
+            )
+            _advance_embedded_lifecycle(
+                row, "runner_tunnel_waiting", code="runner_tunnel_pending", runner_id=runner_id
+            )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
 
     async def begin_embedded_runner_launch(
-        self, idempotency_key: str, *, host_id: str
+        self, idempotency_key: str, *, host_id: str,
+        runner_id: str | None = None, generation: int | None = None,
+        credential_generation: int | None = None,
+        launch_generation: int | None = None,
     ) -> OmnigentBridgeSession:
         """Reserve the one permitted launch before crossing the socket boundary."""
 
@@ -484,16 +711,29 @@ class OmnigentBridgeSessionStore:
             if row.omnigent_runner_id:
                 return _detached(session, row)
             if launch.get("state") in {"pending", "launched"}:
+                if (
+                    launch.get("hostId") == host_id
+                    and launch.get("runnerId") == runner_id
+                    and launch.get("generation") == generation
+                    and launch.get("credentialGeneration") == credential_generation
+                    and launch.get("launchGeneration") == launch_generation
+                ):
+                    return _detached(session, row)
                 raise OmnigentIdempotencyError(
-                    "embedded runner launch requires durable reconciliation"
+                    "embedded runner launch generation requires durable reconciliation"
                 )
             metadata = dict(row.metadata_ or {})
             metadata[EMBEDDED_LAUNCH_KEY] = {
                 "state": "pending",
                 "hostId": host_id,
+                "runnerId": runner_id,
+                "generation": generation,
+                "credentialGeneration": credential_generation,
+                "launchGeneration": launch_generation,
                 "reservedAt": datetime.now(tz=UTC).isoformat(),
             }
             row.metadata_ = metadata
+            _advance_embedded_lifecycle(row, "launch_reserved", code="launch_reserved")
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -523,6 +763,7 @@ class OmnigentBridgeSessionStore:
             )
             metadata[EMBEDDED_LAUNCH_KEY] = launch
             row.metadata_ = metadata
+            _advance_embedded_lifecycle(row, "failed", code="host_launch_rejected")
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -559,6 +800,9 @@ class OmnigentBridgeSessionStore:
                 "recordedAt": recorded_at.isoformat(),
             }
             row.metadata_ = metadata
+            _advance_embedded_lifecycle(
+                row, "failed", code="embedded_runner_exited", runner_id=runner_id
+            )
             terminal_refs = dict(row.terminal_refs or {})
             terminal_refs.update(
                 {
@@ -584,6 +828,93 @@ class OmnigentBridgeSessionStore:
             metadata={"cleanupCompleted": False, "janitorRequired": True},
         )
         return detached
+
+    async def mark_embedded_runner_state(
+        self, idempotency_key: str, *, state: str, code: str
+    ) -> OmnigentBridgeSession:
+        """Persist an authenticated tunnel/reconciliation transition."""
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            _advance_embedded_lifecycle(row, state, code=code)
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def prepare_embedded_runner_replacement(
+        self, idempotency_key: str, *, runner_id: str
+    ) -> OmnigentBridgeSession:
+        """Clear a stale assignment only after the host confirmed it stopped.
+
+        Provider and host lease fields intentionally remain untouched; callers
+        may launch the replacement before credential capacity is released.
+        """
+
+        async with self._session_factory() as session:
+            row = await self._require(session, idempotency_key)
+            if row.omnigent_runner_id != runner_id:
+                raise OmnigentIdempotencyError(
+                    "embedded replacement does not match durable runner assignment"
+                )
+            _advance_embedded_lifecycle(
+                row, "draining", code="stale_runner_stop_confirmed", runner_id=runner_id
+            )
+            _advance_embedded_lifecycle(
+                row, "stopped", code="stale_runner_stopped", runner_id=runner_id
+            )
+            row.omnigent_runner_id = None
+            metadata = dict(row.metadata_ or {})
+            prior_launch = dict(metadata.get(EMBEDDED_LAUNCH_KEY) or {})
+            metadata[EMBEDDED_LAUNCH_KEY] = {
+                "state": "failed",
+                "hostId": row.omnigent_host_id,
+                "credentialGeneration": row.credential_generation,
+                "launchGeneration": int(prior_launch.get("launchGeneration") or 1),
+                "reconciliationCode": "safe_replacement_required",
+                "reconciledAt": datetime.now(tz=UTC).isoformat(),
+            }
+            # A stopped generation is terminal. Start a fresh lifecycle journal
+            # for the replacement while retaining the prior timeline as evidence.
+            previous = dict(metadata.get(EMBEDDED_LIFECYCLE_KEY) or {})
+            metadata["embedded_runner_lifecycle_previous"] = previous
+            metadata.pop(EMBEDDED_LIFECYCLE_KEY, None)
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def get_session_by_runner_id(
+        self, runner_id: str
+    ) -> OmnigentBridgeSession | None:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.omnigent_runner_id == runner_id)
+                .limit(1)
+            )
+            row = result.scalars().first()
+            return _detached(session, row) if row is not None else None
+
+    async def get_active_session_by_runner_identity(
+        self, runner_id: str
+    ) -> OmnigentBridgeSession | None:
+        """Resolve a bound or launch-reserved runner, excluding terminal rows."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession).where(
+                    OmnigentBridgeSession.omnigent_endpoint_ref == "embedded",
+                    OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES),
+                )
+            )
+            for row in result.scalars():
+                launch = dict((row.metadata_ or {}).get(EMBEDDED_LAUNCH_KEY) or {})
+                if row.omnigent_runner_id == runner_id or (
+                    launch.get("state") in {"pending", "launched"}
+                    and launch.get("runnerId") == runner_id
+                ):
+                    return _detached(session, row)
+            return None
 
     async def record_lifecycle_event(
         self,
@@ -688,6 +1019,10 @@ class OmnigentBridgeSessionStore:
             safe_summary = redact_sensitive_text(summary or "")[:512] or None
             event_metadata = dict(entry)
             event_metadata["eventIdentity"] = str(event_identity)[:255]
+            event_metadata["moonmind"] = {
+                "workflowChatVisible": False,
+                "source": "bridge_lifecycle",
+            }
             session.add(
                 OmnigentBridgeSessionEvent(
                     event_id=stable_event_id,
@@ -1034,6 +1369,17 @@ class OmnigentBridgeSessionStore:
                 row.first_message_state = FIRST_MESSAGE_PREPARED
             row.first_message_digest = digest
             row.first_message_marker = marker
+            lifecycle_state = (
+                (row.metadata_ or {}).get(EMBEDDED_LIFECYCLE_KEY) or {}
+            ).get("state")
+            if row.omnigent_endpoint_ref == "embedded" and lifecycle_state in {
+                "runner_tunnel_waiting",
+                "runner_tunnel_ready",
+                "first_message_prepared",
+            }:
+                _advance_embedded_lifecycle(
+                    row, "first_message_prepared", code="first_message_digest_persisted"
+                )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -1045,6 +1391,10 @@ class OmnigentBridgeSessionStore:
             row.first_message_post_attempted_at = datetime.now(tz=UTC)
             if row.status in _LIFECYCLE_STATUSES:
                 row.status = STATUS_ACTIVE
+            if row.omnigent_endpoint_ref == "embedded":
+                _advance_embedded_lifecycle(
+                    row, "first_message_posting", code="first_message_side_effect_started"
+                )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -1067,6 +1417,13 @@ class OmnigentBridgeSessionStore:
             )
             if row.status in _LIFECYCLE_STATUSES:
                 row.status = STATUS_ACTIVE
+            if row.omnigent_endpoint_ref == "embedded":
+                _advance_embedded_lifecycle(
+                    row, "first_message_posted", code="first_message_response_persisted"
+                )
+                _advance_embedded_lifecycle(
+                    row, "running", code="first_message_delivery_complete"
+                )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -1091,6 +1448,15 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
+            if row.omnigent_endpoint_ref == "embedded":
+                lifecycle_state = (
+                    "stopped"
+                    if row.status in {"completed", "canceled"}
+                    else "failed"
+                )
+                _advance_embedded_lifecycle(
+                    row, lifecycle_state, code=f"terminal_{row.status}"
+                )
             if terminal_refs:
                 safe_terminal_refs = redact_sensitive_payload(terminal_refs)
                 if not isinstance(safe_terminal_refs, dict):
@@ -1224,11 +1590,16 @@ class OmnigentBridgeSessionStore:
                 )
             )
             existing = set(existing_result.scalars().all())
-            pending = [
-                (event, dedup_key)
-                for event, dedup_key in zip(events, dedup_keys, strict=True)
-                if dedup_key not in existing
-            ]
+            # A reconnect can replay the same provider frame more than once in
+            # a single received batch.  Deduplicate both against committed rows
+            # and earlier entries in this batch before assigning sequences.
+            seen = set(existing)
+            pending: list[tuple[dict[str, Any], str]] = []
+            for event, dedup_key in zip(events, dedup_keys, strict=True):
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                pending.append((event, dedup_key))
             if not pending:
                 return []
             max_sequence_result = await session.execute(
