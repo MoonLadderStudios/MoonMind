@@ -846,3 +846,11 @@ async def test_stream_timed_out_snapshot_is_terminal() -> None:
         )
     ]
     assert events == []
+
+
+async def test_stop_session_preserves_stock_control_event_type() -> None:
+    client = _FakeClient()
+
+    await _proxy(_FakeStore(), client).stop_session("sess-9")
+
+    assert client.posted_events == [("sess-9", {"type": "stop_session"})]

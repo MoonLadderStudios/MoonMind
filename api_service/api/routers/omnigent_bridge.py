@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket,
     WebSocketDisconnect, status,
 )
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -101,6 +101,76 @@ _WORKFLOW_ID_LABEL = "moonmind.workflow_id"
 _AGENT_RUN_ID_LABEL = "moonmind.agent_run_id"
 _CORRELATION_ID_LABEL = "moonmind.correlation_id"
 _IDEMPOTENCY_KEY_LABEL = "moonmind.idempotency_key"
+
+
+class OmnigentPublicErrorDetail(BaseModel):
+    """Stable error detail shared by proxy and embedded public routes."""
+
+    model_config = ConfigDict(extra="allow")
+    code: str
+    message: str | None = None
+
+
+class OmnigentPublicErrorResponse(BaseModel):
+    detail: OmnigentPublicErrorDetail
+
+
+class OmnigentMoonMindBinding(BaseModel):
+    """Mode-neutral durable ownership metadata added to session responses."""
+
+    model_config = ConfigDict(extra="allow")
+    workflow_id: str | None = Field(default=None, alias="workflowId")
+    agent_run_id: str | None = Field(default=None, alias="agentRunId")
+    bridge_session_id: str | None = Field(default=None, alias="bridgeSessionId")
+    host_protocol_mode: str | None = Field(default=None, alias="hostProtocolMode")
+
+
+class OmnigentSessionResponse(BaseModel):
+    """Supported common session snapshot/create/attach response profile."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    id: str
+    status: str | None = None
+    terminal: bool | None = None
+    moonmind: OmnigentMoonMindBinding | None = None
+
+
+class OmnigentAgentResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    id: str = Field(validation_alias=AliasChoices("id", "agentId", "agent_id"))
+    name: str | None = None
+    ready: bool | None = None
+
+
+class OmnigentHostResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    id: str
+    status: str | None = None
+    ready: bool | None = None
+
+
+class OmnigentOperationResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    ok: bool | None = None
+
+
+class OmnigentStreamEvent(BaseModel):
+    """Typed canonical event envelope used when MoonMind supplies a schema."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    schema_version: Literal["moonmind.omnigent_bridge.event.v1"] | None = Field(
+        default=None, alias="schemaVersion"
+    )
+    type: str
+    sequence: int | None = None
+    status: str | None = None
+    terminal: bool | None = None
+
+
+_PUBLIC_ERROR_RESPONSES = {
+    code: {"model": OmnigentPublicErrorResponse}
+    for code in (400, 403, 404, 409, 500, 501, 502, 503)
+}
 
 
 def _clean(value: Any) -> str | None:
@@ -366,7 +436,12 @@ async def _resolve_bridge_binding(
     )
 
 
-@router.post(_ROUTES.create_session, response_model=dict)
+@router.post(
+    _ROUTES.create_session,
+    response_model=OmnigentSessionResponse,
+    response_model_exclude_none=True,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def create_omnigent_session(
     payload: BridgeSessionCreateRequest,
     config: OmnigentBridgeConfig = Depends(_require_mode_transition_safe),
@@ -413,13 +488,21 @@ async def create_omnigent_session(
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.get(_ROUTES.get_session, response_model=dict)
+@router.get(
+    _ROUTES.get_session,
+    response_model=OmnigentSessionResponse,
+    response_model_exclude_none=True,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def get_omnigent_session(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Return an Omnigent-shaped session snapshot (OB-§4.1, §8.2).
 
@@ -434,7 +517,17 @@ async def get_omnigent_session(
     the authenticated user must own the workflow that owns the session.
     """
 
-    owner = await proxy.get_session_owner(session_id)
+    facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
+    if facade is None:
+        raise HTTPException(
+            status_code=501,
+            detail={"code": "omnigent_bridge_mode_unsupported"},
+        )
+    owner = await facade.get_session_owner(session_id)
     if owner is None:
         # The bridge only exposes sessions it created/attached; an id it does
         # not own is not proxied upstream (avoids leaking arbitrary sessions).
@@ -466,20 +559,28 @@ async def get_omnigent_session(
         )
 
     try:
-        return await proxy.get_session(session_id)
+        return await facade.get_session(session_id)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.post(_ROUTES.attach_session, response_model=dict)
+@router.post(
+    _ROUTES.attach_session,
+    response_model=OmnigentSessionResponse,
+    response_model_exclude_none=True,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def attach_omnigent_session(
     session_id: str,
     payload: BridgeSessionCreateRequest,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
     """Reconcile an already-created provider session after a create retry."""
 
@@ -487,24 +588,43 @@ async def attach_omnigent_session(
         user=user, service=service, principal_context=principal_context, payload=payload
     )
     try:
-        return await proxy.attach_session(session_id=session_id, binding=binding)
+        facade = (
+            embedded_facade
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        )
+        if facade is None:
+            raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
+        return await facade.attach_session(session_id=session_id, binding=binding)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.delete(_ROUTES.delete_session, response_model=dict)
+@router.delete(
+    _ROUTES.delete_session,
+    response_model=OmnigentOperationResponse,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def delete_omnigent_session(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> dict[str, Any]:
+    facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
+    )
     await _authorize_session_control(
-        session_id=session_id, user=user, service=service, proxy=proxy
+        session_id=session_id, user=user, service=service, proxy=facade
     )
     try:
-        return await proxy.delete_session(session_id)
+        return await facade.delete_session(session_id)
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
@@ -1043,7 +1163,11 @@ async def stream_omnigent_bridge_session_events(
     return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
-@router.post(_ROUTES.post_event, response_model=dict)
+@router.post(
+    _ROUTES.post_event,
+    response_model=OmnigentOperationResponse,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def post_omnigent_session_event(
     session_id: str,
     payload: BridgeSessionEventRequest,
@@ -1077,14 +1201,10 @@ async def post_omnigent_session_event(
         proxy=control_facade,
     )
     try:
+        if payload.type in {"stop", "session.stop", "stop_session"}:
+            return await control_facade.stop_session(session_id)
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
-            if payload.type in {
-                "stop",
-                "session.stop",
-                "stop_session",
-            }:
-                return await embedded_facade.stop_runner(session_id=session_id)
             if payload.type == "interrupt":
                 raise OmnigentBridgeError(
                     "Embedded interrupt is not supported by the pinned host "
@@ -1109,7 +1229,8 @@ async def post_omnigent_session_event(
 
 @router.post(
     _ROUTES.resolve_elicitation,
-    response_model=dict,
+    response_model=OmnigentOperationResponse,
+    responses=_PUBLIC_ERROR_RESPONSES,
 )
 async def resolve_omnigent_elicitation(
     session_id: str,
@@ -1154,30 +1275,60 @@ async def resolve_omnigent_elicitation(
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.get(_ROUTES.agents, response_model=list)
+@router.get(
+    _ROUTES.agents,
+    response_model=list[OmnigentAgentResponse],
+    response_model_exclude_none=True,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def list_omnigent_agents(
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     _user: User = Depends(get_current_user()),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> list[dict[str, Any]]:
     """Proxy the Omnigent agent catalog (OB-§4.1)."""
 
     try:
-        return await proxy.list_agents()
+        facade = (
+            embedded_facade
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        )
+        if facade is None:
+            raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
+        return await facade.list_agents()
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
 
-@router.get(_ROUTES.hosts, response_model=list)
+@router.get(
+    _ROUTES.hosts,
+    response_model=list[OmnigentHostResponse],
+    response_model_exclude_none=True,
+    responses=_PUBLIC_ERROR_RESPONSES,
+)
 async def list_omnigent_hosts(
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     _user: User = Depends(get_current_user()),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> list[dict[str, Any]]:
     """Expose bounded host readiness metadata; callers cannot select a host."""
 
     try:
-        return await proxy.list_hosts()
+        facade = (
+            embedded_facade
+            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+            else proxy
+        )
+        if facade is None:
+            raise OmnigentBridgeError("Unsupported bridge mode", status_code=501)
+        return await facade.list_hosts()
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
@@ -1185,26 +1336,69 @@ async def list_omnigent_hosts(
 @router.get(
     _ROUTES.stream_events,
     response_class=StreamingResponse,
-    responses={200: {"content": {"text/event-stream": {}}}},
+    responses={
+        200: {
+            "content": {
+                "text/event-stream": {"schema": OmnigentStreamEvent.model_json_schema()}
+            }
+        },
+        **_PUBLIC_ERROR_RESPONSES,
+    },
 )
 async def stream_upstream_omnigent_events(
     session_id: str,
-    _enabled: OmnigentBridgeConfig = Depends(_require_proxy_mode),
+    _request: Request,
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     user: User = Depends(get_current_user()),
     service: Any = Depends(_get_execution_service),
-    proxy: OmnigentBridgeSessionProxy = Depends(_get_bridge_proxy),
+    proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
+    embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
+        _get_create_embedded_facade
+    ),
 ) -> StreamingResponse:
-    await _authorize_session_control(
-        session_id=session_id, user=user, service=service, proxy=proxy
+    facade = (
+        embedded_facade
+        if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
+        else proxy
     )
+    await _authorize_session_control(
+        session_id=session_id, user=user, service=service, proxy=facade
+    )
+    event_after = 0
+    if last_event_id:
+        try:
+            event_after = max(int(last_event_id), 0)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "omnigent_bridge_invalid_event_cursor"},
+            ) from exc
 
     async def _stream():
         try:
-            async for event in proxy.stream_events(session_id):
-                yield f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
-        except OmnigentBridgeError as exc:
+            stream = facade.stream_events(session_id, after=event_after)
+            async for event in stream:
+                # Reject unknown future canonical envelopes visibly instead of
+                # silently coercing them into the pinned public contract.
+                if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+                    OmnigentStreamEvent.model_validate(event)
+                event_id = ""
+                sequence = event.get("sequence")
+                if isinstance(sequence, int) and sequence >= 0:
+                    event_id = f"id: {sequence}\n"
+                yield (
+                    f"{event_id}data: "
+                    f"{json.dumps(event, separators=(',', ':'))}\n\n"
+                )
+        except (OmnigentBridgeError, ValidationError) as exc:
+            code = (
+                exc.code
+                if isinstance(exc, OmnigentBridgeError)
+                else "omnigent_bridge_schema_version_unsupported"
+            )
             payload = {
-                "code": exc.code,
+                "code": code,
                 "message": "The upstream Omnigent event stream became unavailable.",
             }
             yield f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
