@@ -10,6 +10,7 @@ class _Repository:
     def __init__(self, lease):
         self.lease = lease
         self.stopped: list[str] = []
+        self.order: list[str] = []
 
     async def list_active_host_leases(self):
         return [self.lease]
@@ -18,17 +19,20 @@ class _Repository:
         return SimpleNamespace()
 
     async def mark_host_lease_stopped(self, lease_id):
+        self.order.append("lease_released")
         self.stopped.append(lease_id)
 
 
 class _Runtime:
-    def __init__(self):
+    def __init__(self, order=None):
         self.stopped = 0
+        self.order = order if order is not None else []
 
     async def container_exists(self, _name):
         return True
 
     async def stop_host(self, **_kwargs):
+        self.order.append("host_stopped")
         self.stopped += 1
 
     async def list_managed_containers(self):
@@ -113,3 +117,36 @@ async def test_janitor_leaves_fresh_host_owned_by_active_session() -> None:
     assert result["count"] == 0
     assert repository.stopped == []
     assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", [
+    "abandoned_launch_cleanup",
+    "acknowledgement_without_binding_cleanup",
+    "binding_without_tunnel_cleanup",
+    "stale_binding_cleanup",
+    "credential_generation_cleanup",
+])
+async def test_janitor_reconciles_each_durable_embedded_abandonment_class(
+    action: str,
+) -> None:
+    repository = _Repository(_lease())
+    runtime = _Runtime(repository.order)
+
+    async def cleanup_refs():
+        return set()
+
+    async def reconciliation_refs(*, abandoned_before):
+        assert abandoned_before < datetime.now(UTC)
+        return {"lease-1": action}
+
+    run_store = SimpleNamespace(
+        cleanup_required_host_lease_refs=cleanup_refs,
+        embedded_reconciliation_host_lease_refs=reconciliation_refs,
+    )
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository, runtime=runtime, client=_Client(), run_store=run_store,
+    ).run()
+
+    assert result["actions"][-1]["action"] == action
+    assert repository.order == ["host_stopped", "lease_released"]

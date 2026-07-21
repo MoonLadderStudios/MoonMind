@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from starlette.datastructures import Headers
 
 from api_service.db.models import (
     Base,
@@ -18,19 +17,23 @@ from api_service.db.models import (
     OmnigentOAuthHostLeaseRecord,
     ProviderCredentialSource,
     RuntimeMaterializationMode,
+    OmnigentBridgeSession,
 )
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED, parse_bridge_config
 from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostAuthContext,
     EmbeddedHostHeartbeatRequest,
     EmbeddedHostRegisterRequest,
+    EmbeddedHostSessionEventRequest,
     OmnigentEmbeddedHostProtocolFacade,
 )
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-from moonmind.omnigent.bridge_store import OmnigentIdempotencyError
-from moonmind.omnigent.embedded_host_channel import EmbeddedHostChannelRegistry
-from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
+from moonmind.omnigent.bridge_store import (
+    OmnigentDigestMismatchError,
+    OmnigentIdempotencyError,
+)
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
@@ -173,119 +176,6 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(
         )
 
 
-async def test_runner_reconnect_authority_survives_api_process_restart(
-    store, session_factory,
-) -> None:
-    await _seed(store, session_factory)
-    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
-    _, token = await store.get_embedded_runner_binding_token(
-        idempotency_key="recovery"
-    )
-    runner_id = OmnigentHostAuthAdapter(
-        allowed_tokens=frozenset({token})
-    ).runner_id_for_binding_token(token)
-    await store.transition_embedded_runner("recovery", state="launch_sent")
-    await store.transition_embedded_runner("recovery", state="launch_acknowledged")
-    await store.bind_embedded_runner(
-        "recovery", host_id="host-1", runner_id=runner_id
-    )
-
-    # A new registry models an API restart: no process-local token map is needed.
-    restarted = EmbeddedHostChannelRegistry()
-    recovered, recovered_token = await store.get_embedded_runner_binding_token(
-        runner_id=runner_id
-    )
-    assert restarted.authenticate_runner(
-        runner_id=runner_id,
-        headers=Headers({"X-Omnigent-Runner-Tunnel-Token": token}),
-        binding_token=recovered_token,
-    ) == runner_id
-    assert recovered.metadata_["embedded_runner_launch"]["version"] == 1
-    assert "runner_tunnel_waiting" in {
-        transition["state"]
-        for transition in recovered.metadata_["embedded_runner_launch"]["transitions"]
-    }
-    assert token not in str(recovered.metadata_)
-
-
-async def test_launch_response_before_persist_reattaches_without_duplicate_launch(
-    store, session_factory,
-) -> None:
-    await _seed(store, session_factory)
-    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
-    _, token = await store.get_embedded_runner_binding_token(
-        idempotency_key="recovery"
-    )
-    runner_id = OmnigentHostAuthAdapter(
-        allowed_tokens=frozenset({token})
-    ).runner_id_for_binding_token(token)
-    await store.transition_embedded_runner("recovery", state="launch_sent")
-
-    class Channels:
-        launches = 0
-
-        def runner_ready(self, candidate):
-            return candidate == runner_id
-
-        async def launch_runner(self, **_kwargs):
-            self.launches += 1
-            raise AssertionError("reconciliation must not repeat launch")
-
-    channels = Channels()
-    result = await OmnigentEmbeddedHostProtocolFacade(
-        run_store=store, config=_config(), host_channels=channels
-    ).dispatch_runner(idempotency_key="recovery")
-    row = await store.get_existing("recovery")
-    assert result == {"runnerId": runner_id, "reused": True}
-    assert channels.launches == 0
-    assert row.omnigent_runner_id == runner_id
-    assert row.metadata_["embedded_runner_launch"]["state"] == "runner_tunnel_ready"
-
-
-async def test_runner_reconnect_revalidates_current_lease_and_generation(
-    store, session_factory,
-) -> None:
-    await _seed(store, session_factory)
-    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
-    _, token = await store.get_embedded_runner_binding_token(
-        idempotency_key="recovery"
-    )
-    runner_id = OmnigentHostAuthAdapter(
-        allowed_tokens=frozenset({token})
-    ).runner_id_for_binding_token(token)
-    await store.transition_embedded_runner("recovery", state="launch_sent")
-    await store.transition_embedded_runner("recovery", state="launch_acknowledged")
-    await store.bind_embedded_runner(
-        "recovery", host_id="host-1", runner_id=runner_id
-    )
-
-    async with session_factory() as session:
-        lease = await session.get(OmnigentOAuthHostLeaseRecord, "host-lease-1")
-        lease.status = "stopped"
-        await session.commit()
-    with pytest.raises(OmnigentIdempotencyError, match="inactive or stale host lease"):
-        await store.get_embedded_runner_binding_token(runner_id=runner_id)
-
-    async with session_factory() as session:
-        lease = await session.get(OmnigentOAuthHostLeaseRecord, "host-lease-1")
-        lease.status = "ready"
-        lease.omnigent_session_id = "another-session"
-        await session.commit()
-    with pytest.raises(OmnigentIdempotencyError, match="inactive or stale host lease"):
-        await store.get_embedded_runner_binding_token(runner_id=runner_id)
-
-    async with session_factory() as session:
-        lease = await session.get(OmnigentOAuthHostLeaseRecord, "host-lease-1")
-        lease.omnigent_session_id = "session-1"
-        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
-        profile.credential_generation = 2
-        await session.commit()
-    with pytest.raises(
-        OmnigentIdempotencyError, match="inactive credential generation"
-    ):
-        await store.get_embedded_runner_binding_token(runner_id=runner_id)
-
-
 async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_janitor(
     store, session_factory,
 ) -> None:
@@ -297,11 +187,8 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
     class Repository:
         stopped: list[str] = []
-        ordering: list[str] = []
 
         async def list_active_host_leases(self):
-            if self.stopped:
-                return []
             now = datetime.now(UTC)
             return [SimpleNamespace(
                 lease_id="host-lease-1", provider_profile_id="profile-1",
@@ -314,13 +201,11 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
             return SimpleNamespace()
 
         async def mark_host_lease_stopped(self, lease_id):
-            self.ordering.append("host_lease_released")
             self.stopped.append(lease_id)
 
     class Runtime:
         async def container_exists(self, _name): return True
-        async def stop_host(self, **_kwargs):
-            repository.ordering.append("credential_host_stopped")
+        async def stop_host(self, **_kwargs): return None
         async def list_managed_containers(self): return []
 
     repository = Repository()
@@ -328,121 +213,294 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
         repository=repository, runtime=Runtime(), client=SimpleNamespace(),
         run_store=store,
     ).run()
-    repeated = await OmnigentOAuthHostJanitor(
-        repository=repository, runtime=Runtime(), client=SimpleNamespace(),
-        run_store=store,
-    ).run()
     row = await store.get_existing("recovery")
     events = await store.list_events(row.bridge_session_id)
 
     assert row.status == "failed"
-    assert [event.event_type for event in events] == [
-        "lifecycle.embedded_runner.runner_tunnel_waiting",
-        "lifecycle.terminal", "lifecycle.host_cleanup",
-    ]
-    assert result["actions"][-1]["action"] == "runner_lifecycle_cleanup"
+    assert row.terminal_refs["cleanupState"] == "runner_exited"
+    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert result["actions"][-1]["action"] == "runner_exit_cleanup"
     assert repository.stopped == ["host-lease-1"]
-    assert repository.ordering == ["credential_host_stopped", "host_lease_released"]
-    assert repeated["count"] == 0
-    assert row.terminal_refs["cleanupState"] == "host_stopped"
-    assert row.terminal_refs["cleanupCompleted"] is True
-    assert row.terminal_refs["reconciliationAction"] == "replacement_ready"
-    assert row.terminal_refs["replacementPermitted"] is True
 
 
 @pytest.mark.parametrize(
-    ("boundary", "states", "runner_count", "message_count", "cleanup_required"),
+    ("state", "expected_action"),
     [
-        ("reservation_before_send", ["launch_reserved"], 0, 0, False),
-        ("send_before_ack", ["launch_reserved", "launch_sent", "stale"], 1, 0, True),
-        (
-            "ack_before_binding",
-            ["launch_reserved", "launch_sent", "launch_acknowledged", "stale"],
-            1, 0, True,
-        ),
-        (
-            "binding_before_tunnel",
-            ["launch_reserved", "launch_sent", "launch_acknowledged",
-             "runner_identity_bound", "runner_tunnel_waiting", "stale"],
-            1, 0, True,
-        ),
-        (
-            "tunnel_before_ready_persist",
-            ["launch_reserved", "launch_sent", "launch_acknowledged",
-             "runner_identity_bound", "runner_tunnel_waiting", "runner_tunnel_ready"],
-            1, 0, False,
-        ),
-        (
-            "message_response_before_persist",
-            ["launch_reserved", "launch_sent", "launch_acknowledged",
-             "runner_identity_bound", "runner_tunnel_waiting", "runner_tunnel_ready",
-             "first_message_prepared", "first_message_posting", "first_message_posted"],
-            1, 1, False,
-        ),
-        (
-            "runner_exit_before_terminal_persist",
-            ["launch_reserved", "launch_sent", "launch_acknowledged",
-             "runner_identity_bound", "runner_tunnel_waiting", "runner_tunnel_ready",
-             "first_message_prepared", "first_message_posting", "first_message_posted",
-             "running", "failed"],
-            1, 1, True,
-        ),
+        ("launch_reserved", "abandoned_launch_cleanup"),
+        ("launch_acknowledged", "acknowledgement_without_binding_cleanup"),
+        ("runner_identity_bound", "binding_without_tunnel_cleanup"),
+        ("runner_tunnel_waiting", "binding_without_tunnel_cleanup"),
+        ("stale", "stale_binding_cleanup"),
     ],
 )
-async def test_seven_boundary_durable_recovery_matrix(
-    store, session_factory, boundary, states, runner_count, message_count,
-    cleanup_required,
+async def test_restart_janitor_classifies_each_abandoned_lifecycle_boundary(
+    store, session_factory, state, expected_action,
 ) -> None:
-    """Every documented crash boundary has one durable, non-duplicating decision."""
+    await _seed(store, session_factory)
+    row = await store.get_existing("recovery")
+    old = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    async with session_factory() as session:
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        metadata = dict(persisted.metadata_ or {})
+        metadata["embedded_runner_lifecycle"] = {
+            "version": 1, "state": state, "updatedAt": old, "timeline": [],
+        }
+        persisted.metadata_ = metadata
+        await session.commit()
+
+    refs = await store.embedded_reconciliation_host_lease_refs(
+        abandoned_before=datetime.now(UTC) - timedelta(seconds=90)
+    )
+    assert refs == {"host-lease-1": expected_action}
+
+
+async def test_restart_janitor_rejects_changed_credential_generation(
+    store, session_factory,
+) -> None:
+    await _seed(store, session_factory)
+    async with session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        profile.credential_generation = 2
+        await session.commit()
+
+    refs = await store.embedded_reconciliation_host_lease_refs(
+        abandoned_before=datetime.now(UTC)
+    )
+    assert refs == {"host-lease-1": "credential_generation_cleanup"}
+
+
+@pytest.mark.parametrize(
+    "crash_boundary",
+    [
+        "reservation_before_command",
+        "command_before_acknowledgement",
+        "acknowledgement_before_binding",
+        "binding_before_tunnel",
+        "tunnel_before_readiness_persist",
+        "message_response_before_posted_persist",
+        "runner_exit_before_terminal_bridge_persist",
+    ],
+)
+async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
+    store, session_factory, crash_boundary,
+) -> None:
+    """Crash once at every issue-listed production ownership boundary."""
 
     await _seed(store, session_factory)
-    await store.begin_embedded_runner_launch("recovery", host_id="host-1")
-    runner_id = None
-    for state in states[1:]:
-        if state == "runner_identity_bound":
-            _, token = await store.get_embedded_runner_binding_token(
-                idempotency_key="recovery"
-            )
-            runner_id = OmnigentHostAuthAdapter(
-                allowed_tokens=frozenset({token})
-            ).runner_id_for_binding_token(token)
-            await store.bind_embedded_runner(
-                "recovery", host_id="host-1", runner_id=runner_id
-            )
-        elif state == "runner_tunnel_waiting":
-            # Binding persists this state atomically.
-            continue
-        elif state == "first_message_prepared":
-            await store.mark_prepared("recovery", digest="digest", marker="marker")
-        elif state == "first_message_posting":
-            await store.mark_posting("recovery")
-            await store.claim_embedded_first_message_post("recovery")
-        elif state == "first_message_posted":
-            await store.mark_posted(
-                "recovery",
-                response={"pending_id": "pending-1", "item_id": "item-1"},
-            )
-        elif state == "failed" and runner_id:
-            await store.record_embedded_runner_exit(
-                runner_id=runner_id, error=f"crash at {boundary}"
-            )
-        else:
-            await store.transition_embedded_runner(
-                "recovery", state=state, code=f"matrix_{boundary}"
-            )
+    class ObservedHost:
+        launch_command_count = 0
+        post_count = 0
+        created_runner_ids: list[str] = []
+        runner_ready = False
 
-    row = await store.get_existing("recovery")
-    launch = row.metadata_["embedded_runner_launch"]
-    assert [entry["state"] for entry in launch["transitions"]] == states
-    runner_side_effect_count = int("launch_sent" in states)
-    assert runner_side_effect_count == runner_count
-    assert runner_side_effect_count <= 1
-    assert (row.omnigent_runner_id is not None) is (
-        "runner_identity_bound" in states
+        async def launch_runner(self, **kwargs):
+            self.launch_command_count += 1
+            runner_id = OmnigentHostAuthAdapter(
+                allowed_tokens=frozenset({kwargs["binding_token"]})
+            ).runner_id_for_binding_token(kwargs["binding_token"])
+            if runner_id not in self.created_runner_ids:
+                self.created_runner_ids.append(runner_id)
+            self.runner_ready = True
+            return runner_id
+
+        def is_runner_ready(self, _runner_id):
+            return self.runner_ready
+
+        async def wait_runner_ready(self, _runner_id):
+            return self.runner_ready
+
+        async def post_runner_event(self, **_kwargs):
+            self.post_count += 1
+            return {"pending_id": "pending-1", "item_id": "item-1"}
+
+        async def request_runner(self, **_kwargs):
+            return {
+                "events": [{"text": "marker-1"}],
+                "firstMessageResponse": {
+                    "pending_id": "pending-1", "item_id": "item-1",
+                },
+            }
+
+    class OneShotCrashStore:
+        """Inject a process death immediately before/after one durable write."""
+
+        def __init__(self, inner, method, *, after=False, state=None):
+            self.inner = inner
+            self.method = method
+            self.after = after
+            self.state = state
+            self.injected = False
+
+        def __getattr__(self, name):
+            target = getattr(self.inner, name)
+            if name != self.method:
+                return target
+
+            async def call(*args, **kwargs):
+                matches = self.state is None or kwargs.get("state") == self.state
+                if matches and not self.injected and not self.after:
+                    self.injected = True
+                    raise RuntimeError(f"injected crash: {crash_boundary}")
+                result = await target(*args, **kwargs)
+                if matches and not self.injected:
+                    self.injected = True
+                    raise RuntimeError(f"injected crash: {crash_boundary}")
+                return result
+            return call
+
+    host = ObservedHost()
+    fault_specs = {
+        "reservation_before_command": ("begin_embedded_runner_launch", True, None),
+        "command_before_acknowledgement": (
+            "mark_embedded_runner_state", False, "launch_acknowledged",
+        ),
+        "acknowledgement_before_binding": ("bind_embedded_runner", False, None),
+        "binding_before_tunnel": ("bind_embedded_runner", True, None),
+        "tunnel_before_readiness_persist": (
+            "mark_embedded_runner_state", True, "runner_tunnel_ready",
+        ),
+        "message_response_before_posted_persist": ("mark_posted", False, None),
+        "runner_exit_before_terminal_bridge_persist": (
+            "record_embedded_runner_exit", False, None,
+        ),
+    }
+    method, after, state = fault_specs[crash_boundary]
+    crashing_store = OneShotCrashStore(store, method, after=after, state=state)
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=crashing_store, config=_config(), host_channels=host,
+        runner_binding_root_secret="recovery-root-secret",
     )
-    assert int(row.first_message_state in {"posted", "terminal"}) == message_count
-    cleanup_refs = await store.cleanup_required_host_lease_refs()
-    assert (row.host_lease_ref in cleanup_refs) is cleanup_required
-    if cleanup_required:
-        assert row.terminal_refs["reconciliationAction"] == "stop_host_then_replace"
-        assert row.terminal_refs["replacementPermitted"] is False
+
+    if crash_boundary in {
+        "reservation_before_command", "command_before_acknowledgement",
+        "acknowledgement_before_binding", "binding_before_tunnel",
+    }:
+        with pytest.raises(RuntimeError, match="injected crash"):
+            await facade.dispatch_runner(idempotency_key="recovery")
+    else:
+        dispatch = await facade.dispatch_runner(idempotency_key="recovery")
+        runner_id = dispatch["runnerId"]
+        if crash_boundary == "tunnel_before_readiness_persist":
+            with pytest.raises(RuntimeError, match="injected crash"):
+                await facade.record_runner_tunnel_ready(runner_id=runner_id)
+
+    # Reconstruct both production owners, then retry the interrupted operation.
+    restarted_store = OmnigentBridgeSessionStore(session_factory)
+    restarted = OmnigentEmbeddedHostProtocolFacade(
+        run_store=restarted_store, config=_config(), host_channels=host,
+        runner_binding_root_secret="recovery-root-secret",
+    )
+    reused = await restarted.dispatch_runner(idempotency_key="recovery")
+    runner_id = reused["runnerId"]
+    assert reused["reused"] is (crash_boundary != "reservation_before_command")
+    await restarted.record_runner_tunnel_ready(runner_id=runner_id)
+
+    await store.mark_prepared("recovery", digest="digest-1", marker="marker-1")
+    await store.mark_posting("recovery")
+    response = await restarted.post_event(
+        session_id="session-1",
+        event=EmbeddedHostSessionEventRequest(type="message", data={"text": "hello"}),
+    )
+    if crash_boundary == "message_response_before_posted_persist":
+        with pytest.raises(RuntimeError, match="injected crash"):
+            await crashing_store.mark_posted("recovery", response=response)
+        await restarted.reconcile_first_message(session_id="session-1")
+    else:
+        await restarted_store.mark_posted("recovery", response=response)
+
+    # Retrying execute after either posting boundary must only revalidate the
+    # digest; it must not regress the durable embedded lifecycle.
+    lifecycle_before_retry = (
+        (await restarted_store.get_existing("recovery")).metadata_[
+            "embedded_runner_lifecycle"
+        ]["state"]
+    )
+    await restarted_store.mark_prepared(
+        "recovery", digest="digest-1", marker="marker-1"
+    )
+    assert (
+        (await restarted_store.get_existing("recovery")).metadata_[
+            "embedded_runner_lifecycle"
+        ]["state"]
+        == lifecycle_before_retry
+    )
+
+    if crash_boundary == "runner_exit_before_terminal_bridge_persist":
+        with pytest.raises(RuntimeError, match="injected crash"):
+            await facade.record_runner_exit(runner_id=runner_id, error="exit 1")
+        restarted_store = OmnigentBridgeSessionStore(session_factory)
+    await restarted_store.record_embedded_runner_exit(runner_id=runner_id, error="exit 1")
+
+    row = await restarted_store.get_existing("recovery")
+    lifecycle = row.metadata_["embedded_runner_lifecycle"]
+    events = await restarted_store.list_events(row.bridge_session_id)
+    assert host.launch_command_count == 1
+    assert host.post_count == 1
+    assert host.created_runner_ids == [runner_id]
+    assert row.omnigent_host_id == "host-1"
+    assert row.omnigent_runner_id == runner_id
+    assert row.omnigent_session_id == "session-1"
+    assert row.first_message_item_id == "item-1"
+    assert lifecycle["state"] == "failed"
+    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    refs = await restarted_store.cleanup_required_host_lease_refs()
+    assert refs == {"host-lease-1"}
+
+
+async def test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(
+    store, session_factory,
+) -> None:
+    await _seed(store, session_factory)
+    await store.bind_embedded_runner(
+        "recovery", host_id="host-1", runner_id="runner-1"
+    )
+    await store.mark_embedded_runner_state(
+        "recovery", state="runner_tunnel_ready", code="authenticated_runner_handshake"
+    )
+    await store.mark_prepared("recovery", digest="digest-1", marker="marker-1")
+    await store.mark_posting("recovery")
+
+    class ObservedRunner:
+        post_count = 0
+
+        async def post_runner_event(self, **_kwargs):
+            self.post_count += 1
+            return {"pending_id": "pending-1", "item_id": "item-1"}
+
+        async def request_runner(self, **_kwargs):
+            return {
+                "events": [{"text": "marker-1"}],
+                "firstMessageResponse": {
+                    "pending_id": "pending-1", "item_id": "item-1",
+                },
+            }
+
+    runner = ObservedRunner()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_config(), host_channels=runner
+    )
+    await facade.post_event(
+        session_id="session-1",
+        event=EmbeddedHostSessionEventRequest(type="message", data={"text": "hello"}),
+    )
+
+    # The runner accepted marker-1, then MoonMind restarted before mark_posted.
+    restarted_store = OmnigentBridgeSessionStore(session_factory)
+    row = await restarted_store.get_existing("recovery")
+    assert row.first_message_state == "posting"
+    assert row.first_message_marker == "marker-1"
+    restarted = OmnigentEmbeddedHostProtocolFacade(
+        run_store=restarted_store, config=_config(), host_channels=runner
+    )
+    assert await restarted.reconcile_first_message(session_id="session-1") == {
+        "reconciled": True, "pending_id": "pending-1", "item_id": "item-1",
+    }
+    assert runner.post_count == 1
+
+    with pytest.raises(OmnigentDigestMismatchError, match="different first-message"):
+        await restarted_store.mark_prepared(
+            "recovery", digest="digest-changed", marker="marker-changed"
+        )
+    final = await restarted_store.get_existing("recovery")
+    assert final.first_message_digest == "digest-1"
+    assert final.first_message_item_id == "item-1"

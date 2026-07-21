@@ -8,6 +8,8 @@ authenticated host, while request correlation is bounded to the connection.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import secrets
 from dataclasses import dataclass, field
@@ -26,6 +28,22 @@ MAX_EMBEDDED_RESPONSE_BYTES = 8_388_608
 
 class EmbeddedHostChannelError(RuntimeError):
     """A host channel violated lifecycle or correlation rules."""
+
+
+def derive_runner_binding_token(
+    root_secret: str, *, host_id: str, session_id: str, generation: int
+) -> str:
+    """Derive a restart-safe launch credential without durably storing it.
+
+    The root value is resolved at the Secrets boundary.  Durable rows carry
+    only the non-secret derivation inputs and generation, so rotation revokes
+    older launches and a fresh API process can reconstruct exact authority.
+    """
+
+    if not root_secret:
+        raise EmbeddedHostChannelError("runner binding root secret is unavailable")
+    context = f"omnigent-runner-binding:v1:{host_id}:{session_id}:{generation}"
+    return hmac.new(root_secret.encode(), context.encode(), hashlib.sha256).hexdigest()
 
 
 def _require_bounded_frame(text: str) -> None:
@@ -291,22 +309,20 @@ class EmbeddedHostChannelRegistry:
         if self._runners.get(channel.runner_id) is channel:
             self._runners.pop(channel.runner_id, None)
 
-    def runner_ready(self, runner_id: str) -> bool:
-        """Return process-local tunnel readiness; never implies durable authority."""
+    def is_runner_ready(self, runner_id: str) -> bool:
+        """Return live tunnel readiness; durable identity alone is insufficient."""
 
         return runner_id in self._runners
 
-    async def wait_runner_ready(
-        self, runner_id: str, *, timeout_seconds: float = 5.0
-    ) -> bool:
-        """Bound a reconnect/startup wait without converting absence into readiness."""
+    async def wait_runner_ready(self, runner_id: str, timeout_seconds: float = 5.0) -> bool:
+        """Bound the normal launch/reconnect race without claiming false readiness."""
 
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while asyncio.get_running_loop().time() < deadline:
-            if self.runner_ready(runner_id):
+            if self.is_runner_ready(runner_id):
                 return True
             await asyncio.sleep(0.05)
-        return self.runner_ready(runner_id)
+        return self.is_runner_ready(runner_id)
 
     async def post_runner_event(
         self, *, runner_id: str, session_id: str, payload: dict[str, Any]
@@ -362,5 +378,6 @@ __all__ = [
     "EmbeddedHostChannelError",
     "EmbeddedHostChannelRegistry",
     "EmbeddedRunnerChannel",
+    "derive_runner_binding_token",
     "embedded_host_channels",
 ]
