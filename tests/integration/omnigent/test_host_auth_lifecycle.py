@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 
 from api_service.db.base import async_session_maker
-from moonmind.omnigent.host_auth_profile import HostAuthCredentialProfile
+from moonmind.omnigent.host_auth_profile import (
+    HostAuthCredentialProfile,
+    rotate_host_auth_profile,
+)
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -24,12 +28,10 @@ async def test_concurrent_rotation_has_one_generation_winner_on_postgres() -> No
         current = await store.get_active()
         assert current is not None and current.current_generation == 1
         await start.wait()
-        candidate = HostAuthCredentialProfile(
-            profile_id=current.profile_id,
-            current_secret_ref=secret_ref,
-            current_generation=2,
-            previous_secret_ref=current.current_secret_ref,
-            previous_generation=1,
+        candidate = rotate_host_auth_profile(
+            current,
+            new_secret_ref=secret_ref,
+            overlap=timedelta(minutes=5),
         )
         try:
             return await store.put(candidate, expected_generation=1)
@@ -51,4 +53,3 @@ async def test_concurrent_rotation_has_one_generation_winner_on_postgres() -> No
     assert durable is not None
     assert durable.current_generation == 2
     assert durable.current_secret_ref == winners[0].current_secret_ref
-

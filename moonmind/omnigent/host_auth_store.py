@@ -49,10 +49,12 @@ class HostAuthProfileStore:
                 .where(OmnigentHostAuthProfileRecord.active.is_(True))
                 .with_for_update()
             )
-            if expected_generation is not None and (
-                active is None
-                or int(active.metadata_json.get("currentGeneration", 0))
-                != expected_generation
+            active_generation = (
+                int(active.metadata_json.get("currentGeneration", 0)) if active else 0
+            )
+            if (
+                expected_generation is not None
+                and active_generation != expected_generation
             ):
                 raise RuntimeError("host-auth profile changed during lifecycle update")
             await session.execute(

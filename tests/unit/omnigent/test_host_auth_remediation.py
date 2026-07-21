@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -27,13 +28,15 @@ from moonmind.omnigent.host_auth_profile import (
     HostAuthProfileError,
     ResolvedHostAuthCredentials,
     profile_persistence_metadata,
+    rotate_host_auth_profile,
 )
+from moonmind.omnigent.bridge_config import parse_bridge_config
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
-from moonmind.utils.logging import SecretRedactor
+import moonmind.utils.logging as mm_logging
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def host_auth_store(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/host-auth.db")
     async with engine.begin() as connection:
@@ -89,12 +92,10 @@ async def test_database_lifecycle_allows_exactly_one_concurrent_rotation(
         current = await store.get_active()
         assert current is not None and current.current_generation == 1
         await start.wait()
-        candidate = HostAuthCredentialProfile(
-            profile_id=current.profile_id,
-            current_secret_ref=secret_ref,
-            current_generation=2,
-            previous_secret_ref=current.current_secret_ref,
-            previous_generation=1,
+        candidate = rotate_host_auth_profile(
+            current,
+            new_secret_ref=secret_ref,
+            overlap=timedelta(minutes=5),
         )
         try:
             return await store.put(candidate, expected_generation=1)
@@ -180,6 +181,32 @@ async def test_operator_api_serialization_and_failures_never_return_secret_body(
     assert (await store.get_active()).current_generation == 1
 
 
+@pytest.mark.asyncio
+async def test_operator_profile_put_is_initial_only(monkeypatch, host_auth_store) -> None:
+    store, _ = host_auth_store
+    await store.put(HostAuthCredentialProfile("managed", "env://HOST_ONE", 2))
+    monkeypatch.setattr(bridge_router, "_host_auth_store", lambda: store)
+    monkeypatch.setattr(
+        bridge_router,
+        "resolve_host_auth_credentials",
+        AsyncMock(return_value=ResolvedHostAuthCredentials(
+            HostAuthCredentialProfile("managed", "env://HOST_STALE", 1), {1: "stale"}
+        )),
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await bridge_router.put_embedded_host_auth_profile(
+            bridge_router.HostAuthProfilePutRequest(
+                profileId="managed", currentSecretRef="env://HOST_STALE", currentGeneration=1
+            ),
+            user=SimpleNamespace(is_superuser=True),
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["code"] == "host_auth_already_configured"
+    assert (await store.get_active()).current_generation == 2
+
+
 class _Headers(dict):
     def getlist(self, key: str):
         return [value for name, value in self.items() if name.lower() == key.lower()]
@@ -217,7 +244,7 @@ async def test_websocket_profile_failure_close_code_matrix(
     monkeypatch, failure, expected_code
 ) -> None:
     socket = _HandshakeSocket({})
-    monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
     monkeypatch.setattr(
         bridge_router, "_active_host_auth_profile", AsyncMock(side_effect=failure)
     )
@@ -267,7 +294,7 @@ async def test_http_websocket_profile_failure_retryability_matrix(
     assert (ws_code in authoritative_retryable_close_codes) is retryable
 
     socket = _HandshakeSocket({})
-    monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
     await bridge_router.embedded_omnigent_host_tunnel(socket, "host")
     assert socket.closes == [(ws_code, failure.code)]
 
@@ -283,7 +310,7 @@ async def test_connected_tunnel_is_drained_immediately_after_revocation(monkeypa
     socket = _HandshakeSocket(_Headers({"X-Omnigent-Runner-Tunnel-Token": token}))
     facade = SimpleNamespace(disconnect_host=AsyncMock())
     channel = SimpleNamespace()
-    monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
     monkeypatch.setattr(
         bridge_router, "_active_host_auth_profile", AsyncMock(return_value=profile)
     )
@@ -371,7 +398,7 @@ async def test_cross_channel_serializers_redact_or_reject_host_secret(caplog) ->
     # Structured logging uses the production redactor with the resolved secret.
     caplog.set_level(logging.ERROR)
     logging.getLogger(__name__).error(
-        "host handshake failed: %s", SecretRedactor([token]).scrub(token)
+        "host handshake failed: %s", mm_logging.SecretRedactor([token]).scrub(token)
     )
     assert token not in caplog.text
     assert "***" in caplog.text
@@ -445,13 +472,13 @@ async def test_pinned_upstream_http_websocket_rejection_parity(
     assert http_exc.value.detail["code"] == http_code
 
     socket = _HandshakeSocket(headers)
-    monkeypatch.setattr(bridge_router, "get_bridge_config", lambda: _embedded_config())
+    monkeypatch.setattr(bridge_router, "get_bridge_config", _embedded_config)
     await bridge_router.embedded_omnigent_host_tunnel(socket, "untrusted-host")
     assert socket.closes == [(ws_code, http_code)]
 
 
 def _embedded_config():
-    return bridge_router.parse_bridge_config(
+    return parse_bridge_config(
         {
             "enabled": True,
             "compatibility": {"hostProtocolMode": "embedded"},

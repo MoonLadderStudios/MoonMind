@@ -70,10 +70,8 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
-    import api_service.api.routers.omnigent_bridge as bridge_router
-
-    monkeypatch.setattr(
-        bridge_router,
+    monkeypatch.setitem(
+        embedded_host_auth_preflight.__globals__,
         "_BRIDGE_CONFIG",
         parse_bridge_config({
             "enabled": True,
@@ -85,8 +83,8 @@ async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
             }},
         }),
     )
-    monkeypatch.setattr(
-        bridge_router, "_active_host_auth_profile",
+    monkeypatch.setitem(
+        embedded_host_auth_preflight.__globals__, "_active_host_auth_profile",
         AsyncMock(return_value=__import__(
             "moonmind.omnigent.host_auth_profile", fromlist=["HostAuthCredentialProfile"]
         ).HostAuthCredentialProfile("managed", "env://ABSENT_HOST_TOKEN", 1)),

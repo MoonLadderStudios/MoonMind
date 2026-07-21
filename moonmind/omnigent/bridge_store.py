@@ -243,6 +243,10 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "embedded host authentication profile does not match its lease"
                 )
+            if lease.host_auth_generation not in (None, credential_generation):
+                raise OmnigentIdempotencyError(
+                    "embedded host authentication generation does not match its lease"
+                )
             # The upstream-verified host credential is a separate authority from
             # the Provider Profile OAuth generation above. Bind it only after the
             # preassigned host identity and OAuth lease have both matched.

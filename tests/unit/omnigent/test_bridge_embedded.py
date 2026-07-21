@@ -1092,6 +1092,12 @@ async def test_host_auth_profile_is_durably_bound_to_preassigned_lease(store) ->
             credential_generation=9,
             credential_profile_id="unrelated-host-auth",
         )
+    with pytest.raises(OmnigentIdempotencyError, match="generation does not match"):
+        await store.record_embedded_host_lifecycle(
+            host_id="host-auth-bound",
+            credential_generation=9,
+            credential_profile_id="host-auth-primary",
+        )
 
 
 @pytest.mark.asyncio

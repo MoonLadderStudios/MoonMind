@@ -117,7 +117,7 @@ async def embedded_host_auth_preflight() -> dict[str, Any]:
     try:
         profile = await _active_host_auth_profile()
     except HostAuthProfileError as exc:
-        return {"ready": False, "code": exc.code, "message": str(exc)}
+        return {"ready": False, "code": exc.code}
     return await host_auth_readiness(profile=profile)
 
 
@@ -250,7 +250,7 @@ async def get_omnigent_bridge_readiness(
             profile = await _active_host_auth_profile()
             auth = await host_auth_readiness(profile=profile)
         except HostAuthProfileError as exc:
-            auth = {"ready": False, "code": exc.code, "message": str(exc)}
+            auth = {"ready": False, "code": exc.code}
         readiness["hostAuthentication"] = auth
         if not auth["ready"]:
             readiness["conformanceState"] = "gated"
@@ -427,7 +427,7 @@ async def _embedded_auth_context(
     except HostAuthProfileError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": exc.code, "failureClass": "system_error", "message": str(exc)},
+            detail={"code": exc.code, "failureClass": "system_error"},
         ) from exc
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
@@ -1661,7 +1661,7 @@ def _require_host_auth_operator(user: User) -> None:
 def _host_auth_http_error(exc: HostAuthProfileError) -> HTTPException:
     return HTTPException(
         status_code=409 if exc.code.startswith("host_auth_rotation") else 503,
-        detail={"code": exc.code, "message": str(exc)},
+        detail={"code": exc.code},
     )
 
 
@@ -1682,7 +1682,17 @@ async def put_embedded_host_auth_profile(
         await resolve_host_auth_credentials(profile=candidate)
     except HostAuthProfileError as exc:
         raise _host_auth_http_error(exc) from exc
-    stored = await _host_auth_store().put(candidate)
+    store = _host_auth_store()
+    if await store.get_active() is not None:
+        raise HTTPException(
+            status_code=409, detail={"code": "host_auth_already_configured"}
+        )
+    try:
+        stored = await store.put(candidate, expected_generation=0)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "host_auth_already_configured"}
+        ) from exc
     return stored.metadata()
 
 
@@ -1708,9 +1718,14 @@ async def rotate_embedded_host_auth_profile(
         await resolve_host_auth_credentials(profile=candidate)
     except HostAuthProfileError as exc:
         raise _host_auth_http_error(exc) from exc
-    stored = await store.put(
-        candidate, expected_generation=current.current_generation
-    )
+    try:
+        stored = await store.put(
+            candidate, expected_generation=current.current_generation
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "host_auth_generation_conflict"}
+        ) from exc
     return stored.metadata()
 
 
@@ -1764,7 +1779,11 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
             await websocket.close(code=4403)
             return
     except HostAuthProfileError as exc:
-        close_code = 4403 if exc.code in {"host_auth_revoked", "host_auth_disabled"} else 1013
+        close_code = (
+            4403
+            if exc.code in {"host_auth_revoked", "host_auth_disabled"}
+            else 1013
+        )
         await websocket.close(code=close_code, reason=exc.code)
         return
     except OmnigentBridgeError as exc:
@@ -1797,6 +1816,9 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
                     runner_id=frame.runner_id, error=frame.error
                 )
                 embedded_host_channels.revoke_runner_binding(frame.runner_id)
+    except HostAuthProfileError as exc:
+        close_code = 4403 if exc.code in {"host_auth_revoked", "host_auth_disabled"} else 1013
+        await websocket.close(code=close_code, reason=exc.code)
     except WebSocketDisconnect:
         pass
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):

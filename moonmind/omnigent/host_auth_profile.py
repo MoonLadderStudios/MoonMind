@@ -322,6 +322,11 @@ async def resolve_host_auth_credentials(
             "embedded host credential reference could not be resolved",
             code="host_auth_secret_unavailable",
         ) from exc
+    if len(values) != len(set(values)):
+        raise HostAuthProfileError(
+            "embedded host credential generations must resolve to distinct values",
+            code="host_auth_rotation_invalid",
+        )
     return ResolvedHostAuthCredentials(
         profile=profile,
         tokens_by_generation=dict(zip(generations, values, strict=True)),

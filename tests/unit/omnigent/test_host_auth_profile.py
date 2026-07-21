@@ -88,6 +88,27 @@ async def test_expired_previous_generation_is_stale(monkeypatch) -> None:
     assert resolved.tokens_by_generation == {8: "current-token"}
 
 
+@pytest.mark.asyncio
+async def test_overlapping_generations_cannot_resolve_to_same_token(monkeypatch) -> None:
+    now = datetime.now(tz=UTC)
+    monkeypatch.setenv("HOST_CURRENT", "same-token")
+    monkeypatch.setenv("HOST_PREVIOUS", "same-token")
+    profile = HostAuthCredentialProfile(
+        profile_id="managed-host-auth",
+        current_secret_ref="env://HOST_CURRENT",
+        current_generation=8,
+        previous_secret_ref="env://HOST_PREVIOUS",
+        previous_generation=7,
+        rotated_at=now,
+        previous_expires_at=now + timedelta(minutes=5),
+    )
+
+    with pytest.raises(HostAuthProfileError) as excinfo:
+        await resolve_host_auth_credentials(profile=profile, now=now)
+
+    assert excinfo.value.code == "host_auth_rotation_invalid"
+
+
 def test_revocation_and_incompatible_profile_fail_without_secret_material() -> None:
     for profile, code in (
         (HostAuthCredentialProfile("managed", "env://HOST", 2, revoked=True), "host_auth_revoked"),
