@@ -1515,6 +1515,7 @@ async def embedded_omnigent_runner_tunnel(
                     code="runner_tunnel_disconnected",
                 )
             except OmnigentIdempotencyError:
+                # Disconnect cleanup is idempotent after a terminal transition.
                 pass
 
 

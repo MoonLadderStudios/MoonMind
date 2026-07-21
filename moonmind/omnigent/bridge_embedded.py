@@ -234,7 +234,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                 )
             lifecycle = dict((row.metadata_ or {}).get("embedded_runner_launch") or {})
             if ready and lifecycle.get("state") not in {"failed", "stale", "stopped"}:
-                if lifecycle.get("state") != "runner_tunnel_ready":
+                if lifecycle.get("state") in {
+                    "runner_identity_bound", "runner_tunnel_waiting"
+                }:
                     await self._run_store.transition_embedded_runner(
                         idempotency_key, state="runner_tunnel_ready",
                         code="live_tunnel_verified",
@@ -274,6 +276,10 @@ class OmnigentEmbeddedHostProtocolFacade:
             _, binding_token = await self._run_store.get_embedded_runner_binding_token(
                 idempotency_key=idempotency_key
             )
+            # Prove the host transport exists before recording an ambiguous
+            # side-effect boundary. launch_runner performs the same check again.
+            if hasattr(self._host_channels, "get_ready"):
+                self._host_channels.get_ready(row.omnigent_host_id)
             await self._run_store.transition_embedded_runner(
                 idempotency_key, state="launch_sent"
             )
@@ -389,6 +395,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
+        lifecycle = dict((row.metadata_ or {}).get("embedded_runner_launch") or {})
+        if lifecycle.get("state") == "stopped":
+            return {"ok": True, "status": "stopped", "runnerId": runner_id}
         try:
             await self._run_store.transition_embedded_runner(
                 row.idempotency_key, state="draining", code="stop_requested"
@@ -431,17 +440,17 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=409,
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
-        is_first_message = row.first_message_state in {
-            "posting", "posted"
-        }
+        is_first_message = row.first_message_state == "posting"
         if is_first_message:
-            if row.first_message_state == "posted":
-                return {
-                    key: value for key, value in {
-                        "pending_id": row.first_message_pending_id,
-                        "item_id": row.first_message_item_id,
-                    }.items() if value
-                }
+            if (
+                hasattr(self._host_channels, "runner_ready")
+                and not self._host_channels.runner_ready(runner_id)
+            ):
+                raise OmnigentBridgeError(
+                    "assigned runner is not connected",
+                    failure_class="integration_error",
+                    status_code=503,
+                )
             try:
                 await self._run_store.claim_embedded_first_message_post(
                     row.idempotency_key
@@ -456,6 +465,8 @@ class OmnigentEmbeddedHostProtocolFacade:
                             path=f"/v1/sessions/{session_id}",
                         )
                     except (EmbeddedHostChannelError, TimeoutError):
+                        # Reconciliation is best effort; the durable claim below
+                        # remains authoritative when the runner is unavailable.
                         pass
                 response = _first_message_response_evidence(evidence)
                 if response is not None:
