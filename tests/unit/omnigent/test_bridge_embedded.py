@@ -575,7 +575,7 @@ async def test_embedded_create_session_creates_local_bridge_session(store) -> No
         "sendFollowUp": True,
         "clearSession": False,
         "interruptTurn": False,
-        "cancelSession": True,
+        "cancelSession": False,
         "resolveElicitation": True,
         "harvestResources": True,
         "newSession": False,
@@ -1017,6 +1017,18 @@ async def test_embedded_message_does_not_redeliver_delivery_unknown_retry(store)
     assert retry_error.value.code == "embedded_control_reconciliation_required"
     assert channels.calls == 1
 
+    control_key = facade._control_key(
+        "message", "sess-embedded", event.model_dump(by_alias=True, exclude_none=True)
+    )
+    reconciled = await facade.reconcile_control(
+        session_id="sess-embedded", control="message",
+        idempotency_key=control_key, outcome="failed",
+    )
+    assert reconciled == {
+        "ok": False, "reconciled": True, "outcome": "failed",
+        "idempotencyKey": control_key,
+    }
+
 
 @pytest.mark.asyncio
 async def test_embedded_message_rejects_expected_state_before_delivery(store) -> None:
@@ -1059,6 +1071,28 @@ async def test_embedded_message_rejects_expected_state_before_delivery(store) ->
     assert "stale-runner" in evidence["requestSummary"]
     assert evidence["evidenceRef"].startswith("artifact://omnigent/")
     assert events[0].artifact_refs == [evidence["evidenceRef"]]
+
+
+@pytest.mark.asyncio
+async def test_embedded_control_evidence_redacts_secret_shaped_summary(store) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+
+    await facade._append_control(
+        await store.get_existing("idem-embedded"), "message", "control-secret",
+        "requested", summary={"password": "super-secret-value"},
+    )
+
+    event = (await store.list_events(
+        (await store.get_existing("idem-embedded")).bridge_session_id
+    ))[0]
+    assert "super-secret-value" not in event.metadata_["embeddedControl"]["requestSummary"]
 
 
 @pytest.mark.asyncio
@@ -1393,6 +1427,34 @@ async def test_embedded_harvest_persists_terminal_bundle_and_replays_without_del
     assert "resourceProjection" not in associations[0].metadata_
     assert replay["reconciled"] is True
     assert channels.calls == calls
+
+
+@pytest.mark.asyncio
+async def test_live_embedded_harvest_does_not_persist_terminal_outcome(store, tmp_path) -> None:
+    await store.get_or_create(
+        request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,
+        target_metadata={"workspace": "/workspace/repo"},
+    )
+    await store.attach_session("idem-embedded", "sess-embedded")
+    await store.bind_embedded_runner(
+        "idem-embedded", host_id="host-1", runner_id="runner-1"
+    )
+
+    class Channels:
+        async def request_runner(self, **kwargs):
+            return {"items": []} if kwargs["expect_json"] else b""
+
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config(), host_channels=Channels(),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path / "artifacts"),
+    )
+    await facade.harvest_resources(session_id="sess-embedded")
+    refs = (await store.get_existing("idem-embedded")).terminal_refs
+
+    assert refs["cleanupState"] == "not_terminal"
+    assert "failureClass" not in refs
+    assert "failureCode" not in refs
+    assert "summary" not in refs
 
 
 @pytest.mark.asyncio

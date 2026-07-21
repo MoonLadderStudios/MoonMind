@@ -1296,6 +1296,15 @@ async def post_omnigent_session_event(
             return await control_facade.stop_session(session_id)
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
+            if payload.type == "control.reconcile":
+                extra = payload.model_extra or {}
+                return await embedded_facade.reconcile_control(
+                    session_id=session_id,
+                    control=str(extra.get("control") or ""),
+                    idempotency_key=str(extra.get("idempotencyKey") or ""),
+                    outcome=str(extra.get("outcome") or ""),
+                    actor="authenticated_session_owner",
+                )
             if payload.type in {"harvest", "harvest_session"}:
                 return await embedded_facade.harvest_resources(
                     session_id=session_id,

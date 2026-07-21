@@ -72,17 +72,14 @@ def _embedded_intervention_capabilities(
 ) -> dict[str, bool]:
     """Project pinned host capabilities onto the runtime-neutral UI contract."""
 
-    def advertised(*names: str) -> bool:
-        return any(host_capabilities.get(name) is True for name in names)
-
     live = session_status not in {"completed", "failed", "canceled", "timed_out"}
     controllable = live and runner_bound
     return {
         # These operations are part of the pinned embedded runner tunnel.
         "sendFollowUp": controllable,
         "clearSession": False,
-        "interruptTurn": controllable and advertised("interrupt", "interruptTurn", "interrupt_turn"),
-        "cancelSession": controllable,
+        "interruptTurn": False,
+        "cancelSession": False,
         "resolveElicitation": controllable,
         "harvestResources": controllable,
         "newSession": False,
@@ -260,6 +257,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         self._host_channels = host_channels
         self._artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
         self._runner_binding_root_secret = runner_binding_root_secret
+        self._journal_locks: dict[str, asyncio.Lock] = {}
 
     async def dispatch_runner(self, *, idempotency_key: str) -> dict[str, Any]:
         """Dispatch and durably bind a runner to an authorized embedded session."""
@@ -683,8 +681,11 @@ class OmnigentEmbeddedHostProtocolFacade:
             "bridgeSessionId": row.bridge_session_id,
             "direction": "moonmind_system",
             "kind": "resource_evidence_pending",
+            "eventType": "resource.evidence.pending",
             "status": "running",
+            "normalizedStatus": "running",
             "text": "Embedded resource evidence is being harvested",
+            "textPreview": "Embedded resource evidence is being harvested",
             "deduplicationKey": f"{association_key}:pending",
             "metadata": {
                 "associationKey": association_key,
@@ -730,6 +731,9 @@ class OmnigentEmbeddedHostProtocolFacade:
                     terminal_refs=terminal_refs,
                 )
             else:
+                terminal_refs.pop("failureClass", None)
+                terminal_refs.pop("failureCode", None)
+                terminal_refs.pop("summary", None)
                 await self._run_store.attach_capture_evidence(
                     row.idempotency_key, terminal_refs=terminal_refs
                 )
@@ -747,8 +751,11 @@ class OmnigentEmbeddedHostProtocolFacade:
             "bridgeSessionId": row.bridge_session_id,
             "direction": "moonmind_system",
             "kind": "resource_evidence_published",
+            "eventType": "resource.evidence.published",
             "status": terminal_status,
+            "normalizedStatus": terminal_status,
             "text": "Embedded resource evidence published",
+            "textPreview": "Embedded resource evidence published",
             "deduplicationKey": f"{association_key}:published",
             "metadata": {
                 "associationKey": association_key,
@@ -855,6 +862,18 @@ class OmnigentEmbeddedHostProtocolFacade:
     ) -> dict[str, Any]:
         """Finalize an accepted/ambiguous control without repeating its side effect."""
 
+        if control not in {"stop", "message", "elicitation", "harvest"}:
+            raise OmnigentBridgeError(
+                "Embedded control reconciliation requires a supported control",
+                failure_class="user_error", status_code=422,
+                code="embedded_control_reconciliation_invalid",
+            )
+        if not idempotency_key:
+            raise OmnigentBridgeError(
+                "Embedded control reconciliation requires an idempotency key",
+                failure_class="user_error", status_code=422,
+                code="embedded_control_reconciliation_invalid",
+            )
         if outcome not in {"completed", "failed"}:
             raise OmnigentBridgeError(
                 "Embedded control reconciliation outcome must be completed or failed",
@@ -929,7 +948,10 @@ class OmnigentEmbeddedHostProtocolFacade:
         actor: str = "authenticated_session_owner",
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        summary_json = json.dumps(dict(summary or {}), sort_keys=True, default=str)
+        redacted_summary = redact_raw_events([{"data": dict(summary or {})}])[0].get(
+            "data", {}
+        )
+        summary_json = json.dumps(redacted_summary, sort_keys=True, default=str)
         evidence = {
             "schemaVersion": "moonmind.omnigent.control_evidence.v1",
             "control": control,
@@ -1470,30 +1492,35 @@ class OmnigentEmbeddedHostProtocolFacade:
                     values.append(value)
             return values
 
-        raw_events = await restored(row.raw_events_ref)
-        normalized_events = await restored(row.normalized_events_ref)
-        raw_events.extend(redact_raw_events([raw_event]))
-        normalized_events.append(normalized_event)
-        request = _request_for_row(row)
-        prefix = f"{sequence:08d}"
-        encode = lambda values: "".join(
-            json.dumps(value, sort_keys=True, default=str, separators=(",", ":")) + "\n"
-            for value in values
-        )
-        raw_ref = await self._artifact_gateway.write_text(
-            request=request, name=f"runtime.omnigent.sse.raw.{prefix}.jsonl",
-            payload=encode(raw_events), link_type="runtime.omnigent.sse.raw",
-            content_type="application/x-ndjson",
-        )
-        normalized_ref = await self._artifact_gateway.write_text(
-            request=request, name=f"runtime.omnigent.sse.normalized.{prefix}.jsonl",
-            payload=encode(normalized_events), link_type="runtime.omnigent.sse.normalized",
-            content_type="application/x-ndjson",
-        )
-        await self._run_store.attach_active_journal_refs(
-            row.bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref,
-        )
-        return raw_ref, normalized_ref
+        lock = self._journal_locks.setdefault(row.bridge_session_id, asyncio.Lock())
+        async with lock:
+            refreshed = await self._run_store.get_session_by_provider_session_id(
+                row.omnigent_session_id
+            )
+            raw_events = await restored(refreshed.raw_events_ref)
+            normalized_events = await restored(refreshed.normalized_events_ref)
+            raw_events.extend(redact_raw_events([raw_event]))
+            normalized_events.append(normalized_event)
+            request = _request_for_row(refreshed)
+            prefix = f"{sequence:08d}"
+            encode = lambda values: "".join(
+                json.dumps(value, sort_keys=True, default=str, separators=(",", ":")) + "\n"
+                for value in values
+            )
+            raw_ref = await self._artifact_gateway.write_text(
+                request=request, name=f"runtime.omnigent.sse.raw.{prefix}.jsonl",
+                payload=encode(raw_events), link_type="runtime.omnigent.sse.raw",
+                content_type="application/x-ndjson",
+            )
+            normalized_ref = await self._artifact_gateway.write_text(
+                request=request, name=f"runtime.omnigent.sse.normalized.{prefix}.jsonl",
+                payload=encode(normalized_events), link_type="runtime.omnigent.sse.normalized",
+                content_type="application/x-ndjson",
+            )
+            await self._run_store.attach_active_journal_refs(
+                row.bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref,
+            )
+            return raw_ref, normalized_ref
 
     def _require_embedded_mode(self) -> None:
         if self._config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
