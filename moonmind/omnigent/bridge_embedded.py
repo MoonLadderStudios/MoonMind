@@ -11,6 +11,8 @@ and persists them into the canonical bridge session store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import json
 from typing import Any, Mapping
 from urllib.parse import quote
@@ -67,6 +69,10 @@ def _embedded_intervention_capabilities(
         "clearSession": False,
         "interruptTurn": advertised("interrupt", "interruptTurn", "interrupt_turn"),
         "cancelSession": True,
+        "resolveElicitation": True,
+        "harvestResources": True,
+        "newSession": True,
+        "terminalCleanup": True,
     }
 
 
@@ -282,14 +288,25 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
+        control_key = self._control_key("stop", session_id, {})
+        if await self._control_completed(row, control_key):
+            return {"ok": True, "status": "stopped", "runnerId": runner_id, "reconciled": True}
+        await self._append_control(row, "stop", control_key, "requested")
+        await self._append_control(row, "stop", control_key, "accepted")
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._append_control(
+                row, "stop", control_key,
+                "delivery_unknown" if isinstance(exc, TimeoutError) else "failed",
+                code="embedded_control_delivery_unknown" if isinstance(exc, TimeoutError) else "embedded_control_failed",
+            )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
+        await self._append_control(row, "stop", control_key, "completed")
         await self._run_store.record_lifecycle_event(
             row.idempotency_key,
             event_type="terminal",
@@ -318,14 +335,26 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error", status_code=409,
             )
         payload = event.model_dump(by_alias=True, exclude_none=True)
+        control_key = self._control_key("message", session_id, payload)
+        if await self._control_completed(row, control_key):
+            return {"ok": True, "reconciled": True, "idempotencyKey": control_key}
+        await self._append_control(row, "message", control_key, "requested", summary=payload)
+        await self._append_control(row, "message", control_key, "accepted")
         try:
-            return await self._host_channels.post_runner_event(
+            result = await self._host_channels.post_runner_event(
                 runner_id=runner_id, session_id=session_id, payload=payload
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._append_control(
+                row, "message", control_key,
+                "delivery_unknown" if isinstance(exc, TimeoutError) else "failed",
+                code="embedded_control_delivery_unknown" if isinstance(exc, TimeoutError) else "embedded_control_failed",
+            )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
+        await self._append_control(row, "message", control_key, "completed")
+        return result
 
     async def get_resource(
         self, operation: str, session_id: str, value: str | None = None
@@ -397,13 +426,20 @@ class OmnigentEmbeddedHostProtocolFacade:
     ) -> dict[str, Any]:
         """Resolve an elicitation through the exact durably bound runner."""
 
-        _, runner_id = await self._bound_runner(session_id)
+        row, runner_id = await self._bound_runner(session_id)
+        control_key = self._control_key(
+            "elicitation", session_id, {"elicitationId": elicitation_id, "payload": payload}
+        )
+        if await self._control_completed(row, control_key):
+            return {"ok": True, "reconciled": True, "idempotencyKey": control_key}
+        await self._append_control(row, "elicitation", control_key, "requested", summary={"elicitationId": elicitation_id})
+        await self._append_control(row, "elicitation", control_key, "accepted")
         path = self._config.public_api.routes.resolve_elicitation.format(
             session_id=quote(session_id, safe=""),
             elicitation_id=quote(_safe_resource_identifier(elicitation_id), safe=""),
         )
         try:
-            return await self._host_channels.request_runner(
+            result = await self._host_channels.request_runner(
                 runner_id=runner_id,
                 method="POST",
                 path=path,
@@ -411,9 +447,73 @@ class OmnigentEmbeddedHostProtocolFacade:
                 expect_json=True,
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
+            await self._append_control(
+                row, "elicitation", control_key,
+                "delivery_unknown" if isinstance(exc, TimeoutError) else "failed",
+                code="embedded_control_delivery_unknown" if isinstance(exc, TimeoutError) else "embedded_control_failed",
+            )
             raise OmnigentBridgeError(
                 str(exc), failure_class="integration_error", status_code=503
             ) from exc
+        await self._append_control(row, "elicitation", control_key, "completed")
+        return result
+
+    @staticmethod
+    def _control_key(control: str, session_id: str, payload: Mapping[str, Any]) -> str:
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()[:24]
+        return f"embedded:{control}:{session_id}:{digest}"[:100]
+
+    async def _control_completed(self, row: Any, control_key: str) -> bool:
+        events = await self._run_store.list_events(row.bridge_session_id)
+        return any(
+            event.deduplication_key == f"{control_key}:completed"
+            for event in events
+        )
+
+    async def _append_control(
+        self, row: Any, control: str, control_key: str, outcome: str, *,
+        summary: Mapping[str, Any] | None = None, code: str | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        summary_json = json.dumps(dict(summary or {}), sort_keys=True, default=str)
+        data = {
+            "control": control,
+            "outcome": outcome,
+            "actor": "authenticated_session_owner",
+            "idempotencyKey": control_key,
+            "expectedState": {
+                "sessionId": row.omnigent_session_id,
+                "hostId": row.omnigent_host_id,
+                "runnerId": row.omnigent_runner_id,
+                "sessionStatus": row.status,
+                "turnState": "unknown",
+            },
+            "requestSummary": summary_json[:2048],
+            "evidenceRef": None,
+            "timestamp": now,
+            "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        }
+        if code:
+            data["code"] = code
+        await self._run_store.append_events(row.bridge_session_id, [{
+            "schemaVersion": "moonmind.omnigent_bridge.event.v1",
+            "timestamp": now,
+            "bridgeSessionId": row.bridge_session_id,
+            "omnigentSessionId": row.omnigent_session_id,
+            "moonmindWorkflowId": row.moonmind_workflow_id,
+            "moonmindAgentRunId": row.moonmind_agent_run_id,
+            "direction": "moonmind_to_host",
+            "type": f"control.{control}.{outcome}",
+            "eventType": f"control.{control}.{outcome}",
+            "normalizedStatus": "running",
+            "data": data,
+            "artifactRefs": [],
+            "metadata": {
+                "moonmind": {"workflowChatVisible": False, "source": "embedded_control"},
+                "embeddedControl": data,
+            },
+            "deduplicationKey": f"{control_key}:{outcome}"[:128],
+        }])
 
     async def _bound_runner(self, session_id: str) -> tuple[Any, str]:
         self._require_embedded_mode()
