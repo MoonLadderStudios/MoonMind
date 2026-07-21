@@ -3057,14 +3057,14 @@ files = [
 
 [[package]]
 name = "mem0ai"
-version = "2.0.11"
+version = "2.0.12"
 description = "Long-term memory for AI Agents"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "mem0ai-2.0.11-py3-none-any.whl", hash = "sha256:1b49801105814e01d845b0e0a68267357cff0f48a4ef382e1ed77c2e8ecba3ff"},
-    {file = "mem0ai-2.0.11.tar.gz", hash = "sha256:bca405548e11c642ee75009134ffa7f69ab41ba3b1f72465816ba5ff0612e18f"},
+    {file = "mem0ai-2.0.12-py3-none-any.whl", hash = "sha256:6b7e1afa466f6e14dd34b5e9222c159a69fad38f8d787e73adbf91dbb29e73e2"},
+    {file = "mem0ai-2.0.12.tar.gz", hash = "sha256:626c001faee2edd3733cbda7105571ed4a514c7c044bfe8f64fd48aa1b34dd7a"},
 ]
 
 [package.dependencies]
@@ -3079,7 +3079,7 @@ sqlalchemy = ">=2.0.31"
 
 [package.extras]
 dev = ["isort (>=5.13.2)", "pytest (>=8.2.2)", "ruff (>=0.6.5)"]
-extras = ["boto3 (>=1.34.0)", "elasticsearch (>=8.0.0,<9.0.0)", "fastembed (>=0.3.1)", "langchain (>=0.3.30,<1.0.0)", "langchain-community (>=0.3.27,<1.0.0)", "langchain-core (>=0.3.85,<1.0.0)", "opensearch-py (>=2.0.0)", "sentence-transformers (>=5.0.0)"]
+extras = ["boto3 (>=1.34.0)", "elasticsearch (>=8.0.0,<9.0.0)", "fastembed (>=0.3.1)", "langchain (>=0.3.30,<1.0.0)", "langchain-community (>=0.3.27,<1.0.0)", "langchain-core (>=0.3.85,<1.0.0)", "opensearch-py (>=2.0.0)", "sentence-transformers (>=5.2.0)", "transformers (>=5.3.0)"]
 llms = ["google-genai (>=1.0.0)", "google-generativeai (>=0.3.0)", "groq (>=0.3.0)", "litellm (>=1.83.7)", "ollama (>=0.3.0)", "openai (>=1.90.0)", "together (>=0.2.10)", "vertexai (>=0.1.0)"]
 nlp = ["spacy (>=3.7.0)"]
 test = ["pytest (>=8.2.2)", "pytest-asyncio (>=0.23.7)", "pytest-mock (>=3.14.0)"]
