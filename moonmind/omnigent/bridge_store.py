@@ -326,29 +326,6 @@ class OmnigentBridgeSessionStore:
                 lease.host_readiness = readiness[:32]
             await session.commit()
 
-    async def get_embedded_host_capabilities(
-        self, *, host_id: str
-    ) -> dict[str, Any]:
-        """Return the bounded capabilities advertised by an active host lease."""
-        from api_service.db.models import OmnigentOAuthHostLeaseRecord
-
-        now = datetime.now(tz=UTC)
-        async with self._session_factory() as session:
-            lease = (
-                await session.execute(
-                    select(OmnigentOAuthHostLeaseRecord).where(
-                        OmnigentOAuthHostLeaseRecord.omnigent_host_id == host_id,
-                        OmnigentOAuthHostLeaseRecord.status.in_(
-                            {"starting", "ready", "assigned", "draining"}
-                        ),
-                        OmnigentOAuthHostLeaseRecord.expires_at > now,
-                    )
-                )
-            ).scalar_one_or_none()
-            if lease is None:
-                return {}
-            return dict(lease.host_capabilities_json or {})
-
     async def active_host_protocol_modes(
         self, *, exclude_idempotency_key: str | None = None
     ) -> dict[str, int]:
@@ -390,39 +367,99 @@ class OmnigentBridgeSessionStore:
                     OmnigentBridgeSession.terminal_refs,
                 ).where(
                     OmnigentBridgeSession.host_lease_ref.is_not(None),
-                    OmnigentBridgeSession.status.in_(_TERMINAL_STATUSES),
                 )
             )
             refs: set[str] = set()
             for host_lease_ref, terminal_refs in result.all():
                 if host_lease_ref and (terminal_refs or {}).get(
                     "cleanupState"
-                ) in {"runner_exited", "cleanup_required"}:
+                ) in {"runner_exited", "failed"}:
                     refs.add(str(host_lease_ref))
             return refs
 
-    async def embedded_lease_state(self, idempotency_key: str) -> dict[str, Any]:
-        """Return compact durable host/provider lease evidence for terminal capture."""
-        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+    async def record_terminal_cleanup(
+        self,
+        *,
+        host_lease_ref: str,
+        completed: bool,
+        code: str | None = None,
+        summary: str | None = None,
+    ) -> OmnigentBridgeSession | None:
+        """Persist the authoritative host/Profile lease cleanup outcome.
+
+        The janitor owns the cleanup side effect.  This method projects its
+        result back onto the durable bridge contract without making the host
+        lease or container name an access authority.
+        """
+
+        from moonmind.utils.logging import redact_sensitive_text
 
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
-            lease = None
-            if row.host_lease_ref:
-                lease = await session.get(
-                    OmnigentOAuthHostLeaseRecord, row.host_lease_ref
-                )
-            return {
-                "providerProfileId": row.provider_profile_id,
-                "providerLeaseId": row.provider_lease_id,
-                "hostLeaseRef": row.host_lease_ref,
-                "hostLeaseStatus": getattr(lease, "status", None),
-                "hostReadiness": getattr(lease, "host_readiness", None),
-                "disconnectedAt": (
-                    lease.disconnected_at.isoformat()
-                    if lease is not None and lease.disconnected_at else None
-                ),
-            }
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.host_lease_ref == host_lease_ref)
+                .order_by(OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            safe_summary = redact_sensitive_text(str(summary or ""))[:512]
+            safe_code = str(code or "")[:96] or None
+            refs = dict(row.terminal_refs or {})
+            refs.update(
+                {
+                    "cleanupState": "completed" if completed else "failed",
+                    "leaseReleaseState": "released" if completed else "failed",
+                }
+            )
+            if safe_code:
+                refs["cleanupFailureCode"] = safe_code
+            else:
+                refs.pop("cleanupFailureCode", None)
+            row.terminal_refs = refs
+            idempotency_key = row.idempotency_key
+            await session.commit()
+            await session.refresh(row)
+            detached = _detached(session, row)
+
+        control_key = f"terminal-cleanup:{host_lease_ref}"
+        common_metadata = {
+            "actor": "moonmind_janitor",
+            "controlType": "terminal_cleanup",
+            "controlIdempotencyKey": control_key,
+            "sourceMode": "embedded",
+        }
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="control",
+            event_identity=f"embedded-control:{control_key}:requested",
+            summary="Embedded terminal cleanup requested",
+            metadata={**common_metadata, "controlOutcome": "requested"},
+        )
+        await self.record_lifecycle_event(
+            idempotency_key,
+            event_type="control",
+            status="completed" if completed else "failed",
+            event_identity=(
+                f"embedded-control:{control_key}:"
+                f"{'completed' if completed else 'failed'}"
+            ),
+            code=safe_code,
+            summary=safe_summary or (
+                "Embedded terminal cleanup completed"
+                if completed
+                else "Embedded terminal cleanup failed"
+            ),
+            failure_class=None if completed else "integration_error",
+            metadata={
+                **common_metadata,
+                "controlOutcome": "completed" if completed else "failed",
+                "cleanupCompleted": completed,
+                "leaseReleased": completed,
+            },
+        )
+        return detached
     async def embedded_reconciliation_host_lease_refs(
         self, *, abandoned_before: datetime
     ) -> dict[str, str]:
@@ -932,6 +969,62 @@ class OmnigentBridgeSessionStore:
     ) -> OmnigentBridgeSession:
         """Append a bounded, secret-safe pre-stream lifecycle event."""
 
+        row, _created = await self._record_lifecycle_event(
+            idempotency_key,
+            event_type=event_type,
+            status=status,
+            event_identity=event_identity,
+            code=code,
+            summary=summary,
+            failure_class=failure_class,
+            diagnostics_ref=diagnostics_ref,
+            remediation_action=remediation_action,
+            metadata=metadata,
+        )
+        return row
+
+    async def claim_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        event_identity: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Atomically claim a logical side effect with a durable event.
+
+        The bridge-session row lock serializes competing claimants.  Exactly one
+        caller creates the stable event identity and may perform the live side
+        effect; later callers must reconcile the already durable control state.
+        """
+
+        _row, created = await self._record_lifecycle_event(
+            idempotency_key,
+            event_type=event_type,
+            status="running",
+            event_identity=event_identity,
+            summary=summary,
+            metadata=metadata,
+        )
+        return created
+
+    async def _record_lifecycle_event(
+        self,
+        idempotency_key: str,
+        *,
+        event_type: str,
+        status: str = "running",
+        event_identity: str | None = None,
+        code: str | None = None,
+        summary: str | None = None,
+        failure_class: str | None = None,
+        diagnostics_ref: str | None = None,
+        remediation_action: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[OmnigentBridgeSession, bool]:
+        """Record one stable lifecycle identity and report whether it was new."""
+
         from moonmind.utils.logging import redact_sensitive_text
 
         async with self._session_factory() as session:
@@ -954,7 +1047,7 @@ class OmnigentBridgeSessionStore:
             )
             existing = await session.get(OmnigentBridgeSessionEvent, stable_event_id)
             if existing is not None:
-                return _detached(session, row)
+                return _detached(session, row), False
             max_sequence_result = await session.execute(
                 select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
                     OmnigentBridgeSessionEvent.bridge_session_id
@@ -1011,6 +1104,20 @@ class OmnigentBridgeSessionStore:
                         "hostCleanupMode",
                         "stateResourcesCleaned",
                         "hostLeaseReleased",
+                        "actor",
+                        "controlType",
+                        "controlOutcome",
+                        "controlId",
+                        "controlIdempotencyKey",
+                        "expectedSessionId",
+                        "expectedHostId",
+                        "expectedRunnerId",
+                        "expectedTurnState",
+                        "sourceMode",
+                        "controlKey",
+                        "captureManifestRef",
+                        "resourceProjectionRef",
+                        "evidenceCompleteness",
                     }
                 }
             journal.append(entry)
@@ -1049,7 +1156,7 @@ class OmnigentBridgeSessionStore:
                 row.first_message_state = FIRST_MESSAGE_TERMINAL
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            return _detached(session, row), True
 
     async def get_binding(self, idempotency_key: str) -> BridgeSessionBinding | None:
         """Return the MoonMind identity already bound to a bridge session.
@@ -1656,20 +1763,32 @@ class OmnigentBridgeSessionStore:
             await session.commit()
 
     async def attach_capture_evidence(
-        self, idempotency_key: str, *, terminal_refs: dict[str, Any]
-    ) -> OmnigentBridgeSession:
-        """Persist a harvest bundle without changing the live session state."""
+        self,
+        bridge_session_id: str,
+        *,
+        capture_manifest_ref: str,
+        resource_projection_ref: str,
+        evidence_completeness: str,
+    ) -> None:
+        """Attach MoonMind-owned embedded harvest evidence without terminalizing."""
         async with self._session_factory() as session:
-            row = await self._require(session, idempotency_key)
-            safe_refs = redact_sensitive_payload(terminal_refs)
-            if not isinstance(safe_refs, dict):
-                raise OmnigentIdempotencyError("invalid capture evidence payload")
-            row.terminal_refs = safe_refs
-            for column, value in _canonical_ref_columns(safe_refs).items():
-                setattr(row, column, value)
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            row.capture_manifest_ref = str(capture_manifest_ref)[:1024]
+            refs = dict(row.terminal_refs or {})
+            refs.update(
+                {
+                    "captureManifestRef": str(capture_manifest_ref)[:1024],
+                    "resourceProjectionRef": str(resource_projection_ref)[:1024],
+                    "evidenceCompleteness": str(evidence_completeness)[:64],
+                }
+            )
+            row.terminal_refs = refs
             await session.commit()
-            await session.refresh(row)
-            return _detached(session, row)
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str

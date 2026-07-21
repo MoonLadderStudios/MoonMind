@@ -182,7 +182,7 @@ class _FakeProxy:
             raise self.stream_error
         yield {"type": "response.completed", "session": {"status": "completed"}}
 
-    async def post_event(self, *, session_id: str, event):
+    async def post_event(self, *, session_id: str, event, actor=None):
         self.posted_events.append({"session_id": session_id, "event": event})
         return {"ok": True, "type": event.type}
 
@@ -192,6 +192,7 @@ class _FakeProxy:
         session_id: str,
         elicitation_id: str,
         payload,
+        actor=None,
     ):
         self.resolved_elicitations.append(
             {
@@ -319,7 +320,6 @@ class _FakeEmbeddedFacade(_FakeProxy):
         super().__init__()
         self.created: list[dict[str, Any]] = []
         self.stopped: list[str] = []
-        self.reconciled: list[dict[str, Any]] = []
         self.stream_afters: list[int] = []
 
     async def create_session(self, *, request, binding):
@@ -359,12 +359,8 @@ class _FakeEmbeddedFacade(_FakeProxy):
         self.stopped.append(session_id)
         return {"ok": True, "status": "stopped", "runnerId": "runner-1"}
 
-    async def stop_session(self, session_id: str):
+    async def stop_session(self, session_id: str, *, payload=None, actor=None):
         return await self.stop_runner(session_id=session_id)
-
-    async def reconcile_control(self, **kwargs):
-        self.reconciled.append(kwargs)
-        return {"ok": True, "reconciled": True, "outcome": kwargs["outcome"]}
 
 
 def _build(
@@ -1392,29 +1388,6 @@ def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
     assert response.status_code == 501
     assert response.json()["detail"]["code"] == "omnigent_embedded_control_unsupported"
     assert facade.stopped == []
-
-
-def test_embedded_control_reconciliation_is_exposed_to_session_owner() -> None:
-    client, facade, _ = _build(config=parse_bridge_config({
-        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-        "hostConnection": {"embedded": {
-            "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
-            "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
-            "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
-        }},
-    }), proxy=_FakeEmbeddedFacade())
-
-    response = client.post(_EVENTS_PATH, json={
-        "type": "control.reconcile", "control": "message",
-        "idempotencyKey": "control-1", "outcome": "completed",
-    })
-
-    assert response.status_code == 200
-    assert facade.reconciled == [{
-        "session_id": "sess-77", "control": "message",
-        "idempotency_key": "control-1", "outcome": "completed",
-        "actor": "authenticated_session_owner",
-    }]
 
 
 def test_public_openapi_uses_typed_mode_neutral_contracts() -> None:

@@ -217,8 +217,12 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
     events = await store.list_events(row.bridge_session_id)
 
     assert row.status == "failed"
-    assert row.terminal_refs["cleanupState"] == "runner_exited"
-    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert row.terminal_refs["cleanupState"] == "completed"
+    assert row.terminal_refs["leaseReleaseState"] == "released"
+    assert [event.event_type for event in events] == [
+        "lifecycle.terminal", "lifecycle.control", "lifecycle.control",
+    ]
+    assert events[-1].metadata_["metadata"]["controlOutcome"] == "completed"
     assert result["actions"][-1]["action"] == "runner_exit_cleanup"
     assert repository.stopped == ["host-lease-1"]
 
@@ -442,7 +446,11 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
     assert row.omnigent_session_id == "session-1"
     assert row.first_message_item_id == "item-1"
     assert lifecycle["state"] == "failed"
-    assert [event.event_type for event in events] == ["lifecycle.terminal"]
+    assert events[-1].event_type == "lifecycle.terminal"
+    assert all(
+        event.event_type in {"lifecycle.control", "lifecycle.terminal"}
+        for event in events
+    )
     refs = await restarted_store.cleanup_required_host_lease_refs()
     assert refs == {"host-lease-1"}
 
