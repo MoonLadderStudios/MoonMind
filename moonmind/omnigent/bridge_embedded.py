@@ -16,6 +16,7 @@ import json
 from typing import Any, Mapping
 from urllib.parse import quote
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from moonmind.omnigent.bridge_config import (
@@ -52,6 +53,7 @@ MAX_EMBEDDED_CAPABILITIES = 128
 MAX_EMBEDDED_CAPABILITY_BYTES = 64 * 1024
 MAX_EMBEDDED_EVENT_ENTRIES = 1024
 MAX_EMBEDDED_EVENT_BYTES = 1024 * 1024
+logger = structlog.get_logger(__name__)
 
 
 def _bounded_mapping(
@@ -134,13 +136,16 @@ class EmbeddedHostAuthContext:
     protocol_profile: str
     runner_id: str
     credential_generation: int
+    credential_profile_id: str = "bootstrap-local"
 
 
 def verify_embedded_host_auth(
     *,
     headers: Mapping[str, Any],
     config: OmnigentBridgeConfig,
-    configured_token: str,
+    configured_token: str = "",
+    configured_credentials: Mapping[int, str] | None = None,
+    credential_profile_id: str = "bootstrap-local",
 ) -> EmbeddedHostAuthContext:
     """Verify the embedded host/runner auth profile (§16 rule 8).
 
@@ -155,24 +160,63 @@ def verify_embedded_host_auth(
             failure_class="system_error",
             status_code=501,
         )
+    credentials = {
+        int(generation): str(token).strip()
+        for generation, token in (configured_credentials or {}).items()
+        if str(token or "").strip()
+    }
+    if not credentials and str(configured_token or "").strip():
+        credentials = {1: str(configured_token).strip()}
     try:
-        identity = OmnigentHostAuthAdapter(
-            allowed_tokens=frozenset({str(configured_token or "").strip()})
-            if str(configured_token or "").strip()
-            else frozenset()
-        ).verify(headers)
+        adapter = OmnigentHostAuthAdapter(allowed_tokens=frozenset(credentials.values()))
+        identity = adapter.verify(headers)
     except UpstreamHostAuthError as exc:
         unavailable = "configured" in str(exc) or "entrypoint" in str(exc)
+        logger.warning(
+            "embedded_host_auth_verification_failed",
+            credential_profile_id=credential_profile_id,
+            failure_code=("host_auth_unavailable" if unavailable else "host_auth_rejected"),
+        )
         raise OmnigentBridgeError(
-            str(exc),
+            "Embedded host credential could not be verified",
             failure_class="system_error" if unavailable else "user_error",
             status_code=503 if unavailable else 401,
+            code=("host_auth_unavailable" if unavailable else "host_auth_rejected"),
         ) from exc
+    header_values = (
+        list(headers.getlist(adapter.token_header))
+        if callable(getattr(headers, "getlist", None))
+        else [
+            str(value)
+            for key, value in headers.items()
+            if str(key).lower() == adapter.token_header.lower()
+        ]
+    )
+    matched = [generation for generation, token in credentials.items() if header_values == [token]]
+    if len(matched) != 1:
+        logger.warning(
+            "embedded_host_auth_verification_failed",
+            credential_profile_id=credential_profile_id,
+            failure_code="host_auth_stale_or_invalid_generation",
+        )
+        raise OmnigentBridgeError(
+            "Embedded host credential generation could not be selected",
+            failure_class="user_error",
+            status_code=401,
+            code="host_auth_stale_or_invalid_generation",
+        )
+    logger.info(
+        "embedded_host_auth_verified",
+        credential_profile_id=credential_profile_id,
+        credential_generation=matched[0],
+        runner_id=identity.runner_id,
+    )
     return EmbeddedHostAuthContext(
         auth_mode=auth_mode,
         protocol_profile=identity.protocol_profile,
         runner_id=identity.runner_id,
-        credential_generation=1,
+        credential_generation=matched[0],
+        credential_profile_id=credential_profile_id,
     )
 
 

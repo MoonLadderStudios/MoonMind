@@ -14,6 +14,33 @@ verified identity is produced by `omnigent.runner.identity.token_bound_runner_id
 MoonMind invokes these pinned entrypoints through `OmnigentHostAuthAdapter` and
 fails preflight when they cannot be imported.
 
+## Managed credential lifecycle
+
+Embedded deployments configure a stable host-auth profile ID, a current
+generation, and an `env://` or `db://` SecretRef. Secret bodies are resolved
+only immediately before the HTTP or WebSocket handshake verifier runs. The
+legacy `OMNIGENT_HOST_RUNNER_TOKEN` is retained solely as an explicit
+local/bootstrap fallback and readiness reports that fallback state; it is not
+the managed production contract.
+
+Rotation is an atomic settings change. A new SecretRef and strictly increasing
+generation become current together. One immediately preceding generation may
+remain valid for reconnects until its explicit expiry, with a maximum overlap
+of 15 minutes from `rotatedAt`. Existing tunnels may finish until disconnected;
+new and reconnecting tunnels reauthenticate against the current bounded set.
+Expired generations are stale and rejected. Revocation disables every
+generation immediately for new requests and reconnects; operators drain or
+close existing tunnels before re-enabling a newly validated generation. Invalid
+profile, verifier, SecretRef, or overlap configuration fails readiness without
+replacing the last valid settings, which supplies rollback through the settings
+transaction rather than silent credential fallback.
+
+The verified token-bound identity and selected host-auth generation must match
+an active durable host lease. That lease is revalidated against its exact host
+binding, Provider Profile credential generation, and assigned bridge session
+on each accepted operation. Readiness and errors expose only safe profile,
+generation, pinned-commit, and failure-code metadata.
+
 The binding token is a runner control-plane credential, distinct from Omnigent
 user authentication and MoonMind user/operator authentication. Authorization
 Bearer values, cookies, query/path values, execution-principal headers, and

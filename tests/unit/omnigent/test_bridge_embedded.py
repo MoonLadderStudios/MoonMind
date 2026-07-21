@@ -427,6 +427,37 @@ async def test_registration_rejects_expired_profile_bound_lease(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_rejects_lease_after_provider_profile_rotation(store) -> None:
+    """MoonLadderStudios/MoonMind#3423: stale generation cannot keep a lease."""
+
+    await _bind_active_host(store, host_id="stale-host")
+    async with store._session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "profile-1")
+        profile.credential_generation = 2
+        await session.commit()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store, config=_embedded_config()
+    )
+    auth = EmbeddedHostAuthContext(
+        auth_mode="upstream_runner_tunnel",
+        protocol_profile="omnigent.runner_tunnel.7da32637",
+        runner_id="stale-host",
+        credential_generation=1,
+        credential_profile_id="managed-host-auth",
+    )
+
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        await facade.heartbeat(
+            host_id="stale-host",
+            request=EmbeddedHostHeartbeatRequest(status="ready"),
+            auth=auth,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert "credential generation" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_runner_exit_without_terminal_event_creates_terminal_evidence(store) -> None:
     row = await store.get_or_create(
         request=_request(), endpoint_ref="embedded", agent_id=None, agent_name=None,

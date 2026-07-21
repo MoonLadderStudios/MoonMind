@@ -61,12 +61,16 @@ from moonmind.omnigent.embedded_host_channel import (
     embedded_host_channels,
 )
 from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
+from moonmind.omnigent.host_auth_profile import (
+    HostAuthProfileError,
+    host_auth_readiness,
+    resolve_host_auth_credentials,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
-    resolved_host_runner_token,
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
@@ -199,7 +203,13 @@ async def get_omnigent_bridge_readiness(
 ) -> dict[str, Any]:
     """Expose selected protocol and conformance gates without secret material."""
 
-    return config.readiness()
+    readiness = config.readiness()
+    if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        auth = await host_auth_readiness()
+        readiness["hostAuthentication"] = auth
+        if not auth["ready"]:
+            readiness["conformanceState"] = "gated"
+    return readiness
 
 
 def _require_proxy_mode(
@@ -354,17 +364,24 @@ def _http_error_from_bridge(exc: OmnigentBridgeError) -> HTTPException:
     )
 
 
-def _embedded_auth_context(
+async def _embedded_auth_context(
     *,
     request: Request,
     config: OmnigentBridgeConfig,
 ):
     try:
+        resolved = await resolve_host_auth_credentials()
         return verify_embedded_host_auth(
             headers=request.headers,
             config=config,
-            configured_token=resolved_host_runner_token(),
+            configured_credentials=resolved.tokens_by_generation,
+            credential_profile_id=resolved.profile.profile_id,
         )
+    except HostAuthProfileError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "failureClass": "system_error", "message": str(exc)},
+        ) from exc
     except OmnigentBridgeError as exc:
         raise _http_error_from_bridge(exc) from exc
 
@@ -1598,7 +1615,7 @@ async def register_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Register an unchanged host against MoonMind's embedded host facade."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.register_host(request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -1614,15 +1631,17 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
+        resolved = await resolve_host_auth_credentials()
         auth = verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
-            configured_token=resolved_host_runner_token(),
+            configured_credentials=resolved.tokens_by_generation,
+            credential_profile_id=resolved.profile.profile_id,
         )
         if host_id != auth.runner_id:
             await websocket.close(code=4403)
             return
-    except OmnigentBridgeError:
+    except (OmnigentBridgeError, HostAuthProfileError):
         await websocket.close(code=4401)
         return
     await websocket.accept()
@@ -1700,7 +1719,7 @@ async def heartbeat_embedded_omnigent_host(
 ) -> dict[str, Any]:
     """Accept a host heartbeat through the embedded host facade."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.heartbeat(host_id=host_id, request=payload, auth=auth)
     except OmnigentBridgeError as exc:
@@ -1718,7 +1737,7 @@ async def ingest_embedded_omnigent_host_event(
 ) -> dict[str, Any]:
     """Ingest host/session events into the canonical bridge projection."""
 
-    auth = _embedded_auth_context(request=request, config=config)
+    auth = await _embedded_auth_context(request=request, config=config)
     try:
         return await facade.ingest_session_event(
             host_id=host_id,
