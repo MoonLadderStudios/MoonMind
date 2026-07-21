@@ -40,6 +40,7 @@ class OmnigentHostProtocolAdapter:
             raise UpstreamHostProtocolError("host frame was rejected") from exc
         allowed = (
             self._frames.HostHelloFrame,
+            self._frames.HostHarnessReadinessFrame,
             self._frames.HostLaunchRunnerResultFrame,
             self._frames.HostStopRunnerResultFrame,
             self._frames.HostRunnerExitedFrame,
