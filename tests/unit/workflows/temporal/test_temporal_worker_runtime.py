@@ -236,6 +236,49 @@ def test_required_capability_readiness_accepts_prefetched_jira_context(
     assert blockers == []
 
 
+def test_python_container_tests_readiness_blocks_disabled_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        worker_runtime.settings.feature_flags, "container_jobs_enabled", False
+    )
+    monkeypatch.setenv("MOONMIND_CONTAINER_BACKEND_ENABLED", "true")
+    monkeypatch.setenv("SYSTEM_DOCKER_HOST", "tcp://docker-proxy:2375")
+    monkeypatch.setenv("MOONMIND_PYTHON_TEST_IMAGE", "moonmind-python-tests:local")
+
+    blockers = _required_capability_blockers(
+        parameters={
+            "repository": "MoonLadderStudios/MoonMind",
+            "requiredCapabilities": ["python_container_tests"],
+        },
+        task_payload={},
+    )
+
+    assert blockers[0]["check"] == "container_jobs_api_surface"
+    assert blockers[0]["capability"] == "python_container_tests"
+
+
+def test_python_container_tests_readiness_accepts_canonical_compose_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        worker_runtime.settings.feature_flags, "container_jobs_enabled", True
+    )
+    monkeypatch.setenv("MOONMIND_CONTAINER_BACKEND_ENABLED", "true")
+    monkeypatch.setenv("SYSTEM_DOCKER_HOST", "tcp://docker-proxy:2375")
+    monkeypatch.setenv("MOONMIND_PYTHON_TEST_IMAGE", "moonmind-python-tests:local")
+
+    blockers = _required_capability_blockers(
+        parameters={
+            "repository": "MoonLadderStudios/MoonMind",
+            "requiredCapabilities": ["python_container_tests"],
+        },
+        task_payload={},
+    )
+
+    assert blockers == []
+
+
 def test_opentelemetry_logging_filter_caches_default_env_fields(monkeypatch) -> None:
     calls = 0
 

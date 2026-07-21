@@ -296,7 +296,25 @@ Minimum readiness:
 3. required model/provider profile constraints are satisfied;
 4. runtime-specific materialization, prompt, Skill bundle, and artifact contracts can be honored.
 
-### 7.6 Scoped future capabilities
+### 7.6 `python_container_tests`
+
+`python_container_tests` means a repository workflow requires the API-owned
+Python container-test path, not direct access to a Docker socket.
+
+Minimum readiness:
+
+1. the authenticated container-job API surface is enabled;
+2. the trusted agent-runtime worker backend is enabled and has a configured endpoint;
+3. the configured Python test image has passed deployment readiness;
+4. a repository-backed managed workspace can be prepared;
+5. the caller remains bound to its authorized managed workspace.
+
+An unsatisfied requirement blocks before the first managed implementation agent
+launches, before an issue is moved to In Progress. Canonical Compose proves the
+worker and image portions through its startup dependencies; runtime submission
+still validates workspace resolution, image acquisition, and authorization.
+
+### 7.7 Scoped future capabilities
 
 Coarse names remain valid. Future scoped aliases may refine semantics:
 
