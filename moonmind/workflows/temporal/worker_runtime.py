@@ -122,6 +122,9 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     resolve_external_adapter,
     external_adapter_execution_style,
 )
+from moonmind.workflows.temporal.workflows.merge_gate import (
+    DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+)
 from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
     workflow_fleet_workflow_classes,
@@ -1571,6 +1574,10 @@ def _build_runtime_planner():
             "instructions": instructions,
             "runtime": runtime_node,
         }
+        if selected_skill_name.lower() == "pr-resolver":
+            node_inputs["timeoutPolicy"] = {
+                "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+            }
         if selected_skill_inputs:
             node_inputs["inputs"] = dict(selected_skill_inputs)
         node_inputs.update(selected_skill_evidence)
