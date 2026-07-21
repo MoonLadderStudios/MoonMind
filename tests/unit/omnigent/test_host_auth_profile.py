@@ -11,6 +11,8 @@ from moonmind.omnigent.host_auth_profile import (
     HostAuthProfileError,
     MAX_ROTATION_OVERLAP,
     load_host_auth_profile,
+    profile_from_metadata,
+    profile_persistence_metadata,
     resolve_host_auth_credentials,
     revoke_host_auth_profile,
     rotate_host_auth_profile,
@@ -150,3 +152,30 @@ def test_revocation_removes_overlap_without_exposing_secret_refs() -> None:
     assert revoked.revoked is True
     assert revoked.previous_secret_ref is None
     assert "CURRENT" not in str(revoked.metadata())
+
+
+def test_persistence_metadata_round_trip_contains_refs_but_never_secret_bodies() -> None:
+    now = datetime.now(tz=UTC)
+    profile = HostAuthCredentialProfile(
+        "managed", "db://host-current", 4,
+        previous_secret_ref="db://host-previous", previous_generation=3,
+        rotated_at=now, previous_expires_at=now + timedelta(minutes=5),
+    )
+    metadata = profile_persistence_metadata(profile)
+    encoded = str(metadata)
+    assert "actual-current-secret" not in encoded
+    assert "actual-previous-secret" not in encoded
+    assert profile_from_metadata(metadata) == profile
+
+
+@pytest.mark.asyncio
+async def test_resolution_failure_does_not_leak_ref_or_secret(monkeypatch) -> None:
+    secret = "credential-body-must-not-escape"
+    monkeypatch.delenv("MISSING_HOST_AUTH", raising=False)
+    profile = HostAuthCredentialProfile("managed", "env://MISSING_HOST_AUTH", 2)
+    with pytest.raises(HostAuthProfileError) as excinfo:
+        await resolve_host_auth_credentials(profile=profile)
+    rendered = str(excinfo.value)
+    assert secret not in rendered
+    assert "MISSING_HOST_AUTH" not in rendered
+    assert excinfo.value.code == "host_auth_secret_unavailable"

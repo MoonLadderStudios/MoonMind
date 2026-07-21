@@ -10,6 +10,27 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.create_table(
+        "omnigent_host_auth_profiles",
+        sa.Column("profile_id", sa.String(length=128), nullable=False),
+        sa.Column("metadata_json", sa.JSON(), nullable=False),
+        sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.PrimaryKeyConstraint("profile_id"),
+    )
+    op.create_index(
+        "ux_omnigent_host_auth_profile_active",
+        "omnigent_host_auth_profiles",
+        ["active"],
+        unique=True,
+        postgresql_where=sa.text("active"),
+        sqlite_where=sa.text("active = 1"),
+    )
     op.add_column(
         "omnigent_oauth_host_leases",
         sa.Column("host_auth_profile_id", sa.String(length=128), nullable=True),
@@ -33,3 +54,5 @@ def downgrade() -> None:
     )
     op.drop_column("omnigent_oauth_host_leases", "host_auth_generation")
     op.drop_column("omnigent_oauth_host_leases", "host_auth_profile_id")
+    op.drop_index("ux_omnigent_host_auth_profile_active", table_name="omnigent_host_auth_profiles")
+    op.drop_table("omnigent_host_auth_profiles")

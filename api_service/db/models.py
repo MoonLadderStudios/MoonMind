@@ -2777,6 +2777,19 @@ class OmnigentOAuthHostBindingRecord(Base):
             )
 
 
+class OmnigentHostAuthProfileRecord(Base):
+    """Singleton durable owner for safe embedded host-auth lifecycle metadata."""
+
+    __tablename__ = "omnigent_host_auth_profiles"
+
+    profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class OmnigentOAuthHostLeaseRecord(Base):
     """Durable lifecycle state for the single host consuming an OAuth profile."""
 

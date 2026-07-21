@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -23,6 +24,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_execution_service,
     _require_bridge_enabled,
     router,
+    embedded_host_auth_preflight,
 )
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import (
@@ -64,6 +66,35 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     assert response.json()["selectedMode"] == "upstream_omnigent_server_proxy"
     assert response.json()["protocolProfile"] == "omnigent.server.v1"
     assert response.json()["conformanceState"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_embedded_preflight_gates_failed_host_auth(monkeypatch) -> None:
+    import api_service.api.routers.omnigent_bridge as bridge_router
+
+    monkeypatch.setattr(
+        bridge_router,
+        "_BRIDGE_CONFIG",
+        parse_bridge_config({
+            "enabled": True,
+            "compatibility": {"hostProtocolMode": "embedded"},
+            "hostConnection": {"embedded": {
+                "proxyConformanceEvidenceRef": "artifact://proxy",
+                "liveSmokeEvidenceRef": "artifact://smoke",
+                "hostAuthConformanceEvidenceRef": "artifact://auth",
+            }},
+        }),
+    )
+    monkeypatch.setattr(
+        bridge_router, "_active_host_auth_profile",
+        AsyncMock(return_value=__import__(
+            "moonmind.omnigent.host_auth_profile", fromlist=["HostAuthCredentialProfile"]
+        ).HostAuthCredentialProfile("managed", "env://ABSENT_HOST_TOKEN", 1)),
+    )
+    result = await embedded_host_auth_preflight()
+    assert result["ready"] is False
+    assert result["code"] == "host_auth_secret_unavailable"
+    assert "ABSENT_HOST_TOKEN" not in str(result)
 
 
 def _mock_user():

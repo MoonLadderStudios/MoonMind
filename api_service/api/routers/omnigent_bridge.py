@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from typing import Any, Literal
 
 from fastapi import (
@@ -63,9 +64,12 @@ from moonmind.omnigent.embedded_host_channel import (
 from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
 from moonmind.omnigent.host_auth_profile import (
     HostAuthProfileError,
+    HostAuthCredentialProfile,
     host_auth_readiness,
+    load_host_auth_profile,
     resolve_host_auth_credentials,
 )
+from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -93,6 +97,30 @@ def get_bridge_config() -> OmnigentBridgeConfig:
     return _BRIDGE_CONFIG
 
 
+def _host_auth_store() -> HostAuthProfileStore:
+    return HostAuthProfileStore(async_session_maker)
+
+
+async def _active_host_auth_profile() -> HostAuthCredentialProfile:
+    managed = await _host_auth_store().get_active()
+    return managed or load_host_auth_profile()
+
+
+async def embedded_host_auth_preflight() -> dict[str, Any]:
+    """Evaluate the selected embedded contract at the enablement boundary."""
+
+    if (
+        not _BRIDGE_CONFIG.enabled
+        or _BRIDGE_CONFIG.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
+    ):
+        return {"ready": True, "code": "host_auth_not_selected"}
+    try:
+        profile = await _active_host_auth_profile()
+    except HostAuthProfileError as exc:
+        return {"ready": False, "code": exc.code, "message": str(exc)}
+    return await host_auth_readiness(profile=profile)
+
+
 router = APIRouter(tags=["Omnigent Bridge"])
 
 _FAILURE_CLASS_STATUS = {
@@ -117,6 +145,19 @@ class OmnigentPublicErrorDetail(BaseModel):
 
 class OmnigentPublicErrorResponse(BaseModel):
     detail: OmnigentPublicErrorDetail
+
+
+class HostAuthProfilePutRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    profile_id: str = Field(alias="profileId", min_length=1, max_length=128)
+    current_secret_ref: str = Field(alias="currentSecretRef", min_length=1)
+    current_generation: int = Field(1, alias="currentGeneration", ge=1)
+
+
+class HostAuthRotateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    new_secret_ref: str = Field(alias="newSecretRef", min_length=1)
+    overlap_seconds: int = Field(900, alias="overlapSeconds", ge=0, le=900)
 
 
 class OmnigentMoonMindBinding(BaseModel):
@@ -205,7 +246,11 @@ async def get_omnigent_bridge_readiness(
 
     readiness = config.readiness()
     if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
-        auth = await host_auth_readiness()
+        try:
+            profile = await _active_host_auth_profile()
+            auth = await host_auth_readiness(profile=profile)
+        except HostAuthProfileError as exc:
+            auth = {"ready": False, "code": exc.code, "message": str(exc)}
         readiness["hostAuthentication"] = auth
         if not auth["ready"]:
             readiness["conformanceState"] = "gated"
@@ -370,7 +415,9 @@ async def _embedded_auth_context(
     config: OmnigentBridgeConfig,
 ):
     try:
-        resolved = await resolve_host_auth_credentials()
+        resolved = await resolve_host_auth_credentials(
+            profile=await _active_host_auth_profile()
+        )
         return verify_embedded_host_auth(
             headers=request.headers,
             config=config,
@@ -1606,6 +1653,79 @@ async def get_omnigent_session_file(
     return Response(content=content, media_type="application/octet-stream")
 
 
+def _require_host_auth_operator(user: User) -> None:
+    if not bool(getattr(user, "is_superuser", False)):
+        raise HTTPException(status_code=403, detail={"code": "host_auth_operator_required"})
+
+
+def _host_auth_http_error(exc: HostAuthProfileError) -> HTTPException:
+    return HTTPException(
+        status_code=409 if exc.code.startswith("host_auth_rotation") else 503,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+@router.put("/host-auth/profile", response_model=dict)
+async def put_embedded_host_auth_profile(
+    payload: HostAuthProfilePutRequest,
+    user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Atomically select safe managed metadata after resolving its SecretRef."""
+
+    _require_host_auth_operator(user)
+    candidate = HostAuthCredentialProfile(
+        profile_id=payload.profile_id,
+        current_secret_ref=payload.current_secret_ref,
+        current_generation=payload.current_generation,
+    )
+    try:
+        await resolve_host_auth_credentials(profile=candidate)
+    except HostAuthProfileError as exc:
+        raise _host_auth_http_error(exc) from exc
+    stored = await _host_auth_store().put(candidate)
+    return stored.metadata()
+
+
+@router.post("/host-auth/rotate", response_model=dict)
+async def rotate_embedded_host_auth_profile(
+    payload: HostAuthRotateRequest,
+    user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Validate a new generation before atomically replacing durable metadata."""
+
+    _require_host_auth_operator(user)
+    store = _host_auth_store()
+    current = await store.get_active()
+    if current is None:
+        raise HTTPException(status_code=409, detail={"code": "host_auth_unconfigured"})
+    from moonmind.omnigent.host_auth_profile import rotate_host_auth_profile
+    try:
+        candidate = rotate_host_auth_profile(
+            current,
+            new_secret_ref=payload.new_secret_ref,
+            overlap=timedelta(seconds=payload.overlap_seconds),
+        )
+        await resolve_host_auth_credentials(profile=candidate)
+    except HostAuthProfileError as exc:
+        raise _host_auth_http_error(exc) from exc
+    stored = await store.put(
+        candidate, expected_generation=current.current_generation
+    )
+    return stored.metadata()
+
+
+@router.post("/host-auth/revoke", response_model=dict)
+async def revoke_embedded_host_auth_profile(
+    user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_host_auth_operator(user)
+    try:
+        stored = await _host_auth_store().revoke()
+    except LookupError as exc:
+        raise HTTPException(status_code=409, detail={"code": "host_auth_unconfigured"}) from exc
+    return stored.metadata()
+
+
 @router.post("/v1/hosts/register", response_model=dict)
 async def register_embedded_omnigent_host(
     payload: EmbeddedHostRegisterRequest,
@@ -1631,7 +1751,9 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
             await websocket.close(code=4404)
             return
-        resolved = await resolve_host_auth_credentials()
+        resolved = await resolve_host_auth_credentials(
+            profile=await _active_host_auth_profile()
+        )
         auth = verify_embedded_host_auth(
             headers=websocket.headers,
             config=config,
@@ -1641,8 +1763,12 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         if host_id != auth.runner_id:
             await websocket.close(code=4403)
             return
-    except (OmnigentBridgeError, HostAuthProfileError):
-        await websocket.close(code=4401)
+    except HostAuthProfileError as exc:
+        close_code = 4403 if exc.code in {"host_auth_revoked", "host_auth_disabled"} else 1013
+        await websocket.close(code=close_code, reason=exc.code)
+        return
+    except OmnigentBridgeError as exc:
+        await websocket.close(code=4401, reason=exc.code)
         return
     await websocket.accept()
     channel = embedded_host_channels.connect(
@@ -1656,7 +1782,9 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
             frame_text = await websocket.receive_text()
             # Re-resolve safe profile state for every frame so immediate
             # revocation and overlap expiry drain already-connected tunnels.
-            active = await resolve_host_auth_credentials()
+            active = await resolve_host_auth_credentials(
+                profile=await _active_host_auth_profile()
+            )
             if (
                 active.profile.profile_id != auth.credential_profile_id
                 or auth.credential_generation not in active.tokens_by_generation

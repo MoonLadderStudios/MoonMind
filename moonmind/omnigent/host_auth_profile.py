@@ -120,6 +120,44 @@ class ResolvedHostAuthCredentials:
     tokens_by_generation: Mapping[int, str]
 
 
+def profile_from_metadata(value: Mapping[str, Any]) -> HostAuthCredentialProfile:
+    """Deserialize only the safe metadata persisted by the API service."""
+
+    profile = HostAuthCredentialProfile(
+        profile_id=_clean(value.get("profileId")),
+        current_secret_ref=_clean(value.get("currentSecretRef")),
+        current_generation=_integer(value.get("currentGeneration"), 0) or 0,
+        protocol_profile=_clean(value.get("protocolProfile")) or PINNED_PROTOCOL_PROFILE,
+        enabled=bool(value.get("enabled", True)),
+        revoked=bool(value.get("revoked", False)),
+        previous_secret_ref=_clean(value.get("previousSecretRef")) or None,
+        previous_generation=_integer(value.get("previousGeneration")),
+        previous_expires_at=_timestamp(value.get("previousExpiresAt")),
+        rotated_at=_timestamp(value.get("rotatedAt")),
+        bootstrap_fallback=False,
+    )
+    return profile
+
+
+def profile_persistence_metadata(profile: HostAuthCredentialProfile) -> dict[str, Any]:
+    """Serialize references and lifecycle metadata, never resolved secret bodies."""
+
+    return {
+        "profileId": profile.profile_id,
+        "currentSecretRef": profile.current_secret_ref,
+        "currentGeneration": profile.current_generation,
+        "protocolProfile": profile.protocol_profile,
+        "enabled": profile.enabled,
+        "revoked": profile.revoked,
+        "previousSecretRef": profile.previous_secret_ref,
+        "previousGeneration": profile.previous_generation,
+        "previousExpiresAt": (
+            profile.previous_expires_at.isoformat() if profile.previous_expires_at else None
+        ),
+        "rotatedAt": profile.rotated_at.isoformat() if profile.rotated_at else None,
+    }
+
+
 def rotate_host_auth_profile(
     profile: HostAuthCredentialProfile,
     *,
@@ -290,11 +328,13 @@ async def resolve_host_auth_credentials(
     )
 
 
-async def host_auth_readiness() -> dict[str, Any]:
+async def host_auth_readiness(
+    *, profile: HostAuthCredentialProfile | None = None
+) -> dict[str, Any]:
     """Return redacted compatibility/readiness evidence."""
 
     try:
-        resolved = await resolve_host_auth_credentials()
+        resolved = await resolve_host_auth_credentials(profile=profile)
         result = {
             "ready": True,
             "code": "host_auth_ready",
@@ -325,6 +365,8 @@ __all__ = [
     "ResolvedHostAuthCredentials",
     "host_auth_readiness",
     "load_host_auth_profile",
+    "profile_from_metadata",
+    "profile_persistence_metadata",
     "resolve_host_auth_credentials",
     "revoke_host_auth_profile",
     "rotate_host_auth_profile",
