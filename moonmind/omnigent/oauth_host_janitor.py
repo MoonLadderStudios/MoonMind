@@ -82,20 +82,27 @@ class OmnigentOAuthHostJanitor:
             if not missing:
                 await self._runtime.stop_host(binding=binding, host_lease=lease)
             await self._repository.mark_host_lease_stopped(lease.lease_id)
+            cleanup_action = (
+                "expired_cleanup"
+                if expired
+                else (
+                    "stale_heartbeat_cleanup"
+                    if stale
+                    else (
+                        "runner_lifecycle_cleanup"
+                        if terminal_cleanup
+                        else "missing_container_repair"
+                    )
+                )
+            )
+            if terminal_cleanup and self._run_store is not None:
+                await self._run_store.record_embedded_cleanup_completed(
+                    host_lease_ref=lease.lease_id, action=cleanup_action
+                )
             actions.append(
                 {
                     "hostLeaseRef": lease.lease_id,
-                    "action": "expired_cleanup"
-                    if expired
-                    else (
-                        "stale_heartbeat_cleanup"
-                        if stale
-                        else (
-                            "runner_exit_cleanup"
-                            if terminal_cleanup
-                            else "missing_container_repair"
-                        )
-                    ),
+                    "action": cleanup_action,
                 }
             )
         for container_name in await self._runtime.list_managed_containers():

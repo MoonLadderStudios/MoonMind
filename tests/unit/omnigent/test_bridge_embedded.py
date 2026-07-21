@@ -907,7 +907,18 @@ async def test_embedded_lifecycle_rejects_invalid_and_terminal_transitions(store
     assert len(first.metadata_["embedded_runner_launch"]["transitions"]) == len(
         duplicate.metadata_["embedded_runner_launch"]["transitions"]
     )
-    await store.transition_embedded_runner("idem-embedded", state="stale")
+    stale = await store.transition_embedded_runner(
+        "idem-embedded", state="stale", code="launch_abandoned_timeout"
+    )
+    events = await store.list_events(stale.bridge_session_id)
+    assert [event.event_type for event in events] == [
+        "lifecycle.embedded_runner.launch_reserved",
+        "lifecycle.embedded_runner.launch_sent",
+        "lifecycle.embedded_runner.stale",
+    ]
+    assert stale.terminal_refs["cleanupState"] == "launch_abandoned"
+    assert stale.terminal_refs["janitorRequired"] is True
+    assert await store.cleanup_required_host_lease_refs() == {"host-lease-1"}
     with pytest.raises(OmnigentIdempotencyError, match="terminal"):
         await store.transition_embedded_runner("idem-embedded", state="running")
 
