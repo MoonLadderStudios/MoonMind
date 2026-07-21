@@ -66,8 +66,10 @@ _NON_SECRET_REF_KEYS = frozenset(
 )
 
 def _is_sensitive_key(key: str) -> bool:
-    snake_key = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
-    return bool(_SENSITIVE_KEY_PATTERN.search(snake_key))
+    return bool(
+        _SENSITIVE_KEY_PATTERN.search(key)
+        or re.search(r"(?:Token|Secret|Password|Credential|Auth)(?:$|[A-Z])", key)
+    )
 
 def _is_non_secret_sentinel(value: str) -> bool:
     return value.strip().casefold() in _NON_SECRET_SENTINEL_VALUES

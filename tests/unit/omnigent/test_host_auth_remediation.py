@@ -238,9 +238,15 @@ class _HandshakeSocket:
 @pytest.mark.parametrize(
     ("failure", "expected_code"),
     [
-        (HostAuthProfileError("revoked", code="host_auth_revoked"), 4403),
-        (HostAuthProfileError("disabled", code="host_auth_disabled"), 4403),
-        (HostAuthProfileError("incompatible", code="host_auth_profile_incompatible"), 1013),
+        (HostAuthProfileError("sensitive revoked detail", code="host_auth_revoked"), 4403),
+        (HostAuthProfileError("sensitive disabled detail", code="host_auth_disabled"), 4403),
+        (
+            HostAuthProfileError(
+                "sensitive incompatible detail",
+                code="host_auth_profile_incompatible",
+            ),
+            1013,
+        ),
     ],
 )
 async def test_websocket_profile_failure_close_code_matrix(
