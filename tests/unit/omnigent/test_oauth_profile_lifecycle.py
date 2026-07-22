@@ -316,8 +316,11 @@ async def test_activity_lease_client_preserves_delegating_workflow_owner() -> No
 
 @pytest.mark.asyncio
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
+    environment_image = "registry.example/environment-host@sha256:" + "1" * 64
+    snapshot_image = "registry.example/snapshot-host@sha256:" + "2" * 64
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE", environment_image)
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -333,23 +336,31 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
     lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
 
+    effective_launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    effective_launch["hostImageRef"] = snapshot_image
+
     await runtime._launch_on_demand(
         binding=binding,
         host_lease=lease,
         container_name="mm-host-lease-1",
         workspace_source=tmp_path,
         skill_projection=tmp_path / "skills",
-        effective_launch=compile_effective_launch(
-            profile_ref="omnigent-codex@1",
-            policy_ref="codex-on-demand@1",
-            provider_profile_id="codex",
-        ),
+        effective_launch=effective_launch,
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
     assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
+    runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
+    assert commands[1][-1] == snapshot_image
+    assert commands[2][-2] == snapshot_image
+    assert environment_image not in commands[1]
+    assert environment_image not in commands[2]
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
     assert (
@@ -461,9 +472,11 @@ async def test_tools_path_discovery_falls_back_when_image_is_not_local(
     )
     runtime._run = AsyncMock(return_value=(1, "", "No such image"))
 
-    assert await runtime._discover_upstream_path() == (
+    image_ref = "registry.example/snapshot-host@sha256:" + "2" * 64
+    assert await runtime._discover_upstream_path(image_ref) == (
         "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     )
+    assert runtime._run.await_args.args[-1] == image_ref
     assert runtime._run.await_args.kwargs["check"] is False
 
 
