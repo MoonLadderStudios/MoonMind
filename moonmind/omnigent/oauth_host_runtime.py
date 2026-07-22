@@ -228,6 +228,11 @@ class OmnigentOAuthHostRuntime:
                 "host image must be an immutable sha256 reference",
                 code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
             )
+        if not _DIGEST_IMAGE.fullmatch(str(launch.get("serverImageRef") or "")):
+            raise OmnigentOAuthHostError(
+                "server image must be an immutable sha256 reference",
+                code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
+            )
         network = str(launch.get("networkRef") or "")
         if not _SAFE_NETWORK.fullmatch(network):
             raise OmnigentOAuthHostError(
@@ -264,6 +269,42 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError(
                 "Codex host UID/GID policy is unrealizable",
                 code="OMNIGENT_LAUNCH_IDENTITY_UNREALIZABLE",
+            )
+        if launch.get("readOnlyRoot") is not True:
+            raise OmnigentOAuthHostError(
+                "Codex host policy must require a read-only root filesystem",
+                code="OMNIGENT_LAUNCH_ROOT_UNREALIZABLE",
+            )
+        capture = launch.get("capture")
+        if (
+            not isinstance(capture, Mapping)
+            or capture.get("required") is not True
+            or not isinstance(capture.get("retentionDays"), int)
+            or capture["retentionDays"] <= 0
+        ):
+            raise OmnigentOAuthHostError(
+                "launch capture and retention policy is unrealizable",
+                code="OMNIGENT_LAUNCH_CAPTURE_UNREALIZABLE",
+            )
+        cleanup = launch.get("cleanup")
+        expected_cleanup = "remove" if expected_mode == "on_demand_docker" else "drain"
+        if (
+            not isinstance(cleanup, Mapping)
+            or cleanup.get("mode") != expected_cleanup
+            or cleanup.get("janitor") is not True
+        ):
+            raise OmnigentOAuthHostError(
+                "launch cleanup and janitor policy is unrealizable",
+                code="OMNIGENT_LAUNCH_CLEANUP_UNREALIZABLE",
+            )
+        if set(launch.get("controlCapabilities") or ()) != {
+            "interrupt",
+            "terminate",
+            "clear_context",
+        }:
+            raise OmnigentOAuthHostError(
+                "launch control capabilities are unrealizable",
+                code="OMNIGENT_LAUNCH_CONTROLS_UNREALIZABLE",
             )
         return launch
 

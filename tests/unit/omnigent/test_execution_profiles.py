@@ -8,6 +8,7 @@ from moonmind.omnigent.execution_profiles import (
     selection_from_request,
 )
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 
 
 def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
@@ -91,3 +92,48 @@ def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
         "codex-on-demand@1",
     }
     assert "credential" not in str(catalog).lower()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        (
+            "serverImageRef",
+            "omnigent:latest",
+            "OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
+        ),
+        ("readOnlyRoot", False, "OMNIGENT_LAUNCH_ROOT_UNREALIZABLE"),
+        (
+            "capture",
+            {"required": False, "retentionDays": 30},
+            "OMNIGENT_LAUNCH_CAPTURE_UNREALIZABLE",
+        ),
+        (
+            "cleanup",
+            {"mode": "drain", "janitor": True},
+            "OMNIGENT_LAUNCH_CLEANUP_UNREALIZABLE",
+        ),
+        (
+            "controlCapabilities",
+            ["terminate"],
+            "OMNIGENT_LAUNCH_CONTROLS_UNREALIZABLE",
+        ),
+    ],
+)
+def test_runtime_revalidates_complete_on_demand_policy_before_mutation(
+    field: str, value: object, code: str
+) -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex-oauth",
+    )
+    launch[field] = value
+
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        OmnigentOAuthHostRuntime._validate_effective_launch(
+            binding=type("Binding", (), {"host_launch_profile_ref": "on-demand"})(),
+            effective_launch=launch,
+        )
+
+    assert error.value.code == code
