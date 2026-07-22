@@ -275,6 +275,8 @@ class OmnigentProfileBoundExecutionCoordinator:
             requested_target, requested_policy = selection_from_request(
                 request.parameters
             )
+            current_stage = "host_binding_resolution"
+            await emit(current_stage, "started")
             binding = await self._hosts.get_binding_for_profile(profile_id)
             if binding is not None and binding.effective_launch_snapshot is not None:
                 effective_launch = dict(binding.effective_launch_snapshot)
@@ -361,7 +363,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             current_stage = "host_binding_resolution"
-            await emit(current_stage, "started")
             if binding is None:
                 selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
                 binding = await self._hosts.create_or_update_static_binding(
