@@ -450,6 +450,8 @@ async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
     assert payload["targetRuntime"] == "omnigent"
     assert payload["task"]["runtime"] == {
         "mode": "omnigent",
+        "model": "gpt-5.4",
+        "effort": "high",
         "executionProfileRef": "codex-oauth-profile",
         "omnigent": selection,
     }
