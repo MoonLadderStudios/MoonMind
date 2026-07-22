@@ -8,6 +8,7 @@ Last updated: 2026-07-08
 
 ## Related docs
 
+- [`docs/Omnigent/CodexCreateToHostContract.md`](./CodexCreateToHostContract.md)
 - [`docs/Omnigent/OmnigentAdapter.md`](./OmnigentAdapter.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](../ManagedAgents/CodexCliManagedSessions.md)
 - [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
