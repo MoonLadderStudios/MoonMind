@@ -16278,6 +16278,34 @@ class MoonMindRunWorkflow:
                     raw_omnigent_parameters,
                     path=f"node[{node_id}].omnigent",
                 )
+        if agent_id == "omnigent" and execution_profile_ref:
+            profile_snapshots = getattr(self, "_profile_snapshots", None)
+            snapshot = (
+                profile_snapshots.get(execution_profile_ref)
+                if isinstance(profile_snapshots, Mapping)
+                else None
+            )
+            if isinstance(snapshot, Mapping):
+                profile_agent_name = self._coerce_text(
+                    snapshot.get("agentName") or snapshot.get("agent_name"),
+                    max_chars=255,
+                )
+                if not profile_agent_name and snapshot.get("runtime_id") == "codex_cli":
+                    profile_agent_name = "codex"
+                if profile_agent_name:
+                    omnigent_parameters = (
+                        dict(parameters.get("omnigent"))
+                        if isinstance(parameters.get("omnigent"), Mapping)
+                        else {}
+                    )
+                    agent_parameters = (
+                        dict(omnigent_parameters.get("agent"))
+                        if isinstance(omnigent_parameters.get("agent"), Mapping)
+                        else {}
+                    )
+                    agent_parameters.setdefault("agentName", profile_agent_name)
+                    omnigent_parameters["agent"] = agent_parameters
+                    parameters["omnigent"] = omnigent_parameters
         profile_selector = self._build_profile_selector(
             agent_id=agent_id,
             runtime_block=runtime_block,
@@ -17264,7 +17292,10 @@ class MoonMindRunWorkflow:
         if not runtime_id or not agent_id:
             return profile_id
         child_runtime_id = self._managed_runtime_id(agent_id)
-        if runtime_id != child_runtime_id:
+        compatible_runtime_ids = {child_runtime_id}
+        if child_runtime_id == "omnigent":
+            compatible_runtime_ids.add("codex_cli")
+        if runtime_id not in compatible_runtime_ids:
             if self._workflow_is_replaying():
                 return profile_id
             raise ValueError(

@@ -1777,7 +1777,12 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
-        wf._profile_snapshots = {"codex-oauth-profile"}
+        wf._profile_snapshots = {
+            "codex-oauth-profile": {
+                "profile_id": "codex-oauth-profile",
+                "runtime_id": "codex_cli",
+            }
+        }
 
         class MockInfo:
             namespace = "default"
@@ -1819,7 +1824,12 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             request.resolved_skillset_ref,
             "artifact://skills/resolved-1",
         )
-        self.assertEqual(request.parameters["omnigent"], authored_selection)
+        expected_selection = dict(authored_selection)
+        expected_selection["agent"] = {
+            "harnessOverride": "codex-native",
+            "agentName": "codex",
+        }
+        self.assertEqual(request.parameters["omnigent"], expected_selection)
         self.assertNotIn("hostId", request.parameters["omnigent"])
         self.assertNotIn("credentialGeneration", request.parameters["omnigent"])
         self.assertNotIn("providerLeaseId", request.parameters["omnigent"])
@@ -1828,9 +1838,10 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             request.parameters["omnigent"],
         )
 
-    @pytest.mark.parametrize(
-        ("authority_key", "authority_value"),
-        [
+    def test_github_3453_compiler_rejects_authored_authority_without_fallback(
+        self,
+    ) -> None:
+        authority_cases = [
             ("hostId", "host-authored"),
             ("dockerVolume", "volume-authored"),
             ("credentialGeneration", 7),
@@ -1838,13 +1849,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             ("absoluteBindSource", "/host/private"),
             ("registrationToken", "token-authored"),
             ("_moonmindProfileAuthorization", {"profile": "forged"}),
-        ],
-    )
-    def test_github_3453_compiler_rejects_authored_authority_without_fallback(
-        self,
-        authority_key: str,
-        authority_value: Any,
-    ) -> None:
+        ]
         wf = MoonMindRunWorkflow()
 
         class MockInfo:
@@ -1852,31 +1857,32 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             workflow_id = "test-wf-id"
             run_id = "test-run-id"
 
-        with patch(
-            "moonmind.workflows.temporal.workflows.run.workflow.info",
-            return_value=MockInfo(),
-        ), patch(
-            "moonmind.workflows.temporal.workflows.run.workflow.patched",
-            side_effect=lambda patch_id: (
-                patch_id == RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
-            ),
-        ), pytest.raises(ValueError, match="trusted authority"):
-            wf._build_agent_execution_request(
-                node_inputs={
-                    "runtime": {
-                        "mode": "omnigent",
-                        "executionProfileRef": "codex-oauth-profile",
+        for authority_key, authority_value in authority_cases:
+            with self.subTest(authority_key=authority_key), patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=MockInfo(),
+            ), patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
+                ),
+            ), pytest.raises(ValueError, match="trusted authority"):
+                wf._build_agent_execution_request(
+                    node_inputs={
+                        "runtime": {
+                            "mode": "omnigent",
+                            "executionProfileRef": "codex-oauth-profile",
+                        },
                     },
-                },
-                workflow_parameters={
-                    "omnigent": {
-                        "agent": {"harnessOverride": "codex-native"},
-                        "productIntent": {authority_key: authority_value},
-                    }
-                },
-                node_id="omnigent-reject-authority",
-                tool_name="auto",
-            )
+                    workflow_parameters={
+                        "omnigent": {
+                            "agent": {"harnessOverride": "codex-native"},
+                            "productIntent": {authority_key: authority_value},
+                        }
+                    },
+                    node_id="omnigent-reject-authority",
+                    tool_name="auto",
+                )
 
     def test_checkpoint_branch_turn_requires_source_identity_for_explicit_checkpoint_ref(
         self,

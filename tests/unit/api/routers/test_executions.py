@@ -665,6 +665,30 @@ async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:
     }
 
 
+def test_task_step_runtime_preserves_omnigent_selection() -> None:
+    steps = _normalize_task_steps(
+        {
+            "steps": [
+                {
+                    "id": "implement",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "omnigent": {
+                            "executionTargetRef": "omnigent-codex@1",
+                            "launchPolicyRef": "codex-on-demand@1",
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    assert steps[0]["runtime"]["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+
+
 @pytest.mark.asyncio
 async def test_step_runtime_inherits_task_profile_default_model() -> None:
     steps = _normalize_task_steps(
