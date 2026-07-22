@@ -84,6 +84,9 @@ class LoopBudget(_ContractModel):
     max_unsafe_or_policy_denied_attempts: int = Field(
         alias="maxUnsafeOrPolicyDeniedAttempts", ge=0
     )
+    max_elapsed_seconds: int | None = Field(
+        default=None, alias="maxElapsedSeconds", ge=1
+    )
     provider_budget: int | None = Field(default=None, alias="providerBudget", ge=0)
     token_budget: int | None = Field(default=None, alias="tokenBudget", ge=0)
     cost_budget: int | None = Field(default=None, alias="costBudget", ge=0)
@@ -727,6 +730,11 @@ def _budget_exhaustion_reason(budget: LoopBudget) -> str | None:
     ):
         return "unsafe_policy_attempts_exhausted"
     optional = (
+        (
+            ("elapsedSeconds", "elapsed_seconds"),
+            budget.max_elapsed_seconds,
+            "wall_clock_budget_exhausted",
+        ),
         (
             ("provider", "provider_budget"),
             budget.provider_budget,

@@ -289,6 +289,11 @@ def test_verification_workspace_snapshot_rejects_writable_projection() -> None:
             {"unsafe_or_policy_denied_attempts": 1},
             "unsafe_policy_attempts_exhausted",
         ),
+        (
+            {"maxElapsedSeconds": 300},
+            {"elapsed_seconds": 300},
+            "wall_clock_budget_exhausted",
+        ),
         ({"providerBudget": 2}, {"provider_budget": 2}, "provider_budget_exhausted"),
         ({"tokenBudget": 20}, {"token_budget": 20}, "token_budget_exhausted"),
         ({"costBudget": 3}, {"cost_budget": 3}, "cost_budget_exhausted"),
@@ -319,6 +324,7 @@ def test_zero_optional_and_failure_budgets_do_not_stop_before_consumption() -> N
         budget=_budget(
             maxRepeatedFailedCommands=0,
             maxUnsafeOrPolicyDeniedAttempts=0,
+            maxElapsedSeconds=None,
             providerBudget=0,
             tokenBudget=0,
             costBudget=0,
