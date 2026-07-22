@@ -31,6 +31,8 @@ from moonmind.schemas.workspace_locator_models import (
     WORKSPACE_LOCATOR_ADAPTER,
 )
 from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
     resolve_sandbox_workspace_locator,
 )
@@ -748,10 +750,35 @@ class OmnigentOAuthHostRuntime:
         expected_id = hashlib.sha256(
             f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
         ).hexdigest()[:24]
+        # Validate the workflow-derived identity and containment before writing
+        # even the owner record.
+        resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=self._workspace_root,
+            expected_workspace_id=expected_id,
+            must_exist=False,
+        )
+        record_store = SandboxWorkspaceRecordStore(self._workspace_root)
+        record = SandboxWorkspaceRecord(
+            workspace_id=locator.workspace_id,
+            workflow_id=current_workflow_id,
+            step_execution_id=current_step_execution_id,
+            relative_path=locator.relative_path,
+        )
+        record_store.ensure(record)
+        authoritative_record = record_store.load(locator.workspace_id)
+        if authoritative_record is None:
+            raise OmnigentOAuthHostError(
+                "sandbox workspace owner record was not persisted",
+                code="WORKSPACE_IDENTITY_MISMATCH",
+            )
         workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
             expected_workspace_id=expected_id,
+            owner_record=authoritative_record,
+            expected_workflow_id=current_workflow_id,
+            expected_step_execution_id=current_step_execution_id,
             must_exist=False,
         )
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)

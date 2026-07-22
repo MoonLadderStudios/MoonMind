@@ -56,6 +56,7 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
+from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
 
 
 @pytest.mark.parametrize(
@@ -495,6 +496,43 @@ async def test_failed_workspace_clone_is_removed_for_retry(tmp_path) -> None:
         )
 
     assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
+
+
+@pytest.mark.asyncio
+async def test_workspace_retry_rejects_tampered_owner_record_before_git_mutation(
+    tmp_path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+    records = workspace_root / "temporal_sandbox" / ".workspace_records"
+    records.mkdir(parents=True)
+    (records / f"{workspace_id}.json").write_text(
+        json.dumps(
+            {
+                "workspace_id": workspace_id,
+                "workflow_id": "foreign-workflow",
+                "step_execution_id": "step-1",
+                "relative_path": "repo",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_url="https://github.com/owner/private.git",
+            repository_branch=None,
+        )
+
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+    runtime._run.assert_not_awaited()
 
 
 def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
