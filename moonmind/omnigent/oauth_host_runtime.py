@@ -384,16 +384,8 @@ class OmnigentOAuthHostRuntime:
         container_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
         )
-        ownership = await self._run(
-            "docker", "inspect", "--format",
-            "{{index .Config.Labels \"moonmind.host_lease_id\"}}",
-            container_name, check=False,
-        )
-        if ownership[0] == 0 and ownership[1].strip() != host_lease.lease_id:
-            raise OmnigentOAuthHostError(
-                "container does not belong to the current host lease",
-                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
-            )
+        if await self.container_exists(container_name):
+            await self._assert_container_owned(container_name, host_lease.lease_id)
         await self._run("docker", "stop", "--time", "20", container_name, check=False)
         await self._run("docker", "rm", "-f", container_name, check=False)
         await self._run(
