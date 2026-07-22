@@ -75,6 +75,18 @@ PRODUCT_ACTIONS = (
     "artifacts_harvested", "host_removed", "workflow_detail_replayed",
     "profile_released",
 )
+PRODUCT_RECORD_TYPES = {
+    "runtime_catalog_loaded": {"runtimeCatalog"},
+    "workflow_created": {"createRequest", "authoredWorkflow"},
+    "authored_intent_persisted": {"authoredWorkflow", "taskInputSnapshot"},
+    "request_compiled": {"compiledExecutionRequest"},
+    "temporal_routed": {"temporalHistory", "hostBinding", "profileLease"},
+    "workflow_detail_streamed": {"workflowDetail", "bridgeEvents"},
+    "artifacts_harvested": {"artifactInventory"},
+    "host_removed": {"cleanupResult"},
+    "workflow_detail_replayed": {"workflowDetail", "bridgeEvents"},
+    "profile_released": {"profileLease", "cleanupResult"},
+}
 ONDEMAND_ACTIONS = (
     "lease_acquired", "host_launched", "preflight_ready", "session_bound",
     "executed", "resources_harvested", "partial_start_retry", "janitor_recovery",
@@ -180,6 +192,33 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
+        if scenario in {"product", "failures"}:
+            records = [
+                record
+                for item in observations
+                for record in item.get("sourceRecords", [])
+                if isinstance(record, dict)
+            ]
+            required_types = (
+                PRODUCT_RECORD_TYPES[action]
+                if scenario == "product"
+                else {"injectionControl", "terminalProjection", "sideEffectAudit"}
+            )
+            observed_types = {record.get("type") for record in records}
+            missing = sorted(required_types - observed_types)
+            if missing:
+                raise ConformanceContractError(
+                    f"{scenario}/{action} lacks independently resolved source records: {missing}"
+                )
+            for record in records:
+                if not all(
+                    isinstance(record.get(key), str) and record[key].strip()
+                    for key in ("type", "ref", "sha256")
+                ) or len(record["sha256"]) != 64:
+                    raise ConformanceContractError(
+                        f"{scenario}/{action} contains an invalid source record"
+                    )
+            payload["_sourceRecordTypes"] = sorted(observed_types)
         returned_ids = {
             key: value for key, value in payload.items()
             if key in {"leaseId", "hostId", "workflowId", "agentRunId", "sessionId"}
@@ -290,6 +329,11 @@ class LiveRunner:
             "identifiers": {key: state[key] for key in required}, "assertions": assertions,
             "selection": state.get("selection"), "schemaVersions": state.get("schemaVersions"),
             "evidenceRefs": [ref for result in results.values() for ref in result["evidenceRefs"]],
+            "sourceRecordTypes": sorted({
+                record_type
+                for result in results.values()
+                for record_type in result.get("_sourceRecordTypes", [])
+            }),
         })
         self.scenario("product")
 

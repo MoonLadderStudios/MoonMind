@@ -192,12 +192,13 @@ def test_action_rejects_boolean_attestation_without_evidence(tmp_path, monkeypat
         raise AssertionError("bare boolean attestation was accepted")
 
 
-def _action_evidence(tmp_path, scenario, action, identifiers=None):
+def _action_evidence(tmp_path, scenario, action, identifiers=None, source_records=None):
     path = tmp_path / f"{scenario}-{action}.json"
     path.write_text(json.dumps({
         "schemaVersion": "moonmind.omnigent.action-evidence/v1",
         "scenario": scenario, "action": action, "observed": True,
         "identifiers": identifiers or {},
+        "sourceRecords": source_records or [],
     }))
     return path.as_uri()
 
@@ -259,52 +260,21 @@ def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
     assert all(call == state for call in seen[1:])
 
 
-def test_repository_backend_persists_static_replay_and_rejects_wrong_ids(tmp_path):
+def test_product_rejects_semantic_attestation_without_source_records(tmp_path, monkeypatch):
     module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={
-        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
-    })
-    executed = runner.action("static", "execute")
-    ids = {key: executed[key] for key in ("workflowId", "agentRunId", "sessionId")}
-    assert runner.action("static", "replay", **ids)["durable_replay"] is True
+    ref = _action_evidence(tmp_path, "product", "workflow_created")
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"},
+    )
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
     try:
-        runner.action("static", "replay", **{**ids, "workflowId": "wrong"})
-    except RuntimeError:
-        pass
+        runner.action("product", "workflow_created")
+    except module.ConformanceContractError as exc:
+        assert "independently resolved source records" in str(exc)
     else:
-        raise AssertionError("backend accepted replay for another workflow")
-
-
-def test_repository_backend_enforces_lifecycle_and_failure_projection(tmp_path):
-    module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={
-        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
-    })
-    try:
-        runner.action("ondemand", "host_launched")
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("backend accepted host launch before lease")
-    state = {}
-    for action in module.ONDEMAND_ACTIONS:
-        result = runner.action("ondemand", action, **state)
-        state.update(result["state"])
-    assert all(state.get(key) for key in ("leaseId", "hostId", "workflowId", "agentRunId", "sessionId"))
-    for case in module.FAILURE_CASES:
-        durable = runner.action("failures", case)["durableEvidence"]
-        assert all(durable.values())
-
-
-def test_repository_backend_enforces_product_create_lifecycle(tmp_path):
-    module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={
-        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
-    })
-    state = {}
-    for action in module.PRODUCT_ACTIONS:
-        result = runner.action("product", action, **state)
-        state.update(result["state"])
-        assert result["noFallback"] is True
-    assert state["selection"]["agentKind"] == "external"
-    assert state["selection"]["agentId"] == "omnigent"
+        raise AssertionError("semantic product attestation was accepted")

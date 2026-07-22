@@ -130,6 +130,41 @@ jobs:
           reports = sorted(root.glob("*/report.json"))
           if len(reports) != 5:
               raise SystemExit(f"expected five passing reports, found {len(reports)}")
+          report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
+          for path, report in zip(reports, report_payloads):
+              if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
+                  raise SystemExit(f"unsupported report schema: {path}")
+              if report.get("summary", {}).get("failed"):
+                  raise SystemExit(f"failed cases cannot be published: {path}")
+              if not any(case.get("status") == "passed" for case in report.get("cases", [])):
+                  raise SystemExit(f"report has no passing controlling case: {path}")
+          product_paths = list(root.glob("*/product-evidence.json"))
+          if len(product_paths) != 1:
+              raise SystemExit(f"expected one product evidence document, found {len(product_paths)}")
+          product = json.loads(product_paths[0].read_text(encoding="utf-8"))
+          required_assertions = {
+              "normal_create_api", "authored_intent_and_snapshot",
+              "external_omnigent_compilation", "selected_profile_policy_workspace",
+              "real_temporal_activity_route", "workflow_detail_sse", "release_last",
+              "replay_after_host_removal", "no_fallback",
+          }
+          if any(product.get("assertions", {}).get(key) is not True for key in required_assertions):
+              raise SystemExit("product evidence lacks a controlling assertion")
+          required_records = {
+              "runtimeCatalog", "createRequest", "authoredWorkflow", "taskInputSnapshot",
+              "compiledExecutionRequest", "temporalHistory", "hostBinding", "profileLease",
+              "workflowDetail", "bridgeEvents", "artifactInventory", "cleanupResult",
+          }
+          if not required_records.issubset(set(product.get("sourceRecordTypes", []))):
+              raise SystemExit("product evidence lacks independently resolved production records")
+          required_ids = {"workflowId", "runId", "stepId", "bridgeId", "hostId", "sessionId"}
+          if any(not product.get("identifiers", {}).get(key) for key in required_ids):
+              raise SystemExit("product evidence lacks safe lifecycle identifiers")
+          selection = product.get("selection", {})
+          if selection.get("agentKind") != "external" or selection.get("agentId") != "omnigent":
+              raise SystemExit("product evidence is not the explicit Omnigent selection")
+          if not product.get("schemaVersions") or not product.get("evidenceRefs"):
+              raise SystemExit("product evidence lacks schema versions or durable evidence refs")
           manifest = {
               "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
               "issue": "MoonLadderStudios/MoonMind#3456",
@@ -146,6 +181,12 @@ jobs:
                   f"{os.environ['GITHUB_RUN_ATTEMPT']}"
               ),
               "reports": [str(path) for path in reports],
+              "productEvidence": str(product_paths[0]),
+              "productSchemaVersions": product["schemaVersions"],
+              "selection": selection,
+              "safeIdentities": product["identifiers"],
+              "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
+              "noFallback": product["assertions"]["no_fallback"],
               "modes": ["product", "stock", "static", "ondemand", "failures"],
               "status": "passed",
               "generatedAt": os.environ.get("GITHUB_RUN_STARTED_AT"),

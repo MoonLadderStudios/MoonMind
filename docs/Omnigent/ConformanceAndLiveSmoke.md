@@ -82,16 +82,20 @@ python tools/run_omnigent_live_conformance.py --mode all \
 ```
 
 The runner requires `MOONMIND_OMNIGENT_ACTION_COMMAND` to name an
-operator-provisioned adapter that performs the real live actions. The
-repository-owned `tools/omnigent_live_action.py` is a semantic test backend and
-is not accepted as an implicit live default. Action responses must include
+operator-provisioned adapter that performs the real live actions. No
+repository semantic backend is accepted as live evidence. Action responses must include
 durable `evidenceRefs` using `https` or
 run-output-scoped `file` URLs. Each referenced JSON document uses
 `moonmind.omnigent.action-evidence/v1`, names the scenario and action, records
 `observed: true`, and repeats any returned durable identifiers. The runner
 resolves and secret-scans every document and rejects missing, malformed,
-mismatched, or opaque references. Bare success booleans are rejected as
-evidence.
+mismatched, or opaque references. Product and failure documents must also carry
+`sourceRecords`; every record names its production record type, durable ref, and
+SHA-256 digest. The runner requires action-specific records (for example the
+create request and authored workflow for `workflow_created`, Temporal history,
+host binding, and profile lease for `temporal_routed`, and injection control,
+terminal projection, and side-effect audit for every failure). Bare success
+booleans and repository-synthesized identifiers are rejected as evidence.
 
 Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
 removes that project's containers and networks only; it intentionally never

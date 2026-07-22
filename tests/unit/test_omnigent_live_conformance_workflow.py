@@ -92,6 +92,9 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert "MoonLadderStudios/MoonMind#3448" in manifest["run"]
     assert "moonmind.omnigent.product-acceptance/v1" in manifest["run"]
     assert '"commit": os.environ["GITHUB_SHA"]' in manifest["run"]
+    assert "product evidence lacks independently resolved production records" in manifest["run"]
+    assert '"productSchemaVersions": product["schemaVersions"]' in manifest["run"]
+    assert '"safeIdentities": product["identifiers"]' in manifest["run"]
     upload = next(
         step
         for step in job["steps"]
