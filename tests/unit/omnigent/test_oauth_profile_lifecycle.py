@@ -340,7 +340,13 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     runtime._discover_upstream_path = AsyncMock(
         return_value="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
     )
-    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime._run = AsyncMock(
+        side_effect=[
+            (1, "", "no such container"),
+            (0, "", ""),
+            (0, "", ""),
+        ]
+    )
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
@@ -363,7 +369,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
-    assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
+    assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
@@ -390,6 +396,50 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     ) in commands[2]
+
+
+@pytest.mark.asyncio
+async def test_on_demand_retry_rejects_stopped_container_from_another_lease(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE",
+        "registry.example/environment-host@sha256:" + "1" * 64,
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(return_value=(0, "another-host-lease\n", ""))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    effective_launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._launch_on_demand(
+            binding=binding,
+            host_lease=lease,
+            container_name="mm-host-lease-1",
+            workspace_source=tmp_path,
+            skill_projection=tmp_path / "skills",
+            effective_launch=effective_launch,
+        )
+
+    assert raised.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert len(commands) == 1
+    assert commands[0][:3] == ("docker", "inspect", "--format")
+
+
 @pytest.mark.asyncio
 async def test_private_workspace_clone_uses_in_memory_github_credentials(
     tmp_path,

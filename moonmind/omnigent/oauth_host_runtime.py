@@ -470,9 +470,25 @@ class OmnigentOAuthHostRuntime:
         host_image_ref = str(effective_launch["hostImageRef"])
         host_path = await self._discover_upstream_path(host_image_ref)
         # A retry may find a stopped container with this deterministic name.
-        # Remove only that lease-owned container, then initialize the dedicated
-        # state volume as root before the actual host drops to UID/GID 1000.
-        await self._run("docker", "rm", "-f", container_name, check=False)
+        # Inspect its lease before removal; a deterministic name is not itself
+        # ownership authority. An absent container needs no reconciliation.
+        stopped = await self._run(
+            "docker",
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"moonmind.host_lease_id\"}}",
+            container_name,
+            check=False,
+        )
+        if stopped[0] == 0:
+            if stopped[1].strip() != host_lease.lease_id:
+                raise OmnigentOAuthHostError(
+                    "container does not belong to the current host lease",
+                    code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+                )
+            await self._run("docker", "rm", "-f", container_name, check=False)
+        # Initialize the dedicated state volume as root before the actual host
+        # drops to UID/GID 1000.
         await self._run(
             "docker",
             "run",
