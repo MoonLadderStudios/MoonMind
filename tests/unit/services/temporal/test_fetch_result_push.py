@@ -12,6 +12,7 @@ import pytest
 
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
@@ -478,6 +479,40 @@ class TestPushWorkspaceBranch:
             "-z",
             "--untracked-files=all",
         ]
+
+    @pytest.mark.asyncio
+    async def test_commit_repairs_git_ownership_and_runs_as_managed_agent(self):
+        activities = TemporalAgentRuntimeActivities(run_store=None)
+        workspace = "/work/agent_jobs/mm:run-1/repo"
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        proc.returncode = 0
+
+        with (
+            patch.object(
+                activity_runtime_module,
+                "_normalize_managed_git_ownership",
+            ) as normalize_ownership,
+            patch.object(
+                activity_runtime_module,
+                "_managed_agent_subprocess_kwargs",
+                return_value={"user": 1000, "group": 1000},
+            ),
+            patch(
+                "asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=proc,
+            ) as mock_exec,
+        ):
+            result = await activities._commit_workspace_changes_if_needed(
+                workspace,
+                run_id="mm:run-1",
+            )
+
+        assert result == {}
+        normalize_ownership.assert_called_once_with(workspace)
+        assert mock_exec.await_args.kwargs["user"] == 1000
+        assert mock_exec.await_args.kwargs["group"] == 1000
 
     @pytest.mark.asyncio
     async def test_push_protected_branch_main(self):
