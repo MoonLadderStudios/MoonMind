@@ -110,6 +110,11 @@ def _diagnostics_ref(value: object) -> str | None:
 
 
 def _request_identity(request: AgentExecutionRequest) -> tuple[str, str | None]:
+    if request.step_execution is not None:
+        return (
+            request.step_execution.workflow_id,
+            request.step_execution.step_execution_id,
+        )
     parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
     step = parameters.get("stepExecution")
     if not isinstance(step, Mapping):
@@ -286,6 +291,30 @@ class OmnigentProfileBoundExecutionCoordinator:
                     raise OmnigentOAuthHostError(
                         "explicit launch selection conflicts with the durable host binding",
                         code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+                    )
+                if effective_launch.get("schemaVersion") != 2:
+                    effective_launch = compile_effective_launch(
+                        profile_ref=str(
+                            binding.execution_profile_ref or "omnigent-codex@1"
+                        ),
+                        policy_ref=str(
+                            binding.launch_policy_ref
+                            or (
+                                "codex-on-demand@1"
+                                if binding.host_launch_profile_ref
+                                else "codex-static@1"
+                            )
+                        ),
+                        provider_profile_id=profile_id,
+                    )
+                    binding = await self._hosts.create_or_update_static_binding(
+                        profile_id=profile_id,
+                        endpoint_ref=binding.endpoint_ref,
+                        static_host_id=binding.static_host_id,
+                        host_launch_profile_ref=binding.host_launch_profile_ref,
+                        execution_profile_ref=str(effective_launch["executionProfileRef"]),
+                        launch_policy_ref=str(effective_launch["launchPolicyRef"]),
+                        effective_launch_snapshot=effective_launch,
                     )
             elif requested_target:
                 effective_launch = compile_effective_launch(

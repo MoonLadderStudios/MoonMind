@@ -474,6 +474,45 @@ async def test_host_preparation_resolves_pre_materialized_workspace_without_git(
 
 
 @pytest.mark.asyncio
+async def test_host_preparation_materializes_missing_owner_record(tmp_path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+    workspace = workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+    )
+
+    assert resolved == workspace
+    assert SandboxWorkspaceRecordStore(workspace_root).load(workspace_id) == (
+        SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
+    )
+
+
+@pytest.mark.asyncio
+async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
+    runtime._run = AsyncMock(return_value=(1, "", "not found"))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+
+    await runtime.stop_host(binding=binding, host_lease=lease)
+
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert commands[0][:3] == ("docker", "inspect", "--format")
+    assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-artifacts") in commands
+    assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-cache") in commands
+
+
+@pytest.mark.asyncio
 async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(

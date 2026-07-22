@@ -233,7 +233,7 @@ def compile_effective_launch(
             )
         policy_payload[field] = value
     payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "executionProfileRef": profile.ref,
         "launchPolicyRef": policy.ref,
         "providerProfileId": provider_profile_id,

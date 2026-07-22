@@ -30,6 +30,7 @@ from moonmind.schemas.workspace_locator_models import (
 )
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
     resolve_sandbox_workspace_locator,
@@ -99,7 +100,7 @@ class OmnigentOAuthHostRuntime:
         )
         self._workspace_root = (
             workspace_root
-            or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work"))
+            or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs"))
         ).resolve()
         self._tool_bundle_volume = os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
@@ -138,6 +139,7 @@ class OmnigentOAuthHostRuntime:
             current_step_execution_id=current_step_execution_id,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
+        daemon_skill_projection = daemon_visible_workspace_path(skill_projection)
         if binding.host_launch_profile_ref:
             if "gh" in {item.strip().lower() for item in required_capabilities}:
                 await self._initialize_required_tools()
@@ -150,7 +152,7 @@ class OmnigentOAuthHostRuntime:
                 host_lease=host_lease,
                 container_name=container_name,
                 workspace_source=daemon_workspace_source,
-                skill_projection=skill_projection,
+                skill_projection=daemon_skill_projection,
                 github_token=github_token,
                 effective_launch=launch,
             )
@@ -159,7 +161,7 @@ class OmnigentOAuthHostRuntime:
         else:
             await self._compose_static_check(
                 workspace_source=daemon_workspace_source,
-                skill_projection=skill_projection, effective_launch=launch
+                skill_projection=daemon_skill_projection, effective_launch=launch
             )
 
         host = await self._resolve_exact_host(binding=binding, host_lease=host_lease)
@@ -382,7 +384,16 @@ class OmnigentOAuthHostRuntime:
         container_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
         )
-        await self._assert_container_owned(container_name, host_lease.lease_id)
+        ownership = await self._run(
+            "docker", "inspect", "--format",
+            "{{index .Config.Labels \"moonmind.host_lease_id\"}}",
+            container_name, check=False,
+        )
+        if ownership[0] == 0 and ownership[1].strip() != host_lease.lease_id:
+            raise OmnigentOAuthHostError(
+                "container does not belong to the current host lease",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
         await self._run("docker", "stop", "--time", "20", container_name, check=False)
         await self._run("docker", "rm", "-f", container_name, check=False)
         await self._run(
@@ -775,10 +786,13 @@ class OmnigentOAuthHostRuntime:
         record_store = SandboxWorkspaceRecordStore(self._workspace_root)
         authoritative_record = record_store.load(locator.workspace_id)
         if authoritative_record is None:
-            raise OmnigentOAuthHostError(
-                "authorized sandbox workspace must be materialized before host preparation",
-                code="WORKSPACE_IDENTITY_MISMATCH",
+            authoritative_record = SandboxWorkspaceRecord(
+                workspace_id=locator.workspace_id,
+                workflow_id=current_workflow_id,
+                step_execution_id=current_step_execution_id,
+                relative_path=locator.relative_path,
             )
+            record_store.ensure(authoritative_record)
         workspace = resolve_sandbox_workspace_locator(
             locator,
             workspace_root=self._workspace_root,
