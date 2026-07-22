@@ -303,6 +303,11 @@ class OmnigentOAuthHostRepository:
                     raise OmnigentOAuthHostError(
                         "idempotency key is already bound to another host lease"
                     )
+                if existing.effective_launch_snapshot_json != binding.effective_launch_snapshot:
+                    raise OmnigentOAuthHostError(
+                        "retry launch snapshot does not match the durable host lease",
+                        code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
+                    )
                 return self._lease_model(existing)
             record = OmnigentOAuthHostLeaseRecord(
                 lease_id=lease_id,
@@ -314,6 +319,7 @@ class OmnigentOAuthHostRepository:
                 agent_run_id=agent_run_id,
                 idempotency_key=idempotency_key,
                 lease_purpose=lease_purpose,
+                effective_launch_snapshot_json=binding.effective_launch_snapshot,
                 container_name=(
                     deterministic_host_container_name(lease_id)
                     if binding.host_launch_profile_ref
@@ -356,6 +362,7 @@ class OmnigentOAuthHostRepository:
             omnigentHostId=record.omnigent_host_id,
             omnigentSessionId=record.omnigent_session_id,
             bridgeSessionId=record.bridge_session_id,
+            effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
             status=record.status,
             acquiredAt=record.acquired_at,
             lastHeartbeatAt=record.last_heartbeat_at,

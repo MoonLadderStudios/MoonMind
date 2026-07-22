@@ -297,15 +297,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if binding.effective_launch_snapshot is not None:
                     effective_launch = dict(binding.effective_launch_snapshot)
                 else:
-                    retry_policy = (
-                        "codex-on-demand@1"
-                        if binding.host_launch_profile_ref
-                        else "codex-static@1"
-                    )
-                    effective_launch = compile_effective_launch(
-                        profile_ref="omnigent-codex@1",
-                        policy_ref=retry_policy,
-                        provider_profile_id=profile_id,
+                    raise OmnigentOAuthHostError(
+                        "durable host binding predates effective launch authority",
+                        code="OMNIGENT_LEGACY_BINDING_REQUIRES_RESELECTION",
                     )
             else:
                 bootstrap_on_demand = bool(
@@ -416,6 +410,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_binding_ref=binding.binding_ref,
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=binding.static_host_id,
+                effective_launch_snapshot=effective_launch,
             )
             if host_lease.status == "allocating":
                 host_lease = await self._hosts.transition_host_lease(
@@ -486,6 +481,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_binding_ref=binding.binding_ref,
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=host_id,
+                effective_launch_snapshot=effective_launch,
             )
             await emit("credential_preflight", "started")
             await emit(

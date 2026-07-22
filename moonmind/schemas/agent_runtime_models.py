@@ -1047,6 +1047,9 @@ class OmnigentHostLease(BaseModel):
     omnigent_host_id: str | None = Field(None, alias="omnigentHostId")
     omnigent_session_id: str | None = Field(None, alias="omnigentSessionId")
     bridge_session_id: str | None = Field(None, alias="bridgeSessionId")
+    effective_launch_snapshot: dict[str, Any] | None = Field(
+        None, alias="effectiveLaunchSnapshot"
+    )
     status: Literal[
         "allocating", "starting", "ready", "assigned", "draining", "stopped", "failed"
     ]
