@@ -294,16 +294,19 @@ class OmnigentProfileBoundExecutionCoordinator:
                             code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                         )
             elif binding is not None:
-                retry_policy = (
-                    "codex-on-demand@1"
-                    if binding.host_launch_profile_ref
-                    else "codex-static@1"
-                )
-                effective_launch = compile_effective_launch(
-                    profile_ref="omnigent-codex@1",
-                    policy_ref=retry_policy,
-                    provider_profile_id=profile_id,
-                )
+                if binding.effective_launch_snapshot is not None:
+                    effective_launch = dict(binding.effective_launch_snapshot)
+                else:
+                    retry_policy = (
+                        "codex-on-demand@1"
+                        if binding.host_launch_profile_ref
+                        else "codex-static@1"
+                    )
+                    effective_launch = compile_effective_launch(
+                        profile_ref="omnigent-codex@1",
+                        policy_ref=retry_policy,
+                        provider_profile_id=profile_id,
+                    )
             else:
                 bootstrap_on_demand = bool(
                     os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE")
@@ -376,6 +379,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         if selected_on_demand
                         else None
                     ),
+                    execution_profile_ref=str(effective_launch["executionProfileRef"]),
+                    launch_policy_ref=str(effective_launch["launchPolicyRef"]),
+                    effective_launch_snapshot=effective_launch,
                 )
             await emit(
                 current_stage,
@@ -435,6 +441,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 required_capabilities=self._required_capabilities(request),
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
+                effective_launch=effective_launch,
             )
             await emit(current_stage, "completed")
             await emit("credential_mount", "started")

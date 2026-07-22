@@ -34,6 +34,7 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
+from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
@@ -559,9 +560,39 @@ async def test_host_rejects_missing_skill_projection_before_workspace_mutation(
             binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
+            effective_launch=compile_effective_launch(
+                profile_ref="omnigent-codex@1",
+                policy_ref="codex-static@1",
+                provider_profile_id="codex",
+            ),
         )
 
     assert exc_info.value.code == "OMNIGENT_SKILL_PROJECTION_UNAVAILABLE"
+    runtime._prepare_workspace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
+    runtime._prepare_workspace = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime.prepare_host(
+            binding=_binding(),
+            host_lease=_host_lease(),
+            workspace_key="run-1",
+            effective_launch=compile_effective_launch(
+                profile_ref="omnigent-codex@1",
+                policy_ref="codex-on-demand@1",
+                provider_profile_id="codex",
+            ),
+        )
+
+    assert exc_info.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
+    runtime._prepare_skill_projection.assert_not_awaited()
     runtime._prepare_workspace.assert_not_awaited()
 
 

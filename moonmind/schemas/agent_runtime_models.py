@@ -1014,6 +1014,11 @@ class OmnigentOAuthHostBinding(BaseModel):
     max_sessions_per_host: Literal[1] = Field(1, alias="maxSessionsPerHost")
     static_host_id: str | None = Field(None, alias="staticHostId")
     host_launch_profile_ref: str | None = Field(None, alias="hostLaunchProfileRef")
+    execution_profile_ref: str | None = Field(None, alias="executionProfileRef")
+    launch_policy_ref: str | None = Field(None, alias="launchPolicyRef")
+    effective_launch_snapshot: dict[str, Any] | None = Field(
+        None, alias="effectiveLaunchSnapshot"
+    )
 
     @model_validator(mode="after")
     def _validate_profile_ownership(self) -> "OmnigentOAuthHostBinding":
