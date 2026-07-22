@@ -287,6 +287,50 @@ class CandidateWorkspaceHead(_ContractModel):
         return self
 
 
+class VerificationWorkspaceSnapshot(_ContractModel):
+    """Artifact-backed identity observed at a verifier projection boundary."""
+
+    candidate_head_digest: str = Field(
+        alias="candidateHeadDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    checkpoint_digest: str = Field(
+        alias="checkpointDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    workspace_digest: str = Field(
+        alias="workspaceDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    projection_ref: ArtifactRef = Field(alias="projectionRef")
+    access_mode: Literal["read_only"] = Field("read_only", alias="accessMode")
+
+    @field_validator("projection_ref")
+    @classmethod
+    def _projection_ref_is_ref(cls, value: str) -> str:
+        return _require_ref(value, field_name="projectionRef")
+
+
+def validate_verification_workspace_integrity(
+    *,
+    candidate: CandidateWorkspaceHead,
+    before: VerificationWorkspaceSnapshot,
+    after: VerificationWorkspaceSnapshot,
+) -> None:
+    """Fail closed unless verification preserved the exact candidate projection."""
+
+    for boundary, snapshot in (("before", before), ("after", after)):
+        if snapshot.candidate_head_digest != candidate.head_digest:
+            raise ValueError(
+                f"verification {boundary} snapshot does not match candidate head"
+            )
+        if snapshot.checkpoint_digest != candidate.checkpoint_digest:
+            raise ValueError(
+                f"verification {boundary} snapshot does not match candidate checkpoint"
+            )
+    if after.projection_ref != before.projection_ref:
+        raise ValueError("verification replaced the candidate projection")
+    if after.workspace_digest != before.workspace_digest:
+        raise ValueError("verification contaminated the candidate workspace")
+
+
 def advance_candidate_workspace_head(
     *,
     previous: CandidateWorkspaceHead | None,

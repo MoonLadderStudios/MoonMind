@@ -16,12 +16,14 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     PublicationDecision,
     ProviderLeaseDecision,
     TypedGateResult,
+    VerificationWorkspaceSnapshot,
     advance_candidate_workspace_head,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
     evaluate_attempt_preflight,
     evaluate_provider_lease,
     evaluate_publication_decision,
+    validate_verification_workspace_integrity,
 )
 
 
@@ -193,6 +195,79 @@ def test_candidate_workspace_head_rejects_fallback_fork_and_tampering() -> None:
     tampered["checkpointRef"] = "artifact://checkpoint/substituted"
     with pytest.raises(ValidationError, match="digest does not match"):
         CandidateWorkspaceHead.model_validate(tampered)
+
+
+def test_verification_workspace_integrity_preserves_read_only_candidate() -> None:
+    candidate = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+    snapshot = VerificationWorkspaceSnapshot.model_validate(
+        {
+            "candidateHeadDigest": candidate.head_digest,
+            "checkpointDigest": candidate.checkpoint_digest,
+            "workspaceDigest": "sha256:" + "2" * 64,
+            "projectionRef": "artifact://verification-projection/loop-1",
+            "accessMode": "read_only",
+        }
+    )
+
+    validate_verification_workspace_integrity(
+        candidate=candidate,
+        before=snapshot,
+        after=snapshot.model_copy(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value", "error"),
+    [
+        ("workspace_digest", "sha256:" + "3" * 64, "contaminated"),
+        ("projection_ref", "artifact://verification-projection/replaced", "replaced"),
+        ("candidate_head_digest", "sha256:" + "4" * 64, "candidate head"),
+        ("checkpoint_digest", "sha256:" + "5" * 64, "candidate checkpoint"),
+    ],
+)
+def test_verification_workspace_integrity_fails_closed_on_mutation_or_substitution(
+    changed_field: str, changed_value: str, error: str
+) -> None:
+    candidate = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+    before = VerificationWorkspaceSnapshot(
+        candidateHeadDigest=candidate.head_digest,
+        checkpointDigest=candidate.checkpoint_digest,
+        workspaceDigest="sha256:" + "2" * 64,
+        projectionRef="artifact://verification-projection/loop-1",
+    )
+    after = before.model_copy(update={changed_field: changed_value})
+
+    with pytest.raises(ValueError, match=error):
+        validate_verification_workspace_integrity(
+            candidate=candidate,
+            before=before,
+            after=after,
+        )
+
+
+def test_verification_workspace_snapshot_rejects_writable_projection() -> None:
+    with pytest.raises(ValidationError):
+        VerificationWorkspaceSnapshot.model_validate(
+            {
+                "candidateHeadDigest": "sha256:" + "1" * 64,
+                "checkpointDigest": "sha256:" + "2" * 64,
+                "workspaceDigest": "sha256:" + "3" * 64,
+                "projectionRef": "artifact://verification-projection/loop-1",
+                "accessMode": "read_write",
+            }
+        )
 
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()
