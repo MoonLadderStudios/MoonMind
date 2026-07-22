@@ -18,7 +18,6 @@ import {
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
 } from "../lib/workflowActions";
-import { WorkflowActionsMenu } from "./WorkflowActionsMenu";
 import {
   buildRemediationCreateDraft,
   remediationCreateDraftHref,
