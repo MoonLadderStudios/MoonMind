@@ -13,7 +13,11 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.schemas.temporal_models import WorkspaceCheckpointCaptureInput
 from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
 from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+    daemon_visible_workspace_path,
     resolve_managed_workspace_locator,
+    resolve_sandbox_workspace_locator,
 )
 
 
@@ -38,6 +42,14 @@ def test_workspace_locator_discriminator(payload, model_type):
 @pytest.mark.parametrize("relative_path", ["../repo", "/repo", "repo/../secret", ""])
 def test_workspace_locator_rejects_unsafe_relative_path(relative_path):
     with pytest.raises(ValidationError):
+        SandboxWorkspaceLocator(workspaceId="ws-1", relativePath=relative_path)
+
+
+@pytest.mark.parametrize(
+    "relative_path", ["%2e%2e/repo", "%252e%252e/repo", "repo%2f..%2fsecret"]
+)
+def test_workspace_locator_rejects_encoded_traversal(relative_path):
+    with pytest.raises(ValidationError, match="percent-encoding"):
         SandboxWorkspaceLocator(workspaceId="ws-1", relativePath=relative_path)
 
 
@@ -72,6 +84,96 @@ def test_sandbox_locator_rejects_symlink_escape(tmp_path):
         )
 
     assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+
+
+def test_owner_side_sandbox_resolution_rejects_cross_run_and_symlink(tmp_path):
+    locator = SandboxWorkspaceLocator(workspaceId="owned")
+    repo = tmp_path / "temporal_sandbox" / "owned" / "repo"
+    repo.mkdir(parents=True)
+    assert resolve_sandbox_workspace_locator(
+        locator, workspace_root=tmp_path, expected_workspace_id="owned"
+    ) == repo.resolve()
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        resolve_sandbox_workspace_locator(
+            locator, workspace_root=tmp_path, expected_workspace_id="other"
+        )
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
+def test_sandbox_owner_record_is_durable_and_idempotent(tmp_path):
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    record = SandboxWorkspaceRecord(
+        workspace_id="owned",
+        workflow_id="workflow-1",
+        step_execution_id="step-1",
+        relative_path="repo",
+    )
+
+    store.ensure(record)
+    store.ensure(record)
+
+    assert store.load("owned") == record
+
+
+def test_sandbox_owner_record_rejects_cross_step_retry(tmp_path):
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    store.ensure(
+        SandboxWorkspaceRecord(
+            workspace_id="owned",
+            workflow_id="workflow-1",
+            step_execution_id="step-1",
+            relative_path="repo",
+        )
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        store.ensure(
+            SandboxWorkspaceRecord(
+                workspace_id="owned",
+                workflow_id="workflow-1",
+                step_execution_id="step-2",
+                relative_path="repo",
+            )
+        )
+
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
+def test_sandbox_resolution_rejects_mismatched_owner_record(tmp_path):
+    locator = SandboxWorkspaceLocator(workspaceId="owned")
+    record = SandboxWorkspaceRecord(
+        workspace_id="owned",
+        workflow_id="other-workflow",
+        step_execution_id="step-1",
+        relative_path="repo",
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=tmp_path,
+            expected_workspace_id="owned",
+            owner_record=record,
+            expected_workflow_id="workflow-1",
+            expected_step_execution_id="step-1",
+            must_exist=False,
+        )
+
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+
+
+def test_daemon_visible_workspace_translation_is_deployment_owned(tmp_path, monkeypatch):
+    worker_root = tmp_path / "worker"
+    workspace = worker_root / "temporal_sandbox" / "owned" / "repo"
+    workspace.mkdir(parents=True)
+    daemon_root = tmp_path / "daemon"
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(worker_root))
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", str(daemon_root))
+
+    assert daemon_visible_workspace_path(workspace) == (
+        daemon_root / "temporal_sandbox" / "owned" / "repo"
+    )
 
 
 def test_external_locator_satisfies_external_checkpoint_input():

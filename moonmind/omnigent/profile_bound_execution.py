@@ -39,7 +39,6 @@ from moonmind.provider_profiles.lease_client import (
 )
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.adapters.omnigent_agent_adapter import build_omnigent_selection
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
@@ -111,6 +110,11 @@ def _diagnostics_ref(value: object) -> str | None:
 
 
 def _request_identity(request: AgentExecutionRequest) -> tuple[str, str | None]:
+    if request.step_execution is not None:
+        return (
+            request.step_execution.workflow_id,
+            request.step_execution.step_execution_id,
+        )
     parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
     step = parameters.get("stepExecution")
     if not isinstance(step, Mapping):
@@ -288,6 +292,24 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "explicit launch selection conflicts with the durable host binding",
                         code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                     )
+                if effective_launch.get("schemaVersion") != 2:
+                    effective_launch = compile_effective_launch(
+                        profile_ref=str(
+                            binding.execution_profile_ref or "omnigent-codex@1"
+                        ),
+                        policy_ref=str(
+                            binding.launch_policy_ref
+                            or (
+                                "codex-on-demand@1"
+                                if binding.host_launch_profile_ref
+                                else "codex-static@1"
+                            )
+                        ),
+                        provider_profile_id=profile_id,
+                    )
+                    binding = binding.model_copy(
+                        update={"effective_launch_snapshot": effective_launch}
+                    )
             elif requested_target:
                 effective_launch = compile_effective_launch(
                     profile_ref=requested_target,
@@ -432,7 +454,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                 workspace_key=(
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),
-                repository_url=self._repository_url(request),
+                workspace_locator=self._workspace_locator(request),
+                current_workflow_id=workflow_id,
+                current_step_execution_id=(
+                    step_execution_id or request.idempotency_key
+                ),
                 resolved_skillset_ref=request.resolved_skillset_ref,
                 artifact_gateway=self._artifact_service,
                 target_repository=str(
@@ -861,11 +887,14 @@ class OmnigentProfileBoundExecutionCoordinator:
             return profile
 
     @staticmethod
-    def _repository_url(request: AgentExecutionRequest) -> str | None:
-        workspace = str(
-            build_omnigent_selection(request).session.workspace or ""
-        ).strip()
-        return workspace if "://" in workspace or workspace.startswith("git@") else None
+    def _workspace_locator(request: AgentExecutionRequest) -> Mapping[str, Any]:
+        locator = request.workspace_spec.get("workspaceLocator")
+        if not isinstance(locator, Mapping):
+            raise OmnigentOAuthHostError(
+                "profile-bound Omnigent execution requires workspaceSpec.workspaceLocator",
+                code="WORKSPACE_LOCATOR_REQUIRED",
+            )
+        return dict(locator)
 
     @staticmethod
     def _required_capabilities(request: AgentExecutionRequest) -> tuple[str, ...]:

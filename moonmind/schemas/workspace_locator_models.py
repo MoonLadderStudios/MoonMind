@@ -4,12 +4,21 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 from typing import Annotated, Literal
+from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 
 def _relative_subpath(value: str) -> str:
     candidate = str(value).strip().replace("\\", "/")
+    decoded = candidate
+    for _ in range(3):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    if decoded != candidate:
+        raise ValueError("relativePath must not contain percent-encoding")
     path = PurePosixPath(candidate)
     if not candidate or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError("relativePath must be a normalized relative path without traversal")

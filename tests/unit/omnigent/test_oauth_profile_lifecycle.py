@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -55,6 +56,11 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
+from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
 
 
 @pytest.mark.parametrize(
@@ -96,11 +102,6 @@ def test_failure_evidence_falls_back_when_code_is_none() -> None:
     exc = RuntimeError("failed")
     exc.code = None  # type: ignore[attr-defined]
     assert _failure_evidence(exc)[0] == "RuntimeError"
-
-
-from moonmind.workflows.temporal.runtime.git_auth import (
-    build_github_token_git_environment,
-)
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -339,7 +340,13 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     runtime._discover_upstream_path = AsyncMock(
         return_value="/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
     )
-    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime._run = AsyncMock(
+        side_effect=[
+            (1, "", "no such container"),
+            (0, "", ""),
+            (0, "", ""),
+        ]
+    )
     binding = _binding().model_copy(
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
@@ -362,7 +369,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
-    assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
+    assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
@@ -386,11 +393,61 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
     ) in commands[2]
     assert (
+        "type=volume,src=mm-host-lease-1-artifacts,dst=/artifacts"
+    ) in commands[2]
+    assert (
+        "type=volume,src=mm-host-lease-1-cache,dst=/home/app/.cache"
+    ) in commands[2]
+    assert (
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     ) in commands[2]
+
+
 @pytest.mark.asyncio
-async def test_private_workspace_clone_uses_in_memory_github_credentials(
+async def test_on_demand_retry_rejects_stopped_container_from_another_lease(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE",
+        "registry.example/environment-host@sha256:" + "1" * 64,
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime.container_exists = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/bin:/bin")
+    runtime._run = AsyncMock(return_value=(0, "another-host-lease\n", ""))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    effective_launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._launch_on_demand(
+            binding=binding,
+            host_lease=lease,
+            container_name="mm-host-lease-1",
+            workspace_source=tmp_path,
+            skill_projection=tmp_path / "skills",
+            effective_launch=effective_launch,
+        )
+
+    assert raised.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert len(commands) == 1
+    assert commands[0][:3] == ("docker", "inspect", "--format")
+
+
+@pytest.mark.asyncio
+async def test_host_preparation_resolves_pre_materialized_workspace_without_git(
     tmp_path,
 ) -> None:
     runtime = OmnigentOAuthHostRuntime(
@@ -398,43 +455,119 @@ async def test_private_workspace_clone_uses_in_memory_github_credentials(
     )
     runtime._run = AsyncMock(return_value=(0, "", ""))
 
-    await runtime._prepare_workspace(
-        workspace_key="private",
-        repository_url="https://github.com/owner/private.git",
-        github_token="test-token-value",
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+
+    workspace = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    SandboxWorkspaceRecordStore(tmp_path / "workspaces").ensure(
+        SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
     )
 
-    call = runtime._run.await_args
-    assert call.args[:3] == ("git", "clone", "--")
-    expected = build_github_token_git_environment(
-        "test-token-value", base_env=call.kwargs["env"]
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
     )
-    assert call.kwargs["env"]["GITHUB_TOKEN"] == "test-token-value"
-    assert call.kwargs["env"]["GIT_CONFIG_VALUE_1"] == expected["GIT_CONFIG_VALUE_1"]
+
+    assert resolved == workspace
+    runtime._run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_failed_workspace_clone_is_removed_for_retry(tmp_path) -> None:
+async def test_host_preparation_materializes_missing_owner_record(tmp_path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+    workspace = workspace_root / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+
+    resolved = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+    )
+
+    assert resolved == workspace
+    assert SandboxWorkspaceRecordStore(workspace_root).load(workspace_id) == (
+        SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
+    )
+
+
+@pytest.mark.asyncio
+async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
+    runtime._run = AsyncMock(return_value=(1, "", "not found"))
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+
+    await runtime.stop_host(binding=binding, host_lease=lease)
+
+    commands = [call.args for call in runtime._run.await_args_list]
+    assert commands[0][:3] == ("docker", "inspect", "--format")
+    assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-artifacts") in commands
+    assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-cache") in commands
+
+
+@pytest.mark.asyncio
+async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(), workspace_root=workspace_root
     )
 
-    async def fail_after_partial_clone(*_args, **_kwargs):
-        workspace = next(workspace_root.iterdir())
-        (workspace / ".git").mkdir()
-        raise OmnigentOAuthHostError("clone failed")
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
-    runtime._run = AsyncMock(side_effect=fail_after_partial_clone)
-
-    with pytest.raises(OmnigentOAuthHostError, match="clone failed"):
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
         await runtime._prepare_workspace(
-            workspace_key="private",
-            repository_url="https://github.com/owner/private.git",
-            github_token="test-token-value",
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
         )
 
-    assert not any(workspace_root.iterdir())
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+    assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
+    runtime._run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_workspace_retry_rejects_tampered_owner_record_before_git_mutation(
+    tmp_path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=workspace_root
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+    (workspace_root / "temporal_sandbox" / workspace_id / "repo").mkdir(parents=True)
+    records = workspace_root / "temporal_sandbox" / ".workspace_records"
+    records.mkdir(parents=True)
+    (records / f"{workspace_id}.json").write_text(
+        json.dumps(
+            {
+                "workspace_id": workspace_id,
+                "workflow_id": "foreign-workflow",
+                "step_execution_id": "step-1",
+                "relative_path": "repo",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+        )
+
+    assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+    runtime._run.assert_not_awaited()
 
 
 def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
@@ -521,7 +654,13 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         policy_ref="codex-static@1",
         provider_profile_id="codex",
     )
-    await runtime._compose_static_check(effective_launch=launch)
+    workspace = tmp_path / "authorized-workspace"
+    skills = tmp_path / "authorized-skills"
+    await runtime._compose_static_check(
+        workspace_source=workspace,
+        skill_projection=skills,
+        effective_launch=launch,
+    )
     await runtime.stop_static_host()
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -561,6 +700,24 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         ),
     ]
     assert all("docker-compose.codex-host.yaml" not in command for command in commands)
+    start_env = runtime._run.await_args_list[0].kwargs["env"]
+    assert start_env["OMNIGENT_RUN_WORKSPACE"] == str(workspace)
+    assert start_env["OMNIGENT_ACTIVE_SKILLS_DIR"] == str(skills)
+
+
+def test_static_codex_compose_separates_authorized_mount_classes() -> None:
+    compose = (Path(__file__).resolve().parents[3] / "docker-compose.yaml").read_text(
+        encoding="utf-8"
+    )
+    service = compose.split("  omnigent-host-codex:", 1)[1].split(
+        "  omnigent-host-claude:", 1
+    )[0]
+
+    assert "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run" in service
+    assert "${OMNIGENT_ACTIVE_SKILLS_DIR" in service
+    assert "omnigent-tools:/opt/moonmind-tools:ro" in service
+    assert "omnigent-host-artifacts:/artifacts" in service
+    assert "omnigent-host-cache:/home/app/.cache" in service
 
 
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:
@@ -598,6 +755,9 @@ async def test_host_rejects_missing_skill_projection_before_workspace_mutation(
             binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
+            workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
             effective_launch=compile_effective_launch(
                 profile_ref="omnigent-codex@1",
                 policy_ref="codex-static@1",
@@ -622,6 +782,9 @@ async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) ->
             binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
+            workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
             effective_launch=compile_effective_launch(
                 profile_ref="omnigent-codex@1",
                 policy_ref="codex-on-demand@1",
@@ -1003,6 +1166,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             executionProfileRef="codex",
             correlationId="workflow-1",
             idempotencyKey="idem-1",
+            workspaceSpec={
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24],
+                }
+            },
             parameters={
                 "omnigent": {"session": {"workspace": "https://example.com/repo.git"}}
             },
@@ -1151,6 +1320,12 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
                 executionProfileRef="codex",
                 correlationId="workflow-1",
                 idempotencyKey="idem-1",
+                workspaceSpec={
+                    "workspaceLocator": {
+                        "kind": "sandbox",
+                        "workspaceId": hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24],
+                    }
+                },
                 parameters={
                     "repository": "owner/repo",
                     "requiredCapabilities": ["gh"],
@@ -1417,6 +1592,14 @@ async def _run_coordinator_failure_case(
         executionProfileRef="codex",
         correlationId="workflow-1",
         idempotencyKey="idem-failure-matrix",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-failure-matrix"
+                ).hexdigest()[:24],
+            }
+        },
         parameters={
             "untrustedSupportValue": "github_pat_secret_value_must_not_persist",
             "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},

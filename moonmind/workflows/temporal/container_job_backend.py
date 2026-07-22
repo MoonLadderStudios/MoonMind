@@ -67,6 +67,7 @@ from moonmind.workflows.temporal.container_image_acquisition import (
     normalize_image_reference,
     parse_resolved_digest,
 )
+from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
     RegistryAuthResolutionError,
     RegistryCredential,
@@ -373,15 +374,10 @@ class DockerContainerJobBackend:
         env = os.environ.copy()
         if self._docker_host:
             env["DOCKER_HOST"] = self._docker_host
-        process = await asyncio.create_subprocess_exec(
-            self._docker_binary,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        return await run_runtime_command(
+            (self._docker_binary, *args),
             env=env,
         )
-        stdout, stderr = await process.communicate()
-        return int(process.returncode or 0), stdout, stderr
 
     async def _checked(self, *args: str) -> str:
         code, stdout, stderr = await self._runner(args)
