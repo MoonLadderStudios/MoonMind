@@ -853,13 +853,14 @@ services:
         required: false
     volumes:
       - omnigent-host-state:/root/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/root/.cache
       - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
-      - ./omnigent_workspaces:/workspaces
-      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
-      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+      # The owning worker supplies the canonical daemon-visible source.
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started
@@ -972,14 +973,14 @@ services:
       OMNIGENT_CAPTURE_RETENTION_DAYS: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
       - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro
-      - ./omnigent_workspaces:/workspaces
-      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
-      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started
@@ -1195,6 +1196,8 @@ volumes:
     name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
   unreal_ccache_volume:
     name: unreal_ccache_volume
+  omnigent-host-artifacts:
+  omnigent-host-cache:
   unreal_ubt_volume:
     name: unreal_ubt_volume
   codex_auth_volume:

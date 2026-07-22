@@ -527,13 +527,13 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         volume for volume in host_service["volumes"] if isinstance(volume, str)
     }
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
-    assert "./omnigent_workspaces:/workspaces" in host_volumes
-    assert "codex_auth_volume:/root/.codex" not in host_volumes
-    # Operator-managed sanitized workspace, exposed read-only.
     assert (
-        "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
-        "/workspaces/MoonMind:ro"
-    ) in host_volumes
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run"
+        in host_volumes
+    )
+    assert "codex_auth_volume:/root/.codex" not in host_volumes
+    assert "omnigent-host-artifacts:/artifacts" in host_volumes
+    assert "omnigent-host-cache:/root/.cache" in host_volumes
     assert "omnigent-host-state" in volumes
     assert "codex_auth_volume" in volumes
     assert "omnigent-server-state" not in volumes
@@ -660,11 +660,9 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "omnigent-host-codex-state:/home/app/.omnigent",
         "codex_auth_volume:/home/app/.codex",
         "omnigent-tools:/opt/moonmind-tools:ro",
-        "./omnigent_workspaces:/workspaces",
-        (
-            "${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:"
-            "/workspaces/MoonMind:ro"
-        ),
+        "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run",
+        "omnigent-host-artifacts:/artifacts",
+        "omnigent-host-cache:/home/app/.cache",
         "./services/omnigent/scripts:/opt/moonmind:ro",
         "./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro",
         "omnigent-tools:/opt/moonmind-tools:ro",

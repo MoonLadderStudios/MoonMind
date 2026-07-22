@@ -142,6 +142,8 @@ _COMMON = dict(
         "oauth_home",
         "omnigent_state",
         "skills_tools",
+        "artifacts",
+        "cache",
     ),
     capture={"required": True, "retentionDays": 30},
     controlCapabilities=("interrupt", "terminate", "clear_context"),
@@ -231,7 +233,7 @@ def compile_effective_launch(
             )
         policy_payload[field] = value
     payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "executionProfileRef": profile.ref,
         "launchPolicyRef": policy.ref,
         "providerProfileId": provider_profile_id,

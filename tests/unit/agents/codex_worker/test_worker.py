@@ -10558,6 +10558,30 @@ def test_runtime_can_execute_treats_aliases_as_equivalent(tmp_path: Path) -> Non
     assert claude_code_worker._runtime_can_execute("codex") is False
 
 
+def test_universal_worker_does_not_admit_external_omnigent_runtime(
+    tmp_path: Path,
+) -> None:
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:8000",
+            worker_id="worker-1",
+            worker_token=None,
+            poll_interval_ms=1500,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="universal",
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    assert worker._runtime_can_execute("omnigent") is False
+
+
 async def test_resolve_task_auth_context_includes_git_identity_without_token(
     tmp_path: Path, monkeypatch
 ) -> None:

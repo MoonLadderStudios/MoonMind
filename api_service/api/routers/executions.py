@@ -7614,6 +7614,9 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 value = validated_runtime.get(key)
                 if isinstance(value, Mapping):
                     normalized_runtime[key] = dict(value)
+            omnigent = validated_runtime.get("omnigent")
+            if isinstance(omnigent, Mapping):
+                normalized_runtime["omnigent"] = dict(omnigent)
             if normalized_runtime:
                 normalized_step["runtime"] = normalized_runtime
 

@@ -606,6 +606,9 @@ RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH = "run-checkpoint-branch-turn-context-v
 RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH = (
     "run-omnigent-checkpoint-branch-turn-request-v1"
 )
+RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
+    "run-omnigent-authored-selection-compiler-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -645,6 +648,9 @@ RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
     "run-moonspec-draft-publish-recovery-handoff-v1"
 )
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
+RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH = (
+    "run-authoritative-pr-requirement-v1"
+)
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH = (
     "run-propagate-agent-child-cancellation-v1"
@@ -11029,6 +11035,16 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return
 
+        if workflow.patched(RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH):
+            require_pull_request_url = self._authoritative_pr_requirement(
+                publish_mode=publish_mode,
+                pr_publish_optional=pr_publish_optional,
+            )
+            pull_request_url = pull_request_url or self._coerce_text(
+                self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+
         if (
             workflow.patched(RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH)
             and self._publish_status == "failed"
@@ -14049,6 +14065,43 @@ class MoonMindRunWorkflow:
                     self._publish_context["noCommitPublish"] = {"status": key}
                     return
 
+    def _authoritative_pr_requirement(
+        self,
+        *,
+        publish_mode: str,
+        pr_publish_optional: bool,
+    ) -> bool:
+        """Derive the PR gate from durable publication evidence after all steps."""
+
+        if publish_mode != "pr" or self._integration is not None:
+            return False
+        if self._publish_status == "failed" or self._publish_context.get(
+            "publicationBlockedBy"
+        ):
+            return False
+        commit_count = self._publish_context.get("commitCount")
+        has_commits = (
+            not isinstance(commit_count, bool)
+            and isinstance(commit_count, (int, float))
+            and int(commit_count) > 0
+        ) or (
+            isinstance(commit_count, str)
+            and commit_count.strip().isdigit()
+            and int(commit_count.strip()) > 0
+        )
+        if has_commits or self._coerce_text(
+            self._publish_context.get("pullRequestUrl"), max_chars=500
+        ):
+            return True
+        if (
+            self._publish_status == "published"
+            and self._publish_context.get("storyOutputMode") in {"jira", "github"}
+        ):
+            return False
+        if self._publish_status in {"not_required", "skipped"}:
+            return False
+        return not pr_publish_optional
+
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
         inputs = node.get("inputs")
@@ -16261,10 +16314,48 @@ class MoonMindRunWorkflow:
         if raw_omnigent_parameters is not None:
             if not isinstance(raw_omnigent_parameters, Mapping):
                 raise ValueError(f"node[{node_id}].omnigent must be an object")
-            parameters["omnigent"] = self._json_mapping(
-                raw_omnigent_parameters,
-                path=f"node[{node_id}].omnigent",
+            if self._workflow_patch_enabled(
+                RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
+            ):
+                parameters["omnigent"] = self._compile_authored_omnigent_selection(
+                    raw_omnigent_parameters,
+                    path=f"node[{node_id}].omnigent",
+                )
+            else:
+                # Preserve the exact historical activity input for workflows whose
+                # histories predate the product compiler boundary.
+                parameters["omnigent"] = self._json_mapping(
+                    raw_omnigent_parameters,
+                    path=f"node[{node_id}].omnigent",
+                )
+        if agent_id == "omnigent" and execution_profile_ref:
+            profile_snapshots = getattr(self, "_profile_snapshots", None)
+            snapshot = (
+                profile_snapshots.get(execution_profile_ref)
+                if isinstance(profile_snapshots, Mapping)
+                else None
             )
+            if isinstance(snapshot, Mapping):
+                profile_agent_name = self._coerce_text(
+                    snapshot.get("agentName") or snapshot.get("agent_name"),
+                    max_chars=255,
+                )
+                if not profile_agent_name and snapshot.get("runtime_id") == "codex_cli":
+                    profile_agent_name = "codex"
+                if profile_agent_name:
+                    omnigent_parameters = (
+                        dict(parameters.get("omnigent"))
+                        if isinstance(parameters.get("omnigent"), Mapping)
+                        else {}
+                    )
+                    agent_parameters = (
+                        dict(omnigent_parameters.get("agent"))
+                        if isinstance(omnigent_parameters.get("agent"), Mapping)
+                        else {}
+                    )
+                    agent_parameters.setdefault("agentName", profile_agent_name)
+                    omnigent_parameters["agent"] = agent_parameters
+                    parameters["omnigent"] = omnigent_parameters
         profile_selector = self._build_profile_selector(
             agent_id=agent_id,
             runtime_block=runtime_block,
@@ -16934,6 +17025,24 @@ class MoonMindRunWorkflow:
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
 
+        # Repository work delegated through Omnigent carries durable ownership,
+        # never a worker or daemon filesystem path. The activity resolves this
+        # identity after validating the current workflow and step execution.
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+        ):
+            locator_identity = (
+                f"{wf_info.workflow_id}:{step_execution_payload['stepExecutionId']}"
+            )
+            workspace_spec["workspaceLocator"] = {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    locator_identity.encode("utf-8")
+                ).hexdigest()[:24],
+                "relativePath": "repo",
+            }
+
         terminal_contract_payload: dict[str, Any] | None = None
         resolved_terminal_contract = (
             self._resolved_skill_terminal_contract_by_step.get(node_id)
@@ -17251,7 +17360,10 @@ class MoonMindRunWorkflow:
         if not runtime_id or not agent_id:
             return profile_id
         child_runtime_id = self._managed_runtime_id(agent_id)
-        if runtime_id != child_runtime_id:
+        compatible_runtime_ids = {child_runtime_id}
+        if child_runtime_id == "omnigent":
+            compatible_runtime_ids.add("codex_cli")
+        if runtime_id not in compatible_runtime_ids:
             if self._workflow_is_replaying():
                 return profile_id
             raise ValueError(
@@ -19052,6 +19164,99 @@ class MoonMindRunWorkflow:
             if not isinstance(key, str):
                 raise ValueError(f"{path} keys must be strings")
             normalized[key] = self._json_value(item, path=f"{path}.{key}")
+        return normalized
+
+    def _compile_authored_omnigent_selection(
+        self, value: Mapping[str, Any], *, path: str
+    ) -> dict[str, Any]:
+        """Compile product-owned Omnigent intent without accepting authority."""
+
+        allowed_fields: dict[str, frozenset[str] | None] = {
+            "endpointRef": None,
+            "executionTargetRef": None,
+            "launchPolicyRef": None,
+            "agent": frozenset({"harnessOverride"}),
+            "capture": frozenset(
+                {
+                    "required",
+                    "retentionDays",
+                    "changedFiles",
+                    "workspaceFiles",
+                    "sessionFiles",
+                    "deleteOmnigentSessionAfterHarvest",
+                }
+            ),
+            "session": frozenset({"title", "labels"}),
+            "prompt": frozenset({"text", "instructionRef"}),
+            "productIntent": None,
+            "contextRefs": None,
+            "workspaceContextRefs": None,
+            "repositoryContextRefs": None,
+        }
+        normalized = self._json_mapping(value, path=path)
+
+        forbidden_authority_keys = {
+            "hostid",
+            "dockervolume",
+            "volumename",
+            "credentialgeneration",
+            "leaseid",
+            "providerleaseid",
+            "hostleaseid",
+            "absolutebindsource",
+            "bindsource",
+            "registrationtoken",
+            "profileauthorization",
+            "moonmindprofileauthorization",
+        }
+
+        def reject_authority(item: Any, *, item_path: str) -> None:
+            if isinstance(item, Mapping):
+                for nested_key, nested_value in item.items():
+                    canonical_key = re.sub(r"[^a-z0-9]", "", nested_key.lower())
+                    if canonical_key in forbidden_authority_keys:
+                        raise ValueError(
+                            f"{item_path}.{nested_key} is trusted authority and "
+                            "cannot be authored"
+                        )
+                    reject_authority(
+                        nested_value,
+                        item_path=f"{item_path}.{nested_key}",
+                    )
+            elif isinstance(item, list):
+                for index, nested_value in enumerate(item):
+                    reject_authority(
+                        nested_value,
+                        item_path=f"{item_path}[{index}]",
+                    )
+
+        reject_authority(normalized, item_path=path)
+        unknown = sorted(set(normalized) - set(allowed_fields))
+        if unknown:
+            raise ValueError(
+                f"{path} contains unsupported authored fields: {', '.join(unknown)}"
+            )
+
+        for key, nested_allowlist in allowed_fields.items():
+            if key not in normalized or nested_allowlist is None:
+                continue
+            nested = normalized[key]
+            if not isinstance(nested, Mapping):
+                raise ValueError(f"{path}.{key} must be an object")
+            nested_unknown = sorted(set(nested) - set(nested_allowlist))
+            if nested_unknown:
+                raise ValueError(
+                    f"{path}.{key} contains unsupported authored fields: "
+                    + ", ".join(nested_unknown)
+                )
+
+        agent = normalized.get("agent")
+        if isinstance(agent, Mapping):
+            harness = agent.get("harnessOverride")
+            if harness != "codex-native":
+                raise ValueError(
+                    f"{path}.agent.harnessOverride must be codex-native"
+                )
         return normalized
 
     def _json_value(self, value: Any, *, path: str) -> Any:
