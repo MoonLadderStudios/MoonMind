@@ -3491,51 +3491,23 @@ class TemporalArtifactActivities:
         *,
         runtime_id: str,
     ) -> dict[str, Any]:
-        """Terminate and restart the ProviderProfileManager for *runtime_id*.
+        """Replay-safe legacy recovery that never revokes lease authority.
 
-        Used by AgentRun when the manager appears stuck (e.g. nondeterminism
-        error causing workflow task failures). Terminates the existing manager
-        if running, then starts a fresh one.
+        Older AgentRun histories may already contain this activity type, so it
+        remains registered. Its destructive implementation is intentionally
+        removed: ambiguous manager health cannot authorize termination while a
+        credential consumer may still be active.
         """
-        from temporalio.service import RPCError
-
-        from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
-        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
-            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
-            workflow_id_for_runtime,
-        )
-
-        workflow_id = workflow_id_for_runtime(runtime_id)
-        adapter = TemporalClientAdapter()
-        client = await adapter.get_client()
-
-        # Terminate the existing manager if it exists.
-        try:
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.terminate(reason="Reset by AgentRun: manager appeared stuck")
-            logger.info(
-                "provider_profile.reset_manager terminated stale manager for runtime=%s",
-                runtime_id,
-            )
-        except RPCError:
-            logger.debug(
-                "provider_profile.reset_manager no running manager to terminate for runtime=%s",
-                runtime_id,
-            )
-
-        # Start a fresh manager.
-        await client.start_workflow(
-            PROVIDER_PROFILE_MANAGER_WF,
-            {"runtime_id": runtime_id},
-            id=workflow_id,
-            task_queue=get_workflow_task_queue(),
-        )
+        result = await self.provider_profile_ensure_manager(runtime_id=runtime_id)
         logger.info(
-            "provider_profile.reset_manager started fresh manager for runtime=%s",
+            "provider_profile.reset_manager performed non-destructive recovery for runtime=%s",
             runtime_id,
         )
-        return {"reset": True, "workflow_id": workflow_id}
+        return {
+            "reset": False,
+            "started": bool(result.get("started")),
+            "workflow_id": result["workflow_id"],
+        }
 
     async def provider_profile_manager_state(
         self,

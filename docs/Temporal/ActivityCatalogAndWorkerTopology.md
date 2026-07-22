@@ -386,6 +386,9 @@ Current implemented activities:
 Worker queue: `mm.activity.artifacts`
 
 These are support activities used by workflow and manager orchestration. They are not part of the end-user skill or agent contract surface.
+`provider_profile.reset_manager` remains registered only for replay compatibility
+and performs non-destructive ensure/recovery; it never terminates the lease
+authority workflow.
 
 ## 8.6 OAuth session activities (`oauth_session.*`)
 
