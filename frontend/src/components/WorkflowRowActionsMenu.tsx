@@ -1,29 +1,29 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { z } from 'zod';
+import { useCallback, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
 
-import { DashboardActionDialog } from './DashboardActionDialog';
-import { useDashboardToast } from './dashboard/DashboardToast';
-import { formatStatusLabel } from '../utils/formatters';
-import { navigateTo } from '../lib/navigation';
-import { workflowDetailHref } from '../lib/workflowListContext';
+import { DashboardActionDialog } from "./DashboardActionDialog";
+import { useDashboardToast } from "./dashboard/DashboardToast";
+import { formatStatusLabel } from "../utils/formatters";
+import { navigateTo } from "../lib/navigation";
+import { workflowDetailHref } from "../lib/workflowListContext";
 import {
   taskCompareHref,
   taskEditForRerunHref,
   taskEditHref,
-} from '../lib/temporalTaskEditing';
+} from "../lib/temporalTaskEditing";
 import {
   buildWorkflowActionMenuItems,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
-} from '../lib/workflowActions';
-import { WorkflowActionsMenu } from './WorkflowActionsMenu';
+} from "../lib/workflowActions";
+import { WorkflowActionsMenu } from "./WorkflowActionsMenu";
 import {
   buildRemediationCreateDraft,
   remediationCreateDraftHref,
   storeRemediationCreateDraft,
-} from '../lib/remediationCreateDraft';
+} from "../lib/remediationCreateDraft";
 
 /**
  * Focused projection of the execution detail payload. The row actions menu only
@@ -61,9 +61,7 @@ const RowActionsExecutionSchema = z
   .passthrough();
 
 type RowActionsExecution = z.infer<typeof RowActionsExecutionSchema>;
-type RowActionDialogKind =
-  | 'rename'
-  | 'send-message';
+type RowActionDialogKind = "rename" | "send-message";
 
 const KEBAB_ICON = (
   <svg
@@ -78,8 +76,9 @@ const KEBAB_ICON = (
   </svg>
 );
 
-const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
-const DEFAULT_WORKFLOW_ACTION_ERROR = 'The workflow action could not be completed.';
+const ACTION_AVAILABILITY_PENDING_REASON = "Checking availability…";
+const DEFAULT_WORKFLOW_ACTION_ERROR =
+  "The workflow action could not be completed.";
 
 const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canSetTitle: true,
@@ -94,48 +93,62 @@ const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canReject: true,
   canSendMessage: true,
   canBypassDependencies: true,
-} satisfies RowActionsExecution['actions'];
+} satisfies RowActionsExecution["actions"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readableWorkflowActionError(error: unknown): string {
   const rawMessage =
     error instanceof Error
       ? error.message
-      : typeof error === 'string'
+      : typeof error === "string"
         ? error
-        : isRecord(error) && typeof error.message === 'string'
+        : isRecord(error) && typeof error.message === "string"
           ? error.message
-          : '';
+          : "";
   const message = rawMessage.trim();
   if (!message) return DEFAULT_WORKFLOW_ACTION_ERROR;
   try {
-    const parsed = JSON.parse(message) as { detail?: unknown; message?: unknown };
+    const parsed = JSON.parse(message) as {
+      detail?: unknown;
+      message?: unknown;
+    };
     const parsedMessage =
-      typeof parsed.detail === 'string'
+      typeof parsed.detail === "string"
         ? parsed.detail
-        : typeof parsed.message === 'string'
+        : typeof parsed.message === "string"
           ? parsed.message
           : null;
     if (parsedMessage?.trim()) return parsedMessage.trim();
   } catch {
     // Plain text API errors are already user-readable enough for this surface.
   }
-  return message.replace(/\s+/g, ' ').slice(0, 240);
+  return message.replace(/\s+/g, " ").slice(0, 240);
 }
 
-function workflowActionResultHref(result: unknown, fallbackHref: string): string {
-  const execution = isRecord(result) && isRecord(result.execution) ? result.execution : null;
+function workflowActionResultHref(
+  result: unknown,
+  fallbackHref: string,
+): string {
+  const execution =
+    isRecord(result) && isRecord(result.execution) ? result.execution : null;
   const redirectPath =
-    execution && typeof execution.redirectPath === 'string' ? execution.redirectPath.trim() : '';
+    execution && typeof execution.redirectPath === "string"
+      ? execution.redirectPath.trim()
+      : "";
   if (redirectPath) return redirectPath;
 
   const resultWorkflowId =
-    execution && typeof execution.workflowId === 'string' ? execution.workflowId.trim() : '';
+    execution && typeof execution.workflowId === "string"
+      ? execution.workflowId.trim()
+      : "";
   if (resultWorkflowId) {
-    return workflowDetailHref(resultWorkflowId, new URLSearchParams(window.location.search));
+    return workflowDetailHref(
+      resultWorkflowId,
+      new URLSearchParams(window.location.search),
+    );
   }
 
   return fallbackHref;
@@ -164,10 +177,12 @@ export function WorkflowRowActionsMenu({
   const toast = useDashboardToast();
   const [hasOpened, setHasOpened] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(null);
+  const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(
+    null,
+  );
 
   const detailQuery = useQuery({
-    queryKey: ['workflow-row-actions-detail', workflowId],
+    queryKey: ["workflow-row-actions-detail", workflowId],
     enabled: actionsEnabled && hasOpened && Boolean(workflowId),
     staleTime: 5000,
     queryFn: async () => {
@@ -183,11 +198,14 @@ export function WorkflowRowActionsMenu({
 
   const execution: RowActionsExecution | undefined = detailQuery.data;
   const actions = execution?.actions;
-  const runId = execution?.temporalRunId?.trim() || execution?.runId?.trim() || '';
+  const runId =
+    execution?.temporalRunId?.trim() || execution?.runId?.trim() || "";
 
   const invalidate = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['workflow-row-actions-detail', workflowId] });
-    void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
+    void queryClient.invalidateQueries({
+      queryKey: ["workflow-row-actions-detail", workflowId],
+    });
+    void queryClient.invalidateQueries({ queryKey: ["workflow-list"] });
   }, [queryClient, workflowId]);
 
   const onMutationError = useCallback(
@@ -195,7 +213,7 @@ export function WorkflowRowActionsMenu({
       const message = readableWorkflowActionError(error);
       setActionError(message);
       toast.error({
-        title: 'Workflow action failed',
+        title: "Workflow action failed",
         message,
       });
     },
@@ -204,11 +222,17 @@ export function WorkflowRowActionsMenu({
 
   const updateMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/update`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(body),
+        },
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || response.statusText);
@@ -227,11 +251,17 @@ export function WorkflowRowActionsMenu({
       signalName: string;
       payload?: Record<string, unknown>;
     }) => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/signal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ signalName, payload: signalPayload ?? {} }),
-      });
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/signal`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ signalName, payload: signalPayload ?? {} }),
+        },
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || response.statusText);
@@ -244,17 +274,23 @@ export function WorkflowRowActionsMenu({
 
   const cancelMutation = useMutation({
     mutationFn: async ({
-      action = 'cancel',
+      action = "cancel",
       graceful = true,
     }: {
-      action?: 'cancel' | 'reject';
+      action?: "cancel" | "reject";
       graceful?: boolean;
     }) => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}/cancel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ action, graceful }),
-      });
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ action, graceful }),
+        },
+      );
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || response.statusText);
@@ -270,14 +306,17 @@ export function WorkflowRowActionsMenu({
       const response = await fetch(
         `${apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-failed-step`,
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
           body: JSON.stringify({
-            idempotencyKey: `resume-${workflowId}-${runId || 'latest'}`,
+            idempotencyKey: `resume-${workflowId}-${runId || "latest"}`,
             ...(execution?.resume?.checkpointRef
               ? { recoveryCheckpointRef: execution.resume.checkpointRef }
               : {}),
-            operatorMetadata: { requestedFrom: 'workflow-list' },
+            operatorMetadata: { requestedFrom: "workflow-list" },
           }),
         },
       );
@@ -294,7 +333,9 @@ export function WorkflowRowActionsMenu({
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
       if (!execution) {
-        throw new Error('Workflow detail is required before remediation can be drafted.');
+        throw new Error(
+          "Workflow detail is required before remediation can be drafted.",
+        );
       }
       const draft = buildRemediationCreateDraft(execution, { runId });
       const draftId = storeRemediationCreateDraft(draft);
@@ -315,20 +356,28 @@ export function WorkflowRowActionsMenu({
     ? actions?.canEditForRerun
       ? taskEditForRerunHref(workflowId)
       : taskEditHref(workflowId)
-    : '';
+    : "";
   const compareHref =
-    workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
-  const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
+    workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : "";
+  const canShowEditWorkflow = Boolean(
+    actions?.canUpdateInputs || actions?.canEditForRerun,
+  );
   const editTaskUnavailableReason = canShowEditWorkflow
     ? null
     : actions?.disabledReasons?.canEditForRerun ||
       actions?.disabledReasons?.canUpdateInputs ||
       null;
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
-  const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
-  const actionAvailabilityPending = actionsEnabled && !actions && !detailQuery.isError;
+  const canCreateRemediation = Boolean(
+    execution && isRemediationEligibleTarget(execution),
+  );
+  const actionAvailabilityPending =
+    actionsEnabled && !actions && !detailQuery.isError;
   const workflowSubject = execution?.title?.trim() || workflowId;
-  const detailHref = workflowDetailHref(workflowId, new URLSearchParams(window.location.search));
+  const detailHref = workflowDetailHref(
+    workflowId,
+    new URLSearchParams(window.location.search),
+  );
   const disabledReason = useCallback(
     (key: string): string | null => {
       if (actionAvailabilityPending) return ACTION_AVAILABILITY_PENDING_REASON;
@@ -343,7 +392,9 @@ export function WorkflowRowActionsMenu({
       ? PENDING_WORKFLOW_ACTION_CAPABILITIES
       : actions;
     if (!actionsEnabled || !menuActions) return [];
-    const pendingReason = actionAvailabilityPending ? ACTION_AVAILABILITY_PENDING_REASON : null;
+    const pendingReason = actionAvailabilityPending
+      ? ACTION_AVAILABILITY_PENDING_REASON
+      : null;
     return buildWorkflowActionMenuItems({
       actionsOn: actionsEnabled,
       actions: menuActions,
@@ -352,8 +403,12 @@ export function WorkflowRowActionsMenu({
       taskEditingOn: taskEditingEnabled,
       disabledReason,
       editHref: actionAvailabilityPending ? taskEditHref(workflowId) : editHref,
-      compareHref: actionAvailabilityPending ? taskCompareHref(workflowId) : compareHref,
-      canShowEditWorkflow: actionAvailabilityPending ? true : canShowEditWorkflow,
+      compareHref: actionAvailabilityPending
+        ? taskCompareHref(workflowId)
+        : compareHref,
+      canShowEditWorkflow: actionAvailabilityPending
+        ? true
+        : canShowEditWorkflow,
       editTaskDisabledReason: editTaskUnavailableReason
         ? formatStatusLabel(editTaskUnavailableReason)
         : pendingReason,
@@ -363,11 +418,13 @@ export function WorkflowRowActionsMenu({
       selectedRecoveryOptionCount: 0,
       selectedRecoveryStepEligible: false,
       selectedRecoveryStepDisabledReason: null,
-      canCreateRemediation: actionAvailabilityPending ? true : canCreateRemediation,
+      canCreateRemediation: actionAvailabilityPending
+        ? true
+        : canCreateRemediation,
       handlers: {
         onRename: () => {
           setActionError(null);
-          setActiveDialog('rename');
+          setActiveDialog("rename");
         },
         onEditTask: () => {},
         onCompareRun: () => {},
@@ -375,14 +432,14 @@ export function WorkflowRowActionsMenu({
           setActionError(null);
           if (busy || !workflowId) return;
           updateMutation.mutate(
-            { updateName: 'RequestRerun' },
+            { updateName: "RequestRerun" },
             {
               onSuccess: (result) => {
                 toast.success({
-                  title: 'Rerun requested',
+                  title: "Rerun requested",
                   message: `${workflowSubject} has been queued.`,
                   action: {
-                    label: 'View workflow',
+                    label: "View workflow",
                     href: workflowActionResultHref(result, detailHref),
                   },
                 });
@@ -397,46 +454,49 @@ export function WorkflowRowActionsMenu({
         onRecoverFromSelectedStep: () => {},
         onPause: () => {
           setActionError(null);
-          signalMutation.mutate({ signalName: 'Pause', payload: {} });
+          signalMutation.mutate({ signalName: "Pause", payload: {} });
         },
         onResume: () => {
           setActionError(null);
-          signalMutation.mutate({ signalName: 'Resume', payload: {} });
+          signalMutation.mutate({ signalName: "Resume", payload: {} });
         },
         onApprove: () => {
           setActionError(null);
-          signalMutation.mutate({ signalName: 'Approve', payload: {} });
+          signalMutation.mutate({ signalName: "Approve", payload: {} });
         },
         onReject: () => {
           setActionError(null);
-          cancelMutation.mutate({ action: 'reject', graceful: true });
+          cancelMutation.mutate({ action: "reject", graceful: true });
         },
         onCancel: () => {
           setActionError(null);
-          cancelMutation.mutate({ action: 'cancel', graceful: true });
+          cancelMutation.mutate({ action: "cancel", graceful: true });
         },
         onForceCancel: () => {
           setActionError(null);
-          cancelMutation.mutate({ action: 'cancel', graceful: false });
+          cancelMutation.mutate({ action: "cancel", graceful: false });
         },
         onSendMessage: () => {
           setActionError(null);
-          setActiveDialog('send-message');
+          setActiveDialog("send-message");
         },
         onBypassDependencies: () => {
           setActionError(null);
           signalMutation.mutate(
             {
-              signalName: 'BypassDependencies',
-              payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
+              signalName: "BypassDependencies",
+              payload: {
+                reason:
+                  "Dependency wait bypassed by operator from the dashboard.",
+              },
             },
             {
               onSuccess: () => {
                 toast.success({
-                  title: 'Dependency wait bypass requested',
+                  title: "Dependency wait bypass requested",
                   message: `${workflowSubject} will continue without waiting on dependencies.`,
                   action: {
-                    label: 'View workflow',
+                    label: "View workflow",
                     href: detailHref,
                   },
                 });
@@ -476,10 +536,10 @@ export function WorkflowRowActionsMenu({
   ]);
 
   const emptyMessage = detailQuery.isLoading
-    ? 'Loading actions…'
+    ? "Loading actions…"
     : detailQuery.isError
-      ? 'Unable to load workflow actions.'
-      : 'No workflow actions are currently available.';
+      ? "Unable to load workflow actions."
+      : "No workflow actions are currently available.";
   const subject = workflowSubject;
   const closeDialog = () => {
     setActiveDialog(null);
@@ -488,12 +548,15 @@ export function WorkflowRowActionsMenu({
   const confirmDialog = (value: string) => {
     const closeOnSuccess = { onSuccess: () => setActiveDialog(null) };
     switch (activeDialog) {
-      case 'rename':
-        updateMutation.mutate({ updateName: 'SetTitle', title: value }, closeOnSuccess);
+      case "rename":
+        updateMutation.mutate(
+          { updateName: "SetTitle", title: value },
+          closeOnSuccess,
+        );
         break;
-      case 'send-message':
+      case "send-message":
         signalMutation.mutate(
-          { signalName: 'SendMessage', payload: { message: value } },
+          { signalName: "SendMessage", payload: { message: value } },
           closeOnSuccess,
         );
         break;
@@ -505,26 +568,32 @@ export function WorkflowRowActionsMenu({
   return (
     <div className="workflow-row-actions">
       {items.map((item) => (
-        
+        <button
+          key={item.label}
+          type="button"
+          className="secondary"
+          onClick={item.onClick}
+          disabled={item.disabled}
+        ></button>
       ))}
       <DashboardActionDialog
-        open={activeDialog === 'rename'}
+        open={activeDialog === "rename"}
         title="Rename workflow"
         subject={subject}
         compactId={workflowId}
         consequence="Set a dashboard title for this workflow. Execution history, artifacts, and workflow identity stay unchanged."
         valueLabel="Workflow title"
         valueRequired
-        initialValue={execution?.title || ''}
-        confirmLabel={updateMutation.isPending ? 'Renaming' : 'Rename workflow'}
+        initialValue={execution?.title || ""}
+        confirmLabel={updateMutation.isPending ? "Renaming" : "Rename workflow"}
         confirmPending={updateMutation.isPending}
-        disabledReason={disabledReason('canSetTitle')}
-        error={activeDialog === 'rename' ? actionError : null}
+        disabledReason={disabledReason("canSetTitle")}
+        error={activeDialog === "rename" ? actionError : null}
         onCancel={closeDialog}
         onConfirm={confirmDialog}
       />
       <DashboardActionDialog
-        open={activeDialog === 'send-message'}
+        open={activeDialog === "send-message"}
         title="Send operator message"
         subject={subject}
         compactId={workflowId}
@@ -532,10 +601,10 @@ export function WorkflowRowActionsMenu({
         valueLabel="Message"
         valueRequired
         valueMultiline
-        confirmLabel={signalMutation.isPending ? 'Sending' : 'Send message'}
+        confirmLabel={signalMutation.isPending ? "Sending" : "Send message"}
         confirmPending={signalMutation.isPending}
-        disabledReason={disabledReason('canSendMessage')}
-        error={activeDialog === 'send-message' ? actionError : null}
+        disabledReason={disabledReason("canSendMessage")}
+        error={activeDialog === "send-message" ? actionError : null}
         onCancel={closeDialog}
         onConfirm={confirmDialog}
       />
