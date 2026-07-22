@@ -687,34 +687,57 @@ def evaluate_provider_lease(decision: dict[str, Any]) -> ProviderLeaseDecision:
 
 def _budget_exhaustion_reason(budget: LoopBudget) -> str | None:
     consumed = budget.consumed
+
+    def _consumed(*keys: str) -> int:
+        """Read canonical counters while accepting workflow-authored snake case."""
+
+        return max((consumed.get(key, 0) for key in keys), default=0)
+
     checks = (
-        ("attempts", budget.max_attempts, "max_attempts_exhausted"),
+        (("attempts",), budget.max_attempts, "max_attempts_exhausted"),
         (
-            "consecutiveNoProgressAttempts",
+            (
+                "consecutiveNoProgressAttempts",
+                "consecutive_no_progress_attempts",
+            ),
             budget.max_consecutive_no_progress_attempts,
             "no_progress_attempts_exhausted",
         ),
         (
-            "repeatedFailedCommands",
+            ("repeatedFailedCommands", "repeated_failed_commands"),
             budget.max_repeated_failed_commands,
             "repeated_failed_commands_exhausted",
         ),
     )
-    for key, limit, reason in checks:
-        if consumed.get(key, 0) >= limit:
+    for keys, limit, reason in checks:
+        amount = _consumed(*keys)
+        if amount >= limit and amount > 0:
             return reason
     if (
-        consumed.get("unsafeOrPolicyDeniedAttempts", 0)
-        > budget.max_unsafe_or_policy_denied_attempts
+        _consumed(
+            "unsafeOrPolicyDeniedAttempts",
+            "unsafe_or_policy_denied_attempts",
+        )
+        >= budget.max_unsafe_or_policy_denied_attempts
+        and _consumed(
+            "unsafeOrPolicyDeniedAttempts",
+            "unsafe_or_policy_denied_attempts",
+        )
+        > 0
     ):
         return "unsafe_policy_attempts_exhausted"
     optional = (
-        ("provider", budget.provider_budget, "provider_budget_exhausted"),
-        ("tokens", budget.token_budget, "token_budget_exhausted"),
-        ("cost", budget.cost_budget, "cost_budget_exhausted"),
+        (
+            ("provider", "provider_budget"),
+            budget.provider_budget,
+            "provider_budget_exhausted",
+        ),
+        (("tokens", "token_budget"), budget.token_budget, "token_budget_exhausted"),
+        (("cost", "cost_budget"), budget.cost_budget, "cost_budget_exhausted"),
     )
-    for key, limit, reason in optional:
-        if limit is not None and consumed.get(key, 0) > limit:
+    for keys, limit, reason in optional:
+        amount = _consumed(*keys)
+        if limit is not None and amount >= limit and amount > 0:
             return reason
     return None
 

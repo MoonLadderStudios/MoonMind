@@ -269,6 +269,69 @@ def test_verification_workspace_snapshot_rejects_writable_projection() -> None:
             }
         )
 
+
+@pytest.mark.parametrize(
+    ("budget_overrides", "consumed", "reason"),
+    [
+        ({"maxAttempts": 2}, {"attempts": 2}, "max_attempts_exhausted"),
+        (
+            {"maxConsecutiveNoProgressAttempts": 2},
+            {"consecutive_no_progress_attempts": 2},
+            "no_progress_attempts_exhausted",
+        ),
+        (
+            {"maxRepeatedFailedCommands": 2},
+            {"repeated_failed_commands": 2},
+            "repeated_failed_commands_exhausted",
+        ),
+        (
+            {"maxUnsafeOrPolicyDeniedAttempts": 1},
+            {"unsafe_or_policy_denied_attempts": 1},
+            "unsafe_policy_attempts_exhausted",
+        ),
+        ({"providerBudget": 2}, {"provider_budget": 2}, "provider_budget_exhausted"),
+        ({"tokenBudget": 20}, {"token_budget": 20}, "token_budget_exhausted"),
+        ({"costBudget": 3}, {"cost_budget": 3}, "cost_budget_exhausted"),
+    ],
+)
+def test_each_independent_loop_budget_fails_closed_at_its_limit(
+    budget_overrides: dict[str, int],
+    consumed: dict[str, int],
+    reason: str,
+) -> None:
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(),
+        budget=_budget(**budget_overrides, consumed=consumed),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.reason == reason
+    assert decision.remaining_work_ref == "artifact://remaining-work/attempt-1"
+
+
+def test_zero_optional_and_failure_budgets_do_not_stop_before_consumption() -> None:
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(),
+        budget=_budget(
+            maxRepeatedFailedCommands=0,
+            maxUnsafeOrPolicyDeniedAttempts=0,
+            providerBudget=0,
+            tokenBudget=0,
+            costBudget=0,
+            consumed={},
+        ),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is True
+    assert decision.reason == "verification_requested_remediation"
+
+
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()
     assert failed.checkpoint_before_ref == "artifact://checkpoint/before"
