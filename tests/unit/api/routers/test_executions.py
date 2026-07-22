@@ -4226,7 +4226,13 @@ def test_create_task_shaped_execution_preserves_omnigent_selection(
                     "executionTargetRef": "on-demand-docker",
                     "launchPolicyRef": "codex-on-demand@1",
                 },
-                "workflow": {"instructions": "Run through Omnigent."},
+                "workflow": {
+                    "instructions": "Run through Omnigent.",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                    },
+                },
             },
         },
     )
@@ -4239,6 +4245,10 @@ def test_create_task_shaped_execution_preserves_omnigent_selection(
     assert initial_parameters["omnigent"] == {
         "executionTargetRef": "on-demand-docker",
         "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert initial_parameters["workflow"]["runtime"] == {
+        "mode": "omnigent",
+        "executionProfileRef": "codex-oauth-profile",
     }
 
 
@@ -8731,7 +8741,15 @@ def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -
     target = _build_recurring_target(
         {
             "workflowType": "MoonMind.UserWorkflow",
-            "initialParameters": {"workflow": {"instructions": "Run nightly"}},
+            "initialParameters": {
+                "workflow": {
+                    "instructions": "Run nightly",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                    },
+                }
+            },
             "omnigent": {
                 "executionTargetRef": "on-demand-docker",
                 "launchPolicyRef": "codex-on-demand@1",
@@ -8744,6 +8762,10 @@ def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -
     assert target["initialParameters"]["omnigent"] == {
         "executionTargetRef": "on-demand-docker",
         "launchPolicyRef": "codex-on-demand@1",
+    }
+    assert target["initialParameters"]["workflow"]["runtime"] == {
+        "mode": "omnigent",
+        "executionProfileRef": "codex-oauth-profile",
     }
 
 
