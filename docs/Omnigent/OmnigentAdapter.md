@@ -164,7 +164,18 @@ Terminal cleanup removes only the lease-owned container and Omnigent state volum
 
 The desired product authority is an explicit, versioned host-mode choice compiled from the selected Omnigent agent profile and policy. Workflows and operators select policy/profile concepts, not a raw launch-profile string.
 
-`OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` may remain as a bootstrap compatibility default until that product surface is complete. It is not durable workflow authority, must not require workflow JSON editing, and must not bypass policy validation. An absent explicit binding may use the deployment default; an existing durable binding remains authoritative for retry.
+Workflow Create selects the versioned `omnigent-codex@1` execution target and
+one of the built-in `codex-static@1` or `codex-on-demand@1` launch policies.
+MoonMind compiles that selection into secret-free `effectiveLaunch` evidence
+before acquiring a Provider Profile lease or mutating a host. Existing durable
+bindings remain authoritative for retry and conflicting explicit policy fails
+closed.
+
+`OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` is bootstrap compatibility for local
+development only. It is consulted only when a request has no product-owned
+selection and no durable binding; it cannot override either authority. Workflow
+requests cannot provide host IDs, Docker volume names, credential bodies, or
+absolute bind sources.
 
 ### 5.4 Image authority
 
