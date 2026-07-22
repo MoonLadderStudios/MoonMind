@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import os
 import re
@@ -29,6 +28,7 @@ from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WORKSPACE_LOCATOR_ADAPTER,
 )
+from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
@@ -915,26 +915,20 @@ class OmnigentOAuthHostRuntime:
         env: Mapping[str, str] | None = None,
         check: bool = True,
     ) -> tuple[int, str, str]:
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=dict(env) if env is not None else None,
+        return_code, stdout, stderr = await run_runtime_command(
+            args,
+            env=env,
+            timeout_seconds=600,
+            output_limit_bytes=4096,
         )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
-        except (TimeoutError, asyncio.CancelledError):
-            process.kill()
-            await process.wait()
-            raise
-        output = stdout.decode("utf-8", errors="replace")[:4096]
-        error = stderr.decode("utf-8", errors="replace")[:4096]
-        if check and process.returncode != 0:
+        output = stdout.decode("utf-8", errors="replace")
+        error = stderr.decode("utf-8", errors="replace")
+        if check and return_code != 0:
             raise OmnigentOAuthHostError(
                 "OAuth host runtime command failed",
                 code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
             )
-        return process.returncode or 0, output, error
+        return return_code, output, error
 
 
 __all__ = ["OmnigentOAuthHostRuntime"]
