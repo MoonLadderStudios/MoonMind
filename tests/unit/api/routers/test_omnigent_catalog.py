@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import omnigent_catalog as catalog
@@ -161,6 +161,11 @@ def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):
 def test_catalog_requires_authentication():
     app = FastAPI()
     app.include_router(catalog.router)
+
+    def unauthenticated():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    app.dependency_overrides[get_current_user()] = unauthenticated
     response = TestClient(app).get("/api/omnigent/codex-catalog-readiness")
     assert response.status_code in {401, 403}
 

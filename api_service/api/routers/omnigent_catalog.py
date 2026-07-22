@@ -327,6 +327,8 @@ async def get_omnigent_codex_catalog_readiness(
                 row.account_label or row.provider_label or row.profile_id
             )
         )
+        if label.lower().startswith(("ghp_", "github_pat_", "aiza", "akia")):
+            label = "[REDACTED]"
         busy = active_slot_counts.get(row.profile_id, 0) >= (row.max_parallel_runs or 1)
         queue_when_busy = (
             getattr(row.rate_limit_policy, "value", row.rate_limit_policy) == "queue"
