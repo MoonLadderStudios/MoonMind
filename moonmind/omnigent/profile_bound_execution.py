@@ -22,6 +22,10 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.execution_profiles import (
+    compile_effective_launch,
+    selection_from_request,
+)
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
@@ -239,6 +243,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         provider_lease: CredentialLease | None = None
         host_lease = None
         binding = None
+        effective_launch: dict[str, Any] | None = None
         terminal_status = "completed"
         try:
             await emit("request_validated", "started")
@@ -264,6 +269,62 @@ class OmnigentProfileBoundExecutionCoordinator:
                     code="profile_readiness_failed",
                 )
             await emit(current_stage, "ready")
+            # Resolve product-owned launch authority before acquiring a Provider
+            # Profile lease or mutating host state.  A previously persisted
+            # binding is retry authority; environment input is bootstrap-only.
+            requested_target, requested_policy = selection_from_request(
+                request.parameters
+            )
+            current_stage = "host_binding_resolution"
+            await emit(current_stage, "started")
+            binding = await self._hosts.get_binding_for_profile(profile_id)
+            if binding is not None and binding.effective_launch_snapshot is not None:
+                effective_launch = dict(binding.effective_launch_snapshot)
+                if requested_target and (
+                    effective_launch.get("executionProfileRef") != requested_target
+                    or effective_launch.get("launchPolicyRef") != requested_policy
+                ):
+                    raise OmnigentOAuthHostError(
+                        "explicit launch selection conflicts with the durable host binding",
+                        code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+                    )
+            elif requested_target:
+                effective_launch = compile_effective_launch(
+                    profile_ref=requested_target,
+                    policy_ref=requested_policy,
+                    provider_profile_id=profile_id,
+                )
+                if binding is not None:
+                    bound_mode = (
+                        "on_demand_docker"
+                        if binding.host_launch_profile_ref
+                        else "static_compose"
+                    )
+                    if effective_launch["hostMode"] != bound_mode:
+                        raise OmnigentOAuthHostError(
+                            "explicit launch policy conflicts with the durable host binding",
+                            code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+                        )
+            else:
+                bootstrap_on_demand = (
+                    bool(binding.host_launch_profile_ref)
+                    if binding is not None
+                    else bool(os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"))
+                )
+                effective_launch = compile_effective_launch(
+                    profile_ref="omnigent-codex@1",
+                    policy_ref=(
+                        "codex-on-demand@1"
+                        if bootstrap_on_demand
+                        else "codex-static@1"
+                    ),
+                    provider_profile_id=profile_id,
+                )
+            await emit(
+                "effective_launch_compiled",
+                "completed",
+                metadata={"effectiveLaunch": effective_launch},
+            )
             owner_id = deterministic_lease_owner_id(
                 profile_id=profile_id,
                 purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
@@ -302,21 +363,32 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
             )
             current_stage = "host_binding_resolution"
-            await emit(current_stage, "started")
-            binding = await self._hosts.get_binding_for_profile(profile_id)
             if binding is None:
+                selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
                 binding = await self._hosts.create_or_update_static_binding(
                     profile_id=profile_id,
-                    endpoint_ref="default",
+                    endpoint_ref=str(effective_launch["endpointRef"]),
                     static_host_id=None,
                     host_launch_profile_ref=(
-                        os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE") or None
+                        (
+                            "codex-on-demand@1"
+                            if requested_target
+                            else os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE")
+                        )
+                        if selected_on_demand
+                        else None
                     ),
+                    execution_profile_ref=str(effective_launch["executionProfileRef"]),
+                    launch_policy_ref=str(effective_launch["launchPolicyRef"]),
+                    effective_launch_snapshot=effective_launch,
                 )
             await emit(
                 current_stage,
                 "completed",
-                metadata={"hostBindingRef": binding.binding_ref},
+                metadata={
+                    "hostBindingRef": binding.binding_ref,
+                    "effectiveLaunchRef": effective_launch["snapshotRef"],
+                },
             )
             current_stage = "host_lease_created"
             await emit(current_stage, "started")
@@ -343,6 +415,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_binding_ref=binding.binding_ref,
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=binding.static_host_id,
+                effective_launch_snapshot=effective_launch,
             )
             if host_lease.status == "allocating":
                 host_lease = await self._hosts.transition_host_lease(
@@ -368,6 +441,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 required_capabilities=self._required_capabilities(request),
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
+                effective_launch=effective_launch,
             )
             await emit(current_stage, "completed")
             await emit("credential_mount", "started")
@@ -412,6 +486,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 host_binding_ref=binding.binding_ref,
                 host_lease_ref=host_lease.lease_id,
                 omnigent_host_id=host_id,
+                effective_launch_snapshot=effective_launch,
             )
             await emit("credential_preflight", "started")
             await emit(
@@ -447,7 +522,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     request,
                     host_id=host_id,
                     workspace_path=str(preflight["workspacePath"]),
-                    profile_authorization={
+                profile_authorization={
                         "providerProfileId": profile_id,
                         "credentialGeneration": host_lease.credential_generation,
                         "providerLeaseRef": provider_lease.lease_id,
@@ -456,6 +531,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "endpointRef": binding.endpoint_ref,
                         "omnigentHostId": host_id,
                         "bridgeSessionId": bridge.bridge_session_id,
+                        "effectiveLaunchRef": effective_launch["snapshotRef"],
                     },
                 ),
                 artifact_gateway=self._artifact_gateway,

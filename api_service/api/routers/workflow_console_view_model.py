@@ -17,6 +17,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import WorkflowSettings, settings
+from moonmind.omnigent.execution_profiles import public_execution_catalog
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.runtime_defaults import (
     DEFAULT_REPOSITORY,
@@ -756,6 +757,7 @@ def build_runtime_config(
         },
         "system": {
             **system_metadata,
+            "omnigentExecutionCatalog": public_execution_catalog(),
             "defaultRepository": default_repository,
             "repositoryOptions": repository_options,
             "defaultRuntime": default_runtime,

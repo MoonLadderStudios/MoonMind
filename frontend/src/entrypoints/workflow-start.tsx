@@ -376,6 +376,7 @@ interface DashboardConfig {
     defaultEffortByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
     supportedAgentRuntimes?: string[];
+    supportedRuntimes?: string[];
     repositoryOptions?: {
       items?: Array<{
         value?: string | null;
@@ -387,6 +388,10 @@ interface DashboardConfig {
     providerProfiles?: {
       list?: string;
       defaultProfileRef?: string | null;
+    };
+    omnigentExecutionCatalog?: {
+      profiles?: Array<{ ref?: string; displayName?: string; defaultPolicyRef?: string }>;
+      policies?: Array<{ ref?: string; hostMode?: string }>;
     };
     presetCatalog?: {
       enabled?: boolean;
@@ -5893,7 +5898,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
   const supportedAgentRuntimes = dashboardConfig.system
-    ?.supportedAgentRuntimes || ["codex_cli", "claude_code"];
+    ?.supportedAgentRuntimes ||
+    dashboardConfig.system?.supportedRuntimes || ["codex_cli", "claude_code"];
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -5906,6 +5912,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     () => readDashboardPreferences().createExpertMode,
   );
   const [runtime, setRuntime] = useState(defaultRuntime);
+  const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
+  const omnigentProfiles = omnigentCatalog?.profiles || [];
+  const omnigentPolicies = omnigentCatalog?.policies || [];
+  const [omnigentExecutionTargetRef, setOmnigentExecutionTargetRef] = useState(
+    String(omnigentProfiles[0]?.ref || ""),
+  );
+  const [omnigentLaunchPolicyRef, setOmnigentLaunchPolicyRef] = useState(
+    String(omnigentProfiles[0]?.defaultPolicyRef || omnigentPolicies[0]?.ref || ""),
+  );
   const [model, setModel] = useState(
     String(
       defaultTaskModelByRuntime[defaultRuntime] ||
@@ -6274,13 +6289,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const providerProfileRuntime =
+    runtime === "omnigent" ? "codex_cli" : runtime;
   const providerProfilesQuery = useQuery({
     ...configQueryDefaults,
-    queryKey: ["workflow-start", "provider-profiles", runtime],
+    queryKey: ["workflow-start", "provider-profiles", providerProfileRuntime],
     queryFn: async (): Promise<ProviderProfile[]> => {
       const separator = providerProfilesEndpoint.includes("?") ? "&" : "?";
       const response = await fetch(
-        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(runtime)}`,
+        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(providerProfileRuntime)}`,
         {
           headers: { Accept: "application/json" },
         },
@@ -10777,6 +10794,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
+        ...(normalizedRuntime === "omnigent" && omnigentExecutionTargetRef
+          ? {
+              omnigent: {
+                executionTargetRef: omnigentExecutionTargetRef,
+                ...(omnigentLaunchPolicyRef
+                  ? { launchPolicyRef: omnigentLaunchPolicyRef }
+                  : {}),
+              },
+            }
+          : {}),
         publishMode: effectivePublishMode,
         ...(produceReport || pageMode.mode !== "create"
           ? {
@@ -12956,6 +12983,46 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </div>
           ) : null}
         </div>
+
+        {runtime.trim().toLowerCase() === "omnigent" && omnigentProfiles.length > 0 ? (
+          <div className="grid-2" aria-label="Omnigent execution target">
+            <label>
+              Execution target
+              <select
+                name="omnigentExecutionTargetRef"
+                value={omnigentExecutionTargetRef}
+                onChange={(event) => {
+                  const ref = event.target.value;
+                  setOmnigentExecutionTargetRef(ref);
+                  const profile = omnigentProfiles.find((item) => item.ref === ref);
+                  if (profile?.defaultPolicyRef) {
+                    setOmnigentLaunchPolicyRef(profile.defaultPolicyRef);
+                  }
+                }}
+              >
+                {omnigentProfiles.map((profile) => (
+                  <option key={profile.ref} value={profile.ref}>
+                    {profile.displayName || profile.ref}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Host policy
+              <select
+                name="omnigentLaunchPolicyRef"
+                value={omnigentLaunchPolicyRef}
+                onChange={(event) => setOmnigentLaunchPolicyRef(event.target.value)}
+              >
+                {omnigentPolicies.map((policy) => (
+                  <option key={policy.ref} value={policy.ref}>
+                    {policy.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
 
         <div className="grid-2" aria-label="Workflow model tier intent">
           <label>

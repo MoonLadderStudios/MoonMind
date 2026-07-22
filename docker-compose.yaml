@@ -941,6 +941,19 @@ services:
     hostname: omnigent-host-codex
     user: "1000:1000"
     working_dir: /home/app
+    cpus: ${OMNIGENT_HOST_CPU_LIMIT:-2}
+    mem_limit: ${OMNIGENT_HOST_MEMORY_LIMIT:-4096m}
+    pids_limit: ${OMNIGENT_HOST_PIDS_LIMIT:-256}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
+    stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    labels:
+      moonmind.effective_launch_ref: ${OMNIGENT_EFFECTIVE_LAUNCH_REF:-bootstrap}
+      moonmind.capture_required: "true"
+      moonmind.capture_retention_days: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
+      moonmind.cleanup_mode: drain
+      moonmind.control_capabilities: ${OMNIGENT_CONTROL_CAPABILITIES:-interrupt,terminate,clear_context}
     entrypoint: ["/usr/bin/env", "-u", "OPENAI_API_KEY", "-u", "CODEX_ACCESS_TOKEN", "-u", "OPENAI_BASE_URL", "-u", "MINIMAX_API_KEY", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN", "-u", "CLAUDE_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "-u", "GEMINI_API_KEY", "-u", "GOOGLE_API_KEY"]
     command: ["/opt/moonmind/start-codex-oauth-host.sh"]
     environment:
@@ -953,6 +966,10 @@ services:
       CODEX_VOLUME_PATH: /home/app/.codex
       CODEX_CREDENTIAL_GENERATION: ${CODEX_CREDENTIAL_GENERATION:-1}
       OMNIGENT_SERVER_URL: http://omnigent:8000
+      OMNIGENT_EXECUTION_TIMEOUT_SECONDS: ${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}
+      OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
+      OMNIGENT_CAPTURE_OWNER: moonmind_bridge
+      OMNIGENT_CAPTURE_RETENTION_DAYS: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
       - omnigent-tools:/opt/moonmind-tools:ro
