@@ -1,5 +1,16 @@
 # Codex via Omnigent Create-to-host contract
 
+## Frozen hybrid capability
+
+Admission records a versioned, digested snapshot for `external/omnigent` and its
+`codex-native` harness. The session plane names Omnigent/bridge
+`external_state_ref` evidence; the workspace plane names MoonMind sandbox locators
+and `worktree_archive` capture/restore; the host plane names static Compose and
+on-demand Docker realization at `/workspaces/run`. Session ids, host ids,
+credentials, and raw paths remain mutable run bindings, not descriptor identity.
+Workflow Detail reports session reattach and workspace restore independently and
+explains when only one plane has sufficient recovery evidence.
+
 **Document Class:** Canonical declarative  
 **Status:** Accepted  
 **Owners:** MoonMind Platform  

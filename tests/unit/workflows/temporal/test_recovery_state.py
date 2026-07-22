@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.workflows.executions.runtime_capabilities import RuntimeExecutionCapabilities
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeExecutionCapabilities,
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.workflows.temporal.recovery_state import (
     CHECKPOINT_BOUNDARY_INCOMPATIBLE,
     CHECKPOINT_CAPABILITY_INVALID,
@@ -55,6 +58,21 @@ def test_valid_contract_and_deterministic_destination_identity() -> None:
     )
     assert first == second
     assert first[0] == "wf:restore:implement:execution:1"
+
+
+def test_v3_omnigent_snapshot_authorizes_workspace_boundary_without_registry_lookup() -> None:
+    snapshot = resolve_runtime_execution_capabilities("omnigent").model_dump(by_alias=True)
+    contract = CheckpointRecoveryContract.model_validate(
+        _contract(
+            resumePhase="continue_to_gate",
+            sourceCheckpointBoundary="after_execution",
+            capabilitySnapshot=snapshot,
+            restoreActivity="workspace.apply_checkpoint",
+        )
+    )
+
+    assert contract.capabilities.workspace_state.authority == "moonmind_sandbox"
+    assert contract.source_checkpoint_kind == "worktree_archive"
 
 
 @pytest.mark.parametrize(

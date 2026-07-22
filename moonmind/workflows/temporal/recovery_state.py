@@ -22,6 +22,10 @@ CHECKPOINT_RESTORATION_NOT_READY = "CHECKPOINT_RESTORATION_NOT_READY"
 
 BOUNDARY_PHASES = {
     "before_execution": "rerun_failed_step",
+    "after_execution": "continue_to_gate",
+    "after_gate": "continue_after_gate",
+    "before_publication": "resume_publication",
+    "before_recovery_restoration": "retry_restoration",
 }
 
 
@@ -63,7 +67,9 @@ class CheckpointRecoveryContract(BaseModel):
                 CHECKPOINT_BOUNDARY_INCOMPATIBLE,
                 "checkpoint boundary does not authorize the requested resume phase",
             )
-        if self.capabilities.capability_set_version != CAPABILITY_SET_VERSION:
+        if self.capabilities.capability_set_version not in {
+            "runtime-execution-capabilities-v2", CAPABILITY_SET_VERSION
+        }:
             raise RecoveryContractError(
                 CHECKPOINT_CAPABILITY_INVALID, "unsupported capability set version"
             )
@@ -75,6 +81,17 @@ class CheckpointRecoveryContract(BaseModel):
         if self.source_checkpoint_kind not in self.capabilities.checkpoint_restore_kinds:
             raise RecoveryContractError(
                 CHECKPOINT_CAPABILITY_INVALID, "checkpoint kind is not restorable"
+            )
+        supported_phases = self.capabilities.checkpoint_boundary_support.get(
+            self.source_checkpoint_boundary, ()
+        )
+        if (
+            self.capabilities.capability_set_version == CAPABILITY_SET_VERSION
+            and self.resume_phase not in supported_phases
+        ):
+            raise RecoveryContractError(
+                CHECKPOINT_BOUNDARY_INCOMPATIBLE,
+                "workspace capability does not authorize the requested boundary",
             )
         if self.restore_activity != self.capabilities.checkpoint_restore_activity:
             raise RecoveryContractError(

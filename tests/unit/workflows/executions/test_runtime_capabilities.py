@@ -55,8 +55,8 @@ def test_workspace_authority_and_checkpoint_kind_are_jointly_validated() -> None
     omnigent = resolve_runtime_execution_capabilities("omnigent")
     validate_runtime_preflight(
         omnigent,
-        workspace_locator={"kind": "external_state", "artifactRef": "art_1"},
-        checkpoint_kind="external_state_ref",
+        workspace_locator={"kind": "sandbox", "workspaceId": "ws_1"},
+        checkpoint_kind="worktree_archive",
         restore_required=True,
         same_session_continuation=True,
     )
@@ -130,11 +130,34 @@ def test_recorded_capability_snapshot_is_independent_of_registry_changes() -> No
     snapshot = resolve_runtime_execution_capabilities("omnigent").model_dump(
         by_alias=True, mode="json"
     )
-    replacement = RuntimeExecutionCapabilities.model_validate(
-        {**snapshot, "checkpointCaptureKinds": ["future_kind"]}
-    )
+    replacement_payload = {**snapshot, "checkpointCaptureKinds": ["future_kind"]}
+    replacement_payload["workspaceState"] = {
+        **snapshot["workspaceState"], "checkpointKinds": ["future_kind"]
+    }
+    replacement = RuntimeExecutionCapabilities.model_validate(replacement_payload)
 
     recorded = RuntimeExecutionCapabilities.model_validate(snapshot)
 
-    assert recorded.checkpoint_capture_kinds == ("external_state_ref",)
+    assert recorded.checkpoint_capture_kinds == ("worktree_archive",)
     assert replacement.checkpoint_capture_kinds == ("future_kind",)
+
+
+def test_omnigent_freezes_three_independent_ownership_planes() -> None:
+    capability = resolve_runtime_execution_capabilities("omnigent")
+
+    assert capability.agent_identity.model_dump(by_alias=True) == {
+        "agentKind": "external", "agentId": "omnigent", "harness": "codex-native"
+    }
+    assert capability.session_state.authority == "external_provider"
+    assert capability.session_state.checkpoint_kinds == ("external_state_ref",)
+    assert capability.workspace_state.authority == "moonmind_sandbox"
+    assert capability.workspace_state.locator_kinds == ("sandbox",)
+    assert capability.workspace_state.restore_activity == "workspace.apply_checkpoint"
+    assert capability.host_realization.workspace_mount_target == "/workspaces/run"
+
+
+def test_v3_rejects_contradictory_flattened_workspace_claim() -> None:
+    snapshot = resolve_runtime_execution_capabilities("omnigent").model_dump(by_alias=True)
+    snapshot["workspaceAuthority"] = "external_provider"
+    with pytest.raises(ValidationError, match="contradicts workspace state"):
+        RuntimeExecutionCapabilities.model_validate(snapshot)

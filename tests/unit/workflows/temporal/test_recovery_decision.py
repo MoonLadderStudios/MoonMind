@@ -42,7 +42,7 @@ def _decision(**overrides):
     values = {
         "checkpoint_ref": "artifact://checkpoint",
         "checkpoint_boundary": "before_execution",
-        "checkpoint_kind": "external_state_ref",
+        "checkpoint_kind": "worktree_archive",
         "capabilities": resolve_runtime_execution_capabilities("omnigent"),
         "restore_route_registered": True,
         "artifact_valid": True,
@@ -65,7 +65,7 @@ def test_checkpoint_resume_requires_complete_restore_proof() -> None:
     ("overrides", "reason"),
     [
         ({"restore_route_registered": False}, "CHECKPOINT_RESTORE_ROUTE_MISSING"),
-        ({"checkpoint_kind": "worktree_archive"}, "CHECKPOINT_KIND_INCOMPATIBLE"),
+        ({"checkpoint_kind": "external_state_ref"}, "CHECKPOINT_KIND_INCOMPATIBLE"),
         ({"checkpoint_boundary": "after_prepare"}, "CHECKPOINT_BOUNDARY_INCOMPATIBLE"),
         ({"side_effect_safe": False}, "CHECKPOINT_SIDE_EFFECT_UNSAFE"),
         ({"capabilities": None}, "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"),
@@ -90,6 +90,16 @@ def test_codex_worktree_archive_restore_is_eligible() -> None:
         decision.restore_activity
         == "agent_runtime.restore_workspace_checkpoint"
     )
+
+
+def test_omnigent_partial_evidence_distinguishes_session_from_workspace() -> None:
+    decision = _decision(checkpoint_kind="external_state_ref")
+
+    assert decision.eligible is False
+    assert decision.session_recoverable is True
+    assert decision.workspace_recoverable is False
+    assert decision.authoritative_workspace_checkpoint_kind is None
+    assert "workspace checkpoint evidence" in decision.partial_recovery_reason
 
 
 def test_restore_kinds_without_activity_are_rejected_by_capability_schema() -> None:
@@ -132,7 +142,7 @@ def test_workflow_preflight_rejects_string_restore_kinds() -> None:
         **decision,
         "recoveryAction": "resume_from_workspace_checkpoint",
         "selectedCheckpointBoundary": "before_execution",
-        "checkpointRestoreKinds": "external_state_ref",
+        "checkpointRestoreKinds": "worktree_archive",
         "checkpointRestoreActivity": decision["restoreActivity"],
         "recoveryCheckpointRef": decision["checkpointRef"],
         "selectedTargetRuntimeId": decision["targetRuntimeId"],
