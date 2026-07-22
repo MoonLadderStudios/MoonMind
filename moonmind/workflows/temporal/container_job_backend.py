@@ -511,6 +511,12 @@ class DockerContainerJobBackend:
                 )
         return ContainerJobActivityResult()
 
+    async def network_ready(self, network_ref: str) -> bool:
+        """Return live Docker authority for one deployment-owned network ref."""
+
+        code, _, _ = await self._runner(("network", "inspect", network_ref))
+        return code == 0
+
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
         locator = request.request.spec.workspace_ref
         if isinstance(locator, ManagedWorkspaceLocator):

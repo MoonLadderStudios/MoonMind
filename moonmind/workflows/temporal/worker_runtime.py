@@ -2749,8 +2749,19 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
+                from moonmind.omnigent.execution_profiles import POLICIES
+
+                enforced_network_refs = []
+                for policy in POLICIES.values():
+                    if (
+                        policy.enabled
+                        and policy.enforced_egress
+                        and await container_job_backend.network_ready(policy.network_ref)
+                    ):
+                        enforced_network_refs.append(policy.network_ref)
             else:
                 container_job_backend = None
+                enforced_network_refs = []
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2968,6 +2979,11 @@ async def main_async() -> None:
         ]
         health_state.workers_constructed = True
         health_state.readiness_metadata = spec.readiness_payload()
+        if topology.fleet == AGENT_RUNTIME_FLEET:
+            health_state.readiness_metadata["containerBackend"] = {
+                "ready": container_job_backend is not None,
+                "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
+            }
 
         logger.info(
             "Temporal executable worker specification: %s",

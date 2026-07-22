@@ -38,6 +38,21 @@ class _Session:
         return next(self._results)
 
 
+class _HealthResponse:
+    def __init__(self, payload=None, *, status_code=200):
+        self._payload = payload or {}
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise catalog.httpx.HTTPStatusError(
+                "unavailable", request=None, response=None
+            )
+
+    def json(self):
+        return self._payload
+
+
 def _profile(**overrides):
     values = {
         "profile_id": "codex-oauth",
@@ -81,6 +96,10 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
         "resolve_container_backend_settings",
         lambda: SimpleNamespace(enabled=True),
     )
+    async def live_readiness():
+        return True, {"moonmind_local-network"}
+
+    monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64)
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
@@ -213,6 +232,64 @@ def test_catalog_projects_authoritative_deployment_gates(
 
     assert body["available"] is False
     assert expected in {reason["code"] for reason in body["gateReasons"]}
+
+
+@pytest.mark.parametrize(
+    ("live_readiness", "expected"),
+    [
+        ((False, {"moonmind_local-network"}), "bridge_endpoint_unavailable"),
+        ((True, set()), "network_policy_unavailable"),
+    ],
+)
+def test_catalog_fails_closed_on_live_service_readiness(
+    monkeypatch, live_readiness, expected
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+
+    async def readiness():
+        return live_readiness
+
+    monkeypatch.setattr(catalog, "_live_deployment_readiness", readiness)
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert expected in {reason["code"] for reason in body["gateReasons"]}
+
+
+@pytest.mark.asyncio
+async def test_live_readiness_requires_worker_route_backend_and_network(monkeypatch):
+    responses = iter([
+        _HealthResponse(),
+        _HealthResponse({
+            "ready": True,
+            "taskQueues": ["mm.activity.agent_runtime"],
+            "containerBackend": {
+                "ready": True,
+                "enforcedNetworkRefs": ["moonmind_local-network"],
+            },
+        }),
+    ])
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return next(responses)
+
+    monkeypatch.setattr(catalog.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(catalog, "resolved_server_url", lambda: "http://omnigent")
+
+    assert await catalog._live_deployment_readiness() == (
+        True,
+        {"moonmind_local-network"},
+    )
 
 
 def test_static_policy_requires_live_connected_host_lease(monkeypatch):

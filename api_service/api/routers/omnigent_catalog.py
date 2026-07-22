@@ -11,6 +11,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+import httpx
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -35,6 +37,7 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
+from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
 from moonmind.omnigent.host_auth_profile import HostAuthProfileError, host_auth_readiness
@@ -155,6 +158,45 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
     return reasons
 
 
+async def _live_deployment_readiness() -> tuple[bool, set[str]]:
+    """Read bounded health projections from the services that own readiness."""
+
+    endpoint = resolved_server_url()
+    endpoint_ready = False
+    if endpoint:
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get(endpoint.rstrip("/") + "/health")
+                endpoint_ready = response.status_code < 400
+        except (httpx.HTTPError, ValueError):
+            pass
+
+    worker_url = os.getenv(
+        "TEMPORAL_AGENT_RUNTIME_READINESS_URL",
+        "http://temporal-worker-agent-runtime:8080/readyz",
+    )
+    enforced_network_refs: set[str] = set()
+    backend_ready = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(worker_url)
+            response.raise_for_status()
+            payload = response.json()
+        task_queues = {str(value) for value in payload.get("taskQueues", [])}
+        backend = payload.get("containerBackend", {})
+        backend_ready = (
+            payload.get("ready") is True
+            and settings.temporal.activity_agent_runtime_task_queue in task_queues
+            and backend.get("ready") is True
+        )
+        enforced_network_refs = {
+            str(value) for value in backend.get("enforcedNetworkRefs", [])
+        }
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        pass
+    return endpoint_ready, enforced_network_refs if backend_ready else set()
+
+
 def _policy_images_ready(policy: Any) -> bool:
     values = []
     for value, variable in (
@@ -207,6 +249,14 @@ async def get_omnigent_codex_catalog_readiness(
     )
     bridge = config.readiness(evidence_validation=evidence)
     deployment_reasons = _deployment_reasons(config, bridge)
+    endpoint_ready, enforced_network_refs = await _live_deployment_readiness()
+    if (
+        config.enabled
+        and config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
+        and resolved_server_url()
+        and not endpoint_ready
+    ):
+        deployment_reasons.append(_reason("bridge_endpoint_unavailable"))
     if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
         try:
             auth = await host_auth_readiness(profile=await _active_host_auth_profile())
@@ -320,9 +370,10 @@ async def get_omnigent_codex_catalog_readiness(
         for lease in host_leases
     )
     try:
-        backend_ready = resolve_container_backend_settings().enabled
+        backend_configured = resolve_container_backend_settings().enabled
     except ContainerBackendConfigError:
-        backend_ready = False
+        backend_configured = False
+    backend_ready = backend_configured and bool(enforced_network_refs)
 
     profile_views: list[ExecutionProfileReadiness] = []
     available_modes: list[str] = []
@@ -336,7 +387,11 @@ async def get_omnigent_codex_catalog_readiness(
                 policy_reasons.append(_reason("execution_profile_unavailable"))
             if not _policy_images_ready(policy):
                 policy_reasons.append(_reason("immutable_image_unavailable"))
-            if not policy.enforced_egress or not policy.network_ref:
+            if (
+                not policy.enforced_egress
+                or not policy.network_ref
+                or policy.network_ref not in enforced_network_refs
+            ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
             if policy.host_mode == "on_demand_docker" and not backend_ready:
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
