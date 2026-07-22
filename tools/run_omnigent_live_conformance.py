@@ -9,6 +9,7 @@ not disposable test state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -223,17 +224,28 @@ class LiveRunner:
                     raise ConformanceContractError(
                         f"{scenario}/{action} contains an invalid source record"
                     )
+                raw = self._resolve_ref_bytes(record["ref"])
+                if hashlib.sha256(raw).hexdigest() != record["sha256"].lower():
+                    raise ConformanceContractError(
+                        f"{scenario}/{action} source record digest does not match: {record['type']}"
+                    )
             payload["_sourceRecordTypes"] = sorted(observed_types)
         returned_ids = {
             key: value for key, value in payload.items()
-            if key in {"leaseId", "hostId", "workflowId", "agentRunId", "sessionId"}
+            if key in {
+                "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
+                "runId", "stepId", "bridgeId",
+            }
             and value
         }
         state = payload.get("state")
         if isinstance(state, dict):
             returned_ids.update({
                 key: value for key, value in state.items()
-                if key in {"leaseId", "hostId", "workflowId", "agentRunId", "sessionId"}
+                if key in {
+                    "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
+                    "runId", "stepId", "bridgeId",
+                }
                 and value
             })
         for item in observations:
@@ -256,6 +268,19 @@ class LiveRunner:
 
     def _resolve_evidence_ref(self, ref: str) -> dict[str, object]:
         """Resolve durable evidence and reject opaque or unreachable attestations."""
+        raw_bytes = self._resolve_ref_bytes(ref)
+        try:
+            raw = raw_bytes.decode("utf-8")
+            payload = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ConformanceContractError(f"unreachable or malformed evidence ref: {ref}") from exc
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != "moonmind.omnigent.action-evidence/v1":
+            raise ConformanceContractError(f"invalid action evidence document: {ref}")
+        assert_secret_free(raw)
+        return payload
+
+    def _resolve_ref_bytes(self, ref: str) -> bytes:
+        """Resolve a run-owned or HTTPS evidence reference to its authoritative bytes."""
         parsed = urllib.parse.urlparse(ref)
         try:
             if parsed.scheme == "file":
@@ -263,19 +288,15 @@ class LiveRunner:
                 allowed = self.output_dir.resolve()
                 if path != allowed and allowed not in path.parents:
                     raise ConformanceContractError("file evidence is outside the run output directory")
-                raw = path.read_text(encoding="utf-8")
+                raw = path.read_bytes()
             elif parsed.scheme == "https":
                 with urllib.request.urlopen(ref, timeout=30) as response:
-                    raw = response.read().decode("utf-8")
+                    raw = response.read()
             else:
                 raise ConformanceContractError(f"unsupported evidence ref scheme: {parsed.scheme or 'none'}")
-            payload = json.loads(raw)
-        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        except (OSError, urllib.error.URLError) as exc:
             raise ConformanceContractError(f"unreachable or malformed evidence ref: {ref}") from exc
-        if not isinstance(payload, dict) or payload.get("schemaVersion") != "moonmind.omnigent.action-evidence/v1":
-            raise ConformanceContractError(f"invalid action evidence document: {ref}")
-        assert_secret_free(raw)
-        return payload
+        return raw
 
     def write_evidence(self, mode: str, payload: dict[str, object]) -> Path:
         path = self.output_dir / f"{mode}-evidence.json"

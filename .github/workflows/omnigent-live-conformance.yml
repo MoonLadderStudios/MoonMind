@@ -163,6 +163,8 @@ jobs:
           selection = product.get("selection", {})
           if selection.get("agentKind") != "external" or selection.get("agentId") != "omnigent":
               raise SystemExit("product evidence is not the explicit Omnigent selection")
+          if not isinstance(selection.get("providerProfileRef"), str) or not selection["providerProfileRef"].strip():
+              raise SystemExit("product evidence lacks the selected provider profile")
           if not product.get("schemaVersions") or not product.get("evidenceRefs"):
               raise SystemExit("product evidence lacks schema versions or durable evidence refs")
           acceptance = product.get("acceptance", {})
@@ -177,6 +179,17 @@ jobs:
               digest = acceptance[digest_key]
               if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) != 71:
                   raise SystemExit(f"product evidence has invalid immutable digest: {digest_key}")
+          report_images = [report.get("images", {}) for report in report_payloads]
+          expected_images = {
+              "server": acceptance["serverImageDigest"],
+              "host": acceptance["hostImageDigest"],
+          }
+          for image_key, expected_digest in expected_images.items():
+              tested = {images.get(image_key, "").rsplit("@", 1)[-1] for images in report_images}
+              if tested != {expected_digest}:
+                  raise SystemExit(
+                      f"product evidence {image_key} image digest does not match live reports"
+                  )
           case_outcomes = acceptance["caseOutcomes"]
           if not isinstance(case_outcomes, dict) or not case_outcomes or any(
               outcome != "passed" for outcome in case_outcomes.values()
@@ -219,7 +232,7 @@ jobs:
               "policyVersion": acceptance["policyVersion"],
               "effectiveLaunchSnapshotDigest": acceptance["effectiveLaunchSnapshotDigest"],
               "providerProfile": {
-                  "safeRef": selection.get("providerProfileRef"),
+                  "safeRef": selection["providerProfileRef"],
                   "credentialGeneration": acceptance["credentialGeneration"],
               },
               "images": {

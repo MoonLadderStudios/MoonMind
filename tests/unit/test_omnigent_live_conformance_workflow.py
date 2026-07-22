@@ -102,6 +102,8 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     ):
         assert field in manifest["run"]
     assert "product evidence has invalid immutable digest" in manifest["run"]
+    assert "product evidence lacks the selected provider profile" in manifest["run"]
+    assert "image digest does not match live reports" in manifest["run"]
     assert "product evidence lacks complete cleanup and release results" in manifest["run"]
     upload = next(
         step

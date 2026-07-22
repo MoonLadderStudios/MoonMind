@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -271,6 +272,57 @@ def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch
                 assert "unreachable or malformed" in str(exc)
         else:
             raise AssertionError("invalid durable evidence was accepted")
+
+
+def test_product_action_binds_all_lifecycle_ids_to_evidence(tmp_path, monkeypatch):
+    module = _module()
+    ids = {"workflowId": "w", "runId": "r", "stepId": "s", "bridgeId": "b"}
+    ref = _action_evidence(tmp_path, "product", "runtime_catalog_loaded", {
+        **ids, "bridgeId": "different",
+    }, source_records=[])
+    evidence = json.loads(Path(ref.removeprefix("file://")).read_text())
+    record_path = tmp_path / "runtime-catalog.json"
+    record_path.write_text('{"catalog":true}')
+    evidence["sourceRecords"] = [{
+        "type": "runtimeCatalog", "ref": record_path.as_uri(),
+        "sha256": hashlib.sha256(record_path.read_bytes()).hexdigest(),
+    }]
+    Path(ref.removeprefix("file://")).write_text(json.dumps(evidence))
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "state": ids, "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        runner.action("product", "runtime_catalog_loaded")
+    except module.ConformanceContractError as exc:
+        assert "evidence identifiers do not match" in str(exc)
+    else:
+        raise AssertionError("mismatched product identifiers were accepted")
+
+
+def test_product_action_resolves_and_hashes_source_records(tmp_path, monkeypatch):
+    module = _module()
+    record_path = tmp_path / "create-request.json"
+    record_path.write_text('{"request":true}')
+    records = [
+        {"type": record_type, "ref": record_path.as_uri(), "sha256": "0" * 64}
+        for record_type in module.PRODUCT_RECORD_TYPES["workflow_created"]
+    ]
+    ref = _action_evidence(tmp_path, "product", "workflow_created", source_records=records)
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        runner.action("product", "workflow_created")
+    except module.ConformanceContractError as exc:
+        assert "source record digest does not match" in str(exc)
+    else:
+        raise AssertionError("unverified source record digest was accepted")
 
 
 def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
