@@ -309,6 +309,80 @@ _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
 
+def _managed_agent_subprocess_kwargs() -> dict[str, int]:
+    geteuid = getattr(os, "geteuid", None)
+    if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
+        return {}
+    return {"user": _MANAGED_AGENT_UID, "group": _MANAGED_AGENT_GID}
+
+
+async def _create_managed_agent_subprocess(
+    *command: str,
+    **kwargs: Any,
+) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        *command,
+        **kwargs,
+        **_managed_agent_subprocess_kwargs(),
+    )
+
+
+def _normalize_managed_git_ownership(workspace: str) -> None:
+    """Repair legacy root-owned Git directories before managed-user Git commands."""
+
+    if not _managed_agent_subprocess_kwargs():
+        return
+    git_dir = Path(workspace).expanduser().resolve() / ".git"
+    try:
+        git_stat = os.lstat(git_dir)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(git_stat.st_mode):
+        return
+
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", None)
+    if directory_flag is None or no_follow_flag is None:
+        raise RuntimeError(
+            "managed Git ownership repair requires O_DIRECTORY and O_NOFOLLOW support"
+        )
+    git_fd = os.open(git_dir, os.O_RDONLY | directory_flag | no_follow_flag)
+    try:
+        os.fchown(git_fd, _MANAGED_AGENT_UID, _MANAGED_AGENT_GID)
+        for _root, dirnames, filenames, directory_fd in os.fwalk(
+            ".",
+            topdown=True,
+            follow_symlinks=False,
+            dir_fd=git_fd,
+        ):
+            for name in (*dirnames, *filenames):
+                os.chown(
+                    name,
+                    _MANAGED_AGENT_UID,
+                    _MANAGED_AGENT_GID,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+    finally:
+        os.close(git_fd)
+
+
+def _normalize_managed_path_owners(paths: Sequence[Path]) -> None:
+    if not _managed_agent_subprocess_kwargs():
+        return
+    for path in paths:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            continue
+        os.chown(
+            path,
+            _MANAGED_AGENT_UID,
+            _MANAGED_AGENT_GID,
+            follow_symlinks=False,
+        )
+
+
 class _HashingArchiveReader:
     """Hash file blocks while ``tarfile`` streams them into an archive."""
 
@@ -12963,6 +13037,10 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
 
+        _normalize_managed_path_owners(
+            (support_root, support_bin, git_helper_path, support_gitconfig)
+        )
+
         if support_bin.exists():
             existing_path = str(env.get("PATH") or "").strip()
             env["PATH"] = (
@@ -12982,6 +13060,7 @@ class TemporalAgentRuntimeActivities:
         if git_email:
             env["GIT_AUTHOR_EMAIL"] = git_email
             env["GIT_COMMITTER_EMAIL"] = git_email
+        env["HOME"] = str(support_root)
         env["GIT_TERMINAL_PROMPT"] = "0"
         return env
 
@@ -13004,10 +13083,11 @@ class TemporalAgentRuntimeActivities:
         head_branch: str | None = None,
     ) -> dict[str, Any]:
         """Create one deterministic commit when the workspace is dirty."""
+        _normalize_managed_git_ownership(workspace)
         command_env = dict(env) if env is not None else self._workspace_command_env(workspace)
 
         async def _read_status() -> tuple[int, bytes, bytes]:
-            status_proc = await asyncio.create_subprocess_exec(
+            status_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "status",
@@ -13092,7 +13172,7 @@ class TemporalAgentRuntimeActivities:
         ) -> dict[str, str] | None:
             if not paths:
                 return None
-            add_proc = await asyncio.create_subprocess_exec(
+            add_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace, "add", mode, "--", *paths,
                 ),
@@ -13121,7 +13201,7 @@ class TemporalAgentRuntimeActivities:
         if stage_error is not None:
             return stage_error
 
-        staged_proc = await asyncio.create_subprocess_exec(
+        staged_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace, "diff", "--cached", "--name-only",
             ),
@@ -13159,7 +13239,7 @@ class TemporalAgentRuntimeActivities:
             if isinstance(commit_message, str) and commit_message.strip()
             else f"MoonMind workflow result for run {run_id}"
         )
-        commit_proc = await asyncio.create_subprocess_exec(
+        commit_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace,
                 "commit",
@@ -13214,7 +13294,7 @@ class TemporalAgentRuntimeActivities:
         if not branch_name or branch_name == "HEAD" or branch_name.startswith("-"):
             return False
 
-        fetch_proc = await asyncio.create_subprocess_exec(
+        fetch_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace,
                 "fetch",
@@ -13241,7 +13321,7 @@ class TemporalAgentRuntimeActivities:
             )
             return False
 
-        verify_proc = await asyncio.create_subprocess_exec(
+        verify_proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(
                 workspace,
                 "cat-file",
@@ -13302,6 +13382,7 @@ class TemporalAgentRuntimeActivities:
         try:
             self._normalize_workspace_git_alternates(workspace)
             self._recover_orphan_workspace_object_stores(workspace)
+            _normalize_managed_git_ownership(workspace)
             resolved_github_token = str(github_token or "").strip()
             if not resolved_github_token:
                 resolved_github_token = await self._resolve_workspace_push_github_token(
@@ -13312,7 +13393,7 @@ class TemporalAgentRuntimeActivities:
                 workspace,
                 github_token=resolved_github_token,
             )
-            branch_proc = await asyncio.create_subprocess_exec(
+            branch_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace, "rev-parse", "--abbrev-ref", "HEAD",
                 ),
@@ -13354,7 +13435,7 @@ class TemporalAgentRuntimeActivities:
                     or current_branch in {"main", "master"}
                 )
             ):
-                checkout_proc = await asyncio.create_subprocess_exec(
+                checkout_proc = await _create_managed_agent_subprocess(
                     *self._workspace_git_command(
                         workspace,
                         "checkout",
@@ -13523,7 +13604,7 @@ class TemporalAgentRuntimeActivities:
             if pre_push_scan_result is not None:
                 return pre_push_scan_result
 
-            push_proc = await asyncio.create_subprocess_exec(
+            push_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     *build_git_push_with_lease_args(
@@ -13564,7 +13645,7 @@ class TemporalAgentRuntimeActivities:
                 if classified.get("push_status") == "lease_conflict":
                     retry_metadata: dict[str, Any] = {"push_retry_count": 1}
                     remote_tracking_ref = f"refs/remotes/origin/{current_branch}"
-                    fetch_proc = await asyncio.create_subprocess_exec(
+                    fetch_proc = await _create_managed_agent_subprocess(
                         *self._workspace_git_command(
                             workspace,
                             "fetch",
@@ -13631,7 +13712,7 @@ class TemporalAgentRuntimeActivities:
                                 precomputed_commit_count=None,
                             )
 
-                        rebase_proc = await asyncio.create_subprocess_exec(
+                        rebase_proc = await _create_managed_agent_subprocess(
                             *self._workspace_git_command(
                                 workspace, "rebase", remote_tracking_ref,
                             ),
@@ -13663,7 +13744,7 @@ class TemporalAgentRuntimeActivities:
                                 f"{classified['push_error']}; automatic rebase "
                                 f"onto {remote_tracking_ref} failed: {rebase_detail}"
                             )
-                            abort_proc = await asyncio.create_subprocess_exec(
+                            abort_proc = await _create_managed_agent_subprocess(
                                 *self._workspace_git_command(
                                     workspace, "rebase", "--abort",
                                 ),
@@ -13693,7 +13774,7 @@ class TemporalAgentRuntimeActivities:
                         if retry_scan_result is not None:
                             retry_scan_result.update(retry_metadata)
                             return retry_scan_result
-                        retry_push_proc = await asyncio.create_subprocess_exec(
+                        retry_push_proc = await _create_managed_agent_subprocess(
                             *self._workspace_git_command(
                                 workspace,
                                 *build_git_push_with_lease_args(
@@ -13775,7 +13856,7 @@ class TemporalAgentRuntimeActivities:
             return remote_sha
 
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "ls-remote",
@@ -13826,7 +13907,7 @@ class TemporalAgentRuntimeActivities:
         env: Mapping[str, str],
     ) -> str | None:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(workspace, "rev-parse", "--verify", ref),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -13860,7 +13941,7 @@ class TemporalAgentRuntimeActivities:
         env: Mapping[str, str],
     ) -> str | None:
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(workspace, "rev-parse", "HEAD"),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -14028,7 +14109,7 @@ class TemporalAgentRuntimeActivities:
         timeout: int,
         args: Sequence[str],
     ) -> str:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await _create_managed_agent_subprocess(
             *self._workspace_git_command(workspace, *args),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -14061,7 +14142,7 @@ class TemporalAgentRuntimeActivities:
         """Resolve the remote default branch for branchless PR publishing."""
 
         try:
-            proc = await asyncio.create_subprocess_exec(
+            proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "symbolic-ref",
@@ -14110,7 +14191,7 @@ class TemporalAgentRuntimeActivities:
         env: Mapping[str, str],
     ) -> int:
         try:
-            count_proc = await asyncio.create_subprocess_exec(
+            count_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
                     workspace,
                     "rev-list",

@@ -13,6 +13,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
+    RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
@@ -221,6 +222,34 @@ class _CurrentCanonicalNoCommitReplayFixture:
         )
         return [run_workflow._publish_status, status, publish_failure]
 
+
+@workflow.defn(name="MM3453OmnigentCompilerReplayFixture")
+class _LegacyOmnigentCompilerReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        return {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agent": {"harnessOverride": "codex-native"},
+        }
+
+
+@workflow.defn(name="MM3453OmnigentCompilerReplayFixture")
+class _CurrentOmnigentCompilerReplayFixture:
+    @workflow.run
+    async def run(self) -> dict[str, Any]:
+        authored = {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agent": {"harnessOverride": "codex-native"},
+        }
+        if not workflow.patched(RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH):
+            return authored
+        return MoonMindRunWorkflow()._compile_authored_omnigent_selection(
+            authored,
+            path="workflow.omnigent",
+        )
+
 @pytest.mark.asyncio
 async def test_workflow_determinism_replay(mock_run_environment):  # noqa: F811
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -391,6 +420,50 @@ async def test_canonical_no_commit_pre_and_post_patch_histories_replay() -> None
 
     replayer = Replayer(
         workflows=[_CurrentCanonicalNoCommitReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_github_3453_pre_change_omnigent_history_replays() -> None:
+    expected = {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agent": {"harnessOverride": "codex-native"},
+    }
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3453-legacy-replay",
+            workflows=[_LegacyOmnigentCompilerReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyOmnigentCompilerReplayFixture.run,
+                id="test-mm3453-legacy-history",
+                task_queue="test-mm3453-legacy-replay",
+            )
+            assert await legacy.result() == expected
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3453-current-replay",
+            workflows=[_CurrentOmnigentCompilerReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentOmnigentCompilerReplayFixture.run,
+                id="test-mm3453-current-history",
+                task_queue="test-mm3453-current-replay",
+            )
+            assert await current.result() == expected
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentOmnigentCompilerReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

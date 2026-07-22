@@ -38,6 +38,7 @@ SUPPORTED_RUNTIME_MODES = {
     "claude",
     "claude_code",
     "jules",
+    "omnigent",
     "universal",
 }
 SUPPORTED_EXECUTION_RUNTIMES = {

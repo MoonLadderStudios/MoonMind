@@ -917,28 +917,82 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
     await store.bind_embedded_runner(
         "idem-embedded", host_id="host-1", runner_id="runner-1"
     )
+    row = await store.get_existing("idem-embedded")
 
     class Channels:
+        calls = 0
+
         async def stop_runner(self, **kwargs):
             assert kwargs == {"host_id": "host-1", "runner_id": "runner-1"}
+            self.calls += 1
 
+    channels = Channels()
     facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=store, config=_embedded_config(), host_channels=Channels()
+        run_store=store, config=_embedded_config(), host_channels=channels
     )
+    control_payload = {
+        "idempotencyKey": "stop-request-1",
+        "expectedWorkflowId": row.moonmind_workflow_id,
+        "expectedRunId": row.moonmind_run_id,
+        "expectedStepExecutionId": row.step_execution_id,
+        "expectedAgentRunId": row.moonmind_agent_run_id,
+        "expectedBridgeSessionId": row.bridge_session_id,
+        "expectedSessionId": "sess-embedded",
+        "expectedHostId": "host-1",
+        "expectedRunnerId": "runner-1",
+        "expectedTurnState": row.first_message_state,
+        "expectedTerminalState": row.status,
+    }
+    with pytest.raises(OmnigentBridgeError) as stale_error:
+        await facade.stop_runner(
+            session_id="sess-embedded",
+            payload={
+                **control_payload,
+                "idempotencyKey": "stop-stale-1",
+                "expectedRunnerId": "stale-runner",
+            },
+            actor="user-42",
+        )
+    assert stale_error.value.status_code == 409
+    assert stale_error.value.code == "omnigent_embedded_control_state_mismatch"
     result = await facade.stop_runner(
         session_id="sess-embedded",
-        payload={
-            "idempotencyKey": "stop-request-1",
-            "expectedSessionId": "sess-embedded",
-            "expectedHostId": "host-1",
-            "expectedRunnerId": "runner-1",
-        },
+        payload=control_payload,
         actor="user-42",
+    )
+    duplicate = await facade.stop_runner(
+        session_id="sess-embedded", payload=control_payload, actor="user-42"
+    )
+    row = await store.get_existing("idem-embedded")
+    cleanup_payload = {
+        **control_payload,
+        "idempotencyKey": "cleanup-request-1",
+        "expectedTurnState": row.first_message_state,
+        "expectedTerminalState": row.status,
+    }
+    cleanup_result = await facade.cleanup_session(
+        "sess-embedded", payload=cleanup_payload, actor="user-42"
+    )
+    cleanup_duplicate = await facade.cleanup_session(
+        "sess-embedded", payload=cleanup_payload, actor="user-42"
     )
     row = await store.get_existing("idem-embedded")
     events = await store.list_events(row.bridge_session_id)
 
     assert result == {"ok": True, "status": "stopped", "runnerId": "runner-1"}
+    assert duplicate == {
+        "ok": True, "status": "completed", "idempotencyKey": "stop-request-1",
+        "reconciled": True, "runnerId": "runner-1",
+    }
+    assert cleanup_result == {
+        "ok": True, "status": "cleanup_scheduled", "runnerId": "runner-1"
+    }
+    assert cleanup_duplicate == {
+        "ok": True, "status": "completed",
+        "idempotencyKey": "cleanup-request-1", "reconciled": True,
+        "runnerId": "runner-1",
+    }
+    assert channels.calls == 1
     assert row.status == "canceled"
     assert row.metadata_["embedded_runner_lifecycle"]["state"] == "stopped"
     assert "embedded_runner_exit" not in row.metadata_
@@ -952,6 +1006,16 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
     assert {item["actor"] for item in control_metadata} == {"user-42"}
     assert {item["controlIdempotencyKey"] for item in control_metadata} == {
         "stop-request-1"
+    }
+    cleanup_metadata = [
+        event.metadata_["metadata"]
+        for event in events
+        if (event.metadata_ or {}).get("eventIdentity", "").startswith(
+            "embedded-control:cleanup-request-1:"
+        )
+    ]
+    assert {item["controlType"] for item in cleanup_metadata} == {
+        "terminal_cleanup"
     }
 
 

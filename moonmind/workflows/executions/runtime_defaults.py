@@ -1,8 +1,9 @@
 """Helpers for resolving default workflow runtime settings.
 
-Canonical managed runtime IDs are: ``codex_cli`` and ``claude_code``.
-Short aliases (``codex``, ``claude``) are normalized to
-these canonical forms before any lookup.
+Canonical managed runtime IDs are ``codex_cli`` and ``claude_code``. Short
+aliases (``codex``, ``claude``) are normalized to these canonical forms before
+any lookup. Product selectors for other runtime families, including
+``omnigent``, are preserved unchanged.
 """
 
 from __future__ import annotations

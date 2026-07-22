@@ -75,6 +75,7 @@ class InheritedRuntime:
     effort: Optional[str] = None
     profile_id: Optional[str] = None
     execution_profile_ref: Optional[str] = None
+    omnigent: Optional[dict[str, Any]] = None
     source_workflow_id: Optional[str] = None
 
 
@@ -257,6 +258,12 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
     execution_profile_ref = (
         _coerce_str(workflow_runtime.get("executionProfileRef")) or profile_id
     )
+    raw_omnigent = (
+        workflow_runtime.get("omnigent")
+        if isinstance(workflow_runtime.get("omnigent"), Mapping)
+        else parameters.get("omnigent")
+    )
+    omnigent = dict(raw_omnigent) if isinstance(raw_omnigent, Mapping) else None
 
     workflow_id = _coerce_str(getattr(record, "workflow_id", None))
 
@@ -266,6 +273,7 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
         effort=effort,
         profile_id=profile_id,
         execution_profile_ref=execution_profile_ref,
+        omnigent=omnigent,
         source_workflow_id=workflow_id,
     )
 
@@ -460,6 +468,14 @@ def apply_inherited_runtime_to_payload(
         runtime_block["executionProfileRef"] = inherited.execution_profile_ref
     if inherited.profile_id and not explicit_profile_id:
         runtime_block["profileId"] = inherited.profile_id
+    if inherited.omnigent:
+        explicit_omnigent = (
+            runtime_block.get("omnigent")
+            if isinstance(runtime_block.get("omnigent"), Mapping)
+            else payload.get("omnigent")
+        )
+        if not isinstance(explicit_omnigent, Mapping):
+            runtime_block["omnigent"] = dict(inherited.omnigent)
 
     if runtime_block:
         task_payload["runtime"] = runtime_block

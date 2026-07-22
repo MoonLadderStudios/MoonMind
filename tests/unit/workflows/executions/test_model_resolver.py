@@ -48,6 +48,9 @@ class TestNormalizeRuntimeId:
     def test_unknown_runtime_passthrough(self):
         assert normalize_runtime_id("some_future_runtime") == "some_future_runtime"
 
+    def test_omnigent_product_selector_is_not_normalized_to_codex(self):
+        assert normalize_runtime_id("Omnigent") == "omnigent"
+
     def test_none_falls_back_to_default(self):
         # None / empty falls back to DEFAULT_WORKFLOW_RUNTIME
         result = normalize_runtime_id(None)

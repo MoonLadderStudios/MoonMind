@@ -5018,10 +5018,30 @@ export interface components {
             compatibilityProfile: string;
             /** Providerprofileid */
             providerProfileId?: string | null;
+            /** Providerleaseref */
+            providerLeaseRef?: string | null;
+            /** Credentialgeneration */
+            credentialGeneration?: number | null;
             /** Hostbindingref */
             hostBindingRef?: string | null;
+            /** Hostleaseref */
+            hostLeaseRef?: string | null;
+            /** Hostmode */
+            hostMode?: string | null;
+            /** Executionprofileref */
+            executionProfileRef?: string | null;
+            /** Launchpolicyref */
+            launchPolicyRef?: string | null;
+            /** Effectivelaunchsnapshotref */
+            effectiveLaunchSnapshotRef?: string | null;
             /** Providersessionref */
             providerSessionRef?: string | null;
+            /** Omnigenthostref */
+            omnigentHostRef?: string | null;
+            /** Omnigentrunnerref */
+            omnigentRunnerRef?: string | null;
+            /** Firstmessagestate */
+            firstMessageState?: string | null;
             /** Capabilities */
             capabilities?: {
                 [key: string]: boolean;

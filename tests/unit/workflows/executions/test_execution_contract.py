@@ -343,6 +343,68 @@ def test_mm786_task_steps_accept_runtime_selection_and_snapshot_it() -> None:
     }
 
 
+def test_github_3453_canonical_contract_preserves_omnigent_selection() -> None:
+    payload = {
+        "repository": "MoonLadderStudios/MoonMind",
+        "targetRuntime": "omnigent",
+        "omnigent": {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agent": {"harnessOverride": "codex-native"},
+            "capture": {"required": True},
+        },
+        "workflow": {
+            "instructions": "Run through the selected Codex OAuth profile.",
+            "runtime": {
+                "mode": "omnigent",
+                "executionProfileRef": "codex-oauth-profile",
+            },
+            "steps": [
+                {
+                    "id": "direct-review",
+                    "instructions": "Review directly.",
+                    "runtime": {"mode": "codex_cli"},
+                },
+                {
+                    "id": "omnigent-implement",
+                    "instructions": "Implement through Omnigent.",
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                        "omnigent": {
+                            "executionTargetRef": "omnigent-codex@1",
+                            "launchPolicyRef": "codex-on-demand@1",
+                        },
+                    },
+                },
+            ],
+        },
+    }
+
+    canonical = build_canonical_workflow_view(job_type="task", payload=payload)
+
+    assert canonical["targetRuntime"] == "omnigent"
+    assert canonical["workflow"]["runtime"]["mode"] == "omnigent"
+    assert (
+        canonical["workflow"]["runtime"]["executionProfileRef"]
+        == "codex-oauth-profile"
+    )
+    assert canonical["omnigent"] == payload["omnigent"]
+    assert canonical["workflow"]["steps"][0]["runtime"]["mode"] == "codex_cli"
+    assert canonical["workflow"]["steps"][1]["runtime"]["mode"] == "omnigent"
+
+    snapshot = build_authoritative_workflow_input_snapshot(
+        task_payload=canonical["workflow"],
+        target_runtime=canonical["targetRuntime"],
+    )
+    assert snapshot["runtime"]["mode"] == "omnigent"
+    assert snapshot["runtime"]["executionProfileRef"] == "codex-oauth-profile"
+    assert snapshot["steps"][1]["runtime"]["omnigent"] == {
+        "executionTargetRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+
+
 def test_runtime_command_unknown_valid_commands_are_opaque_not_rejected() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
