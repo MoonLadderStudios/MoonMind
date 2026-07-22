@@ -43,6 +43,14 @@ def test_workspace_locator_rejects_unsafe_relative_path(relative_path):
         SandboxWorkspaceLocator(workspaceId="ws-1", relativePath=relative_path)
 
 
+@pytest.mark.parametrize(
+    "relative_path", ["%2e%2e/repo", "%252e%252e/repo", "repo%2f..%2fsecret"]
+)
+def test_workspace_locator_rejects_encoded_traversal(relative_path):
+    with pytest.raises(ValidationError, match="percent-encoding"):
+        SandboxWorkspaceLocator(workspaceId="ws-1", relativePath=relative_path)
+
+
 def test_workspace_locator_rejects_unknown_discriminator():
     with pytest.raises(ValidationError):
         WORKSPACE_LOCATOR_ADAPTER.validate_python({"kind": "host", "path": "/tmp"})
