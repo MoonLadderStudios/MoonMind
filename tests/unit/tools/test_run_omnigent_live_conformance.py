@@ -94,10 +94,24 @@ def test_product_uses_normal_create_and_release_last(tmp_path, monkeypatch):
     ids = {"workflowId": "w", "runId": "r", "stepId": "st", "bridgeId": "b",
            "hostId": "h", "sessionId": "s"}
     selection = {"agentKind": "external", "agentId": "omnigent",
-                 "hostMode": "on_demand_docker"}
+                 "hostMode": "on_demand_docker", "providerProfileRef": "profile-safe"}
+    acceptance = {
+        "credentialGeneration": 7, "executionProfileRef": "execution-profile/v1",
+        "policyVersion": "policy/v1",
+        "effectiveLaunchSnapshotDigest": "sha256:" + "a" * 64,
+        "serverImageDigest": "sha256:" + "b" * 64,
+        "hostImageDigest": "sha256:" + "c" * 64,
+        "caseOutcomes": {"normal-create-api": "passed"},
+        "secretScan": {"status": "passed"},
+        "evidence": {"artifacts": ["artifact://a"], "diagnostics": ["artifact://d"],
+                     "history": ["artifact://h"], "screenshots": []},
+        "cleanupAndRelease": {"runOwnedResourcesRemoved": True,
+            "oauthVolumePreserved": True, "unrelatedResourcesPreserved": True,
+            "profileReleasedLast": True},
+    }
     def action(scenario, name, **inputs):
         actions.append(name)
-        return {"ok": True, "state": {**ids, "selection": selection,
+        return {"ok": True, "state": {**ids, **acceptance, "selection": selection,
                 "schemaVersions": {"create": "v1"}}, "evidenceRefs": [f"artifact://{name}"],
                 "normalCreateApi": name == "workflow_created",
                 "authoredIntentAndSnapshot": name == "authored_intent_persisted",
@@ -115,6 +129,23 @@ def test_product_uses_normal_create_and_release_last(tmp_path, monkeypatch):
     assert actions[-1] == "profile_released"
     evidence = json.loads((tmp_path / "product-evidence.json").read_text())
     assert all(evidence["assertions"].values())
+    assert evidence["acceptance"] == acceptance
+
+
+def test_product_rejects_incomplete_acceptance_report_fields(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    ids = {"workflowId": "w", "runId": "r", "stepId": "st", "bridgeId": "b",
+           "hostId": "h", "sessionId": "s"}
+    monkeypatch.setattr(runner, "action", lambda *args, **kwargs: {
+        "ok": True, "state": ids, "evidenceRefs": ["artifact://evidence"]
+    })
+    try:
+        runner.product()
+    except module.ConformanceContractError as exc:
+        assert "lacks acceptance fields" in str(exc)
+    else:
+        raise AssertionError("incomplete product acceptance evidence was accepted")
 
 
 def test_failure_matrix_executes_exact_issue_cases(tmp_path, monkeypatch):

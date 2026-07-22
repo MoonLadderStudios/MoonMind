@@ -95,6 +95,14 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert "product evidence lacks independently resolved production records" in manifest["run"]
     assert '"productSchemaVersions": product["schemaVersions"]' in manifest["run"]
     assert '"safeIdentities": product["identifiers"]' in manifest["run"]
+    for field in (
+        "credentialGeneration", "executionProfileRef", "policyVersion",
+        "effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest",
+        "caseOutcomes", "secretScan", "cleanupAndRelease",
+    ):
+        assert field in manifest["run"]
+    assert "product evidence has invalid immutable digest" in manifest["run"]
+    assert "product evidence lacks complete cleanup and release results" in manifest["run"]
     upload = next(
         step
         for step in job["steps"]

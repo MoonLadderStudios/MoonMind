@@ -87,6 +87,11 @@ PRODUCT_RECORD_TYPES = {
     "workflow_detail_replayed": {"workflowDetail", "bridgeEvents"},
     "profile_released": {"profileLease", "cleanupResult"},
 }
+PRODUCT_ACCEPTANCE_FIELDS = (
+    "credentialGeneration", "executionProfileRef", "policyVersion",
+    "effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest",
+    "caseOutcomes", "secretScan", "evidence", "cleanupAndRelease",
+)
 ONDEMAND_ACTIONS = (
     "lease_acquired", "host_launched", "preflight_ready", "session_bound",
     "executed", "resources_harvested", "partial_start_retry", "janitor_recovery",
@@ -311,6 +316,11 @@ class LiveRunner:
         required = ("workflowId", "runId", "stepId", "bridgeId", "hostId", "sessionId")
         if not all(state.get(key) for key in required):
             raise ConformanceContractError("product journey lacks durable product identifiers")
+        missing_acceptance = [key for key in PRODUCT_ACCEPTANCE_FIELDS if not state.get(key)]
+        if missing_acceptance:
+            raise ConformanceContractError(
+                f"product journey lacks acceptance fields: {missing_acceptance}"
+            )
         assertions = {
             "normal_create_api": bool(results["workflow_created"].get("normalCreateApi")),
             "authored_intent_and_snapshot": bool(results["authored_intent_persisted"].get("authoredIntentAndSnapshot")),
@@ -328,6 +338,7 @@ class LiveRunner:
             "issue": "MoonLadderStudios/MoonMind#3456", "actions": list(PRODUCT_ACTIONS),
             "identifiers": {key: state[key] for key in required}, "assertions": assertions,
             "selection": state.get("selection"), "schemaVersions": state.get("schemaVersions"),
+            "acceptance": {key: state[key] for key in PRODUCT_ACCEPTANCE_FIELDS},
             "evidenceRefs": [ref for result in results.values() for ref in result["evidenceRefs"]],
             "sourceRecordTypes": sorted({
                 record_type
