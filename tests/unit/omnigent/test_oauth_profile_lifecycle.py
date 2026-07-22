@@ -357,6 +357,11 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "dst=/opt/moonmind-tools,readonly"
     ) in commands[2]
     assert "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills" in commands[2]
+    assert "OMNIGENT_EXECUTION_TIMEOUT_SECONDS=5400" in commands[2]
+    assert "OMNIGENT_EXECUTION_TIMEOUT_OWNER=temporal_workflow" in commands[2]
+    assert "OMNIGENT_CAPTURE_OWNER=moonmind_bridge" in commands[2]
+    assert "OMNIGENT_CAPTURE_RETENTION_DAYS=30" in commands[2]
+    assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
     assert (
         f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
     ) in commands[2]
@@ -1569,3 +1574,7 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
     else:
         assert "provider_released" in actions
     assert events[-1][1]["metadata"]["janitorRequired"] is janitor_required
+@pytest.fixture(autouse=True)
+def immutable_bootstrap_images(monkeypatch) -> None:
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64)

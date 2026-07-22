@@ -54,6 +54,7 @@ _DEFAULT_HOST_PATH = (
     "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
 )
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 
 
@@ -227,12 +228,14 @@ class OmnigentOAuthHostRuntime:
                 "effective launch snapshot reference is invalid",
                 code="OMNIGENT_EFFECTIVE_LAUNCH_INVALID",
             )
-        if not _DIGEST_IMAGE.fullmatch(str(launch.get("hostImageRef") or "")):
+        if (not _DIGEST_IMAGE.fullmatch(str(launch.get("hostImageRef") or ""))
+                or str(launch.get("hostImageRef")).endswith(_PLACEHOLDER_DIGEST)):
             raise OmnigentOAuthHostError(
                 "host image must be an immutable sha256 reference",
                 code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
             )
-        if not _DIGEST_IMAGE.fullmatch(str(launch.get("serverImageRef") or "")):
+        if (not _DIGEST_IMAGE.fullmatch(str(launch.get("serverImageRef") or ""))
+                or str(launch.get("serverImageRef")).endswith(_PLACEHOLDER_DIGEST)):
             raise OmnigentOAuthHostError(
                 "server image must be an immutable sha256 reference",
                 code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
@@ -257,7 +260,7 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_RESOURCES_UNREALIZABLE",
             )
         required_mounts = {
-            "workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"
+            "workspace", "oauth_home", "omnigent_state", "skills_tools"
         }
         if set(launch.get("mountClasses") or ()) != required_mounts:
             raise OmnigentOAuthHostError(
@@ -488,7 +491,7 @@ class OmnigentOAuthHostRuntime:
             "--pids-limit",
             str(effective_launch["limits"]["processes"]),
             "--stop-timeout",
-            str(effective_launch["limits"]["timeoutSeconds"]),
+            "20",
             "--read-only",
             "--tmpfs",
             f"/tmp:rw,noexec,nosuid,size={effective_launch['limits']['temporaryStorageMiB']}m",
@@ -522,6 +525,14 @@ class OmnigentOAuthHostRuntime:
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
             "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills",
+            "--env",
+            f"OMNIGENT_EXECUTION_TIMEOUT_SECONDS={effective_launch['limits']['timeoutSeconds']}",
+            "--env",
+            "OMNIGENT_EXECUTION_TIMEOUT_OWNER=temporal_workflow",
+            "--env",
+            "OMNIGENT_CAPTURE_OWNER=moonmind_bridge",
+            "--env",
+            f"OMNIGENT_CAPTURE_RETENTION_DAYS={effective_launch['capture']['retentionDays']}",
             "--env",
             "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
@@ -734,6 +745,8 @@ class OmnigentOAuthHostRuntime:
                     "OMNIGENT_CAPTURE_RETENTION_DAYS": str(
                         effective_launch["capture"]["retentionDays"]
                     ),
+                    "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
+                    "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
                     "OMNIGENT_CONTROL_CAPABILITIES": ",".join(
                         effective_launch["controlCapabilities"]
                     ),
