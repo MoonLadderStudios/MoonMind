@@ -596,6 +596,14 @@ interface OmnigentCodexCatalogReadiness {
   runtimeId: "omnigent";
   displayName: string;
   available: boolean;
+  defaultExecutionProfileRef: string;
+  executionProfiles: Array<{
+    ref: string;
+    displayName: string;
+    available: boolean;
+    policyRefs: string[];
+    gateReasons: OmnigentCatalogGateReason[];
+  }>;
   eligibleProviderProfiles: Array<{
     profileId: string;
     label: string;
@@ -6371,6 +6379,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     : (providerProfilesQuery.data || []);
 
   useEffect(() => {
+    if (runtime !== "omnigent" || !omnigentCatalogQuery.data) return;
+    if (!omnigentExecutionTargetRef) {
+      setOmnigentExecutionTargetRef(omnigentCatalogQuery.data.defaultExecutionProfileRef);
+    }
+  }, [runtime, omnigentCatalogQuery.data, omnigentExecutionTargetRef]);
+
+  useEffect(() => {
     const profiles = activeProviderProfiles;
     if (
       (runtime === "omnigent" && omnigentCatalogQuery.isFetching) ||
@@ -6499,6 +6514,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.providerProfile) {
       prevProviderProfileRef.current = draft.providerProfile;
       setProviderProfile(draft.providerProfile);
+    }
+    if (draft.omnigentExecutionTargetRef) {
+      setOmnigentExecutionTargetRef(draft.omnigentExecutionTargetRef);
+    }
+    if (draft.omnigentLaunchPolicyRef) {
+      setOmnigentLaunchPolicyRef(draft.omnigentLaunchPolicyRef);
     }
     if (draft.model) {
       setModel(draft.model);
@@ -7897,6 +7918,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : profile.account_label || profile.profile_id,
       isDefault: Boolean(profile.is_default),
     }));
+  const selectedOmnigentReadiness = (omnigentCatalogQuery.data?.executionProfiles || []).find(
+    (profile) => profile.ref === omnigentExecutionTargetRef,
+  );
+  const selectableOmnigentProfiles = omnigentProfiles.filter((profile) =>
+    (omnigentCatalogQuery.data?.executionProfiles || []).some(
+      (readiness) => readiness.ref === profile.ref && readiness.available,
+    ),
+  );
+  const selectableOmnigentPolicies = omnigentPolicies.filter((policy) =>
+    selectedOmnigentReadiness?.policyRefs.includes(String(policy.ref || "")),
+  );
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
     ? undefined
@@ -9781,15 +9813,53 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    const supportedAgentRuntimeIds = supportedAgentRuntimes.map((item) =>
+    const supportedAgentRuntimeIds = runtimeOptions.map((item) =>
       item.trim().toLowerCase(),
     );
     if (!supportedAgentRuntimeIds.includes(normalizedRuntime)) {
       setSubmitMessage(
-        `Runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
+        `Runtime must be one of: ${runtimeOptions.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
+    }
+    if (normalizedRuntime === "omnigent") {
+      const refreshed = await omnigentCatalogQuery.refetch();
+      const catalog = refreshed.data;
+      const executionProfile = (catalog?.executionProfiles || []).find(
+        (profile) => profile.ref === omnigentExecutionTargetRef,
+      );
+      const eligibleProfile = catalog?.eligibleProviderProfiles.find(
+        (profile) => profile.profileId === providerProfile,
+      );
+      if (!catalog?.available || !executionProfile?.available) {
+        setSubmitMessage(
+          executionProfile?.gateReasons[0]?.message ||
+            catalog?.gateReasons[0]?.message ||
+            "Codex via Omnigent readiness could not be verified.",
+        );
+        clearSubmitBusy();
+        return;
+      }
+      if (!eligibleProfile) {
+        setSubmitMessage(
+          "The selected Codex OAuth Provider Profile is no longer eligible. Choose an eligible profile explicitly.",
+        );
+        clearSubmitBusy();
+        return;
+      }
+      if (!executionProfile.policyRefs.includes(omnigentLaunchPolicyRef)) {
+        setSubmitMessage(
+          "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
+        );
+        clearSubmitBusy();
+        return;
+      }
+      if (eligibleProfile.busy && !eligibleProfile.queueWhenBusy) {
+        setSubmitMessage("The selected Provider Profile is busy and does not support queued waiting.");
+        clearSubmitBusy();
+        return;
+      }
     }
     const submittedModelTierValue = modelTier.trim();
     const submittedModelTier = Number.parseInt(submittedModelTierValue, 10);
@@ -10769,9 +10839,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // Never resolve a provider profile from placeholder data: during a runtime
     // switch refetch `data` still holds the previous runtime's profiles, which
     // must not be submitted under the newly selected runtime.
-    const selectedProviderProfile = providerProfilesQuery.isPlaceholderData
+    const selectedProviderProfile = runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData
       ? undefined
-      : (providerProfilesQuery.data || []).find(
+      : activeProviderProfiles.find(
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
@@ -13028,9 +13098,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   // layout stays stable. Those profiles do not belong to the newly
                   // selected runtime, so the control is disabled and the stale
                   // options are withheld to prevent selecting/submitting them.
-                  disabled={providerProfilesQuery.isPlaceholderData}
+                  disabled={runtime === "omnigent" ? omnigentCatalogQuery.isFetching : providerProfilesQuery.isPlaceholderData}
                 >
-                  {providerProfilesQuery.isPlaceholderData ? (
+                  {runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData ? (
                     <option value="">Loading profiles…</option>
                   ) : (
                     providerOptions.map((option) => (
@@ -13068,7 +13138,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   }
                 }}
               >
-                {omnigentProfiles.map((profile) => (
+                {!selectableOmnigentProfiles.some((profile) => profile.ref === omnigentExecutionTargetRef) && omnigentExecutionTargetRef ? (
+                  <option value={omnigentExecutionTargetRef} disabled>
+                    {omnigentExecutionTargetRef} (Unavailable — replacement required)
+                  </option>
+                ) : null}
+                {selectableOmnigentProfiles.map((profile) => (
                   <option key={profile.ref} value={profile.ref}>
                     {profile.displayName || profile.ref}
                   </option>
@@ -13082,13 +13157,28 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 value={omnigentLaunchPolicyRef}
                 onChange={(event) => setOmnigentLaunchPolicyRef(event.target.value)}
               >
-                {omnigentPolicies.map((policy) => (
+                {!selectableOmnigentPolicies.some((policy) => policy.ref === omnigentLaunchPolicyRef) && omnigentLaunchPolicyRef ? (
+                  <option value={omnigentLaunchPolicyRef} disabled>
+                    {omnigentLaunchPolicyRef} (Unavailable — replacement required)
+                  </option>
+                ) : null}
+                {selectableOmnigentPolicies.map((policy) => (
                   <option key={policy.ref} value={policy.ref}>
                     {policy.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}
                   </option>
                 ))}
               </select>
             </label>
+          </div>
+        ) : null}
+
+        {runtime.trim().toLowerCase() === "omnigent" ? (
+          <div className="notice small" aria-label="Effective Omnigent selection">
+            <div>Runtime: Codex via Omnigent</div>
+            <div>Provider Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || providerProfile || "Not selected"}</div>
+            <div>Host mode: {omnigentPolicies.find((policy) => policy.ref === omnigentLaunchPolicyRef)?.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}</div>
+            <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
+            <div>Repository: {repository.trim() || "Not selected"}</div>
           </div>
         ) : null}
 

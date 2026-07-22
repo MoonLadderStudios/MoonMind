@@ -2,6 +2,35 @@ import { describe, expect, it } from "vitest";
 
 import { buildTemporalSubmissionDraftFromExecution } from "./temporalTaskEditing";
 
+describe("MoonLadderStudios/MoonMind#3452 Omnigent draft round-trip", () => {
+  it("preserves canonical execution target and launch policy refs", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:omnigent-edit",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "omnigent",
+      inputParameters: {
+        targetRuntime: "omnigent",
+        profileId: "codex-oauth-team",
+        omnigent: {
+          executionTargetRef: "omnigent-codex-default",
+          launchPolicyRef: "omnigent-codex-on-demand-v1",
+        },
+        workflow: {
+          instructions: "Implement the requested change.",
+          runtime: { mode: "omnigent", profileId: "codex-oauth-team" },
+        },
+      },
+    });
+
+    expect(draft).toMatchObject({
+      runtime: "omnigent",
+      providerProfile: "codex-oauth-team",
+      omnigentExecutionTargetRef: "omnigent-codex-default",
+      omnigentLaunchPolicyRef: "omnigent-codex-on-demand-v1",
+    });
+  });
+});
+
 describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", () => {
   const objectiveRuntimeCommand = {
     kind: "slash_command",
