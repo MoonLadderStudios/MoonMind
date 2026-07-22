@@ -305,14 +305,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                             "explicit launch policy conflicts with the durable host binding",
                             code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                         )
-            elif binding is not None:
-                raise OmnigentOAuthHostError(
-                    "durable host binding predates effective launch authority",
-                    code="OMNIGENT_LEGACY_BINDING_REQUIRES_RESELECTION",
-                )
             else:
-                bootstrap_on_demand = bool(
-                    os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE")
+                bootstrap_on_demand = (
+                    bool(binding.host_launch_profile_ref)
+                    if binding is not None
+                    else bool(os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"))
                 )
                 effective_launch = compile_effective_launch(
                     profile_ref="omnigent-codex@1",
