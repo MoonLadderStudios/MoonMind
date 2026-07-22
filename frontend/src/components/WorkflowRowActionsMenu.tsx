@@ -572,10 +572,9 @@ export function WorkflowRowActionsMenu({
           key={item.label}
           type="button"
           className="secondary"
-          onClick={item.onClick}
-          disabled={item.disabled}
+          onClick={item.onSelect}
+          disabled={Boolean(item.disabledReason)}
         >
-          {item.icon && <span className="icon">{item.icon}</span>}
           {item.label}
         </button>
       ))}
