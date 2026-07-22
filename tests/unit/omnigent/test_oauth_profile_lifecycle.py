@@ -57,6 +57,10 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.temporal_models import WorkspaceCheckpointEvidenceModel
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
 
 
 @pytest.mark.parametrize(
@@ -98,11 +102,6 @@ def test_failure_evidence_falls_back_when_code_is_none() -> None:
     exc = RuntimeError("failed")
     exc.code = None  # type: ignore[attr-defined]
     assert _failure_evidence(exc)[0] == "RuntimeError"
-
-
-from moonmind.workflows.temporal.runtime.git_auth import (
-    build_github_token_git_environment,
-)
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -448,7 +447,7 @@ async def test_on_demand_retry_rejects_stopped_container_from_another_lease(
 
 
 @pytest.mark.asyncio
-async def test_private_workspace_clone_uses_in_memory_github_credentials(
+async def test_host_preparation_resolves_pre_materialized_workspace_without_git(
     tmp_path,
 ) -> None:
     runtime = OmnigentOAuthHostRuntime(
@@ -458,50 +457,42 @@ async def test_private_workspace_clone_uses_in_memory_github_credentials(
 
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
-    await runtime._prepare_workspace(
+    workspace = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    SandboxWorkspaceRecordStore(tmp_path / "workspaces").ensure(
+        SandboxWorkspaceRecord(workspace_id, "workflow-1", "step-1", "repo")
+    )
+
+    resolved = await runtime._prepare_workspace(
         workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
         current_workflow_id="workflow-1",
         current_step_execution_id="step-1",
-        repository_url="https://github.com/owner/private.git",
-        repository_branch=None,
-        github_token="test-token-value",
     )
 
-    call = runtime._run.await_args
-    assert call.args[:3] == ("git", "clone", "--")
-    expected = build_github_token_git_environment(
-        "test-token-value", base_env=call.kwargs["env"]
-    )
-    assert call.kwargs["env"]["GITHUB_TOKEN"] == "test-token-value"
-    assert call.kwargs["env"]["GIT_CONFIG_VALUE_1"] == expected["GIT_CONFIG_VALUE_1"]
+    assert resolved == workspace
+    runtime._run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_failed_workspace_clone_is_removed_for_retry(tmp_path) -> None:
+async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(), workspace_root=workspace_root
     )
 
-    async def fail_after_partial_clone(*_args, **_kwargs):
-        workspace = next(workspace_root.iterdir())
-        (workspace / ".git").mkdir()
-        raise OmnigentOAuthHostError("clone failed")
-
-    runtime._run = AsyncMock(side_effect=fail_after_partial_clone)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
-    with pytest.raises(OmnigentOAuthHostError, match="clone failed"):
+    with pytest.raises(WorkspaceLocatorResolutionError) as exc:
         await runtime._prepare_workspace(
             workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
             current_workflow_id="workflow-1",
             current_step_execution_id="step-1",
-            repository_url="https://github.com/owner/private.git",
-            repository_branch=None,
-            github_token="test-token-value",
         )
 
+    assert exc.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
     assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
+    runtime._run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -514,6 +505,7 @@ async def test_workspace_retry_rejects_tampered_owner_record_before_git_mutation
     )
     runtime._run = AsyncMock(return_value=(0, "", ""))
     workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+    (workspace_root / "temporal_sandbox" / workspace_id / "repo").mkdir(parents=True)
     records = workspace_root / "temporal_sandbox" / ".workspace_records"
     records.mkdir(parents=True)
     (records / f"{workspace_id}.json").write_text(
@@ -533,8 +525,6 @@ async def test_workspace_retry_rejects_tampered_owner_record_before_git_mutation
             workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
             current_workflow_id="workflow-1",
             current_step_execution_id="step-1",
-            repository_url="https://github.com/owner/private.git",
-            repository_branch=None,
         )
 
     assert exc.value.code == "WORKSPACE_IDENTITY_MISMATCH"

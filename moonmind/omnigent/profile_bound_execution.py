@@ -39,7 +39,6 @@ from moonmind.provider_profiles.lease_client import (
 )
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.adapters.omnigent_agent_adapter import build_omnigent_selection
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
@@ -437,8 +436,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                 current_step_execution_id=(
                     step_execution_id or request.idempotency_key
                 ),
-                repository_url=self._repository_url(request),
-                repository_branch=self._repository_branch(request),
                 resolved_skillset_ref=request.resolved_skillset_ref,
                 artifact_gateway=self._artifact_service,
                 target_repository=str(
@@ -865,32 +862,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                     code="profile_resolution_failed",
                 )
             return profile
-
-    @staticmethod
-    def _repository_url(request: AgentExecutionRequest) -> str | None:
-        authored = str(
-            request.workspace_spec.get("repository")
-            or request.workspace_spec.get("repo")
-            or ""
-        ).strip()
-        if authored:
-            if "://" in authored or authored.startswith("git@"):
-                return authored
-            if authored.count("/") == 1:
-                return f"https://github.com/{authored}.git"
-        workspace = str(
-            build_omnigent_selection(request).session.workspace or ""
-        ).strip()
-        return workspace if "://" in workspace or workspace.startswith("git@") else None
-
-    @staticmethod
-    def _repository_branch(request: AgentExecutionRequest) -> str | None:
-        value = str(
-            request.workspace_spec.get("branch")
-            or request.workspace_spec.get("startingBranch")
-            or ""
-        ).strip()
-        return value or None
 
     @staticmethod
     def _workspace_locator(request: AgentExecutionRequest) -> Mapping[str, Any]:

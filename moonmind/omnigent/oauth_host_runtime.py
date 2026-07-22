@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import shutil
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -31,13 +30,9 @@ from moonmind.schemas.workspace_locator_models import (
     WORKSPACE_LOCATOR_ADAPTER,
 )
 from moonmind.workflows.temporal.runtime.workspace_locators import (
-    SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
     daemon_visible_workspace_path,
     resolve_sandbox_workspace_locator,
-)
-from moonmind.workflows.temporal.runtime.git_auth import (
-    build_github_token_git_environment,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.skills.run_projection import (
@@ -119,8 +114,6 @@ class OmnigentOAuthHostRuntime:
         workspace_locator: Mapping[str, Any],
         current_workflow_id: str,
         current_step_execution_id: str,
-        repository_url: str | None = None,
-        repository_branch: str | None = None,
         resolved_skillset_ref: str | None = None,
         artifact_gateway: Any | None = None,
         target_repository: str = "",
@@ -130,7 +123,7 @@ class OmnigentOAuthHostRuntime:
         effective_launch: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
-        # cloning a repository, creating volumes, or starting a container.
+        # creating volumes, or starting a container.
         launch = self._validate_effective_launch(
             binding=binding, effective_launch=effective_launch
         )
@@ -143,9 +136,6 @@ class OmnigentOAuthHostRuntime:
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
-            repository_url=repository_url,
-            repository_branch=repository_branch,
-            github_token=github_token,
         )
         daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         if binding.host_launch_profile_ref:
@@ -764,9 +754,6 @@ class OmnigentOAuthHostRuntime:
         workspace_locator: Mapping[str, Any],
         current_workflow_id: str,
         current_step_execution_id: str,
-        repository_url: str | None,
-        repository_branch: str | None,
-        github_token: str | None = None,
     ) -> Path:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
         if not isinstance(locator, SandboxWorkspaceLocator):
@@ -783,20 +770,13 @@ class OmnigentOAuthHostRuntime:
             locator,
             workspace_root=self._workspace_root,
             expected_workspace_id=expected_id,
-            must_exist=False,
+            must_exist=True,
         )
         record_store = SandboxWorkspaceRecordStore(self._workspace_root)
-        record = SandboxWorkspaceRecord(
-            workspace_id=locator.workspace_id,
-            workflow_id=current_workflow_id,
-            step_execution_id=current_step_execution_id,
-            relative_path=locator.relative_path,
-        )
-        record_store.ensure(record)
         authoritative_record = record_store.load(locator.workspace_id)
         if authoritative_record is None:
             raise OmnigentOAuthHostError(
-                "sandbox workspace owner record was not persisted",
+                "authorized sandbox workspace must be materialized before host preparation",
                 code="WORKSPACE_IDENTITY_MISMATCH",
             )
         workspace = resolve_sandbox_workspace_locator(
@@ -806,29 +786,8 @@ class OmnigentOAuthHostRuntime:
             owner_record=authoritative_record,
             expected_workflow_id=current_workflow_id,
             expected_step_execution_id=current_step_execution_id,
-            must_exist=False,
+            must_exist=True,
         )
-        workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if repository_url and not any(workspace.iterdir()):
-            try:
-                await self._run(
-                    "git",
-                    "clone",
-                    "--",
-                    repository_url,
-                    str(workspace),
-                    env=build_github_token_git_environment(
-                        github_token, base_env=os.environ
-                    ),
-                )
-            except Exception:
-                shutil.rmtree(workspace, ignore_errors=True)
-                raise
-        if repository_branch and (workspace / ".git").is_dir():
-            await self._run(
-                "git", "-C", str(workspace), "checkout", repository_branch,
-                env=build_github_token_git_environment(github_token, base_env=os.environ),
-            )
         return workspace
 
     async def _initialize_required_tools(self) -> None:
