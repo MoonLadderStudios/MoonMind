@@ -645,6 +645,9 @@ RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
     "run-moonspec-draft-publish-recovery-handoff-v1"
 )
 RUN_AUTHORITATIVE_PUBLISH_OUTCOME_PATCH = "run-authoritative-publish-outcome-v1"
+RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH = (
+    "run-authoritative-pr-requirement-v1"
+)
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH = (
     "run-propagate-agent-child-cancellation-v1"
@@ -11029,6 +11032,16 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return
 
+        if workflow.patched(RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH):
+            require_pull_request_url = self._authoritative_pr_requirement(
+                publish_mode=publish_mode,
+                pr_publish_optional=pr_publish_optional,
+            )
+            pull_request_url = pull_request_url or self._coerce_text(
+                self._publish_context.get("pullRequestUrl"),
+                max_chars=500,
+            )
+
         if (
             workflow.patched(RUN_PREPUBLICATION_FAILURE_BLOCKS_PUBLISH_PATCH)
             and self._publish_status == "failed"
@@ -14048,6 +14061,43 @@ class MoonMindRunWorkflow:
                 if publish_outcome.get(key) is True:
                     self._publish_context["noCommitPublish"] = {"status": key}
                     return
+
+    def _authoritative_pr_requirement(
+        self,
+        *,
+        publish_mode: str,
+        pr_publish_optional: bool,
+    ) -> bool:
+        """Derive the PR gate from durable publication evidence after all steps."""
+
+        if publish_mode != "pr" or self._integration is not None:
+            return False
+        if self._publish_status == "failed" or self._publish_context.get(
+            "publicationBlockedBy"
+        ):
+            return False
+        commit_count = self._publish_context.get("commitCount")
+        has_commits = (
+            not isinstance(commit_count, bool)
+            and isinstance(commit_count, (int, float))
+            and int(commit_count) > 0
+        ) or (
+            isinstance(commit_count, str)
+            and commit_count.strip().isdigit()
+            and int(commit_count.strip()) > 0
+        )
+        if has_commits or self._coerce_text(
+            self._publish_context.get("pullRequestUrl"), max_chars=500
+        ):
+            return True
+        if (
+            self._publish_status == "published"
+            and self._publish_context.get("storyOutputMode") in {"jira", "github"}
+        ):
+            return False
+        if self._publish_status in {"not_required", "skipped"}:
+            return False
+        return not pr_publish_optional
 
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
