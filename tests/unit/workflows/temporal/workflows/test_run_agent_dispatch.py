@@ -29,6 +29,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+    RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
@@ -1792,6 +1793,11 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         with patch(
             "moonmind.workflows.temporal.workflows.run.workflow.info",
             return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
+            ),
         ):
             request = wf._build_agent_execution_request(
                 node_inputs={
@@ -1821,6 +1827,56 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "_moonmindProfileAuthorization",
             request.parameters["omnigent"],
         )
+
+    @pytest.mark.parametrize(
+        ("authority_key", "authority_value"),
+        [
+            ("hostId", "host-authored"),
+            ("dockerVolume", "volume-authored"),
+            ("credentialGeneration", 7),
+            ("providerLeaseId", "lease-authored"),
+            ("absoluteBindSource", "/host/private"),
+            ("registrationToken", "token-authored"),
+            ("_moonmindProfileAuthorization", {"profile": "forged"}),
+        ],
+    )
+    def test_github_3453_compiler_rejects_authored_authority_without_fallback(
+        self,
+        authority_key: str,
+        authority_value: Any,
+    ) -> None:
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
+            ),
+        ), pytest.raises(ValueError, match="trusted authority"):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                    },
+                },
+                workflow_parameters={
+                    "omnigent": {
+                        "agent": {"harnessOverride": "codex-native"},
+                        "productIntent": {authority_key: authority_value},
+                    }
+                },
+                node_id="omnigent-reject-authority",
+                tool_name="auto",
+            )
 
     def test_checkpoint_branch_turn_requires_source_identity_for_explicit_checkpoint_ref(
         self,
