@@ -37,7 +37,7 @@ The compiler rejects a missing or ineligible profile and never chooses another p
 
 The form selects versioned `hostProfileRef` and `launchPolicyRef` values. The policy chooses exactly one mode: `static_compose` binds a compatible registered profile host, while `on_demand_docker` launches and later removes one lease-owned host. No host in the chosen mode is a failure; it does not trigger the other mode. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` is bootstrap configuration only, never durable product authority.
 
-Before host realization, the trusted launcher persists an immutable `effectiveLaunchSnapshot`: schema version, resolved mode, profile and policy versions, image digest, machine target, resource limits, network/egress policy, safe mount targets, capture policy, and resolution time. Retries reuse it.
+Before host realization, the trusted launcher persists an immutable `effectiveLaunchSnapshot`: schema version, the selected execution profile and credential generation, resolved mode, profile and policy versions, image digest, machine target, resource limits, network/egress policy, safe mount targets, capture policy, and resolution time. Retries reuse it only while the selected credential generation remains current; a generation change makes the snapshot stale and requires reconciliation.
 
 ## 3. Field authority and workspace
 
@@ -55,7 +55,7 @@ Repository, branch, publish mode, attachments, resolved Skills, and GitHub mutat
 
 ## 4. Versioned wire examples
 
-All examples use `omnigent-create-host/v1`; refs are opaque safe identifiers.
+Product envelopes use `omnigent-create-host/v1`; the canonical `AgentExecutionRequest` example instead follows its model directly. Refs are opaque safe identifiers.
 
 ### 4.1 Create input
 
@@ -98,11 +98,12 @@ All examples use `omnigent-create-host/v1`; refs are opaque safe identifiers.
 
 ```json
 {
-  "schemaVersion": "omnigent-create-host/v1",
   "agentKind": "external",
   "agentId": "omnigent",
   "executionProfileRef": "provider-profile:codex-primary:v7",
-  "workspaceLocator": {"kind": "sandbox", "workspaceId": "ws_01", "subpath": "."},
+  "correlationId": "workflow:run_01:step_01",
+  "idempotencyKey": "workflow:run_01:step_01:attempt_1",
+  "workspaceSpec": {"workspaceLocator": {"kind": "sandbox", "workspaceId": "ws_01", "subpath": "."}},
   "parameters": {"omnigent": {"endpointRef": "omnigent-endpoint:local:v1", "agent": {"harnessOverride": "codex-native"}, "hostProfileRef": "omnigent-host-profile:codex-standard:v3", "launchPolicyRef": "omnigent-launch-policy:restricted:v5", "capture": {"transcript": true, "resources": true}}}
 }
 ```
@@ -115,6 +116,8 @@ There is deliberately no `session.hostId`; host and session identities are trust
 {
   "schemaVersion": "omnigent-create-host/v1",
   "snapshotRef": "omnigent-launch-snapshot:run_01:v1",
+  "executionProfileRef": "provider-profile:codex-primary:v7",
+  "credentialGeneration": 7,
   "hostProfileRef": "omnigent-host-profile:codex-standard:v3",
   "launchPolicyRef": "omnigent-launch-policy:restricted:v5",
   "mode": "on_demand_docker",
@@ -136,13 +139,23 @@ There is deliberately no `session.hostId`; host and session identities are trust
   "runtimeLabel": "Codex via Omnigent",
   "identity": {"agentKind": "external", "agentId": "omnigent", "harness": "codex-native"},
   "safeRefs": {"executionProfileRef": "provider-profile:codex-primary:v7", "hostLeaseRef": "host-lease:01", "bridgeSessionRef": "bridge-session:01", "omnigentSessionRef": "omnigent-session:01", "launchSnapshotRef": "omnigent-launch-snapshot:run_01:v1"},
-  "stage": {"code": "session_running", "status": "running"},
-  "controls": ["interrupt", "terminate"],
+  "stage": {"code": "terminal", "status": "completed"},
+  "controls": [],
   "artifactRefs": ["artifact:transcript-01"],
   "resourceRefs": ["omnigent-resource:01"],
-  "terminal": null
+  "terminal": {
+    "primaryStatus": "completed",
+    "failureClass": null,
+    "outputRefs": ["artifact:final-snapshot-01"],
+    "diagnosticsRef": "artifact:diagnostics-01",
+    "captureManifestRef": "artifact:capture-manifest-01",
+    "cleanup": {"status": "completed", "janitorRequired": false},
+    "profileLease": {"releaseStatus": "released"}
+  }
 }
 ```
+
+The terminal payload embeds the canonical bridge `AgentRunResult` fields defined by [Omnigent Bridge §14.2](./OmnigentBridge.md#142-terminal-result): `primaryStatus` is the authoritative workflow outcome, while `failureClass`, `outputRefs`, `diagnosticsRef`, and `captureManifestRef` retain its result and evidence. `cleanup.status`, `cleanup.janitorRequired`, and `profileLease.releaseStatus` independently expose auxiliary lifecycle completion. Cleanup or lease-release failures remain visible there and never replace or obscure `primaryStatus`.
 
 After cleanup, host/container handles are non-actionable historical refs; artifacts, lifecycle evidence, the terminal envelope, and safe identity refs remain available.
 

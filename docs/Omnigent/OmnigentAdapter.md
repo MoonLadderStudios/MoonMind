@@ -138,7 +138,7 @@ Rules:
 
 - `executionProfileRef` is required for the profile-bound Codex path.
 - The selected profile must be enabled, connected, launch-ready, OpenAI-backed, and compatible with `codex_cli` OAuth materialization.
-- A caller-provided `session.hostId` is rejected when it conflicts with the durable profile binding. Product flows do not require manual host ids.
+- A caller-provided `session.hostId` is always rejected. The trusted coordinator alone injects the exact host id from the durable profile binding immediately before session creation; product flows never accept manual host ids.
 - The coordinator injects `hostType=external`, the exact registered host id, the resolved workspace path, `codex-native`, and a safe profile-authorization envelope immediately before session creation.
 - Raw credentials, host registration tokens, Docker volume names, and absolute daemon paths never enter workflow-authored parameters.
 
