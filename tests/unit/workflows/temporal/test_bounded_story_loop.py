@@ -129,20 +129,12 @@ def test_stop_state_enum_malformed_gate_and_continuation_decisions() -> None:
     assert decision.continue_loop is False
 
 
-def test_additional_work_needed_can_continue_without_remaining_work_ref() -> None:
-    decision = evaluate_attempt_continuation(
-        attempt=_attempt(),
-        gate=_gate(remainingWorkRef=None),
-        budget=_budget(consumed={"attempts": 0}),
-        checkpoint_available=True,
-        policy_allowed=True,
-    )
-
-    assert decision.state == "failed_with_remaining_work"
-    assert decision.reason == "verification_requested_remediation"
-    assert decision.remaining_work_ref is None
-    assert decision.continue_loop is True
-    assert decision.next_attempt_kind == "remediation"
+def test_additional_work_needed_requires_durable_remaining_work_ref() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="ADDITIONAL_WORK_NEEDED requires remainingWorkRef durable evidence",
+    ):
+        _gate(remainingWorkRef=None)
 
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()

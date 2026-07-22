@@ -169,6 +169,14 @@ class TypedGateResult(_ContractModel):
             _reject_forbidden_inline_evidence(data)
         return data
 
+    @model_validator(mode="after")
+    def _additional_work_requires_durable_evidence(self) -> "TypedGateResult":
+        if self.verdict == "ADDITIONAL_WORK_NEEDED" and not self.remaining_work_ref:
+            raise ValueError(
+                "ADDITIONAL_WORK_NEEDED requires remainingWorkRef durable evidence"
+            )
+        return self
+
     @classmethod
     def from_boundary_payload(cls, payload: dict[str, Any]) -> "TypedGateResult":
         raw_verdict = str(payload.get("verdict") or "").strip().upper()

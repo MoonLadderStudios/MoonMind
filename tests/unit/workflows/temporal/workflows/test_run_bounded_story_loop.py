@@ -753,14 +753,14 @@ def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() ->
     workflow._bounded_story_loop_continuation_decision(
         logical_step_id="verify-1",
         gate_result=gate,
-        gate_result_ref=None,
+        gate_result_ref="artifact://gate/attempt-1",
         ordered_nodes=ordered_nodes,
         current_index=0,
     )
     second = workflow._bounded_story_loop_continuation_decision(
         logical_step_id="verify-2",
         gate_result=gate,
-        gate_result_ref=None,
+        gate_result_ref="artifact://gate/attempt-2",
         ordered_nodes=ordered_nodes,
         current_index=2,
     )
@@ -768,7 +768,7 @@ def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() ->
     assert second["continueLoop"] is True
 
 
-def test_parent_loop_continues_to_scheduled_remediation_without_remaining_work_ref() -> None:
+def test_parent_loop_uses_gate_report_as_durable_remaining_work_evidence() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._step_ledger_rows = [
         {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}}
@@ -799,9 +799,9 @@ def test_parent_loop_continues_to_scheduled_remediation_without_remaining_work_r
 
     assert decision["continueLoop"] is True
     assert decision["nextAttemptKind"] == "remediation"
-    assert decision["remainingWorkRef"] is None
+    assert decision["remainingWorkRef"] == "artifact://gate/attempt-1"
     assert decision["hasRemainingRemediationStep"] is True
-    assert decision["gate"]["remainingWorkRef"] is None
+    assert decision["gate"]["remainingWorkRef"] == "artifact://gate/attempt-1"
 
 
 def test_parent_loop_continues_to_unannotated_issue_implement_remediation_step(

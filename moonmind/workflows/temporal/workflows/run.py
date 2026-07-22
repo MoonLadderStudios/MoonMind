@@ -6354,8 +6354,16 @@ class MoonMindRunWorkflow:
                 "gateResultRef": self._bounded_story_loop_artifact_ref(
                     gate_result_ref
                 ),
+                # The verifier report is itself the authoritative remaining-work
+                # evidence when it does not publish a separate extracted artifact.
+                # Never admit ADDITIONAL_WORK_NEEDED without a durable reference.
                 "remainingWorkRef": self._bounded_story_loop_artifact_ref(
                     gate_result.remaining_work_ref
+                )
+                or (
+                    self._bounded_story_loop_artifact_ref(gate_result_ref)
+                    if gate_result.verdict == "ADDITIONAL_WORK_NEEDED"
+                    else None
                 ),
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
