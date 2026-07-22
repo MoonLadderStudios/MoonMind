@@ -1351,15 +1351,11 @@ def _template_step_id_matches(
     return len(parts) >= 4 and parts[3] == f"{step_index:02d}"
 
 
-def _is_jira_pr_handoff_node(
+def _is_explicit_pr_handoff_node(
     node: Mapping[str, Any],
     *,
     task_payload: Mapping[str, Any],
 ) -> bool:
-    has_jira_orchestrate = _task_has_applied_template(task_payload, "jira-orchestrate")
-    has_jira_implement = _task_has_applied_template(task_payload, "jira-implement")
-    if not has_jira_orchestrate and not has_jira_implement:
-        return False
     inputs = node.get("inputs")
     if not isinstance(inputs, Mapping):
         return False
@@ -1369,6 +1365,7 @@ def _is_jira_pr_handoff_node(
             str(
                 annotations.get("jiraOrchestrateRole")
                 or annotations.get("jiraImplementRole")
+                or annotations.get("issueImplementRole")
                 or ""
             )
             .strip()
@@ -1376,6 +1373,7 @@ def _is_jira_pr_handoff_node(
         )
         if role == "pull-request-handoff":
             return True
+    has_jira_implement = _task_has_applied_template(task_payload, "jira-implement")
     if has_jira_implement and _template_step_id_matches(
         node,
         slug="jira-implement",
@@ -2267,7 +2265,7 @@ def _build_runtime_planner():
                     not _jira_agent_skill_selected(publish_selected_skill)
                     or publish_selected_skill.lower() in _MOONSPEC_BREAKDOWN_TOOLS
                 )
-                and not _is_jira_pr_handoff_node(
+                and not _is_explicit_pr_handoff_node(
                     publish_node,
                     task_payload=task_payload,
                 )

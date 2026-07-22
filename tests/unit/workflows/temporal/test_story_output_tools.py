@@ -421,6 +421,73 @@ async def test_update_github_issue_status_declares_completed_close_side_effect(
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_blocks_done_when_pushed_changes_have_no_pr() -> None:
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2231,
+            "mode": "finalize_after_pr_or_done",
+            "previousOutputs": {
+                "push_status": "pushed",
+                "push_branch": "feature/issue-2231",
+                "push_commit_count": 6,
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs == {
+        "issueRef": "MoonLadderStudios/Tactics#2231",
+        "decision": "blocked",
+        "pushStatus": "pushed",
+        "commitCount": 6,
+        "summary": (
+            "Skipped GitHub issue finalization because repository changes were "
+            "published without an authoritative pull request URL."
+        ),
+    }
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_uses_pr_url_from_publish_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2231,
+            "mode": "finalize_after_pr_or_done",
+            "requireVerification": False,
+            "previousOutputs": {
+                "publishContext": {
+                    "pushStatus": "pushed",
+                    "commitCount": 6,
+                    "pullRequestUrl": (
+                        "https://github.com/MoonLadderStudios/Tactics/pull/2240"
+                    ),
+                },
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
+    assert service.token_requests == [
+        "MoonLadderStudios/Tactics",
+        "MoonLadderStudios/Tactics",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("require_verification", [None, "", "   "])
 async def test_update_github_issue_status_requires_verification_for_blank_values(
     tmp_path,

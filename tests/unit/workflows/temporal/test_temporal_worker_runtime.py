@@ -3592,6 +3592,50 @@ def test_runtime_planner_preserves_jira_implement_pr_handoff_instructions():
     assert "commit your work" not in pr_node["inputs"]["instructions"]
 
 
+def test_runtime_planner_preserves_github_issue_pr_handoff_instructions():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement GitHub issue org/repo#2231.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "github-issue-implement"}],
+                "steps": [
+                    {
+                        "id": "implement",
+                        "title": "Implement",
+                        "instructions": "Implement the GitHub issue.",
+                    },
+                    {
+                        "id": "create-pr",
+                        "title": "Create pull request",
+                        "annotations": {
+                            "issueImplementRole": "pull-request-handoff",
+                        },
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
+    assert pr_node["inputs"]["publishMode"] == "pr"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
+
 @pytest.mark.parametrize("step_index", [12, 13])
 def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_step_id_fallback(
     step_index,

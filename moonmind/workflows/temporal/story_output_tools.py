@@ -5019,6 +5019,8 @@ def _github_status_pull_request_url(
 ) -> str:
     previous_outputs = _github_status_previous_outputs(inputs, context)
     previous_metadata = _mapping(previous_outputs.get("metadata"))
+    publish_context = _mapping(previous_outputs.get("publishContext"))
+    snake_publish_context = _mapping(previous_outputs.get("publish_context"))
     return _first_string(
         inputs.get("pullRequestUrl"),
         inputs.get("pull_request_url"),
@@ -5030,8 +5032,51 @@ def _github_status_pull_request_url(
         previous_metadata.get("pull_request_url"),
         previous_metadata.get("prUrl"),
         previous_metadata.get("pr_url"),
+        publish_context.get("pullRequestUrl"),
+        publish_context.get("pull_request_url"),
+        publish_context.get("prUrl"),
+        publish_context.get("pr_url"),
+        snake_publish_context.get("pullRequestUrl"),
+        snake_publish_context.get("pull_request_url"),
+        snake_publish_context.get("prUrl"),
+        snake_publish_context.get("pr_url"),
         _pull_request_url_from_artifact_path(inputs, context),
     )
+
+
+def _github_status_publish_change_evidence(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, int]:
+    previous_outputs = _github_status_previous_outputs(inputs, context)
+    sources = (
+        inputs,
+        previous_outputs,
+        _mapping(previous_outputs.get("metadata")),
+        _mapping(previous_outputs.get("publishContext")),
+        _mapping(previous_outputs.get("publish_context")),
+    )
+    push_status = ""
+    commit_count = 0
+    for source in sources:
+        candidate_status = _first_string(
+            source.get("push_status"),
+            source.get("pushStatus"),
+        ).lower()
+        if candidate_status:
+            push_status = candidate_status
+        raw_count = source.get("push_commit_count")
+        if raw_count is None:
+            raw_count = source.get("pushCommitCount")
+        if raw_count is None:
+            raw_count = source.get("commitCount")
+        if isinstance(raw_count, bool):
+            continue
+        if isinstance(raw_count, (int, float)):
+            commit_count = max(commit_count, int(raw_count))
+        elif isinstance(raw_count, str) and raw_count.strip().isdigit():
+            commit_count = max(commit_count, int(raw_count.strip()))
+    return push_status, commit_count
 
 
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
@@ -5102,6 +5147,26 @@ async def update_github_issue_status(
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
+        push_status, commit_count = _github_status_publish_change_evidence(
+            inputs,
+            _context,
+        )
+        if not pull_request_url and (
+            push_status in {"pushed", "published"} or commit_count > 0
+        ):
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "pushStatus": push_status,
+                    "commitCount": commit_count,
+                    "summary": (
+                        "Skipped GitHub issue finalization because repository changes "
+                        "were published without an authoritative pull request URL."
+                    ),
+                },
+            )
         if pull_request_url and require_verification:
             if not (
                 inputs.get("verificationArtifactPath")
