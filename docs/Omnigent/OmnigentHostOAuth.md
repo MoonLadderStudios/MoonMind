@@ -10,6 +10,7 @@ Implementation progress belongs in the roadmap, issues, and pull requests. This 
 
 ## Related documents
 
+- [`docs/Omnigent/CodexCreateToHostContract.md`](./CodexCreateToHostContract.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
 - [`docs/ManagedAgents/OAuthTerminal.md`](../ManagedAgents/OAuthTerminal.md)
