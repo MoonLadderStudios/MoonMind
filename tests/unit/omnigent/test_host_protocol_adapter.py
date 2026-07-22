@@ -70,6 +70,24 @@ def test_encodes_exact_stock_host_launch_and_stop_commands() -> None:
     assert json.loads(stop)["kind"] == "host.stop_runner"
 
 
+def test_supports_stock_host_install_harness_frames() -> None:
+    adapter = OmnigentHostProtocolAdapter()
+    frames = adapter.frames
+
+    request = adapter.encode_server_frame(
+        frames.HostInstallHarnessFrame(request_id="req_install_1", harness="codex")
+    )
+    result = adapter.decode_host_frame(
+        '{"kind":"host.install_harness_result","request_id":"req_install_1",'
+        '"status":"ok",'
+        '"configured_harnesses":{"codex":true}}'
+    )
+
+    assert json.loads(request)["kind"] == "host.install_harness"
+    assert isinstance(result, frames.HostInstallHarnessResultFrame)
+    assert result.status == "ok"
+
+
 def test_rejects_incompatible_misdirected_and_oversized_frames() -> None:
     adapter = OmnigentHostProtocolAdapter()
     incompatible = _fixture("host_hello.json").replace(
