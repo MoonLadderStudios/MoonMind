@@ -853,6 +853,8 @@ services:
         required: false
     volumes:
       - omnigent-host-state:/root/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/root/.cache
       - omnigent-tools:/opt/moonmind-tools:ro
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
@@ -1194,6 +1196,8 @@ volumes:
     name: ${MOONMIND_SECRETS_VOLUME_NAME:-moonmind_secrets}
   unreal_ccache_volume:
     name: unreal_ccache_volume
+  omnigent-host-artifacts:
+  omnigent-host-cache:
   unreal_ubt_volume:
     name: unreal_ubt_volume
   codex_auth_volume:

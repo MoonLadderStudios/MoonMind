@@ -279,7 +279,12 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_RESOURCES_UNREALIZABLE",
             )
         required_mounts = {
-            "workspace", "oauth_home", "omnigent_state", "skills_tools"
+            "workspace",
+            "oauth_home",
+            "omnigent_state",
+            "skills_tools",
+            "artifacts",
+            "cache",
         }
         if set(launch.get("mountClasses") or ()) != required_mounts:
             raise OmnigentOAuthHostError(
@@ -393,6 +398,12 @@ class OmnigentOAuthHostRuntime:
         await self._run(
             "docker", "volume", "rm", "-f", f"{container_name}-state", check=False
         )
+        await self._run(
+            "docker", "volume", "rm", "-f", f"{container_name}-artifacts", check=False
+        )
+        await self._run(
+            "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
+        )
 
     async def stop_static_host(self) -> None:
         """Stop the static credential consumer even when no host lease is active."""
@@ -452,6 +463,12 @@ class OmnigentOAuthHostRuntime:
         await self._run(
             "docker", "volume", "rm", "-f", f"{container_name}-state", check=False
         )
+        await self._run(
+            "docker", "volume", "rm", "-f", f"{container_name}-artifacts", check=False
+        )
+        await self._run(
+            "docker", "volume", "rm", "-f", f"{container_name}-cache", check=False
+        )
 
     async def _launch_on_demand(
         self,
@@ -469,6 +486,8 @@ class OmnigentOAuthHostRuntime:
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
+        artifacts_volume = f"{container_name}-artifacts"
+        cache_volume = f"{container_name}-cache"
         host_image_ref = str(effective_launch["hostImageRef"])
         host_path = await self._discover_upstream_path(host_image_ref)
         # A retry may find a stopped container with this deterministic name.
@@ -501,6 +520,10 @@ class OmnigentOAuthHostRuntime:
             f"type=volume,src={mount.auth_volume_ref.volume_ref},dst=/home/app/.codex",
             "--mount",
             f"type=volume,src={state_volume},dst=/home/app/.omnigent",
+            "--mount",
+            f"type=volume,src={artifacts_volume},dst=/artifacts",
+            "--mount",
+            f"type=volume,src={cache_volume},dst=/home/app/.cache",
             "--mount",
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--entrypoint",
@@ -549,6 +572,10 @@ class OmnigentOAuthHostRuntime:
             f"type=volume,src={mount.auth_volume_ref.volume_ref},dst=/home/app/.codex",
             "--mount",
             f"type=volume,src={state_volume},dst=/home/app/.omnigent",
+            "--mount",
+            f"type=volume,src={artifacts_volume},dst=/artifacts",
+            "--mount",
+            f"type=volume,src={cache_volume},dst=/home/app/.cache",
             "--mount",
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--mount",

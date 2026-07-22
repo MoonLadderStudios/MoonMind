@@ -394,6 +394,12 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
     ) in commands[2]
     assert (
+        "type=volume,src=mm-host-lease-1-artifacts,dst=/artifacts"
+    ) in commands[2]
+    assert (
+        "type=volume,src=mm-host-lease-1-cache,dst=/home/app/.cache"
+    ) in commands[2]
+    assert (
         "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:"
         "/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     ) in commands[2]
@@ -619,7 +625,13 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         policy_ref="codex-static@1",
         provider_profile_id="codex",
     )
-    await runtime._compose_static_check(effective_launch=launch)
+    workspace = tmp_path / "authorized-workspace"
+    skills = tmp_path / "authorized-skills"
+    await runtime._compose_static_check(
+        workspace_source=workspace,
+        skill_projection=skills,
+        effective_launch=launch,
+    )
     await runtime.stop_static_host()
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -659,6 +671,24 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         ),
     ]
     assert all("docker-compose.codex-host.yaml" not in command for command in commands)
+    start_env = runtime._run.await_args_list[0].kwargs["env"]
+    assert start_env["OMNIGENT_RUN_WORKSPACE"] == str(workspace)
+    assert start_env["OMNIGENT_ACTIVE_SKILLS_DIR"] == str(skills)
+
+
+def test_static_codex_compose_separates_authorized_mount_classes() -> None:
+    compose = (Path(__file__).resolve().parents[3] / "docker-compose.yaml").read_text(
+        encoding="utf-8"
+    )
+    service = compose.split("  omnigent-host-codex:", 1)[1].split(
+        "  omnigent-host-claude:", 1
+    )[0]
+
+    assert "${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run" in service
+    assert "${OMNIGENT_ACTIVE_SKILLS_DIR" in service
+    assert "omnigent-tools:/opt/moonmind-tools:ro" in service
+    assert "omnigent-host-artifacts:/artifacts" in service
+    assert "omnigent-host-cache:/root/.cache" in service
 
 
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:
