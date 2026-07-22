@@ -541,7 +541,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     return {
       ...mockPayload,
       initialData: {
-        ...mockPayload.initialData,
         dashboardConfig: {
           ...mockDashboardConfig,
           system: {
@@ -588,7 +587,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     const payload = {
       ...mockPayload,
       initialData: {
-        ...mockPayload.initialData,
         dashboardConfig: {
           ...mockDashboardConfig,
           system: {
@@ -722,7 +720,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   });
 
   it("rejects a selection revoked by no-cache submit-time readiness without substitution", async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/omnigent/codex-catalog-readiness") {
         readinessRequests += 1;
