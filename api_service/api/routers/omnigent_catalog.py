@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
@@ -26,6 +27,8 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
+    ProviderProfileSlotLease,
     User,
 )
 from moonmind.config.container_backend_settings import (
@@ -35,6 +38,7 @@ from moonmind.config.container_backend_settings import (
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
 from moonmind.omnigent.host_auth_profile import HostAuthProfileError, host_auth_readiness
+from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
@@ -65,6 +69,13 @@ class EligibleProviderProfile(BaseModel):
     queue_when_busy: bool = Field(alias="queueWhenBusy")
 
 
+class IneligibleProviderProfile(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    profile_id: str = Field(alias="profileId")
+    label: str
+    gate_reasons: list[GateReason] = Field(alias="gateReasons")
+
+
 class ExecutionProfileReadiness(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     ref: str
@@ -92,6 +103,9 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     eligible_provider_profiles: list[EligibleProviderProfile] = Field(
         alias="eligibleProviderProfiles"
     )
+    ineligible_provider_profiles: list[IneligibleProviderProfile] = Field(
+        alias="ineligibleProviderProfiles"
+    )
     host_modes: list[str] = Field(alias="hostModes")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
@@ -100,6 +114,7 @@ _REASONS: dict[str, tuple[str, str]] = {
     "bridge_disabled": ("Enable the Omnigent bridge in deployment settings.", "/settings#omnigent"),
     "bridge_conformance_gated": ("Complete Omnigent bridge conformance checks.", "/settings#omnigent"),
     "bridge_endpoint_unavailable": ("Configure the selected Omnigent endpoint.", "/settings#omnigent"),
+    "rollout_gate_disabled": ("Enable the Omnigent runtime rollout gate.", "/settings#omnigent"),
     "host_auth_unavailable": ("Configure or rotate Omnigent bridge credentials.", "/settings#omnigent"),
     "no_eligible_codex_oauth_profile": ("Connect and validate a Codex OAuth Provider Profile.", "/settings#provider-profiles"),
     "execution_profile_unavailable": ("Enable a compatible Omnigent execution profile.", "/settings#omnigent"),
@@ -108,6 +123,9 @@ _REASONS: dict[str, tuple[str, str]] = {
     "immutable_image_unavailable": ("Configure immutable Omnigent server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
+    "profile_reconnect_required": ("Reconnect this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
+    "profile_validation_required": ("Validate this Codex OAuth Provider Profile.", "/settings#provider-profiles"),
+    "profile_capacity_unavailable": ("Wait for Provider Profile capacity or enable queued execution.", "/settings#provider-profiles"),
 }
 
 
@@ -122,6 +140,14 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
         return [_reason("bridge_disabled")]
     if bridge.get("conformanceState") != "ready":
         reasons.append(_reason("bridge_conformance_gated"))
+    runtime_gate = build_omnigent_gate()
+    if not runtime_gate.enabled:
+        reasons.append(_reason("rollout_gate_disabled"))
+    if (
+        config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
+        and not resolved_server_url()
+    ):
+        reasons.append(_reason("bridge_endpoint_unavailable"))
     if os.getenv("MOONMIND_WORKSPACE_RESOLVER_ENABLED", "true").lower() not in {
         "1", "true", "yes", "on"
     }:
@@ -129,11 +155,36 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
     return reasons
 
 
-def _images_ready() -> bool:
-    return all(
-        _DIGEST_IMAGE.fullmatch(os.getenv(name, "").strip())
-        for name in ("OMNIGENT_IMAGE_REF", "OMNIGENT_HOST_IMAGE_REF")
-    )
+def _policy_images_ready(policy: Any) -> bool:
+    values = []
+    for value, variable in (
+        (policy.server_image_ref, "OMNIGENT_IMAGE_REF"),
+        (policy.host_image_ref, "OMNIGENT_HOST_IMAGE_REF"),
+    ):
+        values.append(
+            os.getenv(variable, "").strip()
+            if value.startswith("bootstrap://")
+            else value
+        )
+    return all(_DIGEST_IMAGE.fullmatch(value) for value in values)
+
+
+def _profile_gate_codes(readiness: dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    for check in readiness.get("checks", []):
+        if check.get("status") != "error":
+            continue
+        check_id = str(check.get("id") or "")
+        code = (
+            "profile_reconnect_required"
+            if check_id in {"auth_state", "oauth_volume", "secret_refs"}
+            else "profile_capacity_unavailable"
+            if check_id in {"concurrency", "cooldown"}
+            else "profile_validation_required"
+        )
+        if code not in codes:
+            codes.append(code)
+    return codes
 
 
 @router.get(
@@ -164,16 +215,42 @@ async def get_omnigent_codex_catalog_readiness(
         if not auth.get("ready"):
             deployment_reasons.append(_reason("host_auth_unavailable"))
 
-    rows = list((await session.execute(
-        select(ManagedAgentProviderProfile).where(
-            ManagedAgentProviderProfile.runtime_id == "codex_cli"
+    rows = list(
+        (
+            await session.execute(
+                select(ManagedAgentProviderProfile).where(
+                    ManagedAgentProviderProfile.runtime_id == "codex_cli"
+                )
+            )
         )
-    )).scalars().all())
+        .scalars()
+        .all()
+    )
     secret_results = _secret_ref_results_for_rows(rows)
     secret_statuses = await _managed_secret_statuses_for_rows(
         session, rows, secret_ref_results=secret_results
     )
+    active_slots = list(
+        (
+            await session.execute(
+                select(ProviderProfileSlotLease).where(
+                    ProviderProfileSlotLease.runtime_id == "codex_cli"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    active_slot_counts: dict[str, int] = {}
+    now = datetime.now(UTC)
+    for slot in active_slots:
+        if slot.expires_at is None or slot.expires_at > now:
+            active_slot_counts[slot.profile_id] = (
+                active_slot_counts.get(slot.profile_id, 0) + 1
+            )
+
     eligible: list[EligibleProviderProfile] = []
+    ineligible: list[IneligibleProviderProfile] = []
     for row in rows:
         credential_source = getattr(row.credential_source, "value", row.credential_source)
         materialization = getattr(
@@ -184,31 +261,68 @@ async def get_omnigent_codex_catalog_readiness(
             managed_secret_statuses=secret_statuses,
             secret_ref_results=secret_results.get(row.profile_id),
         )
-        if (
-            credential_source == "oauth_volume"
-            and materialization == "oauth_home"
-            and readiness["launch_ready"]
-        ):
-            eligible.append(EligibleProviderProfile(
-                profileId=row.profile_id,
-                label=str(redact_sensitive_payload(
-                    row.account_label or row.provider_label or row.profile_id
-                )),
-                providerId=row.provider_id,
-                busy=False,
-                queueWhenBusy=getattr(row.rate_limit_policy, "value", row.rate_limit_policy) == "queue",
-            ))
+        label = str(
+            redact_sensitive_payload(
+                row.account_label or row.provider_label or row.profile_id
+            )
+        )
+        busy = active_slot_counts.get(row.profile_id, 0) >= (row.max_parallel_runs or 1)
+        queue_when_busy = (
+            getattr(row.rate_limit_policy, "value", row.rate_limit_policy) == "queue"
+        )
+        compatible = (
+            credential_source == "oauth_volume" and materialization == "oauth_home"
+        )
+        if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
+            eligible.append(
+                EligibleProviderProfile(
+                    profileId=row.profile_id,
+                    label=label,
+                    providerId=row.provider_id,
+                    busy=busy,
+                    queueWhenBusy=queue_when_busy,
+                )
+            )
+        elif compatible:
+            codes = _profile_gate_codes(readiness)
+            if (
+                busy
+                and not queue_when_busy
+                and "profile_capacity_unavailable" not in codes
+            ):
+                codes.append("profile_capacity_unavailable")
+            ineligible.append(
+                IneligibleProviderProfile(
+                    profileId=row.profile_id,
+                    label=label,
+                    gateReasons=[
+                        _reason(code)
+                        for code in codes or ["profile_validation_required"]
+                    ],
+                )
+            )
 
-    bindings = list((await session.execute(select(OmnigentOAuthHostBindingRecord))).scalars().all())
+    bindings = list(
+        (await session.execute(select(OmnigentOAuthHostBindingRecord))).scalars().all()
+    )
+    host_leases = list(
+        (await session.execute(select(OmnigentOAuthHostLeaseRecord))).scalars().all()
+    )
+    static_profile_ids = {
+        binding.provider_profile_id for binding in bindings if binding.static_host_id
+    }
     static_ready = any(
-        binding.static_host_id and binding.host_launch_profile_ref == "static"
-        for binding in bindings
+        lease.provider_profile_id in static_profile_ids
+        and lease.status in {"ready", "assigned"}
+        and lease.expires_at > now
+        and lease.disconnected_at is None
+        and (lease.host_readiness or lease.status) in {"ready", "assigned"}
+        for lease in host_leases
     )
     try:
         backend_ready = resolve_container_backend_settings().enabled
     except ContainerBackendConfigError:
         backend_ready = False
-    images_ready = _images_ready()
 
     profile_views: list[ExecutionProfileReadiness] = []
     available_modes: list[str] = []
@@ -220,7 +334,7 @@ async def get_omnigent_codex_catalog_readiness(
             policy_reasons: list[GateReason] = []
             if not policy.enabled:
                 policy_reasons.append(_reason("execution_profile_unavailable"))
-            if not images_ready:
+            if not _policy_images_ready(policy):
                 policy_reasons.append(_reason("immutable_image_unavailable"))
             if not policy.enforced_egress or not policy.network_ref:
                 policy_reasons.append(_reason("network_policy_unavailable"))
@@ -252,6 +366,7 @@ async def get_omnigent_codex_catalog_readiness(
         defaultExecutionProfileRef=next(iter(PROFILES)),
         executionProfiles=profile_views,
         eligibleProviderProfiles=eligible,
+        ineligibleProviderProfiles=ineligible,
         hostModes=sorted(set(available_modes)),
         gateReasons=top_reasons,
     )

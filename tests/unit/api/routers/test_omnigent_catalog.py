@@ -1,5 +1,6 @@
 """MoonLadderStudios/MoonMind#3451 catalog boundary coverage."""
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -28,8 +29,10 @@ class _Result:
 
 
 class _Session:
-    def __init__(self, profiles, bindings=()):
-        self._results = iter((_Result(profiles), _Result(bindings)))
+    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=()):
+        self._results = iter((
+            _Result(profiles), _Result(slots), _Result(bindings), _Result(host_leases)
+        ))
 
     async def execute(self, _statement):
         return next(self._results)
@@ -44,6 +47,7 @@ def _profile(**overrides):
         "credential_source": SimpleNamespace(value="oauth_volume"),
         "runtime_materialization_mode": SimpleNamespace(value="oauth_home"),
         "rate_limit_policy": SimpleNamespace(value="queue"),
+        "max_parallel_runs": 1,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -59,7 +63,7 @@ def _config(*, enabled=True):
     )
 
 
-def _app(monkeypatch, *, session, enabled=True, launch_ready=True):
+def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setattr(catalog, "get_bridge_config", lambda: _config(enabled=enabled))
     monkeypatch.setattr(catalog, "_secret_ref_results_for_rows", lambda rows: {r.profile_id: {} for r in rows})
 
@@ -70,7 +74,7 @@ def _app(monkeypatch, *, session, enabled=True, launch_ready=True):
     monkeypatch.setattr(
         catalog,
         "_provider_profile_readiness",
-        lambda *_args, **_kwargs: {"launch_ready": launch_ready},
+        lambda *_args, **_kwargs: readiness or {"launch_ready": True, "checks": []},
     )
     monkeypatch.setattr(
         catalog,
@@ -79,10 +83,12 @@ def _app(monkeypatch, *, session, enabled=True, launch_ready=True):
     )
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
     monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64)
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
     app = FastAPI()
     app.include_router(catalog.router)
     app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
-        id=None, is_superuser=True
+        id=None, is_superuser=superuser
     )
     app.dependency_overrides[get_async_session] = lambda: session
     return app
@@ -109,13 +115,14 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
         "busy": False,
         "queueWhenBusy": True,
     }]
+    assert body["ineligibleProviderProfiles"] == []
 
 
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):
     secret = "github_pat_SHOULD_NOT_ESCAPE"
     profile = _profile(account_label=secret)
     client = TestClient(_app(
-        monkeypatch, session=_Session([profile]), enabled=False, launch_ready=True
+        monkeypatch, session=_Session([profile]), enabled=False
     ))
 
     response = client.get("/api/omnigent/codex-catalog-readiness")
@@ -136,3 +143,99 @@ def test_catalog_requires_authentication():
     app.include_router(catalog.router)
     response = TestClient(app).get("/api/omnigent/codex-catalog-readiness")
     assert response.status_code in {401, 403}
+
+
+def test_catalog_reports_mixed_profile_reconnect_and_capacity(monkeypatch):
+    reconnect = _profile(profile_id="reconnect")
+    busy = _profile(
+        profile_id="busy", rate_limit_policy=SimpleNamespace(value="reject")
+    )
+    slot = SimpleNamespace(
+        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
+    )
+
+    def profile_readiness(row, **_kwargs):
+        if row.profile_id == "reconnect":
+            return {
+                "launch_ready": False,
+                "checks": [{"id": "auth_state", "status": "error"}],
+            }
+        return {"launch_ready": True, "checks": []}
+
+    app = _app(
+        monkeypatch,
+        session=_Session([reconnect, busy], slots=[slot]),
+    )
+    monkeypatch.setattr(catalog, "_provider_profile_readiness", profile_readiness)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["eligibleProviderProfiles"] == []
+    assert {
+        item["profileId"]: {reason["code"] for reason in item["gateReasons"]}
+        for item in body["ineligibleProviderProfiles"]
+    } == {
+        "reconnect": {"profile_reconnect_required"},
+        "busy": {"profile_capacity_unavailable"},
+    }
+
+
+def test_busy_profile_is_eligible_when_queueing_is_permitted(monkeypatch):
+    profile = _profile(profile_id="busy")
+    slot = SimpleNamespace(
+        profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
+    )
+    body = TestClient(_app(
+        monkeypatch, session=_Session([profile], slots=[slot])
+    )).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["eligibleProviderProfiles"][0]["busy"] is True
+    assert body["eligibleProviderProfiles"][0]["queueWhenBusy"] is True
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"OMNIGENT_ENABLED": "false"}, "rollout_gate_disabled"),
+        ({"OMNIGENT_SERVER_URL": ""}, "bridge_endpoint_unavailable"),
+        ({"MOONMIND_WORKSPACE_RESOLVER_ENABLED": "false"}, "workspace_resolver_unavailable"),
+        ({"OMNIGENT_IMAGE_REF": "mutable:latest"}, "immutable_image_unavailable"),
+    ],
+)
+def test_catalog_projects_authoritative_deployment_gates(
+    monkeypatch, environment, expected
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert expected in {reason["code"] for reason in body["gateReasons"]}
+
+
+def test_static_policy_requires_live_connected_host_lease(monkeypatch):
+    binding = SimpleNamespace(provider_profile_id="codex-oauth", static_host_id="opaque")
+    stale_lease = SimpleNamespace(
+        provider_profile_id="codex-oauth",
+        status="ready",
+        host_readiness="ready",
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        disconnected_at=None,
+    )
+    body = TestClient(_app(
+        monkeypatch,
+        session=_Session([_profile()], bindings=[binding], host_leases=[stale_lease]),
+    )).get("/api/omnigent/codex-catalog-readiness").json()
+
+    profile = body["executionProfiles"][0]
+    assert "static_host_not_ready" in {reason["code"] for reason in profile["gateReasons"]}
+    assert body["hostModes"] == ["on_demand_docker"]
+
+
+def test_catalog_denies_caller_without_provider_profile_permission(monkeypatch):
+    response = TestClient(_app(
+        monkeypatch, session=_Session([]), superuser=False
+    )).get("/api/omnigent/codex-catalog-readiness")
+    assert response.status_code == 403

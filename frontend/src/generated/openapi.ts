@@ -8144,6 +8144,15 @@ export interface components {
             /** Collections */
             collections: components["schemas"]["IndexCollectionHealthModel"][];
         };
+        /** IneligibleProviderProfile */
+        IneligibleProviderProfile: {
+            /** Profileid */
+            profileId: string;
+            /** Label */
+            label: string;
+            /** Gatereasons */
+            gateReasons: components["schemas"]["GateReason"][];
+        };
         /**
          * IntegrationCallbackRequest
          * @description Generic provider callback payload resolved through correlation storage.
@@ -8891,6 +8900,8 @@ export interface components {
             executionProfiles: components["schemas"]["ExecutionProfileReadiness"][];
             /** Eligibleproviderprofiles */
             eligibleProviderProfiles: components["schemas"]["EligibleProviderProfile"][];
+            /** Ineligibleproviderprofiles */
+            ineligibleProviderProfiles: components["schemas"]["IneligibleProviderProfile"][];
             /** Hostmodes */
             hostModes: string[];
             /** Gatereasons */
