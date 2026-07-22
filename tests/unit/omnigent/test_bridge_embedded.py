@@ -166,7 +166,7 @@ def test_embedded_host_auth_delegates_upstream_runner_tunnel_token() -> None:
     )
 
     assert context.auth_mode == "upstream_runner_tunnel"
-    assert context.protocol_profile == "omnigent.runner_tunnel.7da32637"
+    assert context.protocol_profile == "omnigent.runner_tunnel.3e88237c"
     assert context.runner_id.startswith("runner_token_")
 
 
@@ -302,7 +302,7 @@ async def test_registration_rejects_runner_identity_substitution(store) -> None:
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="runner-authenticated",
         credential_generation=1,
     )
@@ -333,7 +333,7 @@ async def test_register_and_heartbeat_return_embedded_bridge_shape(store) -> Non
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="runner-1",
         credential_generation=1,
     )
@@ -366,7 +366,7 @@ async def test_heartbeat_without_status_preserves_ready_host(store) -> None:
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="runner-1",
         credential_generation=1,
     )
@@ -389,7 +389,7 @@ async def test_registration_rejects_host_without_profile_bound_lease(store) -> N
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="unbound-host",
         credential_generation=1,
     )
@@ -416,7 +416,7 @@ async def test_registration_rejects_expired_profile_bound_lease(store) -> None:
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="expired-host",
         credential_generation=1,
     )
@@ -443,7 +443,7 @@ async def test_heartbeat_rejects_lease_after_provider_profile_rotation(store) ->
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="stale-host",
         credential_generation=1,
         credential_profile_id="managed-host-auth",
@@ -575,7 +575,7 @@ async def test_embedded_session_events_append_to_same_bridge_event_model(store) 
         ),
         auth=EmbeddedHostAuthContext(
             auth_mode="upstream_runner_tunnel",
-            protocol_profile="omnigent.runner_tunnel.7da32637",
+            protocol_profile="omnigent.runner_tunnel.3e88237c",
             runner_id="host-1",
             credential_generation=1,
         ),
@@ -772,7 +772,7 @@ async def test_embedded_session_events_use_artifact_journals_and_compact_index(
     )
     auth = EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
-        protocol_profile="omnigent.runner_tunnel.7da32637",
+        protocol_profile="omnigent.runner_tunnel.3e88237c",
         runner_id="host-1",
         credential_generation=1,
     )

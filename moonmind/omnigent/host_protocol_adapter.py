@@ -50,6 +50,7 @@ class OmnigentHostProtocolAdapter:
             self._frames.HostRemoveWorktreeResultFrame,
             self._frames.HostListWorktreesResultFrame,
             self._frames.HostCreateDirResultFrame,
+            self._frames.HostInstallHarnessResultFrame,
         )
         if not isinstance(frame, allowed):
             raise UpstreamHostProtocolError("server-to-host frame received from host")
@@ -72,6 +73,7 @@ class OmnigentHostProtocolAdapter:
             self._frames.HostRemoveWorktreeFrame,
             self._frames.HostListWorktreesFrame,
             self._frames.HostCreateDirFrame,
+            self._frames.HostInstallHarnessFrame,
         )
         if not isinstance(frame, allowed):
             raise UpstreamHostProtocolError("host-to-server frame cannot be sent")
