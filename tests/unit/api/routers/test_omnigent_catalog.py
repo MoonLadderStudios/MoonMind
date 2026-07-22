@@ -63,6 +63,7 @@ def _profile(**overrides):
         "runtime_materialization_mode": SimpleNamespace(value="oauth_home"),
         "rate_limit_policy": SimpleNamespace(value="queue"),
         "max_parallel_runs": 1,
+        "owner_user_id": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -97,7 +98,7 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
         lambda: SimpleNamespace(enabled=True),
     )
     async def live_readiness():
-        return True, {"moonmind_local-network"}
+        return True, {"local-network"}
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
@@ -234,10 +235,40 @@ def test_catalog_projects_authoritative_deployment_gates(
     assert expected in {reason["code"] for reason in body["gateReasons"]}
 
 
+def test_catalog_rejects_placeholder_image_digests(monkeypatch):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "0" * 64
+    )
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert "immutable_image_unavailable" in {
+        reason["code"] for reason in body["gateReasons"]
+    }
+
+
+def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
+    visible = _profile(profile_id="visible", owner_user_id=None)
+    hidden = _profile(profile_id="hidden", owner_user_id="other-user")
+    app = _app(monkeypatch, session=_Session([visible, hidden]))
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id="current-user", is_superuser=False
+    )
+    monkeypatch.setattr(catalog, "_require_provider_profile_permission", lambda *_: None)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
+        "visible"
+    ]
+
+
 @pytest.mark.parametrize(
     ("live_readiness", "expected"),
     [
-        ((False, {"moonmind_local-network"}), "bridge_endpoint_unavailable"),
+        ((False, {"local-network"}), "bridge_endpoint_unavailable"),
         ((True, set()), "network_policy_unavailable"),
     ],
 )
@@ -265,7 +296,7 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
             "taskQueues": ["mm.activity.agent_runtime"],
             "containerBackend": {
                 "ready": True,
-                "enforcedNetworkRefs": ["moonmind_local-network"],
+                "enforcedNetworkRefs": ["local-network"],
             },
         }),
     ])
@@ -288,7 +319,7 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
 
     assert await catalog._live_deployment_readiness() == (
         True,
-        {"moonmind_local-network"},
+        {"local-network"},
     )
 
 

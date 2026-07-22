@@ -2635,6 +2635,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    container_job_backend = None
+    enforced_network_refs: list[str] = []
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
@@ -2822,6 +2824,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             topology.fleet,
             ", ".join(binding_descriptors) if binding_descriptors else "(none)",
         )
+        resources.container_job_backend = container_job_backend  # type: ignore[attr-defined]
+        resources.enforced_network_refs = tuple(enforced_network_refs)  # type: ignore[attr-defined]
         return resources, [
             binding.handler for binding in bindings
         ] + [
@@ -2980,6 +2984,12 @@ async def main_async() -> None:
         health_state.workers_constructed = True
         health_state.readiness_metadata = spec.readiness_payload()
         if topology.fleet == AGENT_RUNTIME_FLEET:
+            container_job_backend = getattr(
+                runtime_resources, "container_job_backend", None
+            )
+            enforced_network_refs = getattr(
+                runtime_resources, "enforced_network_refs", ()
+            )
             health_state.readiness_metadata["containerBackend"] = {
                 "ready": container_job_backend is not None,
                 "enforcedNetworkRefs": sorted(set(enforced_network_refs)),

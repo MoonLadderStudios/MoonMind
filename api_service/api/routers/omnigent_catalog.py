@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.provider_profiles import (
+    _can_view_profile,
     _managed_secret_statuses_for_rows,
     _provider_profile_readiness,
     _require_provider_profile_permission,
@@ -169,6 +170,8 @@ async def _live_deployment_readiness() -> tuple[bool, set[str]]:
                 response = await client.get(endpoint.rstrip("/") + "/health")
                 endpoint_ready = response.status_code < 400
         except (httpx.HTTPError, ValueError):
+            # Readiness is fail-closed; an unreachable optional endpoint is
+            # represented by endpoint_ready=False in the catalog response.
             pass
 
     worker_url = os.getenv(
@@ -193,6 +196,8 @@ async def _live_deployment_readiness() -> tuple[bool, set[str]]:
             str(value) for value in backend.get("enforcedNetworkRefs", [])
         }
     except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        # Readiness is fail-closed; malformed or unavailable worker metadata
+        # must not advertise launch authority.
         pass
     return endpoint_ready, enforced_network_refs if backend_ready else set()
 
@@ -208,7 +213,12 @@ def _policy_images_ready(policy: Any) -> bool:
             if value.startswith("bootstrap://")
             else value
         )
-    return all(_DIGEST_IMAGE.fullmatch(value) for value in values)
+    placeholder_digest = "0" * 64
+    return all(
+        _DIGEST_IMAGE.fullmatch(value)
+        and not value.endswith(f"@sha256:{placeholder_digest}")
+        for value in values
+    )
 
 
 def _profile_gate_codes(readiness: dict[str, Any]) -> list[str]:
@@ -276,6 +286,7 @@ async def get_omnigent_codex_catalog_readiness(
         .scalars()
         .all()
     )
+    rows = [row for row in rows if _can_view_profile(row, current_user)]
     secret_results = _secret_ref_results_for_rows(rows)
     secret_statuses = await _managed_secret_statuses_for_rows(
         session, rows, secret_ref_results=secret_results

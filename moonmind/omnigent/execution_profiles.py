@@ -128,7 +128,7 @@ _SERVER_IMAGE = "bootstrap://OMNIGENT_IMAGE_REF"
 _COMMON = dict(
     serverImageRef=_SERVER_IMAGE,
     hostImageRef=_IMAGE,
-    networkRef="moonmind_local-network",
+    networkRef="local-network",
     enforcedEgress=True,
     limits={
         "cpuMillis": 2000,

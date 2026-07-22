@@ -69,7 +69,7 @@ def test_policy_rejects_mutable_image_before_launch() -> None:
             hostMode="on_demand_docker",
             serverImageRef="omnigent:latest",
             hostImageRef="host:latest",
-            networkRef="moonmind_local-network",
+            networkRef="local-network",
             enforcedEgress=True,
             limits={
                 "cpuMillis": 1,
