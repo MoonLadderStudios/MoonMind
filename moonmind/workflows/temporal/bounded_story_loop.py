@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+import hashlib
 from typing import Any, Literal
 
 from pydantic import (
@@ -244,6 +245,107 @@ class LoopAttempt(_ContractModel):
     @property
     def publication_allowed(self) -> bool:
         return self.commit_allowed
+
+
+class CandidateWorkspaceHead(_ContractModel):
+    """Compact MoonMind-owned authority for one cumulative candidate workspace."""
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    loop_id: str = Field(alias="loopId", min_length=1)
+    attempt_ordinal: int = Field(alias="attemptOrdinal", ge=0)
+    checkpoint_ref: ArtifactRef = Field(alias="checkpointRef")
+    checkpoint_digest: str = Field(
+        alias="checkpointDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    parent_head_digest: str | None = Field(
+        default=None,
+        alias="parentHeadDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    head_digest: str = Field(alias="headDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("checkpoint_ref")
+    @classmethod
+    def _checkpoint_ref_is_ref(cls, value: str) -> str:
+        return _require_ref(value, field_name="checkpointRef")
+
+    @model_validator(mode="after")
+    def _validate_chain_identity(self) -> "CandidateWorkspaceHead":
+        if self.attempt_ordinal == 0 and self.parent_head_digest is not None:
+            raise ValueError("loop root must not declare parentHeadDigest")
+        if self.attempt_ordinal > 0 and self.parent_head_digest is None:
+            raise ValueError("advanced candidate head requires parentHeadDigest")
+        expected = _candidate_head_digest(
+            loop_id=self.loop_id,
+            attempt_ordinal=self.attempt_ordinal,
+            checkpoint_ref=self.checkpoint_ref,
+            checkpoint_digest=self.checkpoint_digest,
+            parent_head_digest=self.parent_head_digest,
+        )
+        if self.head_digest != expected:
+            raise ValueError("candidate head digest does not match chained workspace identity")
+        return self
+
+
+def advance_candidate_workspace_head(
+    *,
+    previous: CandidateWorkspaceHead | None,
+    loop_id: str,
+    attempt_ordinal: int,
+    checkpoint_ref: ArtifactRef,
+    checkpoint_digest: str,
+) -> CandidateWorkspaceHead:
+    """Create the only valid next head; only ordinal zero may start at loop root."""
+
+    normalized_loop_id = str(loop_id or "").strip()
+    if not normalized_loop_id:
+        raise ValueError("loopId is required")
+    if previous is None:
+        if attempt_ordinal != 0:
+            raise ValueError("only the loop root may advance without a previous head")
+        parent_digest = None
+    else:
+        if previous.loop_id != normalized_loop_id:
+            raise ValueError("candidate head belongs to a different loop")
+        if attempt_ordinal != previous.attempt_ordinal + 1:
+            raise ValueError("candidate head attempt must advance exactly once")
+        parent_digest = previous.head_digest
+    head_digest = _candidate_head_digest(
+        loop_id=normalized_loop_id,
+        attempt_ordinal=attempt_ordinal,
+        checkpoint_ref=checkpoint_ref,
+        checkpoint_digest=checkpoint_digest,
+        parent_head_digest=parent_digest,
+    )
+    return CandidateWorkspaceHead(
+        loopId=normalized_loop_id,
+        attemptOrdinal=attempt_ordinal,
+        checkpointRef=checkpoint_ref,
+        checkpointDigest=checkpoint_digest,
+        parentHeadDigest=parent_digest,
+        headDigest=head_digest,
+    )
+
+
+def _candidate_head_digest(
+    *,
+    loop_id: str,
+    attempt_ordinal: int,
+    checkpoint_ref: str,
+    checkpoint_digest: str,
+    parent_head_digest: str | None,
+) -> str:
+    canonical = "\x00".join(
+        (
+            "moonmind-candidate-workspace-head-v1",
+            loop_id,
+            str(attempt_ordinal),
+            parent_head_digest or "",
+            checkpoint_ref,
+            checkpoint_digest,
+        )
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 class LoopStopDecision(_ContractModel):

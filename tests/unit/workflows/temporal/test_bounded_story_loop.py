@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
+    CandidateWorkspaceHead,
     CompiledBoundedStoryLoop,
     LoopAttempt,
     LoopBudget,
@@ -15,6 +16,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     PublicationDecision,
     ProviderLeaseDecision,
     TypedGateResult,
+    advance_candidate_workspace_head,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
     evaluate_attempt_preflight,
@@ -135,6 +137,62 @@ def test_additional_work_needed_requires_durable_remaining_work_ref() -> None:
         match="ADDITIONAL_WORK_NEEDED requires remainingWorkRef durable evidence",
     ):
         _gate(remainingWorkRef=None)
+
+
+def test_candidate_workspace_head_advances_from_latest_durable_checkpoint() -> None:
+    root = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+    advanced = advance_candidate_workspace_head(
+        previous=root,
+        loop_id="mm:loop-1",
+        attempt_ordinal=1,
+        checkpoint_ref="artifact://checkpoint/attempt-1",
+        checkpoint_digest="sha256:" + "2" * 64,
+    )
+
+    assert root.parent_head_digest is None
+    assert advanced.parent_head_digest == root.head_digest
+    assert advanced.head_digest != root.head_digest
+    assert CandidateWorkspaceHead.model_validate(
+        advanced.model_dump(by_alias=True)
+    ) == advanced
+
+
+def test_candidate_workspace_head_rejects_fallback_fork_and_tampering() -> None:
+    root = advance_candidate_workspace_head(
+        previous=None,
+        loop_id="mm:loop-1",
+        attempt_ordinal=0,
+        checkpoint_ref="artifact://checkpoint/root",
+        checkpoint_digest="sha256:" + "1" * 64,
+    )
+
+    with pytest.raises(ValueError, match="only the loop root"):
+        advance_candidate_workspace_head(
+            previous=None,
+            loop_id="mm:loop-1",
+            attempt_ordinal=2,
+            checkpoint_ref="artifact://checkpoint/original-root",
+            checkpoint_digest="sha256:" + "1" * 64,
+        )
+    with pytest.raises(ValueError, match="advance exactly once"):
+        advance_candidate_workspace_head(
+            previous=root,
+            loop_id="mm:loop-1",
+            attempt_ordinal=2,
+            checkpoint_ref="artifact://checkpoint/fork",
+            checkpoint_digest="sha256:" + "2" * 64,
+        )
+
+    tampered = root.model_dump(by_alias=True)
+    tampered["checkpointRef"] = "artifact://checkpoint/substituted"
+    with pytest.raises(ValidationError, match="digest does not match"):
+        CandidateWorkspaceHead.model_validate(tampered)
 
 def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
     failed = _attempt()
