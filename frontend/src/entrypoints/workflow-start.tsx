@@ -584,6 +584,27 @@ interface ProviderProfile {
   tags?: string[] | null;
 }
 
+interface OmnigentCatalogGateReason {
+  code: string;
+  message: string;
+  remediationHref: string;
+}
+
+interface OmnigentCodexCatalogReadiness {
+  schemaVersion: "moonmind.omnigent-codex-readiness.v1";
+  runtimeId: "omnigent";
+  displayName: string;
+  available: boolean;
+  eligibleProviderProfiles: Array<{
+    profileId: string;
+    label: string;
+    providerId: string;
+    busy: boolean;
+    queueWhenBusy: boolean;
+  }>;
+  gateReasons: OmnigentCatalogGateReason[];
+}
+
 interface ProviderModelEffortTier {
   label?: string | null;
   model?: string | null;
@@ -3016,6 +3037,7 @@ const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
   claude_code: "Claude Code",
   codex_cli: "Codex CLI",
   codex_cloud: "Codex Cloud",
+  omnigent: "Codex via Omnigent",
 };
 
 function formatRuntimeLabel(runtimeId: string): string {
@@ -5794,6 +5816,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.providerProfiles?.list ||
       "/api/v1/provider-profiles",
   );
+  const omnigentCatalogEndpoint = "/api/omnigent/codex-catalog-readiness";
   const configuredDefaultProviderProfileRef =
     dashboardConfig.system?.providerProfiles?.defaultProfileRef ?? null;
   const presetCatalog = dashboardConfig.system?.presetCatalog;
@@ -5898,6 +5921,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     {};
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedAgentRuntimes || ["codex_cli", "claude_code"];
+  const runtimeOptions = Array.from(new Set([...supportedAgentRuntimes, "omnigent"]));
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -6308,7 +6332,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       return (await response.json()) as ProviderProfile[];
     },
-    enabled: Boolean(runtime),
+    enabled: Boolean(runtime) && runtime !== "omnigent",
     // Keep the previously loaded profiles visible while a runtime switch
     // refetches. Without this, the query key change empties `data`, which
     // collapses the Runtime/Provider-profile row from `grid-2` to `stack`
@@ -6316,9 +6340,38 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     placeholderData: keepPreviousData,
   });
 
+  const omnigentCatalogQuery = useQuery({
+    queryKey: ["workflow-start", "omnigent-codex-catalog-readiness"],
+    queryFn: async (): Promise<OmnigentCodexCatalogReadiness> => {
+      const response = await fetch(omnigentCatalogEndpoint, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Failed to load Omnigent readiness."));
+      }
+      return (await response.json()) as OmnigentCodexCatalogReadiness;
+    },
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+
+  const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
+    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).map((profile) => ({
+        profile_id: profile.profileId,
+        account_label: profile.label,
+        provider_id: profile.providerId,
+        enabled: true,
+        launch_ready: true,
+      }))
+    : (providerProfilesQuery.data || []);
+
   useEffect(() => {
-    const profiles = providerProfilesQuery.data || [];
-    if (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching) {
+    const profiles = activeProviderProfiles;
+    if (
+      (runtime === "omnigent" && omnigentCatalogQuery.isFetching) ||
+      (runtime !== "omnigent" && (providerProfilesQuery.isLoading || providerProfilesQuery.isFetching))
+    ) {
       return;
     }
     const resolvedProfileId = resolveLoadedProviderProfileId({
@@ -6337,6 +6390,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     providerProfilesQuery.data,
     providerProfilesQuery.isFetching,
     providerProfilesQuery.isLoading,
+    omnigentCatalogQuery.data,
+    omnigentCatalogQuery.isFetching,
+    runtime,
     configuredDefaultProviderProfileRef,
   ]);
 
@@ -7815,7 +7871,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     [persistedObjectiveAttachments, steps],
   );
 
-  const providerOptions = [...(providerProfilesQuery.data || [])]
+  const providerOptions = [...activeProviderProfiles]
     .sort((left, right) => {
       const leftDefault = Boolean(left.is_default);
       const rightDefault = Boolean(right.is_default);
@@ -7840,7 +7896,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
     ? undefined
-    : (providerProfilesQuery.data || []).find(
+    : activeProviderProfiles.find(
         (profile) => profile.profile_id === providerProfile,
       );
   const workflowTierPreview = previewModelTier(
@@ -12935,12 +12991,24 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               value={runtime}
               onChange={(event) => setRuntime(event.target.value)}
             >
-              {supportedAgentRuntimes.map((runtimeOption) => (
-                <option key={runtimeOption} value={runtimeOption}>
+              {runtimeOptions.map((runtimeOption) => (
+                <option
+                  key={runtimeOption}
+                  value={runtimeOption}
+                  disabled={runtimeOption === "omnigent" && omnigentCatalogQuery.data?.available !== true}
+                >
                   {formatRuntimeLabel(runtimeOption)}
                 </option>
               ))}
             </select>
+            {omnigentCatalogQuery.data?.available === false ? (
+              <span className="small" role="status">
+                Codex via Omnigent is unavailable: {omnigentCatalogQuery.data.gateReasons[0]?.message || "readiness checks failed."}{" "}
+                <button type="button" onClick={() => void omnigentCatalogQuery.refetch()}>
+                  Refresh readiness
+                </button>
+              </span>
+            ) : null}
           </label>
 
           {providerOptions.length > 0 ? (

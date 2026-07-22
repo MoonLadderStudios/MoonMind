@@ -500,6 +500,54 @@ const mockPayload: BootPayload = {
   },
 };
 
+describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
+  let fetchSpy: MockInstance;
+  let readinessRequests: number;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Create Workflow", "/workflows/new");
+    readinessRequests = 0;
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+            runtimeId: "omnigent",
+            displayName: "Codex via Omnigent",
+            available: false,
+            eligibleProviderProfiles: [],
+            gateReasons: [{
+              code: "no_eligible_codex_oauth_profile",
+              message: "Connect and validate a Codex OAuth Provider Profile.",
+              remediationHref: "/settings#provider-profiles",
+            }],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+  });
+
+  afterEach(() => fetchSpy.mockRestore());
+
+  it("keeps an unavailable runtime unselectable and explicitly revalidates stale readiness", async () => {
+    renderWorkflowStartPage(mockPayload);
+
+    const option = await screen.findByRole("option", { name: "Codex via Omnigent" });
+    await waitFor(() => expect((option as HTMLOptionElement).disabled).toBe(true));
+    expect(screen.getByText(/Connect and validate a Codex OAuth Provider Profile/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh readiness" }));
+    await waitFor(() => expect(readinessRequests).toBe(2));
+  });
+});
+
 const historicalRuntimeCommand = {
   kind: "slash_command",
   sourcePath: "objective.instructions",
