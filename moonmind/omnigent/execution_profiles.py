@@ -229,6 +229,28 @@ def compile_effective_launch(
     return payload
 
 
+def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
+    """Reject mutated or credential-bearing snapshots before they become authority."""
+
+    payload = dict(snapshot)
+    supplied_ref = str(payload.pop("snapshotRef", ""))
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    expected_ref = "omnigent-launch:sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+    if supplied_ref != expected_ref:
+        raise OmnigentOAuthHostError(
+            "effective launch snapshot digest does not match its content",
+            code="OMNIGENT_EFFECTIVE_LAUNCH_CONFLICT",
+        )
+    serialized = canonical.lower()
+    if any(marker in serialized for marker in ("credential", "password", "token", "docker.sock")):
+        raise OmnigentOAuthHostError(
+            "effective launch snapshot contains forbidden authority",
+            code="OMNIGENT_EFFECTIVE_LAUNCH_FORBIDDEN_AUTHORITY",
+        )
+
+
 def selection_from_request(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[str | None, str | None]:

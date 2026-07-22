@@ -155,6 +155,7 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
         bridgeSessionId="bridge-1",
         externalStateRef="artifact-external-state",
         idempotencyKey="idem-1",
+        effectiveLaunchRef="omnigent-launch:sha256:" + "0" * 64,
     )
 
 
@@ -338,6 +339,11 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         container_name="mm-host-lease-1",
         workspace_source=tmp_path,
         skill_projection=tmp_path / "skills",
+        effective_launch=compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex",
+        ),
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -483,7 +489,12 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
     )
     runtime._run = AsyncMock(return_value=(0, "", ""))
 
-    await runtime._compose_static_check()
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    await runtime._compose_static_check(effective_launch=launch)
     await runtime.stop_static_host()
 
     commands = [call.args for call in runtime._run.await_args_list]

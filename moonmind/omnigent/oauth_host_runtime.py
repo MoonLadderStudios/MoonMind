@@ -17,6 +17,7 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_mounted_tools,
@@ -147,7 +148,9 @@ class OmnigentOAuthHostRuntime:
             await self._exec_check(container_name)
             await self._exec_tools_check(container_name)
         else:
-            await self._compose_static_check(skill_projection=skill_projection)
+            await self._compose_static_check(
+                skill_projection=skill_projection, effective_launch=launch
+            )
 
         host = await self._resolve_exact_host(binding=binding, host_lease=host_lease)
         host_id = str(host.get("id") or host.get("host_id") or host.get("hostId") or "")
@@ -208,6 +211,7 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_EFFECTIVE_LAUNCH_REQUIRED",
             )
         launch = dict(effective_launch)
+        validate_effective_launch_snapshot(launch)
         expected_mode = (
             "on_demand_docker" if binding.host_launch_profile_ref else "static_compose"
         )
@@ -458,6 +462,12 @@ class OmnigentOAuthHostRuntime:
             "moonmind.workflow_id": "activity-owned",
             "moonmind.credential_generation": str(host_lease.credential_generation),
             "moonmind.expires_at": host_lease.expires_at.isoformat(),
+            "moonmind.effective_launch_ref": str(effective_launch["snapshotRef"]),
+            "moonmind.capture_required": str(effective_launch["capture"]["required"]).lower(),
+            "moonmind.capture_retention_days": str(effective_launch["capture"]["retentionDays"]),
+            "moonmind.cleanup_mode": str(effective_launch["cleanup"]["mode"]),
+            "moonmind.control_capabilities": ",".join(effective_launch["controlCapabilities"]),
+            "moonmind.timeout_seconds": str(effective_launch["limits"]["timeoutSeconds"]),
         }
         args = [
             "docker",
@@ -477,6 +487,8 @@ class OmnigentOAuthHostRuntime:
             f"{effective_launch['limits']['memoryMiB']}m",
             "--pids-limit",
             str(effective_launch["limits"]["processes"]),
+            "--stop-timeout",
+            str(effective_launch["limits"]["timeoutSeconds"]),
             "--read-only",
             "--tmpfs",
             f"/tmp:rw,noexec,nosuid,size={effective_launch['limits']['temporaryStorageMiB']}m",
@@ -689,10 +701,44 @@ class OmnigentOAuthHostRuntime:
             "omnigent-tools-init",
         )
 
-    async def _compose_static_check(self, *, skill_projection: Path | None = None) -> None:
+    async def _compose_static_check(
+        self,
+        *,
+        skill_projection: Path | None = None,
+        effective_launch: Mapping[str, Any] | None = None,
+    ) -> None:
         child_env = dict(os.environ)
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
+        if effective_launch is not None:
+            child_env.update(
+                {
+                    "OMNIGENT_HOST_IMAGE_REF": str(effective_launch["hostImageRef"]),
+                    "OMNIGENT_IMAGE_REF": str(effective_launch["serverImageRef"]),
+                    "OMNIGENT_EFFECTIVE_LAUNCH_REF": str(effective_launch["snapshotRef"]),
+                    "OMNIGENT_HOST_CPU_LIMIT": str(
+                        int(effective_launch["limits"]["cpuMillis"]) / 1000
+                    ),
+                    "OMNIGENT_HOST_MEMORY_LIMIT": (
+                        f"{effective_launch['limits']['memoryMiB']}m"
+                    ),
+                    "OMNIGENT_HOST_PIDS_LIMIT": str(
+                        effective_launch["limits"]["processes"]
+                    ),
+                    "OMNIGENT_HOST_TMPFS_LIMIT": (
+                        f"{effective_launch['limits']['temporaryStorageMiB']}m"
+                    ),
+                    "OMNIGENT_HOST_TIMEOUT_SECONDS": str(
+                        effective_launch["limits"]["timeoutSeconds"]
+                    ),
+                    "OMNIGENT_CAPTURE_RETENTION_DAYS": str(
+                        effective_launch["capture"]["retentionDays"]
+                    ),
+                    "OMNIGENT_CONTROL_CAPABILITIES": ",".join(
+                        effective_launch["controlCapabilities"]
+                    ),
+                }
+            )
         await self._run(
             "docker",
             "compose",
