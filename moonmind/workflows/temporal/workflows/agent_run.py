@@ -330,6 +330,9 @@ PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID = (
     "agent-run-pr-resolver-merge-gate-ownership-v1"
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
+NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID = (
+    "agent-run-non-destructive-slot-wait-recovery-v1"
+)
 ACCURATE_SLOT_WAIT_REASON_PATCH_ID = "agent-run-accurate-slot-wait-reason-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
@@ -398,10 +401,10 @@ MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID = (
 # Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
-# How long to wait for a slot_assigned signal before assuming the manager is
-# stuck (e.g. nondeterminism error) and resetting it.
+# How long to wait for a slot_assigned signal before inspecting manager health
+# and performing bounded, non-destructive recovery.
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
-_SLOT_WAIT_MAX_RESETS = 3
+_SLOT_WAIT_MAX_RECOVERY_ATTEMPTS = 3
 _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS = 1800
 _CLAUDE_CODE_NO_PROGRESS_TIMEOUT_SECONDS = 2400
 _CLAUDE_CODE_NO_PROGRESS_GRACE_SECONDS = 900
@@ -2727,17 +2730,47 @@ class MoonMindAgentRun:
         request_priority: int | None = None,
         request_queue_metadata: dict[str, Any] | None = None,
     ) -> workflow.ExternalWorkflowHandle:
-        """Terminate a stuck manager, start a fresh one, and re-request a slot.
+        """Run the replay-only legacy recovery command and re-request a slot.
 
-        Called when the slot wait times out, indicating the manager may have a
-        nondeterminism error or other unrecoverable workflow task failure.
+        The activity type is retained for histories that already scheduled it,
+        but its implementation is non-destructive.
         """
         self._get_logger().warning(
-            "Slot wait timed out — resetting ProviderProfileManager %s",
+            "Slot wait timed out — invoking legacy non-destructive ProviderProfileManager recovery for %s",
             manager_id,
         )
         await self._execute_routed_activity(
             "provider_profile.reset_manager",
+            {"runtime_id": runtime_id},
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        return await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=True,
+            execution_profile_ref=execution_profile_ref,
+            profile_selector=profile_selector,
+            request_priority=request_priority,
+            request_queue_metadata=request_queue_metadata,
+        )
+
+    async def _recover_and_request_slot(
+        self,
+        manager_id: str,
+        runtime_id: str,
+        *,
+        execution_profile_ref: str | None = None,
+        profile_selector: dict | None = None,
+        request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
+    ) -> workflow.ExternalWorkflowHandle:
+        """Ensure the singleton exists and re-request without revoking leases."""
+        self._get_logger().warning(
+            "Slot wait timed out — ensuring ProviderProfileManager %s without resetting lease authority",
+            manager_id,
+        )
+        await self._execute_routed_activity(
+            "provider_profile.ensure_manager",
             {"runtime_id": runtime_id},
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
@@ -3938,8 +3971,8 @@ class MoonMindAgentRun:
                     # Wait for a provider-profile slot.
                     # Awaiting time does not count against the execution timeout;
                     # overall_start is reset once the slot is acquired.
-                    # If the manager is stuck (e.g. nondeterminism error), the
-                    # wait will time out and we reset the manager automatically.
+                    # If the manager appears unavailable, bounded recovery
+                    # ensures/re-requests it without terminating lease authority.
                     #
                     # NOTE: The slot_assigned signal may have arrived during
                     # _sync_manager_profiles (the activity gives the manager
@@ -3981,7 +4014,7 @@ class MoonMindAgentRun:
                             )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
-                        slot_resets = 0
+                        slot_recovery_attempts = 0
                         refresh_waiting_reason = False
                         while (
                             not self.slot_assigned_event.is_set()
@@ -4052,9 +4085,12 @@ class MoonMindAgentRun:
                                     refresh_waiting_reason = True
                                     continue
                             except TimeoutError:
-                                if slot_resets >= _SLOT_WAIT_MAX_RESETS:
+                                if (
+                                    slot_recovery_attempts
+                                    >= _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS
+                                ):
                                     raise ApplicationError(
-                                        f"Auth profile slot not assigned after {_SLOT_WAIT_MAX_RESETS} manager resets for runtime_id='{runtime_id}'",
+                                        f"Auth profile slot not assigned after {_SLOT_WAIT_MAX_RECOVERY_ATTEMPTS} manager recovery attempts for runtime_id='{runtime_id}'",
                                         type="SlotAcquisitionTimeout",
                                         non_retryable=True,
                                     )
@@ -4072,7 +4108,7 @@ class MoonMindAgentRun:
                                         raise
                                     except Exception as exc:
                                         self._get_logger().warning(
-                                            "Auth profile manager %s state inspection failed while %s waits for a slot; falling back to reset path: %s",
+                                            "Auth profile manager %s state inspection failed while %s waits for a slot; using non-destructive recovery: %s",
                                             manager_id,
                                             workflow.info().workflow_id,
                                             exc,
@@ -4115,20 +4151,36 @@ class MoonMindAgentRun:
                                         )
                                         continue
                                 self.slot_assigned_event.clear()
-                                manager_handle = await self._reset_and_request_slot(
-                                    manager_id,
-                                    runtime_id,
-                                    execution_profile_ref=request.execution_profile_ref,
-                                    profile_selector=selector_payload,
-                                    request_priority=self._request_priority(request),
-                                    request_queue_metadata=self._request_queue_metadata(request),
-                                )
+                                if workflow.patched(
+                                    NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID
+                                ):
+                                    manager_handle = (
+                                        await self._recover_and_request_slot(
+                                            manager_id,
+                                            runtime_id,
+                                            execution_profile_ref=request.execution_profile_ref,
+                                            profile_selector=selector_payload,
+                                            request_priority=self._request_priority(request),
+                                            request_queue_metadata=self._request_queue_metadata(request),
+                                        )
+                                    )
+                                else:
+                                    # Replay compatibility for histories that
+                                    # already scheduled the legacy activity.
+                                    manager_handle = await self._reset_and_request_slot(
+                                        manager_id,
+                                        runtime_id,
+                                        execution_profile_ref=request.execution_profile_ref,
+                                        profile_selector=selector_payload,
+                                        request_priority=self._request_priority(request),
+                                        request_queue_metadata=self._request_queue_metadata(request),
+                                    )
                                 await self._sync_manager_profiles(
                                     manager_id=manager_id,
                                     manager_handle=manager_handle,
                                     runtime_id=runtime_id,
                                 )
-                                slot_resets += 1
+                                slot_recovery_attempts += 1
                     else:
                         while not self.slot_assigned_event.is_set():
                             await workflow.wait_condition(

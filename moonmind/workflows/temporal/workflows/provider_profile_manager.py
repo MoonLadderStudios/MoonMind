@@ -69,6 +69,10 @@ CODEX_OAUTH_LEGACY_RESTORE_PATCH = (
 PURPOSE_AWARE_CREDENTIAL_LEASE_PATCH = (
     "provider-profile-manager-purpose-aware-credential-lease-v1"
 )
+FRESH_START_DB_LEASE_RESTORE_PATCH = (
+    "provider-profile-manager-fresh-start-db-lease-restore-v1"
+)
+DURABLE_LEASE_GRANT_PATCH = "provider-profile-manager-durable-lease-grant-v1"
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
@@ -686,7 +690,16 @@ class MoonMindProviderProfileManagerWorkflow:
                 metadata=lease_metadata,
             ):
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-                    await self._sync_leases_to_db()
+                    persisted = await self._sync_leases_to_db()
+                    if (
+                        workflow.patched(DURABLE_LEASE_GRANT_PATCH)
+                        and not persisted
+                    ):
+                        profile.release(requester_id)
+                        raise exceptions.ApplicationError(
+                            "Provider profile lease persistence failed before direct grant",
+                            type="ProviderProfileLeasePersistenceFailed",
+                        )
                 self._has_new_events = True
                 return {
                     "profile_id": profile.profile_id,
@@ -776,7 +789,16 @@ class MoonMindProviderProfileManagerWorkflow:
                 allow_unready=True,
             ):
                 if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-                    await self._sync_leases_to_db()
+                    persisted = await self._sync_leases_to_db()
+                    if (
+                        workflow.patched(DURABLE_LEASE_GRANT_PATCH)
+                        and not persisted
+                    ):
+                        profile.release(requester_id)
+                        raise exceptions.ApplicationError(
+                            "Provider profile lease persistence failed before maintenance grant",
+                            type="ProviderProfileLeasePersistenceFailed",
+                        )
                 return {
                     "profile_id": profile_id,
                     "lease_id": requester_id,
@@ -876,15 +898,25 @@ class MoonMindProviderProfileManagerWorkflow:
         if not self._profiles:
             await self._load_profiles_from_db()
 
-        # If we restored state from a crash (not continue-as-new), the
-        # pending_requests and current_leases would be empty in the input.
-        # In that case, try to restore leases from the database.
+        # A fresh singleton execution must restore the durable lease ledger
+        # before it drains requests. Signal handlers can populate the pending
+        # queue while the profile-list activity is in flight, so pending state
+        # is not evidence that startup lease recovery already happened.
         if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-            has_leases = any(p.current_leases for p in self._profiles.values())
-            has_pending = bool(self._pending_requests)
-            if not has_leases and not has_pending:
-                # This looks like a fresh start after a crash - try to restore leases from DB
-                await self._load_leases_from_db()
+            if workflow.patched(FRESH_START_DB_LEASE_RESTORE_PATCH):
+                if workflow.info().continued_run_id is None:
+                    leases_restored = await self._load_leases_from_db()
+                    if not leases_restored:
+                        raise exceptions.ApplicationError(
+                            "Provider profile lease recovery failed; refusing to grant capacity without the authoritative lease ledger",
+                            type="ProviderProfileLeaseRecoveryFailed",
+                            non_retryable=True,
+                        )
+            else:
+                has_leases = any(p.current_leases for p in self._profiles.values())
+                has_pending = bool(self._pending_requests)
+                if not has_leases and not has_pending:
+                    await self._load_leases_from_db()
 
         # Refresh restored state from the authoritative DB snapshot. This keeps
         # continued-as-new managers from routing to profiles deleted or changed
@@ -1307,6 +1339,7 @@ class MoonMindProviderProfileManagerWorkflow:
     async def _drain_queue(self) -> None:
         """Try to assign slots to pending requests in priority order."""
         now = workflow.now()
+        durable_grants = workflow.patched(DURABLE_LEASE_GRANT_PATCH)
         self._clear_expired_handoff_reservations(now)
         remaining: list[PendingRequest] = []
         leases_changed = False
@@ -1332,6 +1365,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     break
 
             if existing_profile_id:
+                if durable_grants and not await self._sync_leases_to_db():
+                    remaining.append(req)
+                    continue
                 try:
                     await self._signal_slot_assigned(
                         req.requester_workflow_id, existing_profile_id
@@ -1342,10 +1378,17 @@ class MoonMindProviderProfileManagerWorkflow:
                         req.requester_workflow_id,
                         e,
                     )
-                    self._profiles[existing_profile_id].release(
-                        req.requester_workflow_id
-                    )
-                    leases_changed = True
+                    if durable_grants:
+                        # Signal failure is ambiguous. Keep the durable lease
+                        # until workflow-status verification proves the owner
+                        # terminal; releasing here could authorize a second
+                        # credential consumer while the first is still alive.
+                        remaining.append(req)
+                    else:
+                        self._profiles[existing_profile_id].release(
+                            req.requester_workflow_id
+                        )
+                        leases_changed = True
                 continue
 
             profile = self._find_available_profile(
@@ -1360,6 +1403,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 metadata=req.lease_metadata,
             ):
                 leases_changed = True
+                if durable_grants and not await self._sync_leases_to_db():
+                    # Hold the in-memory reservation and retry persistence on
+                    # the next loop. Never signal a consumer before its lease
+                    # is durable.
+                    remaining.append(req)
+                    continue
                 try:
                     await self._signal_slot_assigned(
                         req.requester_workflow_id, profile.profile_id
@@ -1370,15 +1419,22 @@ class MoonMindProviderProfileManagerWorkflow:
                         req.requester_workflow_id,
                         e,
                     )
-                    profile.release(req.requester_workflow_id)
-                    leases_changed = True
+                    if durable_grants:
+                        remaining.append(req)
+                    else:
+                        profile.release(req.requester_workflow_id)
+                        leases_changed = True
             else:
                 remaining.append(req)
         self._pending_requests = remaining
         self._pending_requests_ordered = True
 
         # Persist lease changes to DB for crash recovery
-        if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+        if (
+            leases_changed
+            and not durable_grants
+            and workflow.patched(DB_LEASE_PERSISTENCE_PATCH)
+        ):
             await self._sync_leases_to_db()
 
     @staticmethod
@@ -1965,7 +2021,7 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             return False
 
-    async def _sync_leases_to_db(self) -> None:
+    async def _sync_leases_to_db(self) -> bool:
         """Persist current lease state to the database for crash recovery."""
         try:
             leases = []
@@ -1993,12 +2049,12 @@ class MoonMindProviderProfileManagerWorkflow:
                     maximum_attempts=3,
                 ),
             )
+            return True
         except Exception:
-            # If we can't persist leases, log but don't fail.
-            # The manager will still function, just without DB persistence.
             self._get_logger().warning(
-                "Failed to persist leases to DB, continuing without persistence"
+                "Failed to persist leases to DB; provider capacity remains blocked"
             )
+            return False
 
     async def _remove_lease_from_db(self, workflow_id: str) -> None:
         """Remove a single lease from the database."""
@@ -2024,7 +2080,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 "Failed to remove lease for %s from DB", workflow_id
             )
 
-    async def _load_leases_from_db(self) -> None:
+    async def _load_leases_from_db(self) -> bool:
         """Load persisted leases from DB and reconnect to running workflows.
 
         On manager startup (after a crash), we load leases from the DB and
@@ -2052,7 +2108,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._get_logger().info(
                     "No persisted leases found in DB for runtime %s", self._runtime_id
                 )
-                return
+                return True
 
             self._get_logger().info(
                 "Restoring %d persisted leases from DB for runtime %s",
@@ -2072,16 +2128,29 @@ class MoonMindProviderProfileManagerWorkflow:
                 if not wf_id or not profile_id:
                     continue
 
-                # Check if this profile still exists and is enabled
+                # Check if this profile still exists. A disabled profile must
+                # still retain an existing lease; disabled only prevents new
+                # grants. If the profile is missing entirely, the manager
+                # cannot safely establish the credential authority boundary.
                 profile = self._profiles.get(profile_id)
                 purpose = str(lease.get("purpose") or "execution_direct")
                 is_maintenance = purpose not in {
                     CredentialLeasePurpose.EXECUTION_DIRECT.value,
                     CredentialLeasePurpose.EXECUTION_OMNIGENT.value,
                 }
-                if not profile or (not profile.enabled and not is_maintenance):
+                durable_grants = workflow.patched(DURABLE_LEASE_GRANT_PATCH)
+                if not profile:
                     self._get_logger().warning(
-                        "Persisted lease for %s references unknown or disabled profile %s, skipping",
+                        "Persisted lease for %s references unknown profile %s",
+                        wf_id,
+                        profile_id,
+                    )
+                    if durable_grants:
+                        return False
+                    continue
+                if not durable_grants and not profile.enabled and not is_maintenance:
+                    self._get_logger().warning(
+                        "Persisted lease for %s references disabled profile %s, skipping",
                         wf_id,
                         profile_id,
                     )
@@ -2122,11 +2191,17 @@ class MoonMindProviderProfileManagerWorkflow:
                     self._get_logger().warning(
                         "Failed to reconnect to workflow %s: %s", wf_id, e
                     )
-                    # Release the lease since the workflow is likely dead
-                    profile.release(wf_id)
-                    await self._remove_lease_from_db(wf_id)
+                    if not durable_grants:
+                        # Preserve the old behavior for replaying histories
+                        # recorded before ambiguous reconnect failures became
+                        # fail-closed.
+                        profile.release(wf_id)
+                        await self._remove_lease_from_db(wf_id)
+
+            return True
 
         except Exception:
             self._get_logger().warning(
-                "Failed to load leases from DB, continuing without persisted state"
+                "Failed to load leases from DB; refusing unverified capacity"
             )
+            return False

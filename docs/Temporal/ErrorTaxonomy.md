@@ -218,11 +218,11 @@ Use when:
 
 - managed execution waits too long for provider-profile slot assignment
 - the manager appears stuck or unavailable after bounded recovery attempts
-- the orchestration path has exhausted its manager-reset or reacquisition strategy
+- the orchestration path has exhausted its non-destructive manager recovery or reacquisition strategy
 
 Examples:
 
-- `MoonMind.AgentRun` times out after repeated manager reset attempts
+- `MoonMind.AgentRun` times out after repeated manager ensure/reacquisition attempts
 - slot assignment never occurs despite a valid request and bounded retries
 
 Classification: **non-retryable** for the current attempt
