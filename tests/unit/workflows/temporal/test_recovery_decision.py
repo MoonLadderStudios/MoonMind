@@ -93,13 +93,35 @@ def test_codex_worktree_archive_restore_is_eligible() -> None:
 
 
 def test_omnigent_partial_evidence_distinguishes_session_from_workspace() -> None:
-    decision = _decision(checkpoint_kind="external_state_ref")
+    decision = _decision(
+        checkpoint_kind="external_state_ref",
+        live_session_id="session-1",
+        session_reachable=True,
+    )
 
     assert decision.eligible is False
     assert decision.session_recoverable is True
     assert decision.workspace_recoverable is False
     assert decision.authoritative_workspace_checkpoint_kind is None
     assert "workspace checkpoint evidence" in decision.partial_recovery_reason
+
+
+def test_workspace_decision_does_not_infer_session_evidence_from_capability() -> None:
+    decision = _decision()
+
+    assert decision.workspace_recoverable is True
+    assert decision.session_recoverable is False
+
+
+def test_same_session_decision_does_not_infer_workspace_evidence_from_capability() -> None:
+    decision = decide_same_session_recovery(
+        live_session_id="session-1",
+        session_reachable=True,
+        capabilities=resolve_runtime_execution_capabilities("omnigent"),
+    )
+
+    assert decision.session_recoverable is True
+    assert decision.workspace_recoverable is False
 
 
 def test_restore_kinds_without_activity_are_rejected_by_capability_schema() -> None:

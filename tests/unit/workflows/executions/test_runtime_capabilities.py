@@ -154,6 +154,13 @@ def test_omnigent_freezes_three_independent_ownership_planes() -> None:
     assert capability.workspace_state.locator_kinds == ("sandbox",)
     assert capability.workspace_state.restore_activity == "workspace.apply_checkpoint"
     assert capability.host_realization.workspace_mount_target == "/workspaces/run"
+    assert capability.host_realization.require_mode(
+        "on_demand_docker", repository_mutation=True, github_credentials=True
+    ).mode == "on_demand_docker"
+    with pytest.raises(RuntimeCapabilityError, match="does not isolate repository mutation"):
+        capability.host_realization.require_mode(
+            "static_compose", repository_mutation=True
+        )
 
 
 def test_v3_rejects_contradictory_flattened_workspace_claim() -> None:

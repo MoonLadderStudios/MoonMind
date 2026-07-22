@@ -39,6 +39,10 @@ from moonmind.provider_profiles.lease_client import (
 )
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeCapabilityError,
+    resolve_runtime_execution_capabilities,
+)
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
@@ -342,6 +346,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                     provider_profile_id=profile_id,
                 )
+            try:
+                host_capabilities = resolve_runtime_execution_capabilities(
+                    "omnigent"
+                ).host_realization
+                assert host_capabilities is not None
+                host_capabilities.require_mode(
+                    str(effective_launch["hostMode"]),
+                    repository_mutation=self._repository_mutation_required(request),
+                    github_credentials=self._github_mutation_required(request),
+                )
+            except RuntimeCapabilityError as exc:
+                raise OmnigentOAuthHostError(
+                    str(exc), code="OMNIGENT_HOST_MODE_CAPABILITY_UNSUPPORTED"
+                ) from exc
             await emit(
                 "effective_launch_compiled",
                 "completed",
@@ -941,6 +959,13 @@ class OmnigentProfileBoundExecutionCoordinator:
         side_effect = skill.get("sideEffect")
         return isinstance(side_effect, Mapping) and bool(
             str(side_effect.get("kind") or "").strip()
+        )
+
+    @staticmethod
+    def _repository_mutation_required(request: AgentExecutionRequest) -> bool:
+        parameters = request.parameters or {}
+        return bool(parameters.get("repositoryMutationRequired")) or (
+            OmnigentProfileBoundExecutionCoordinator._github_mutation_required(request)
         )
 
 

@@ -88,16 +88,48 @@ class WorkspaceStateCapability(BaseModel):
         return self
 
 
+class HostModeCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    mode: NonBlankStr
+    repository_mutation_isolated: bool = Field(False, alias="repositoryMutationIsolated")
+    github_credentials_isolated: bool = Field(False, alias="githubCredentialsIsolated")
+
+
 class HostRealizationCapability(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     owner: NonBlankStr
-    modes: tuple[str, ...] = ()
+    mode_capabilities: tuple[HostModeCapability, ...] = Field(
+        default=(), alias="modeCapabilities"
+    )
     lease_owner: str | None = Field(None, alias="leaseOwner")
     cleanup_owner: str | None = Field(None, alias="cleanupOwner")
     workspace_mount_target: str | None = Field(None, alias="workspaceMountTarget")
-    repository_mutation_isolated: bool = Field(False, alias="repositoryMutationIsolated")
-    github_credentials_isolated: bool = Field(False, alias="githubCredentialsIsolated")
+
+    @model_validator(mode="after")
+    def _validate_modes(self) -> "HostRealizationCapability":
+        modes = tuple(item.mode for item in self.mode_capabilities)
+        if len(modes) != len(set(modes)):
+            raise ValueError("host realization modes must be unique")
+        return self
+
+    def require_mode(
+        self, mode: str, *, repository_mutation: bool = False,
+        github_credentials: bool = False,
+    ) -> HostModeCapability:
+        selected = next((item for item in self.mode_capabilities if item.mode == mode), None)
+        if selected is None:
+            raise RuntimeCapabilityError(f"unsupported host realization mode '{mode}'")
+        if repository_mutation and not selected.repository_mutation_isolated:
+            raise RuntimeCapabilityError(
+                f"host realization mode '{mode}' does not isolate repository mutation"
+            )
+        if github_credentials and not selected.github_credentials_isolated:
+            raise RuntimeCapabilityError(
+                f"host realization mode '{mode}' does not isolate GitHub credentials"
+            )
+        return selected
 
 
 class RuntimeExecutionCapabilities(BaseModel):
@@ -315,11 +347,21 @@ _DESCRIPTORS = (
             },
         },
         hostRealization={
-            "owner": "moonmind", "modes": ("static_compose", "on_demand_docker"),
+            "owner": "moonmind", "modeCapabilities": (
+                {
+                    "mode": "static_compose",
+                    "repositoryMutationIsolated": False,
+                    "githubCredentialsIsolated": False,
+                },
+                {
+                    "mode": "on_demand_docker",
+                    "repositoryMutationIsolated": True,
+                    "githubCredentialsIsolated": True,
+                },
+            ),
             "leaseOwner": "integration.omnigent.profile_bound_execute",
             "cleanupOwner": "integration.omnigent.profile_bound_execute",
             "workspaceMountTarget": "/workspaces/run",
-            "repositoryMutationIsolated": True, "githubCredentialsIsolated": True,
         },
         supportsSameSessionContinuation=True,
         terminalContractIds=("omnigent_execution_terminal_v1",),

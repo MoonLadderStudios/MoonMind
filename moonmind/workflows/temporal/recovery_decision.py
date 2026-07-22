@@ -23,6 +23,7 @@ def decide_same_session_recovery(
     *,
     live_session_id: str | None,
     session_reachable: bool,
+    workspace_checkpoint_valid: bool = False,
     capabilities: RuntimeExecutionCapabilities | None,
     evidence: Sequence[Any] = (),
 ) -> RecoveryEligibilityDiagnosticModel:
@@ -53,14 +54,15 @@ def decide_same_session_recovery(
         capabilityDigest=capability_dump.get("capabilityDigest"),
         workspaceAuthority=capability_dump.get("workspaceAuthority"),
         sessionRecoverable=eligible,
-        workspaceRecoverable=bool(capabilities and capabilities.checkpoint_restore_kinds),
+        workspaceRecoverable=workspace_checkpoint_valid,
         authoritativeWorkspaceCheckpointKind=(
             capabilities.checkpoint_restore_kinds[0]
-            if capabilities and capabilities.checkpoint_restore_kinds else None
+            if workspace_checkpoint_valid and capabilities
+            and capabilities.checkpoint_restore_kinds else None
         ),
         partialRecoveryReason=(
             "Session continuity is unavailable; workspace recovery is independent."
-            if not eligible and capabilities and capabilities.checkpoint_restore_kinds else None
+            if not eligible and workspace_checkpoint_valid else None
         ),
         liveSessionId=live_session_id,
         supportsSameSessionContinuation=supported,
@@ -78,6 +80,8 @@ def decide_checkpoint_recovery(
     restore_route_registered: bool,
     artifact_valid: bool,
     side_effect_safe: bool,
+    live_session_id: str | None = None,
+    session_reachable: bool = False,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
     evidence: Sequence[Any] = (),
@@ -123,7 +127,8 @@ def decide_checkpoint_recovery(
         restoreActivity=capability_dump.get("checkpointRestoreActivity"),
         workspaceAuthority=capability_dump.get("workspaceAuthority"),
         sessionRecoverable=bool(
-            capabilities and capabilities.session_state
+            live_session_id and session_reachable and capabilities
+            and capabilities.session_state
             and capabilities.session_state.supports_live_reattach
         ),
         workspaceRecoverable=eligible,
@@ -132,7 +137,8 @@ def decide_checkpoint_recovery(
         ),
         partialRecoveryReason=(
             "Session state is recoverable, but authoritative workspace checkpoint evidence is unavailable."
-            if not eligible and capabilities and capabilities.session_state
+            if not eligible and live_session_id and session_reachable
+            and capabilities and capabilities.session_state
             and capabilities.session_state.supports_live_reattach else None
         ),
         sourceWorkflowId=source_workflow_id,
