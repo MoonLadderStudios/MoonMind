@@ -54,6 +54,9 @@ from api_service.db.models import (
 from moonmind.capabilities.input_contracts import validate_capability_inputs
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
 from moonmind.config.settings import settings
+from moonmind.config.container_backend_settings import (
+    resolve_container_backend_settings,
+)
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
     DeploymentUpdateLockManager,
@@ -85,9 +88,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
-)
-from moonmind.config.container_backend_settings import (
-    resolve_container_backend_settings,
 )
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.workers import (
@@ -121,6 +121,9 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     get_activity_route,
     resolve_external_adapter,
     external_adapter_execution_style,
+)
+from moonmind.workflows.temporal.workflows.merge_gate import (
+    DEFAULT_RESOLVER_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
@@ -1570,6 +1573,10 @@ def _build_runtime_planner():
             "instructions": instructions,
             "runtime": runtime_node,
         }
+        if selected_skill_name.lower() == "pr-resolver":
+            node_inputs["timeoutPolicy"] = {
+                "timeout_seconds": DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+            }
         if selected_skill_inputs:
             node_inputs["inputs"] = dict(selected_skill_inputs)
         node_inputs.update(selected_skill_evidence)
@@ -2040,6 +2047,8 @@ def _build_runtime_planner():
                     if is_agent_runtime_step and has_explicit_step_skill
                     else ""
                 )
+                if effective_step_skill_name.lower() != "pr-resolver":
+                    step_node_inputs.pop("timeoutPolicy", None)
                 if is_agent_runtime_step and has_explicit_step_skill:
                     step_node_inputs["selectedSkill"] = step_tool_name
                     step_skill_payload = _coerce_mapping(step_entry.get("skill"))

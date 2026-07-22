@@ -2975,7 +2975,83 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+    assert node_inputs["timeoutPolicy"] == {"timeout_seconds": 9000}
     assert plan["metadata"]["title"] == "fix/my-feature-branch"
+
+
+def test_runtime_planner_pr_resolver_timeout_reaches_agent_execution_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "inputs": {"pr": "1434"},
+                "runtime": {"mode": "codex_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        workflow_info,
+    )
+
+    node = plan["nodes"][0]
+    request = MoonMindUserWorkflow()._build_agent_execution_request(
+        node_inputs=node["inputs"],
+        node_id=node["id"],
+        tool_name=node["tool"]["name"],
+    )
+
+    assert request.timeout_policy == {"timeout_seconds": 9000}
+
+
+def test_runtime_planner_pr_resolver_timeout_is_not_inherited_by_other_steps():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "inputs": {"pr": "1434"},
+                "runtime": {"mode": "codex_cli"},
+                "steps": [
+                    {
+                        "id": "generic",
+                        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                        "instructions": "Perform generic work.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "jira-issue-creator",
+                        },
+                        "instructions": "Create a Jira issue.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert all("timeoutPolicy" not in node["inputs"] for node in plan["nodes"])
 
 
 def test_runtime_planner_pr_resolver_uses_non_default_git_branch_as_selector():

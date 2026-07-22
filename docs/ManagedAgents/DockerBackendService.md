@@ -617,11 +617,13 @@ For the MoonMind repository, managed agents run Python verification with:
 moonmind container python-tests tests/unit/path/test_file.py
 ```
 
-The container-job API remains disabled by default until the deployment has
-provisioned the Docker backend and an authority boundary that binds callers to
-managed workspaces. Operators enable it explicitly with
-`MOONMIND_CONTAINER_JOBS_ENABLED=true`. When `AUTH_PROVIDER` requires
-authentication, the managed-session credential boundary supplies a scoped
+The canonical local Compose deployment enables the container-job API by default
+because it provisions the Docker backend, Python test image readiness gate, and
+the authority boundary that binds callers to managed workspaces. Other
+deployments remain fail-closed and enable it explicitly with
+`MOONMIND_CONTAINER_JOBS_ENABLED=true` after provisioning those boundaries.
+When `AUTH_PROVIDER` requires authentication, the managed-session credential
+boundary supplies a scoped
 Bearer credential as `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it
 on every MCP request. An authenticated deployment must not expose a shared or
 deployment-wide token to managed sessions.
