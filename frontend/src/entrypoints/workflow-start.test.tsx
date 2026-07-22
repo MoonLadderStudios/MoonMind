@@ -546,6 +546,58 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh readiness" }));
     await waitFor(() => expect(readinessRequests).toBe(2));
   });
+
+  it("gates a busy Omnigent selection and hides unsupported model authority", async () => {
+    const payload = {
+      ...mockPayload,
+      initialData: {
+        ...mockPayload.initialData,
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            omnigentExecutionCatalog: {
+              profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1" }],
+              policies: [{ ref: "on-demand-v1", hostMode: "on_demand_docker" }],
+            },
+          },
+        },
+      },
+    } as BootPayload;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+            runtimeId: "omnigent",
+            displayName: "Codex via Omnigent",
+            available: true,
+            defaultExecutionProfileRef: "omnigent-codex-default",
+            executionProfiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", available: true, policyRefs: ["on-demand-v1"], gateReasons: [] }],
+            eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", busy: true, queueWhenBusy: false }],
+            ineligibleProviderProfiles: [],
+            gateReasons: [],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+
+    expect(await screen.findByText(/busy and does not support queued waiting/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText("Workflow model tier intent")).toBeNull();
+    expect(screen.queryByLabelText("Hard override model")).toBeNull();
+    expect(document.querySelector('[name="hostId"], [name*="volume"], [name*="token"]')).toBeNull();
+  });
 });
 
 const historicalRuntimeCommand = {

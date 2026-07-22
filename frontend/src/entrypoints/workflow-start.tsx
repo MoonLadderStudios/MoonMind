@@ -611,6 +611,11 @@ interface OmnigentCodexCatalogReadiness {
     busy: boolean;
     queueWhenBusy: boolean;
   }>;
+  ineligibleProviderProfiles: Array<{
+    profileId: string;
+    label: string;
+    gateReasons: OmnigentCatalogGateReason[];
+  }>;
   gateReasons: OmnigentCatalogGateReason[];
 }
 
@@ -6344,7 +6349,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       return (await response.json()) as ProviderProfile[];
     },
-    enabled: Boolean(runtime) && runtime !== "omnigent",
+    // Omnigent eligibility comes exclusively from the readiness catalog, but
+    // the normal profile response remains the authority for model/effort
+    // capabilities. Load it for Codex and intersect the two below.
+    enabled: Boolean(runtime),
     // Keep the previously loaded profiles visible while a runtime switch
     // refetches. Without this, the query key change empties `data`, which
     // collapses the Runtime/Provider-profile row from `grid-2` to `stack`
@@ -6369,13 +6377,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
-    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).map((profile) => ({
-        profile_id: profile.profileId,
-        account_label: profile.label,
-        provider_id: profile.providerId,
-        enabled: true,
-        launch_ready: true,
-      }))
+    ? (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).map((profile) => {
+        const capabilityProfile = (providerProfilesQuery.data || []).find(
+          (candidate) => candidate.profile_id === profile.profileId,
+        );
+        return {
+          ...capabilityProfile,
+          profile_id: profile.profileId,
+          account_label: profile.label,
+          provider_id: profile.providerId,
+          enabled: true,
+          launch_ready: true,
+        };
+      })
     : (providerProfilesQuery.data || []);
 
   useEffect(() => {
@@ -7929,12 +7943,47 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectableOmnigentPolicies = omnigentPolicies.filter((policy) =>
     selectedOmnigentReadiness?.policyRefs.includes(String(policy.ref || "")),
   );
+  const selectedEligibleOmnigentProfile = (omnigentCatalogQuery.data?.eligibleProviderProfiles || []).find(
+    (profile) => profile.profileId === providerProfile,
+  );
+  const historicalOmnigentProviderProfile = (omnigentCatalogQuery.data?.ineligibleProviderProfiles || []).find(
+    (profile) => profile.profileId === providerProfile,
+  );
+  const selectedOmnigentPolicyAvailable = selectableOmnigentPolicies.some(
+    (policy) => policy.ref === omnigentLaunchPolicyRef,
+  );
+  const omnigentSelectionGateReason =
+    selectedOmnigentReadiness?.gateReasons?.[0]?.message ||
+    historicalOmnigentProviderProfile?.gateReasons?.[0]?.message ||
+    omnigentCatalogQuery.data?.gateReasons?.[0]?.message ||
+    (!selectedEligibleOmnigentProfile
+      ? "Choose an eligible Codex OAuth Provider Profile."
+      : selectedEligibleOmnigentProfile.busy && !selectedEligibleOmnigentProfile.queueWhenBusy
+          ? "The selected Provider Profile is busy and does not support queued waiting."
+          : !selectedOmnigentPolicyAvailable
+            ? "Choose a compatible Omnigent host policy."
+            : null);
+  const omnigentSelectionEligible =
+    runtime !== "omnigent" ||
+    (omnigentCatalogQuery.data?.available === true &&
+      selectedOmnigentReadiness?.available === true &&
+      Boolean(selectedEligibleOmnigentProfile) &&
+      selectedOmnigentPolicyAvailable &&
+      !(selectedEligibleOmnigentProfile?.busy && !selectedEligibleOmnigentProfile.queueWhenBusy));
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
     ? undefined
     : activeProviderProfiles.find(
         (profile) => profile.profile_id === providerProfile,
       );
+  const selectedProfileSupportsModelControls =
+    runtime !== "omnigent" ||
+    Boolean(
+      selectedProviderProfileForPreview &&
+        ((selectedProviderProfileForPreview.model_tiers?.length || 0) > 0 ||
+          selectedProviderProfileForPreview.default_model ||
+          selectedProviderProfileForPreview.default_effort),
+    );
   const workflowTierPreview = previewModelTier(
     selectedProviderProfileForPreview,
     modelTier,
@@ -9861,7 +9910,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         return;
       }
     }
-    const submittedModelTierValue = modelTier.trim();
+    const submittedModelTierValue = selectedProfileSupportsModelControls ? modelTier.trim() : "";
     const submittedModelTier = Number.parseInt(submittedModelTierValue, 10);
     const hasSubmittedModelTier = submittedModelTierValue !== "";
     if (
@@ -10845,8 +10894,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
-    const submittedModel = modelManualOverride ? model.trim() : "";
-    const submittedEffort = effortManualOverride ? effort.trim() : "";
+    const submittedModel = selectedProfileSupportsModelControls && modelManualOverride ? model.trim() : "";
+    const submittedEffort = selectedProfileSupportsModelControls && effortManualOverride ? effort.trim() : "";
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -11279,6 +11328,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const isTemporalFormBlocked =
     pageMode.mode !== "create" &&
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
+  const isSubmitBlocked =
+    isTemporalFormBlocked || (runtime === "omnigent" && !omnigentSelectionEligible);
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
@@ -13103,13 +13154,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   {runtime !== "omnigent" && providerProfilesQuery.isPlaceholderData ? (
                     <option value="">Loading profiles…</option>
                   ) : (
-                    providerOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.isDefault
-                          ? `${option.label} (Default)`
-                          : option.label}
-                      </option>
-                    ))
+                    <>
+                      {runtime === "omnigent" && providerProfile && !providerOptions.some((option) => option.id === providerProfile) ? (
+                        <option value={providerProfile} disabled>
+                          {historicalOmnigentProviderProfile?.label || providerProfile} (Unavailable — replacement required)
+                        </option>
+                      ) : null}
+                      {providerOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.isDefault
+                            ? `${option.label} (Default)`
+                            : option.label}
+                        </option>
+                      ))}
+                    </>
                   )}
                 </select>
               </label>
@@ -13173,16 +13231,24 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ) : null}
 
         {runtime.trim().toLowerCase() === "omnigent" ? (
-          <div className="notice small" aria-label="Effective Omnigent selection">
-            <div>Runtime: Codex via Omnigent</div>
-            <div>Provider Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || providerProfile || "Not selected"}</div>
-            <div>Host mode: {omnigentPolicies.find((policy) => policy.ref === omnigentLaunchPolicyRef)?.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}</div>
-            <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
-            <div>Repository: {repository.trim() || "Not selected"}</div>
-          </div>
+          <>
+            {!omnigentSelectionEligible && omnigentSelectionGateReason ? (
+              <div className="notice error small" role="alert">
+                Codex via Omnigent cannot be submitted: {omnigentSelectionGateReason}
+              </div>
+            ) : null}
+            <div className="notice small" aria-label="Effective Omnigent selection">
+              <div>Runtime: Codex via Omnigent</div>
+              <div>Provider Profile: {providerOptions.find((option) => option.id === providerProfile)?.label || historicalOmnigentProviderProfile?.label || providerProfile || "Not selected"}</div>
+              <div>Host mode: {omnigentPolicies.find((policy) => policy.ref === omnigentLaunchPolicyRef)?.hostMode === "on_demand_docker" ? "On-demand Docker" : "Static Compose"}</div>
+              <div>Policy: {omnigentLaunchPolicyRef || "Not selected"}</div>
+              <div>Repository: {repository.trim() || "Not selected"}</div>
+            </div>
+          </>
         ) : null}
 
-        <div className="grid-2" aria-label="Workflow model tier intent">
+        {selectedProfileSupportsModelControls ? (
+        <><div className="grid-2" aria-label="Workflow model tier intent">
           <label>
             Model tier intent
             <input
@@ -13221,9 +13287,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </div>
+        ) : null}</>
         ) : null}
 
-        <div className="grid-2">
+        {selectedProfileSupportsModelControls ? (<div className="grid-2">
           <label>
             Hard override model
             <input
@@ -13252,7 +13319,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               }}
             />
           </label>
-        </div>
+        </div>) : null}
 
         </section>
 
@@ -13688,14 +13755,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     }`
                   : "queue-submit-primary queue-submit-primary--with-arrow"
               }
-              disabled={isTemporalFormBlocked}
-              aria-disabled={isSubmitting || isTemporalFormBlocked}
+              disabled={isSubmitBlocked}
+              aria-disabled={isSubmitting || isSubmitBlocked}
               aria-busy={isSubmitting}
               aria-label={primaryCta}
               title={primaryCtaTooltip}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
-                if (isTemporalFormBlocked) return;
+                if (isSubmitBlocked) return;
                 const rect =
                   submitButtonRef.current?.getBoundingClientRect() ?? null;
                 setSubmitRippleRect(rect);
