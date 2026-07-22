@@ -536,6 +536,37 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
   afterEach(() => fetchSpy.mockRestore());
 
+  function omnigentPayload(): BootPayload {
+    return {
+      ...mockPayload,
+      initialData: {
+        ...mockPayload.initialData,
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            omnigentExecutionCatalog: {
+              profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1" }],
+              policies: [{ ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker" }],
+            },
+          },
+        },
+      },
+    } as BootPayload;
+  }
+
+  const readyOmnigentCatalog = {
+    schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+    runtimeId: "omnigent",
+    displayName: "Codex via Omnigent",
+    available: true,
+    defaultExecutionProfileRef: "omnigent-codex-default",
+    executionProfiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", available: true, policyRefs: ["on-demand-v1"], gateReasons: [] }],
+    eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", busy: false, queueWhenBusy: true }],
+    ineligibleProviderProfiles: [],
+    gateReasons: [],
+  };
+
   it("keeps an unavailable runtime unselectable and explicitly revalidates stale readiness", async () => {
     renderWorkflowStartPage(mockPayload);
 
@@ -597,6 +628,75 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(screen.queryByLabelText("Workflow model tier intent")).toBeNull();
     expect(screen.queryByLabelText("Hard override model")).toBeNull();
     expect(document.querySelector('[name="hostId"], [name*="volume"], [name*="token"]')).toBeNull();
+  });
+
+  it("revalidates and submits only canonical Omnigent intent before opening Workflow Detail", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-created" }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    const runtime = await screen.findByLabelText("Runtime");
+    expect(within(runtime).getByRole("option", { name: "Codex CLI" })).toBeTruthy();
+    expect(within(runtime).getByRole("option", { name: "Claude Code" })).toBeTruthy();
+    fireEvent.change(runtime, { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
+
+    expect(await screen.findByText("Runtime: Codex via Omnigent")).toBeTruthy();
+    expect(screen.getByText("Host mode: On-demand Docker")).toBeTruthy();
+    expect(screen.getByLabelText("Execution target").getAttribute("name")).toBe("omnigentExecutionTargetRef");
+    fireEvent.keyDown(runtime, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-created?source=temporal"));
+    expect(readinessRequests).toBeGreaterThanOrEqual(2);
+    const createCall = fetchSpy.mock.calls.find(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST");
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload).toMatchObject({
+      targetRuntime: "omnigent",
+      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
+      task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
+    });
+    expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
+  });
+
+  it("rejects a selection revoked by no-cache submit-time readiness without substitution", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        const body = readinessRequests === 1
+          ? readyOmnigentCatalog
+          : { ...readyOmnigentCatalog, available: false, gateReasons: [{ code: "deployment_unready", message: "Omnigent deployment became unavailable." }] };
+        return Promise.resolve({ ok: true, json: async () => body } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not launch stale authority." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(await screen.findByText("Omnigent deployment became unavailable.")).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
+    expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe("oauth-1");
   });
 });
 

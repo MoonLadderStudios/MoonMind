@@ -29,6 +29,32 @@ describe("MoonLadderStudios/MoonMind#3452 Omnigent draft round-trip", () => {
       omnigentLaunchPolicyRef: "omnigent-codex-on-demand-v1",
     });
   });
+
+  it.each([
+    ["edit", { draft: { runtime: "omnigent", providerProfile: "oauth-history", omnigentExecutionTargetRef: "target-history", omnigentLaunchPolicyRef: "policy-history", model: "gpt-history", effort: "high" } }],
+    ["edit-for-rerun", { workflow: { runtime: { mode: "omnigent", profileId: "oauth-history", model: "gpt-history", effort: "high" } }, omnigent: { executionTargetRef: "target-history", launchPolicyRef: "policy-history" } }],
+    ["rerun", { draft: { runtime: "omnigent", providerProfile: "oauth-history", omnigentExecutionTargetRef: "target-history", omnigentLaunchPolicyRef: "policy-history", model: "gpt-history", effort: "high" } }],
+    ["comparison", { workflow: { runtime: { mode: "omnigent", profileId: "oauth-history", model: "gpt-history", effort: "high" } }, omnigent: { executionTargetRef: "target-history", launchPolicyRef: "policy-history" } }],
+  ])("preserves the unavailable historical selection for %s reconstruction", (_mode, artifactInput) => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:omnigent-history",
+        workflowType: "MoonMind.UserWorkflow",
+        targetRuntime: "omnigent",
+        inputParameters: { workflow: { instructions: "Inspect historical selection." } },
+      },
+      artifactInput,
+    );
+
+    expect(draft).toMatchObject({
+      runtime: "omnigent",
+      providerProfile: "oauth-history",
+      omnigentExecutionTargetRef: "target-history",
+      omnigentLaunchPolicyRef: "policy-history",
+      model: "gpt-history",
+      effort: "high",
+    });
+  });
 });
 
 describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", () => {
