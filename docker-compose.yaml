@@ -857,9 +857,8 @@ services:
       - ${OMNIGENT_ACTIVE_SKILLS_DIR:-./omnigent_workspaces/.moonmind/skills_active}:/opt/moonmind-skills:ro
       - ./services/omnigent/scripts/moonmind-tools.sh:/etc/profile.d/moonmind-tools.sh:ro
       - ./services/omnigent/scripts:/opt/moonmind:ro
-      - ./omnigent_workspaces:/workspaces
-      # Mount an operator-managed sanitized workspace, not the repo root with local secrets.
-      - ${OMNIGENT_MOONMIND_WORKSPACE:-./omnigent_workspaces/MoonMind}:/workspaces/MoonMind:ro
+      # The owning worker supplies the canonical daemon-visible source.
+      - ${OMNIGENT_RUN_WORKSPACE:-./omnigent_workspaces/run}:/workspaces/run
     depends_on:
       omnigent:
         condition: service_started

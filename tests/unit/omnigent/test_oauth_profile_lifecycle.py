@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -398,9 +399,14 @@ async def test_private_workspace_clone_uses_in_memory_github_credentials(
     )
     runtime._run = AsyncMock(return_value=(0, "", ""))
 
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
+
     await runtime._prepare_workspace(
-        workspace_key="private",
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
         repository_url="https://github.com/owner/private.git",
+        repository_branch=None,
         github_token="test-token-value",
     )
 
@@ -426,15 +432,19 @@ async def test_failed_workspace_clone_is_removed_for_retry(tmp_path) -> None:
         raise OmnigentOAuthHostError("clone failed")
 
     runtime._run = AsyncMock(side_effect=fail_after_partial_clone)
+    workspace_id = hashlib.sha256(b"workflow-1:step-1").hexdigest()[:24]
 
     with pytest.raises(OmnigentOAuthHostError, match="clone failed"):
         await runtime._prepare_workspace(
-            workspace_key="private",
+            workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
             repository_url="https://github.com/owner/private.git",
+            repository_branch=None,
             github_token="test-token-value",
         )
 
-    assert not any(workspace_root.iterdir())
+    assert not (workspace_root / "temporal_sandbox" / workspace_id / "repo").exists()
 
 
 def test_tools_path_prepend_is_idempotent_and_preserves_upstream_path() -> None:
@@ -598,6 +608,9 @@ async def test_host_rejects_missing_skill_projection_before_workspace_mutation(
             binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
+            workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
             effective_launch=compile_effective_launch(
                 profile_ref="omnigent-codex@1",
                 policy_ref="codex-static@1",
@@ -622,6 +635,9 @@ async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) ->
             binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
+            workspace_locator={"kind": "sandbox", "workspaceId": "unused"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
             effective_launch=compile_effective_launch(
                 profile_ref="omnigent-codex@1",
                 policy_ref="codex-on-demand@1",
@@ -1003,6 +1019,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             executionProfileRef="codex",
             correlationId="workflow-1",
             idempotencyKey="idem-1",
+            workspaceSpec={
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24],
+                }
+            },
             parameters={
                 "omnigent": {"session": {"workspace": "https://example.com/repo.git"}}
             },
@@ -1151,6 +1173,12 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
                 executionProfileRef="codex",
                 correlationId="workflow-1",
                 idempotencyKey="idem-1",
+                workspaceSpec={
+                    "workspaceLocator": {
+                        "kind": "sandbox",
+                        "workspaceId": hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24],
+                    }
+                },
                 parameters={
                     "repository": "owner/repo",
                     "requiredCapabilities": ["gh"],
@@ -1417,6 +1445,14 @@ async def _run_coordinator_failure_case(
         executionProfileRef="codex",
         correlationId="workflow-1",
         idempotencyKey="idem-failure-matrix",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-failure-matrix"
+                ).hexdigest()[:24],
+            }
+        },
         parameters={
             "untrustedSupportValue": "github_pat_secret_value_must_not_persist",
             "omnigent": {"session": {"workspace": "https://example.com/repo.git"}},

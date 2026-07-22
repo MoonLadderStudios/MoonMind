@@ -16934,6 +16934,24 @@ class MoonMindRunWorkflow:
                 f"{wf_info.workflow_id}:{branch_id}:{branch_turn_id}:omnigent"
             )
 
+        # Repository work delegated through Omnigent carries durable ownership,
+        # never a worker or daemon filesystem path. The activity resolves this
+        # identity after validating the current workflow and step execution.
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+        ):
+            locator_identity = (
+                f"{wf_info.workflow_id}:{step_execution_payload['stepExecutionId']}"
+            )
+            workspace_spec["workspaceLocator"] = {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    locator_identity.encode("utf-8")
+                ).hexdigest()[:24],
+                "relativePath": "repo",
+            }
+
         terminal_contract_payload: dict[str, Any] | None = None
         resolved_terminal_contract = (
             self._resolved_skill_terminal_contract_by_step.get(node_id)

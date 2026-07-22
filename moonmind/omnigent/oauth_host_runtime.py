@@ -26,6 +26,14 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentOAuthHostBinding,
     OmnigentHostLease,
 )
+from moonmind.schemas.workspace_locator_models import (
+    SandboxWorkspaceLocator,
+    WORKSPACE_LOCATOR_ADAPTER,
+)
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    daemon_visible_workspace_path,
+    resolve_sandbox_workspace_locator,
+)
 from moonmind.workflows.temporal.runtime.git_auth import (
     build_github_token_git_environment,
 )
@@ -94,7 +102,7 @@ class OmnigentOAuthHostRuntime:
         )
         self._workspace_root = (
             workspace_root
-            or Path(os.getenv("OMNIGENT_WORKSPACE_ROOT", "omnigent_workspaces"))
+            or Path(os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work"))
         ).resolve()
         self._tool_bundle_volume = os.getenv(
             "OMNIGENT_TOOL_BUNDLE_VOLUME", "moonmind-omnigent-tools-gh-2.76.2"
@@ -106,7 +114,11 @@ class OmnigentOAuthHostRuntime:
         binding: OmnigentOAuthHostBinding,
         host_lease: OmnigentHostLease,
         workspace_key: str,
+        workspace_locator: Mapping[str, Any],
+        current_workflow_id: str,
+        current_step_execution_id: str,
         repository_url: str | None = None,
+        repository_branch: str | None = None,
         resolved_skillset_ref: str | None = None,
         artifact_gateway: Any | None = None,
         target_repository: str = "",
@@ -126,10 +138,14 @@ class OmnigentOAuthHostRuntime:
             artifact_gateway=artifact_gateway,
         )
         workspace_source = await self._prepare_workspace(
-            workspace_key=workspace_key,
+            workspace_locator=workspace_locator,
+            current_workflow_id=current_workflow_id,
+            current_step_execution_id=current_step_execution_id,
             repository_url=repository_url,
+            repository_branch=repository_branch,
             github_token=github_token,
         )
+        daemon_workspace_source = daemon_visible_workspace_path(workspace_source)
         if binding.host_launch_profile_ref:
             if "gh" in {item.strip().lower() for item in required_capabilities}:
                 await self._initialize_required_tools()
@@ -141,7 +157,7 @@ class OmnigentOAuthHostRuntime:
                 binding=binding,
                 host_lease=host_lease,
                 container_name=container_name,
-                workspace_source=workspace_source,
+                workspace_source=daemon_workspace_source,
                 skill_projection=skill_projection,
                 github_token=github_token,
                 effective_launch=launch,
@@ -150,6 +166,7 @@ class OmnigentOAuthHostRuntime:
             await self._exec_tools_check(container_name)
         else:
             await self._compose_static_check(
+                workspace_source=daemon_workspace_source,
                 skill_projection=skill_projection, effective_launch=launch
             )
 
@@ -187,7 +204,7 @@ class OmnigentOAuthHostRuntime:
             "workspacePath": (
                 "/workspaces/run"
                 if binding.host_launch_profile_ref
-                else f"/workspaces/{workspace_source.name}"
+                else "/workspaces/run"
             ),
         }
         validated = validate_preflight_result(
@@ -368,6 +385,7 @@ class OmnigentOAuthHostRuntime:
         container_name = host_lease.container_name or deterministic_host_container_name(
             host_lease.lease_id
         )
+        await self._assert_container_owned(container_name, host_lease.lease_id)
         await self._run("docker", "stop", "--time", "20", container_name, check=False)
         await self._run("docker", "rm", "-f", container_name, check=False)
         await self._run(
@@ -416,6 +434,18 @@ class OmnigentOAuthHostRuntime:
         return [line.strip() for line in result[1].splitlines() if line.strip()]
 
     async def remove_container(self, container_name: str) -> None:
+        # Janitor discovery is label-scoped; never accept an arbitrary name.
+        result = await self._run(
+            "docker", "inspect", "--format",
+            "{{index .Config.Labels \"moonmind.kind\"}}", container_name, check=False,
+        )
+        if result[0] != 0:
+            return
+        if result[1].strip() != "omnigent-oauth-host":
+            raise OmnigentOAuthHostError(
+                "refusing to remove a container outside Omnigent ownership",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
         await self._run("docker", "rm", "-f", container_name, check=False)
         await self._run(
             "docker", "volume", "rm", "-f", f"{container_name}-state", check=False
@@ -433,6 +463,7 @@ class OmnigentOAuthHostRuntime:
         effective_launch: Mapping[str, Any],
     ) -> None:
         if await self.container_exists(container_name):
+            await self._assert_container_owned(container_name, host_lease.lease_id)
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
@@ -575,6 +606,18 @@ class OmnigentOAuthHostRuntime:
         args.extend([host_image_ref, "/opt/moonmind/start-codex-oauth-host.sh"])
         await self._run(*args, env=child_env)
 
+    async def _assert_container_owned(self, container_name: str, lease_id: str) -> None:
+        result = await self._run(
+            "docker", "inspect", "--format",
+            "{{index .Config.Labels \"moonmind.host_lease_id\"}}",
+            container_name, check=False,
+        )
+        if result[0] != 0 or result[1].strip() != lease_id:
+            raise OmnigentOAuthHostError(
+                "container does not belong to the current host lease",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
+
     async def _discover_upstream_path(self, image_ref: str) -> str:
         """Read the selected image's PATH without replacing image-specific entries."""
         result = await self._run(
@@ -673,15 +716,28 @@ class OmnigentOAuthHostRuntime:
     async def _prepare_workspace(
         self,
         *,
-        workspace_key: str,
+        workspace_locator: Mapping[str, Any],
+        current_workflow_id: str,
+        current_step_execution_id: str,
         repository_url: str | None,
+        repository_branch: str | None,
         github_token: str | None = None,
     ) -> Path:
-        self._workspace_root.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
-        workspace = (self._workspace_root / digest).resolve()
-        if self._workspace_root not in workspace.parents:
-            raise OmnigentOAuthHostError("workspace escaped configured root")
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
+        if not isinstance(locator, SandboxWorkspaceLocator):
+            raise OmnigentOAuthHostError(
+                "Omnigent repository work requires a sandbox WorkspaceLocator",
+                code="WORKSPACE_LOCATOR_UNSUPPORTED",
+            )
+        expected_id = hashlib.sha256(
+            f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        workspace = resolve_sandbox_workspace_locator(
+            locator,
+            workspace_root=self._workspace_root,
+            expected_workspace_id=expected_id,
+            must_exist=False,
+        )
         workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if repository_url and not any(workspace.iterdir()):
             try:
@@ -698,6 +754,11 @@ class OmnigentOAuthHostRuntime:
             except Exception:
                 shutil.rmtree(workspace, ignore_errors=True)
                 raise
+        if repository_branch and (workspace / ".git").is_dir():
+            await self._run(
+                "git", "-C", str(workspace), "checkout", repository_branch,
+                env=build_github_token_git_environment(github_token, base_env=os.environ),
+            )
         return workspace
 
     async def _initialize_required_tools(self) -> None:
@@ -716,10 +777,12 @@ class OmnigentOAuthHostRuntime:
     async def _compose_static_check(
         self,
         *,
+        workspace_source: Path,
         skill_projection: Path | None = None,
         effective_launch: Mapping[str, Any] | None = None,
     ) -> None:
         child_env = dict(os.environ)
+        child_env["OMNIGENT_RUN_WORKSPACE"] = str(workspace_source)
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
         if effective_launch is not None:
@@ -829,7 +892,12 @@ class OmnigentOAuthHostRuntime:
             stderr=asyncio.subprocess.PIPE,
             env=dict(env) if env is not None else None,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+        except (TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.wait()
+            raise
         output = stdout.decode("utf-8", errors="replace")[:4096]
         error = stderr.decode("utf-8", errors="replace")[:4096]
         if check and process.returncode != 0:
