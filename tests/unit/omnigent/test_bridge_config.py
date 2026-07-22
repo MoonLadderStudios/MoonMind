@@ -60,7 +60,7 @@ hostConnection:
     bindAddress: 0.0.0.0
     port: 8000
     authMode: upstream_runner_tunnel
-    protocolProfile: omnigent.runner_tunnel.7da32637
+    protocolProfile: omnigent.runner_tunnel.3e88237c
 
 sessionDefaults:
   hostType: managed
@@ -231,8 +231,8 @@ def test_host_protocol_mode_accepts_embedded() -> None:
     assert config.readiness() == {
         "enabled": True,
         "selectedMode": HOST_PROTOCOL_MODE_EMBEDDED,
-        "protocolProfile": "omnigent.runner_tunnel.7da32637",
-        "upstreamComponentVersion": "7da32637",
+        "protocolProfile": "omnigent.runner_tunnel.3e88237c",
+        "upstreamComponentVersion": "3e88237c",
         "conformanceState": "gated",
         "evidenceRefs": {
             "proxyConformance": "artifact://omnigent/proxy-conformance",
