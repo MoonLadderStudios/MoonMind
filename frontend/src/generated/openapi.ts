@@ -3219,6 +3219,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/codex-catalog-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Omnigent Codex Catalog Readiness
+         * @description Return a fresh, bounded readiness snapshot; this response is not cached.
+         */
+        get: operations["get_omnigent_codex_catalog_readiness_api_omnigent_codex_catalog_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/secrets": {
         parameters: {
             query?: never;
@@ -6614,6 +6634,22 @@ export interface components {
              */
             status: "QUEUED";
         };
+        /** EligibleProviderProfile */
+        EligibleProviderProfile: {
+            /** Profileid */
+            profileId: string;
+            /** Label */
+            label: string;
+            /** Providerid */
+            providerId: string;
+            /**
+             * Busy
+             * @default false
+             */
+            busy: boolean;
+            /** Queuewhenbusy */
+            queueWhenBusy: boolean;
+        };
         /**
          * EmbeddedHostHeartbeatRequest
          * @description Host heartbeat payload.
@@ -7541,6 +7577,19 @@ export interface components {
             /** Evidenceref */
             evidenceRef?: string | null;
         };
+        /** ExecutionProfileReadiness */
+        ExecutionProfileReadiness: {
+            /** Ref */
+            ref: string;
+            /** Displayname */
+            displayName: string;
+            /** Available */
+            available: boolean;
+            /** Policyrefs */
+            policyRefs: string[];
+            /** Gatereasons */
+            gateReasons: components["schemas"]["GateReason"][];
+        };
         /**
          * ExecutionProgressModel
          * @description Bounded latest-run progress summary derived from workflow-owned step state.
@@ -7925,6 +7974,15 @@ export interface components {
             /** Artifactref */
             artifactRef: string;
         };
+        /** GateReason */
+        GateReason: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Remediationhref */
+            remediationHref: string;
+        };
         /**
          * GateSummaryStatusModel
          * @description Bounded gate verdict summary for Step Execution detail surfaces.
@@ -8085,6 +8143,15 @@ export interface components {
             totalPoints: number;
             /** Collections */
             collections: components["schemas"]["IndexCollectionHealthModel"][];
+        };
+        /** IneligibleProviderProfile */
+        IneligibleProviderProfile: {
+            /** Profileid */
+            profileId: string;
+            /** Label */
+            label: string;
+            /** Gatereasons */
+            gateReasons: components["schemas"]["GateReason"][];
         };
         /**
          * IntegrationCallbackRequest
@@ -8786,6 +8853,59 @@ export interface components {
             ready?: boolean | null;
         } & {
             [key: string]: unknown;
+        };
+        /** OmnigentCodexCatalogReadiness */
+        OmnigentCodexCatalogReadiness: {
+            /**
+             * Schemaversion
+             * @default moonmind.omnigent-codex-readiness.v1
+             * @constant
+             */
+            schemaVersion: "moonmind.omnigent-codex-readiness.v1";
+            /**
+             * Runtimeid
+             * @default omnigent
+             * @constant
+             */
+            runtimeId: "omnigent";
+            /**
+             * Displayname
+             * @default Codex via Omnigent
+             * @constant
+             */
+            displayName: "Codex via Omnigent";
+            /**
+             * Agentkind
+             * @default external
+             * @constant
+             */
+            agentKind: "external";
+            /**
+             * Agentid
+             * @default omnigent
+             * @constant
+             */
+            agentId: "omnigent";
+            /**
+             * Harness
+             * @default codex-native
+             * @constant
+             */
+            harness: "codex-native";
+            /** Available */
+            available: boolean;
+            /** Defaultexecutionprofileref */
+            defaultExecutionProfileRef: string;
+            /** Executionprofiles */
+            executionProfiles: components["schemas"]["ExecutionProfileReadiness"][];
+            /** Eligibleproviderprofiles */
+            eligibleProviderProfiles: components["schemas"]["EligibleProviderProfile"][];
+            /** Ineligibleproviderprofiles */
+            ineligibleProviderProfiles: components["schemas"]["IneligibleProviderProfile"][];
+            /** Hostmodes */
+            hostModes: string[];
+            /** Gatereasons */
+            gateReasons: components["schemas"]["GateReason"][];
         };
         /** OmnigentHostResponse */
         OmnigentHostResponse: {
@@ -19491,6 +19611,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_omnigent_codex_catalog_readiness_api_omnigent_codex_catalog_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentCodexCatalogReadiness"];
                 };
             };
         };

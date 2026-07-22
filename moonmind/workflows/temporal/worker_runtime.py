@@ -2635,6 +2635,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    container_job_backend = None
+    enforced_network_refs: list[str] = []
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
@@ -2749,8 +2751,19 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
+                from moonmind.omnigent.execution_profiles import POLICIES
+
+                enforced_network_refs = []
+                for policy in POLICIES.values():
+                    if (
+                        policy.enabled
+                        and policy.enforced_egress
+                        and await container_job_backend.network_ready(policy.network_ref)
+                    ):
+                        enforced_network_refs.append(policy.network_ref)
             else:
                 container_job_backend = None
+                enforced_network_refs = []
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2811,6 +2824,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             topology.fleet,
             ", ".join(binding_descriptors) if binding_descriptors else "(none)",
         )
+        resources.container_job_backend = container_job_backend  # type: ignore[attr-defined]
+        resources.enforced_network_refs = tuple(enforced_network_refs)  # type: ignore[attr-defined]
         return resources, [
             binding.handler for binding in bindings
         ] + [
@@ -2968,6 +2983,17 @@ async def main_async() -> None:
         ]
         health_state.workers_constructed = True
         health_state.readiness_metadata = spec.readiness_payload()
+        if topology.fleet == AGENT_RUNTIME_FLEET:
+            container_job_backend = getattr(
+                runtime_resources, "container_job_backend", None
+            )
+            enforced_network_refs = getattr(
+                runtime_resources, "enforced_network_refs", ()
+            )
+            health_state.readiness_metadata["containerBackend"] = {
+                "ready": container_job_backend is not None,
+                "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
+            }
 
         logger.info(
             "Temporal executable worker specification: %s",

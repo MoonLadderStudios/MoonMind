@@ -4414,6 +4414,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     ):
         mock_settings.workflow.workflow_docker_mode = "profiles"
         mock_backend_cls.return_value.check_readiness = AsyncMock()
+        mock_backend_cls.return_value.network_ready = AsyncMock(return_value=True)
         resources, handlers = await _build_runtime_activities(topology)
 
     mock_backend_cls.return_value.check_readiness.assert_awaited_once()
@@ -4599,6 +4600,7 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
         ) as mock_backend_cls,
     ):
         mock_backend_cls.return_value.check_readiness = AsyncMock()
+        mock_backend_cls.return_value.network_ready = AsyncMock(return_value=True)
         resources, _handlers = await _build_runtime_activities(topology)
 
     mock_agent_runtime_activities_cls.assert_called_once()

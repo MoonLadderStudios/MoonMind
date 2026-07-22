@@ -84,7 +84,7 @@ class OmnigentOAuthHostRuntime:
                 tag = os.getenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
                 self._image = f"{base_image}:{tag}"
         self._network = network or os.getenv(
-            "OMNIGENT_HOST_NETWORK", "moonmind_local-network"
+            "OMNIGENT_HOST_NETWORK", "local-network"
         )
         self._server_url = server_url or os.getenv(
             "OMNIGENT_SERVER_INTERNAL_URL", "http://omnigent:8000"
