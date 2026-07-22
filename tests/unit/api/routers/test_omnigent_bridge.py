@@ -369,6 +369,7 @@ class _FakeEmbeddedFacade(_FakeProxy):
         super().__init__()
         self.created: list[dict[str, Any]] = []
         self.stopped: list[str] = []
+        self.control_payloads: list[dict[str, Any]] = []
         self.stream_afters: list[int] = []
 
     async def create_session(self, *, request, binding):
@@ -409,7 +410,12 @@ class _FakeEmbeddedFacade(_FakeProxy):
         return {"ok": True, "status": "stopped", "runnerId": "runner-1"}
 
     async def stop_session(self, session_id: str, *, payload=None, actor=None):
+        self.control_payloads.append(payload or {})
         return await self.stop_runner(session_id=session_id)
+
+    async def cleanup_session(self, session_id: str, *, payload, actor=None):
+        self.control_payloads.append(payload)
+        return {"ok": True, "status": "completed", "runnerId": "runner-1"}
 
 
 def _build(
@@ -1422,7 +1428,12 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
     app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
     client = TestClient(app)
 
-    response = client.post(_EVENTS_PATH, json={"type": "stop"})
+    response = client.post(_EVENTS_PATH, json={
+        "type": "stop", "idempotencyKey": "stop-1",
+        "expectedWorkflowId": "mm:w1", "expectedBridgeSessionId": "brs-1",
+        "expectedSessionId": "sess-77", "expectedHostId": "host-1",
+        "expectedRunnerId": "runner-1", "expectedTerminalState": "active",
+    })
 
     assert response.status_code == 200
     assert response.json() == {
@@ -1431,6 +1442,33 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
         "runnerId": "runner-1",
     }
     assert facade.stopped == ["sess-77"]
+    assert facade.control_payloads[0]["idempotencyKey"] == "stop-1"
+    assert facade.control_payloads[0]["expectedBridgeSessionId"] == "brs-1"
+
+
+def test_cleanup_session_event_uses_typed_embedded_control() -> None:
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    embedded_config = parse_bridge_config({
+        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        "hostConnection": {"embedded": {
+            "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+            "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+            "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+        }},
+    })
+    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    response = TestClient(app).post(_EVENTS_PATH, json={
+        "type": "cleanup_session", "idempotencyKey": "cleanup-1",
+        "expectedBridgeSessionId": "brs-1", "expectedSessionId": "sess-77",
+    })
+    assert response.status_code == 200
+    assert facade.control_payloads[0]["idempotencyKey"] == "cleanup-1"
 
 
 def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:

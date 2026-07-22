@@ -894,6 +894,7 @@ class BridgeSessionResolution(BaseModel):
     provider_session_ref: str | None = None
     omnigent_host_ref: str | None = None
     omnigent_runner_ref: str | None = None
+    first_message_state: str | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -1163,6 +1164,7 @@ async def resolve_omnigent_bridge_session_projection(
         provider_session_ref=row.omnigent_session_id,
         omnigent_host_ref=getattr(row, "omnigent_host_id", None),
         omnigent_runner_ref=getattr(row, "omnigent_runner_id", None),
+        first_message_state=getattr(row, "first_message_state", None),
         capabilities=_projection_capabilities(row),
     )
 
@@ -1387,6 +1389,19 @@ async def post_omnigent_session_event(
                     actor=str(user.id),
                 )
             return await control_facade.stop_session(session_id)
+        if payload.type in {"cleanup_session", "terminal_cleanup"}:
+            if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
+                raise OmnigentBridgeError(
+                    "Typed owned-resource cleanup is unavailable in this mode.",
+                    failure_class="user_error", status_code=501,
+                    code="omnigent_bridge_capability_unavailable",
+                )
+            assert embedded_facade is not None
+            return await embedded_facade.cleanup_session(
+                session_id,
+                payload=payload.model_dump(by_alias=True, exclude_none=True),
+                actor=str(user.id),
+            )
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
             assert embedded_facade is not None
             if payload.type == "harvest_session":

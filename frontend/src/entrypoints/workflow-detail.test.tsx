@@ -8266,7 +8266,9 @@ describe('Workflow Detail Entrypoint', () => {
         workflowId: 'test-123', agentRunId: 'agent-run-1', compatibilityProfile: 'omnigent.embedded.v1',
         providerProfileId: 'codex-profile', executionProfileRef: 'codex-default@2', launchPolicyRef: 'restricted@3',
         hostMode: 'on_demand_docker', effectiveLaunchSnapshotRef: 'omnigent-launch:sha256:safe-ref',
-        hostLeaseRef: 'host-lease-1', credentialGeneration: 4, omnigentHostRef: 'host-1', omnigentRunnerRef: 'runner-1',
+        hostLeaseRef: 'host-lease-1', credentialGeneration: 4,
+        workflowId: 'test-123', runId: 'run-1', stepExecutionId: 'step-1', agentRunId: 'agent-run-1',
+        firstMessageState: 'first_message_posted', omnigentHostRef: 'host-1', omnigentRunnerRef: 'runner-1',
         capabilities: { resolveElicitation: true, clearSession: true, cancelSession: true, stop: true, terminalCleanup: true },
       }) } as Response);
       if (url.includes('/bridge-sessions/brs-interventions/events')) return Promise.resolve({ ok: true, json: async () => ({
@@ -8306,11 +8308,15 @@ describe('Workflow Detail Entrypoint', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Stop session' }));
       await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
         String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
-        JSON.parse(String((init as RequestInit).body)).type === 'stop_session')).toBe(true));
+        JSON.parse(String((init as RequestInit).body)).type === 'stop_session' &&
+        JSON.parse(String((init as RequestInit).body)).expectedBridgeSessionId === 'brs-interventions' &&
+        JSON.parse(String((init as RequestInit).body)).expectedRunnerId === 'runner-1' &&
+        typeof JSON.parse(String((init as RequestInit).body)).idempotencyKey === 'string')).toBe(true));
       fireEvent.click(screen.getByRole('button', { name: 'Remove owned session' }));
       await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
-        String(url).endsWith('/omnigent/v1/sessions/provider-session') &&
-        (init as RequestInit).method === 'DELETE')).toBe(true));
+        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
+        JSON.parse(String((init as RequestInit).body)).type === 'cleanup_session' &&
+        JSON.parse(String((init as RequestInit).body)).expectedWorkflowId === 'test-123')).toBe(true));
     } finally {
       confirmSpy.mockRestore();
       window.EventSource = priorEventSource;

@@ -434,7 +434,7 @@ class OmnigentEmbeddedHostProtocolFacade:
 
     async def stop_runner(
         self, *, session_id: str, payload: dict[str, Any] | None = None,
-        actor: str | None = None,
+        actor: str | None = None, control_type: str = "stop",
     ) -> dict[str, Any]:
         """Stop the exact runner durably bound to an embedded session."""
 
@@ -454,35 +454,41 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="integration_error",
                 status_code=409,
             )
+        terminal = row.status in {"completed", "failed", "canceled", "timed_out"}
         payload = payload or {}
-        control_key = _clean(payload.get("idempotencyKey")) or (
-            f"stop:{session_id}:{runner_id}"
-        )
-        await self._validate_control_expectations(
-            row=row, payload=payload, control_key=control_key,
-            control_type="stop", actor=actor,
-        )
+        control_key = _clean(payload.get("idempotencyKey"))
+        if not control_key:
+            raise OmnigentBridgeError(
+                "Embedded stop and cleanup controls require an idempotency key",
+                failure_class="user_error", status_code=422,
+                code="omnigent_embedded_control_idempotency_required",
+            )
         reconciled = await self._reconcile_control(row, control_key)
         if reconciled is not None:
             return {**reconciled, "runnerId": runner_id}
+        await self._validate_control_expectations(
+            row=row, payload=payload, control_key=control_key,
+            control_type=control_type, actor=actor,
+        )
         claimed = await self._claim_control(
-            row, control_key, "stop", "requested",
-            summary="Embedded stop requested", actor=actor,
+            row, control_key, control_type, "requested",
+            summary=f"Embedded {control_type} requested", actor=actor,
         )
         if not claimed:
             return {**(await self._reconcile_claimed_control(control_key)), "runnerId": runner_id}
-        await self._run_store.mark_embedded_runner_state(
-            row.idempotency_key,
-            state="draining",
-            code="runner_stop_requested",
-        )
+        if not terminal:
+            await self._run_store.mark_embedded_runner_state(
+                row.idempotency_key,
+                state="draining",
+                code="runner_stop_requested",
+            )
         try:
             await self._host_channels.stop_runner(
                 host_id=host_id, runner_id=runner_id
             )
         except (EmbeddedHostChannelError, TimeoutError) as exc:
             await self._record_control(
-                row, control_key, "stop", "delivery_unknown",
+                row, control_key, control_type, "delivery_unknown",
                 code="omnigent_embedded_control_delivery_unknown",
                 summary=str(exc), actor=actor,
             )
@@ -491,24 +497,25 @@ class OmnigentEmbeddedHostProtocolFacade:
                 code="omnigent_embedded_control_delivery_unknown",
             ) from exc
         await self._record_control(
-            row, control_key, "stop", "accepted",
-            summary="Embedded host accepted stop", actor=actor,
+            row, control_key, control_type, "accepted",
+            summary=f"Embedded host accepted {control_type}", actor=actor,
         )
-        await self._run_store.mark_embedded_runner_state(
-            row.idempotency_key,
-            state="stopped",
-            code="runner_stop_confirmed",
-        )
-        await self._run_store.record_lifecycle_event(
-            row.idempotency_key,
-            event_type="terminal",
-            status="canceled",
-            event_identity=f"embedded-stop:{runner_id}",
-            summary="stopped by MoonMind control",
-        )
+        if not terminal:
+            await self._run_store.mark_embedded_runner_state(
+                row.idempotency_key,
+                state="stopped",
+                code="runner_stop_confirmed",
+            )
+            await self._run_store.record_lifecycle_event(
+                row.idempotency_key,
+                event_type="terminal",
+                status="canceled",
+                event_identity=f"embedded-stop:{runner_id}",
+                summary="stopped by MoonMind control",
+            )
         await self._record_control(
-            row, control_key, "stop", "completed",
-            summary="Embedded runner stopped", actor=actor,
+            row, control_key, control_type, "completed",
+            summary=f"Embedded {control_type} completed", actor=actor,
         )
         return {"ok": True, "status": "stopped", "runnerId": runner_id}
 
@@ -1031,11 +1038,34 @@ class OmnigentEmbeddedHostProtocolFacade:
                 code="omnigent_embedded_control_key_too_long",
             )
         expected = {
+            "expectedWorkflowId": row.moonmind_workflow_id,
+            "expectedRunId": row.moonmind_run_id,
+            "expectedStepExecutionId": row.step_execution_id,
+            "expectedAgentRunId": row.moonmind_agent_run_id,
+            "expectedBridgeSessionId": row.bridge_session_id,
             "expectedSessionId": row.omnigent_session_id,
             "expectedHostId": row.omnigent_host_id,
             "expectedRunnerId": row.omnigent_runner_id,
             "expectedTurnState": row.first_message_state,
+            "expectedTerminalState": row.status,
         }
+        missing = next(
+            (field for field, actual in expected.items()
+             if _clean(actual) and not _clean(payload.get(field))),
+            None,
+        )
+        if control_type in {"stop", "terminal_cleanup"} and missing is not None:
+            await self._record_control(
+                row, control_key, control_type, "rejected",
+                code="omnigent_embedded_control_expected_state_required",
+                summary=f"Embedded control rejected: {missing} is required",
+                actor=actor,
+            )
+            raise OmnigentBridgeError(
+                "Embedded control requires the complete durable expected state",
+                failure_class="user_error", status_code=422,
+                code="omnigent_embedded_control_expected_state_required",
+            )
         mismatch = next(
             (
                 (field, _clean(payload.get(field)), _clean(actual))
@@ -1113,9 +1143,15 @@ class OmnigentEmbeddedHostProtocolFacade:
             "controlId": control_id,
             "controlIdempotencyKey": control_key,
             "expectedSessionId": row.omnigent_session_id,
+            "expectedWorkflowId": row.moonmind_workflow_id,
+            "expectedRunId": row.moonmind_run_id,
+            "expectedStepExecutionId": row.step_execution_id,
+            "expectedAgentRunId": row.moonmind_agent_run_id,
+            "expectedBridgeSessionId": row.bridge_session_id,
             "expectedHostId": row.omnigent_host_id,
             "expectedRunnerId": row.omnigent_runner_id,
             "expectedTurnState": row.first_message_state,
+            "expectedTerminalState": row.status,
             "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
         }
 
@@ -1240,6 +1276,17 @@ class OmnigentEmbeddedHostProtocolFacade:
 
         return await self.stop_runner(
             session_id=session_id, payload=payload, actor=actor
+        )
+
+    async def cleanup_session(
+        self, session_id: str, *, payload: dict[str, Any],
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Terminate owned live resources through the durable control ledger."""
+
+        return await self.stop_runner(
+            session_id=session_id, payload=payload, actor=actor,
+            control_type="terminal_cleanup",
         )
 
     async def attach_session(
