@@ -34,6 +34,7 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostRepository,
     validate_preflight_result,
 )
+from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
@@ -154,7 +155,17 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
         bridgeSessionId="bridge-1",
         externalStateRef="artifact-external-state",
         idempotencyKey="idem-1",
+        effectiveLaunchRef="omnigent-launch:sha256:" + "0" * 64,
     )
+
+
+def test_legacy_checkpoint_without_effective_launch_ref_remains_loadable() -> None:
+    payload = _checkpoint().model_dump(by_alias=True, mode="json")
+    payload.pop("effectiveLaunchRef")
+
+    checkpoint = OmnigentCheckpointIdentity.model_validate(payload)
+
+    assert checkpoint.effective_launch_ref is None
 
 
 def test_oauth_host_runtime_defaults_to_published_image(monkeypatch) -> None:
@@ -314,8 +325,11 @@ async def test_activity_lease_client_preserves_delegating_workflow_owner() -> No
 
 @pytest.mark.asyncio
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
+    environment_image = "registry.example/environment-host@sha256:" + "1" * 64
+    snapshot_image = "registry.example/snapshot-host@sha256:" + "2" * 64
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE", environment_image)
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -331,18 +345,31 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
     lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
 
+    effective_launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    effective_launch["hostImageRef"] = snapshot_image
+
     await runtime._launch_on_demand(
         binding=binding,
         host_lease=lease,
         container_name="mm-host-lease-1",
         workspace_source=tmp_path,
         skill_projection=tmp_path / "skills",
+        effective_launch=effective_launch,
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:4] == ("docker", "rm", "-f", "mm-host-lease-1")
     assert "/opt/moonmind/init-codex-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")
+    runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
+    assert commands[1][-1] == snapshot_image
+    assert commands[2][-2] == snapshot_image
+    assert environment_image not in commands[1]
+    assert environment_image not in commands[2]
     assert commands[1][commands[1].index("--user") + 1] == "0:0"
     assert commands[2][commands[2].index("--workdir") + 1] == "/home/app"
     assert (
@@ -350,6 +377,11 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "dst=/opt/moonmind-tools,readonly"
     ) in commands[2]
     assert "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills" in commands[2]
+    assert "OMNIGENT_EXECUTION_TIMEOUT_SECONDS=5400" in commands[2]
+    assert "OMNIGENT_EXECUTION_TIMEOUT_OWNER=temporal_workflow" in commands[2]
+    assert "OMNIGENT_CAPTURE_OWNER=moonmind_bridge" in commands[2]
+    assert "OMNIGENT_CAPTURE_RETENTION_DAYS=30" in commands[2]
+    assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
     assert (
         f"type=bind,src={tmp_path / 'skills'},dst=/opt/moonmind-skills,readonly"
     ) in commands[2]
@@ -449,9 +481,11 @@ async def test_tools_path_discovery_falls_back_when_image_is_not_local(
     )
     runtime._run = AsyncMock(return_value=(1, "", "No such image"))
 
-    assert await runtime._discover_upstream_path() == (
+    image_ref = "registry.example/snapshot-host@sha256:" + "2" * 64
+    assert await runtime._discover_upstream_path(image_ref) == (
         "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
     )
+    assert runtime._run.await_args.args[-1] == image_ref
     assert runtime._run.await_args.kwargs["check"] is False
 
 
@@ -482,7 +516,12 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
     )
     runtime._run = AsyncMock(return_value=(0, "", ""))
 
-    await runtime._compose_static_check()
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    await runtime._compose_static_check(effective_launch=launch)
     await runtime.stop_static_host()
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -559,9 +598,39 @@ async def test_host_rejects_missing_skill_projection_before_workspace_mutation(
             binding=_binding(),
             host_lease=_host_lease(),
             workspace_key="run-1",
+            effective_launch=compile_effective_launch(
+                profile_ref="omnigent-codex@1",
+                policy_ref="codex-static@1",
+                provider_profile_id="codex",
+            ),
         )
 
     assert exc_info.value.code == "OMNIGENT_SKILL_PROJECTION_UNAVAILABLE"
+    runtime._prepare_workspace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_effective_policy_conflict_fails_before_host_mutation(tmp_path) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path / "workspaces"
+    )
+    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
+    runtime._prepare_workspace = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime.prepare_host(
+            binding=_binding(),
+            host_lease=_host_lease(),
+            workspace_key="run-1",
+            effective_launch=compile_effective_launch(
+                profile_ref="omnigent-codex@1",
+                policy_ref="codex-on-demand@1",
+                provider_profile_id="codex",
+            ),
+        )
+
+    assert exc_info.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
+    runtime._prepare_skill_projection.assert_not_awaited()
     runtime._prepare_workspace.assert_not_awaited()
 
 
@@ -1527,3 +1596,7 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
     else:
         assert "provider_released" in actions
     assert events[-1][1]["metadata"]["janitorRequired"] is janitor_required
+@pytest.fixture(autouse=True)
+def immutable_bootstrap_images(monkeypatch) -> None:
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64)

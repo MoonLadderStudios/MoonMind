@@ -644,6 +644,7 @@ class OmnigentBridgeSessionStore:
         host_binding_ref: str,
         host_lease_ref: str,
         omnigent_host_id: str | None,
+        effective_launch_snapshot: dict[str, Any] | None = None,
     ) -> OmnigentBridgeSession:
         """Persist lease-authorized routing before provider session creation."""
 
@@ -659,6 +660,11 @@ class OmnigentBridgeSessionStore:
                 "hostBindingRef": host_binding_ref,
                 "hostLeaseRef": host_lease_ref,
                 "omnigentHostId": omnigent_host_id,
+                "effectiveLaunchRef": (
+                    effective_launch_snapshot.get("snapshotRef")
+                    if effective_launch_snapshot
+                    else None
+                ),
             },
         )
         async with self._session_factory() as session:
@@ -670,6 +676,15 @@ class OmnigentBridgeSessionStore:
                 "host_binding_ref": host_binding_ref,
                 "host_lease_ref": host_lease_ref,
             }
+            if effective_launch_snapshot and (
+                stored.effective_launch_snapshot_json is not None
+                and stored.effective_launch_snapshot_json != effective_launch_snapshot
+            ):
+                raise OmnigentIdempotencyError(
+                    "bridge authorization is already bound to another launch snapshot"
+                )
+            if effective_launch_snapshot:
+                stored.effective_launch_snapshot_json = effective_launch_snapshot
             if stored.omnigent_endpoint_ref == "pending":
                 stored.omnigent_endpoint_ref = endpoint_ref
             elif stored.omnigent_endpoint_ref != endpoint_ref:

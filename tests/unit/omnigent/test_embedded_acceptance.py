@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -91,10 +92,13 @@ def _source() -> dict:
     return source
 
 
+def _build(source: dict, **kwargs: Any) -> dict:
+    kwargs.setdefault("now", datetime(2026, 7, 21, 12, tzinfo=timezone.utc))
+    return build_embedded_acceptance_report(source, **kwargs)
+
+
 def test_complete_matrix_builds_publishable_issue_3425_report() -> None:
-    report = build_embedded_acceptance_report(
-        _source(), now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
-    )
+    report = _build(_source())
     assert report["status"] == "passed"
     assert report["issue"] == "MoonLadderStudios/MoonMind#3425"
     assert set(report["sections"]) == set(REQUIRED_SECTIONS)
@@ -102,7 +106,7 @@ def test_complete_matrix_builds_publishable_issue_3425_report() -> None:
 
 def test_expected_commit_must_match_evidence_identity() -> None:
     with pytest.raises(ConformanceContractError, match="different commit"):
-        build_embedded_acceptance_report(_source(), expected_commit="def456")
+        _build(_source(), expected_commit="def456")
 
 
 @pytest.mark.parametrize("kind,key", [("prerequisites", "3422"), ("sections", "mode-transition-rollback")])
@@ -110,25 +114,25 @@ def test_missing_or_failed_controlling_lane_refuses_publication(kind: str, key: 
     source = _source()
     source[kind][key] = {"status": "failed", "evidenceRefs": ["artifact://failure"]}
     with pytest.raises(ConformanceContractError, match="did not pass"):
-        build_embedded_acceptance_report(source)
+        _build(source)
 
 
 def test_mutable_stock_host_and_incomplete_cleanup_refuse_publication() -> None:
     mutable = _source()
     mutable["identities"]["images"]["host"] = "host:latest"
     with pytest.raises(ConformanceContractError, match="digest-pinned"):
-        build_embedded_acceptance_report(mutable)
+        _build(mutable)
     incomplete = copy.deepcopy(_source())
     incomplete["cleanup"]["leasesReleased"] = False
     with pytest.raises(ConformanceContractError, match="release leases"):
-        build_embedded_acceptance_report(incomplete)
+        _build(incomplete)
 
 
 def test_secret_like_material_refuses_publication() -> None:
     source = _source()
     source["sections"]["secret-scan"]["note"] = "authorization=unsafe"
     with pytest.raises(ConformanceContractError, match="secret-like"):
-        build_embedded_acceptance_report(source)
+        _build(source)
 
 
 def test_unresolved_or_identity_mismatched_evidence_refuses_publication() -> None:
@@ -137,13 +141,13 @@ def test_unresolved_or_identity_mismatched_evidence_refuses_publication() -> Non
         "artifact://missing"
     ]
     with pytest.raises(ConformanceContractError, match="unresolved"):
-        build_embedded_acceptance_report(unresolved)
+        _build(unresolved)
 
     mismatched = _source()
     evidence = mismatched["evidenceObjects"]["artifact://mixed-mode-history"]
     evidence["identities"]["moonmindCommit"] = "different"
     with pytest.raises(ConformanceContractError, match="different identities"):
-        build_embedded_acceptance_report(mismatched)
+        _build(mismatched)
 
 
 def test_failed_or_incomplete_resolved_case_refuses_publication() -> None:
@@ -151,7 +155,7 @@ def test_failed_or_incomplete_resolved_case_refuses_publication() -> None:
     evidence = source["evidenceObjects"]["artifact://hostile-input-bounds"]
     evidence["cases"]["controlling-case"]["status"] = "skipped"
     with pytest.raises(ConformanceContractError, match="cases are incomplete"):
-        build_embedded_acceptance_report(source)
+        _build(source)
 
 
 def test_unresolved_or_mismatched_leaf_case_refuses_publication() -> None:
@@ -161,17 +165,13 @@ def test_unresolved_or_mismatched_leaf_case_refuses_publication() -> None:
         ConformanceContractError,
         match="case controlling-case evidence ref is unresolved",
     ):
-        build_embedded_acceptance_report(
-            unresolved, now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
-        )
+        _build(unresolved)
 
     mismatched = _source()
     leaf = mismatched["evidenceObjects"]["artifact://case/mixed-mode-history"]
     leaf["case"] = "another-case"
     with pytest.raises(ConformanceContractError, match="does not prove its case"):
-        build_embedded_acceptance_report(
-            mismatched, now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
-        )
+        _build(mismatched)
 
 
 @pytest.mark.parametrize(
@@ -189,6 +189,4 @@ def test_stale_revoked_superseded_or_malformed_evidence_refuses_publication(
     source = _source()
     source["evidenceObjects"]["artifact://mode-transition-rollback"].update(override)
     with pytest.raises(ConformanceContractError, match=match):
-        build_embedded_acceptance_report(
-            source, now=datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
-        )
+        _build(source)

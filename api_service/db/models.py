@@ -413,6 +413,9 @@ class OmnigentBridgeSession(Base):
     credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
 
     omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -2750,6 +2753,9 @@ class OmnigentOAuthHostBindingRecord(Base):
     credential_mount_template_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     static_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     host_launch_profile_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    execution_profile_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    launch_policy_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -2854,6 +2860,9 @@ class OmnigentOAuthHostLeaseRecord(Base):
     omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     bridge_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    effective_launch_snapshot_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
