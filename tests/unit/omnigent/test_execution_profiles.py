@@ -6,6 +6,7 @@ from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
     public_execution_catalog,
     selection_from_request,
+    validate_effective_launch_snapshot,
 )
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -29,6 +30,19 @@ def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
     assert first["snapshotRef"].startswith("omnigent-launch:sha256:")
     assert "credential" not in str(first).lower()
     assert "docker.sock" not in str(first)
+    validate_effective_launch_snapshot(first)
+
+
+def test_mutated_snapshot_fails_conflict_validation() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex-oauth",
+    )
+    launch["limits"]["memoryMiB"] = 8192
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        validate_effective_launch_snapshot(launch)
+    assert error.value.code == "OMNIGENT_EFFECTIVE_LAUNCH_CONFLICT"
 
 
 def test_missing_explicit_policy_fails_closed() -> None:
