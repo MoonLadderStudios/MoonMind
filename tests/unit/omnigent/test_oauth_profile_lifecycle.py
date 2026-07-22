@@ -717,7 +717,7 @@ def test_static_codex_compose_separates_authorized_mount_classes() -> None:
     assert "${OMNIGENT_ACTIVE_SKILLS_DIR" in service
     assert "omnigent-tools:/opt/moonmind-tools:ro" in service
     assert "omnigent-host-artifacts:/artifacts" in service
-    assert "omnigent-host-cache:/root/.cache" in service
+    assert "omnigent-host-cache:/home/app/.cache" in service
 
 
 def test_exact_host_preflight_rejects_generation_mismatch() -> None:

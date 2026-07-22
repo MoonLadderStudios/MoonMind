@@ -307,14 +307,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                         ),
                         provider_profile_id=profile_id,
                     )
-                    binding = await self._hosts.create_or_update_static_binding(
-                        profile_id=profile_id,
-                        endpoint_ref=binding.endpoint_ref,
-                        static_host_id=binding.static_host_id,
-                        host_launch_profile_ref=binding.host_launch_profile_ref,
-                        execution_profile_ref=str(effective_launch["executionProfileRef"]),
-                        launch_policy_ref=str(effective_launch["launchPolicyRef"]),
-                        effective_launch_snapshot=effective_launch,
+                    binding = binding.model_copy(
+                        update={"effective_launch_snapshot": effective_launch}
                     )
             elif requested_target:
                 effective_launch = compile_effective_launch(
