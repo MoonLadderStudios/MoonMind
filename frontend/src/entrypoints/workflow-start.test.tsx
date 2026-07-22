@@ -745,6 +745,65 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
     expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe("oauth-1");
   });
+
+  it("fails closed when submit-time Omnigent readiness cannot be refreshed", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        if (readinessRequests > 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            json: async () => ({ detail: "readiness unavailable" }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => readyOmnigentCatalog,
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              profile_id: "oauth-1",
+              account_label: "Codex OAuth",
+              provider_id: "openai",
+            },
+          ],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+      target: { value: "oauth-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch when readiness cannot be checked." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText("Codex via Omnigent readiness could not be verified."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, options]) =>
+          String(url) === "/api/executions" &&
+          (options as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+  });
 });
 
 const historicalRuntimeCommand = {

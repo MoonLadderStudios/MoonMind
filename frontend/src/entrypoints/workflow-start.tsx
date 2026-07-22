@@ -9874,6 +9874,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (normalizedRuntime === "omnigent") {
       const refreshed = await omnigentCatalogQuery.refetch();
+      if (refreshed.isError) {
+        setSubmitMessage("Codex via Omnigent readiness could not be verified.");
+        clearSubmitBusy();
+        return;
+      }
       const catalog = refreshed.data;
       const executionProfile = (catalog?.executionProfiles || []).find(
         (profile) => profile.ref === omnigentExecutionTargetRef,
@@ -9923,12 +9928,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     const invalidStepRuntime = submissionSteps.find((step) => {
       const stepRuntime = (step.runtimeMode || "").trim().toLowerCase();
-      return stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime);
+      return (
+        stepRuntime === "omnigent" ||
+        (stepRuntime && !supportedAgentRuntimeIds.includes(stepRuntime))
+      );
     });
     if (invalidStepRuntime) {
       const stepIndex = submissionSteps.indexOf(invalidStepRuntime) + 1;
       setSubmitMessage(
-        `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
+        (invalidStepRuntime.runtimeMode || "").trim().toLowerCase() === "omnigent"
+          ? `Step ${stepIndex} cannot use Codex via Omnigent; select it as the workflow runtime instead.`
+          : `Step ${stepIndex} runtime must be one of: ${supportedAgentRuntimes.join(", ")}.`,
       );
       clearSubmitBusy();
       return;
@@ -10913,7 +10923,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       runtime: {
         mode: normalizedRuntime,
         ...(hasSubmittedModelTier ? { modelTier: submittedModelTier } : {}),
-        ...(hasSubmittedModelTier || tierFallback === "strict" ? { tierFallback } : {}),
+        ...(selectedProfileSupportsModelControls &&
+        (hasSubmittedModelTier || tierFallback === "strict")
+          ? { tierFallback }
+          : {}),
         ...(submittedModel ? { model: submittedModel } : {}),
         ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
@@ -11099,6 +11112,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           selectedAttachmentFiles.length > 0 ||
           normalizedRepository !== String(rerunDraft.repository || "").trim() ||
           normalizedRuntime !== String(rerunDraft.runtime || "").trim() ||
+          omnigentExecutionTargetRef.trim() !==
+            String(rerunDraft.omnigentExecutionTargetRef || "").trim() ||
+          omnigentLaunchPolicyRef.trim() !==
+            String(rerunDraft.omnigentLaunchPolicyRef || "").trim() ||
           model.trim() !== String(rerunDraft.model || "").trim() ||
           effort.trim() !== String(rerunDraft.effort || "").trim() ||
           effectivePublishMode !== rerunDraftEffectivePublishMode ||
