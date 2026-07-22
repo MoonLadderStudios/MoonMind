@@ -38,6 +38,7 @@ SUPPORTED_RUNTIME_MODES = {
     "claude",
     "claude_code",
     "jules",
+    "omnigent",
     "universal",
 }
 SUPPORTED_EXECUTION_RUNTIMES = {
@@ -46,6 +47,7 @@ SUPPORTED_EXECUTION_RUNTIMES = {
     "claude",
     "claude_code",
     "jules",
+    "omnigent",
 }
 SUPPORTED_PUBLISH_MODES = {"auto", "none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")

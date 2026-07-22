@@ -1770,6 +1770,58 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 attempt_reason="runtime_recovered",
             )
 
+    def test_github_3453_authored_omnigent_runtime_compiles_profile_bound_request(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {"codex-oauth-profile"}
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        authored_selection = {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "agent": {"harnessOverride": "codex-native"},
+            "capture": {"required": True, "retentionDays": 30},
+        }
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "codex-oauth-profile",
+                    },
+                },
+                workflow_parameters={"omnigent": authored_selection},
+                node_id="omnigent-implement",
+                tool_name="auto",
+                resolved_skillset_ref="artifact://skills/resolved-1",
+            )
+
+        self.assertEqual(request.agent_kind, "external")
+        self.assertEqual(request.agent_id, "omnigent")
+        self.assertEqual(request.execution_profile_ref, "codex-oauth-profile")
+        self.assertEqual(
+            request.resolved_skillset_ref,
+            "artifact://skills/resolved-1",
+        )
+        self.assertEqual(request.parameters["omnigent"], authored_selection)
+        self.assertNotIn("hostId", request.parameters["omnigent"])
+        self.assertNotIn("credentialGeneration", request.parameters["omnigent"])
+        self.assertNotIn("providerLeaseId", request.parameters["omnigent"])
+        self.assertNotIn(
+            "_moonmindProfileAuthorization",
+            request.parameters["omnigent"],
+        )
+
     def test_checkpoint_branch_turn_requires_source_identity_for_explicit_checkpoint_ref(
         self,
     ) -> None:
