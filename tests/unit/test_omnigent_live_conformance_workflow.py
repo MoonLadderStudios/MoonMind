@@ -35,6 +35,7 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     assert job["strategy"]["fail-fast"] is False
     assert job["strategy"]["max-parallel"] == 1
     assert job["strategy"]["matrix"]["mode"] == [
+        "product",
         "stock",
         "static",
         "ondemand",
@@ -86,9 +87,24 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
         for step in job["steps"]
         if step.get("name") == "Write publication manifest"
     )
-    assert "expected four passing reports" in manifest["run"]
-    assert "MoonLadderStudios/MoonMind#3420" in manifest["run"]
+    assert "expected five passing reports" in manifest["run"]
+    assert "MoonLadderStudios/MoonMind#3456" in manifest["run"]
+    assert "MoonLadderStudios/MoonMind#3448" in manifest["run"]
+    assert "moonmind.omnigent.product-acceptance/v1" in manifest["run"]
     assert '"commit": os.environ["GITHUB_SHA"]' in manifest["run"]
+    assert "product evidence lacks independently resolved production records" in manifest["run"]
+    assert '"productSchemaVersions": product["schemaVersions"]' in manifest["run"]
+    assert '"safeIdentities": product["identifiers"]' in manifest["run"]
+    for field in (
+        "credentialGeneration", "executionProfileRef", "policyVersion",
+        "effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest",
+        "caseOutcomes", "secretScan", "cleanupAndRelease",
+    ):
+        assert field in manifest["run"]
+    assert "product evidence has invalid immutable digest" in manifest["run"]
+    assert "product evidence lacks the selected provider profile" in manifest["run"]
+    assert "image digest does not match live reports" in manifest["run"]
+    assert "product evidence lacks complete cleanup and release results" in manifest["run"]
     upload = next(
         step
         for step in job["steps"]
@@ -106,9 +122,10 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     link = next(
         step
         for step in job["steps"]
-        if step.get("name") == "Link passing matrix from issue 3420"
+        if step.get("name") == "Link passing acceptance report from issues 3456 and 3448"
     )
-    assert "gh issue comment 3420" in link["run"]
+    assert "gh issue comment 3456" in link["run"]
+    assert "gh issue comment 3448" in link["run"]
     assert "github.run_id" in link["run"]
     assert "github.run_attempt" in link["run"]
     assert "github.sha" in link["run"]

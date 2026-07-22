@@ -43,10 +43,17 @@ _REQUIRED_STOCK_ROUTES = {
     "workspace.diff", "session.files", "session.content", "terminal.snapshot",
 }
 _REQUIRED_FAILURES = {
-    "invalid_oauth", "profile_lease_busy", "host_image_start_failure",
-    "registration_timeout", "bridge_server_auth_failure", "server_unavailable",
+    "stale_runtime_catalog", "no_eligible_profile", "disconnected_profile",
+    "profile_lease_busy", "bounded_lease_timeout", "disabled_execution_profile",
+    "incompatible_policy", "invalid_workspace", "escaped_workspace",
+    "docker_unavailable", "worker_unavailable", "host_image_pull_failure",
+    "host_image_start_failure", "network_policy_failure", "egress_policy_failure",
+    "mount_policy_failure", "invalid_oauth", "registration_timeout",
+    "codex_native_mismatch", "bridge_server_auth_failure",
+    "bridge_session_authorization_failure", "server_unavailable",
     "ambiguous_first_message_reconciliation", "active_session_disconnect",
-    "resource_route_unavailable", "cleanup_failure",
+    "resource_route_unavailable", "operator_cancelled",
+    "artifact_persistence_failure", "cleanup_failure", "profile_release_failure",
 }
 _ONDEMAND_ORDER = (
     "lease_acquired", "host_launched", "preflight_ready", "session_bound",
@@ -210,6 +217,24 @@ async def test_live_stock_proxy_compatibility_profile(bridge_store) -> None:
     await test_live_omnigent_bridge_smoke_disposable_managed_session(bridge_store)
 
 
+async def test_live_product_create_api_journey(bridge_store) -> None:
+    _require_mode("product")
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_PRODUCT_EVIDENCE")
+    assert evidence.get("issue") == "MoonLadderStudios/MoonMind#3456"
+    _assert_passed(evidence, {
+        "normal_create_api", "authored_intent_and_snapshot",
+        "external_omnigent_compilation", "selected_profile_policy_workspace",
+        "real_temporal_activity_route", "workflow_detail_sse", "release_last",
+        "replay_after_host_removal", "no_fallback",
+    })
+    selection = evidence.get("selection")
+    assert isinstance(selection, dict)
+    assert selection.get("agentKind") == "external"
+    assert selection.get("agentId") == "omnigent"
+    assert selection.get("hostMode") == "on_demand_docker"
+    assert evidence.get("schemaVersions")
+
+
 async def test_live_static_workflow_detail_restart_replay(bridge_store) -> None:
     _require_mode("static")
     evidence = _scenario_evidence("MOONMIND_OMNIGENT_STATIC_EVIDENCE")
@@ -253,3 +278,4 @@ async def test_live_failure_matrix_and_durable_evidence(bridge_store) -> None:
         assert result.get("lifecycleProjected") is True, name
         assert result.get("terminalProjected") is True, name
         assert result.get("redacted") is True, name
+        assert result.get("noFallback") is True, name

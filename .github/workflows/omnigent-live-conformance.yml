@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [stock, static, ondemand, failures]
+        mode: [product, stock, static, ondemand, failures]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -128,11 +128,91 @@ jobs:
           from pathlib import Path
           root = Path("artifacts/omnigent-conformance/published")
           reports = sorted(root.glob("*/report.json"))
-          if len(reports) != 4:
-              raise SystemExit(f"expected four passing reports, found {len(reports)}")
+          if len(reports) != 5:
+              raise SystemExit(f"expected five passing reports, found {len(reports)}")
+          report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
+          for path, report in zip(reports, report_payloads):
+              if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
+                  raise SystemExit(f"unsupported report schema: {path}")
+              if report.get("summary", {}).get("failed"):
+                  raise SystemExit(f"failed cases cannot be published: {path}")
+              if not any(case.get("status") == "passed" for case in report.get("cases", [])):
+                  raise SystemExit(f"report has no passing controlling case: {path}")
+          product_paths = list(root.glob("*/product-evidence.json"))
+          if len(product_paths) != 1:
+              raise SystemExit(f"expected one product evidence document, found {len(product_paths)}")
+          product = json.loads(product_paths[0].read_text(encoding="utf-8"))
+          required_assertions = {
+              "normal_create_api", "authored_intent_and_snapshot",
+              "external_omnigent_compilation", "selected_profile_policy_workspace",
+              "real_temporal_activity_route", "workflow_detail_sse", "release_last",
+              "replay_after_host_removal", "no_fallback",
+          }
+          if any(product.get("assertions", {}).get(key) is not True for key in required_assertions):
+              raise SystemExit("product evidence lacks a controlling assertion")
+          required_records = {
+              "runtimeCatalog", "createRequest", "authoredWorkflow", "taskInputSnapshot",
+              "compiledExecutionRequest", "temporalHistory", "hostBinding", "profileLease",
+              "workflowDetail", "bridgeEvents", "artifactInventory", "cleanupResult",
+          }
+          if not required_records.issubset(set(product.get("sourceRecordTypes", []))):
+              raise SystemExit("product evidence lacks independently resolved production records")
+          required_ids = {"workflowId", "runId", "stepId", "bridgeId", "hostId", "sessionId"}
+          if any(not product.get("identifiers", {}).get(key) for key in required_ids):
+              raise SystemExit("product evidence lacks safe lifecycle identifiers")
+          selection = product.get("selection", {})
+          if selection.get("agentKind") != "external" or selection.get("agentId") != "omnigent":
+              raise SystemExit("product evidence is not the explicit Omnigent selection")
+          if not isinstance(selection.get("providerProfileRef"), str) or not selection["providerProfileRef"].strip():
+              raise SystemExit("product evidence lacks the selected provider profile")
+          if not product.get("schemaVersions") or not product.get("evidenceRefs"):
+              raise SystemExit("product evidence lacks schema versions or durable evidence refs")
+          acceptance = product.get("acceptance", {})
+          required_acceptance = {
+              "credentialGeneration", "executionProfileRef", "policyVersion",
+              "effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest",
+              "caseOutcomes", "secretScan", "evidence", "cleanupAndRelease",
+          }
+          if any(not acceptance.get(key) for key in required_acceptance):
+              raise SystemExit("product evidence lacks a required acceptance-report field")
+          for digest_key in ("effectiveLaunchSnapshotDigest", "serverImageDigest", "hostImageDigest"):
+              digest = acceptance[digest_key]
+              if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) != 71:
+                  raise SystemExit(f"product evidence has invalid immutable digest: {digest_key}")
+          report_images = [report.get("images", {}) for report in report_payloads]
+          expected_images = {
+              "server": acceptance["serverImageDigest"],
+              "host": acceptance["hostImageDigest"],
+          }
+          for image_key, expected_digest in expected_images.items():
+              tested = {images.get(image_key, "").rsplit("@", 1)[-1] for images in report_images}
+              if tested != {expected_digest}:
+                  raise SystemExit(
+                      f"product evidence {image_key} image digest does not match live reports"
+                  )
+          case_outcomes = acceptance["caseOutcomes"]
+          if not isinstance(case_outcomes, dict) or not case_outcomes or any(
+              outcome != "passed" for outcome in case_outcomes.values()
+          ):
+              raise SystemExit("product evidence contains missing or non-passing case outcomes")
+          secret_scan = acceptance["secretScan"]
+          if not isinstance(secret_scan, dict) or secret_scan.get("status") != "passed":
+              raise SystemExit("product evidence lacks a passing secret scan")
+          cleanup = acceptance["cleanupAndRelease"]
+          if not isinstance(cleanup, dict) or any(cleanup.get(key) is not True for key in (
+              "runOwnedResourcesRemoved", "oauthVolumePreserved",
+              "unrelatedResourcesPreserved", "profileReleasedLast",
+          )):
+              raise SystemExit("product evidence lacks complete cleanup and release results")
+          evidence = acceptance["evidence"]
+          if not isinstance(evidence, dict) or any(
+              not evidence.get(key) for key in ("artifacts", "diagnostics", "history")
+          ):
+              raise SystemExit("product evidence lacks required evidence references")
           manifest = {
-              "schemaVersion": "moonmind.omnigent.published-matrix/v1",
-              "issue": "MoonLadderStudios/MoonMind#3420",
+              "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
+              "issue": "MoonLadderStudios/MoonMind#3456",
+              "parentIssue": "MoonLadderStudios/MoonMind#3448",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "commit": os.environ["GITHUB_SHA"],
@@ -145,8 +225,32 @@ jobs:
                   f"{os.environ['GITHUB_RUN_ATTEMPT']}"
               ),
               "reports": [str(path) for path in reports],
-              "modes": ["stock", "static", "ondemand", "failures"],
+              "productEvidence": str(product_paths[0]),
+              "productSchemaVersions": product["schemaVersions"],
+              "selection": selection,
+              "executionProfileRef": acceptance["executionProfileRef"],
+              "policyVersion": acceptance["policyVersion"],
+              "effectiveLaunchSnapshotDigest": acceptance["effectiveLaunchSnapshotDigest"],
+              "providerProfile": {
+                  "safeRef": selection["providerProfileRef"],
+                  "credentialGeneration": acceptance["credentialGeneration"],
+              },
+              "images": {
+                  "serverDigest": acceptance["serverImageDigest"],
+                  "hostDigest": acceptance["hostImageDigest"],
+              },
+              "safeIdentities": product["identifiers"],
+              "caseOutcomes": acceptance["caseOutcomes"],
+              "secretScan": acceptance["secretScan"],
+              "evidence": acceptance["evidence"],
+              "cleanupAndRelease": acceptance["cleanupAndRelease"],
+              "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
+              "noFallback": product["assertions"]["no_fallback"],
+              "modes": ["product", "stock", "static", "ondemand", "failures"],
               "status": "passed",
+              "generatedAt": os.environ.get("GITHUB_RUN_STARTED_AT"),
+              "producer": {"workflow": os.environ["GITHUB_WORKFLOW"], "runId": os.environ["GITHUB_RUN_ID"]},
+              "supersessionPolicy": "newest passing report for the same commit and immutable image digests",
           }
           (root / "published-matrix.json").write_text(
               json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -165,11 +269,11 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issue: \`MoonLadderStudios/MoonMind#3420\`"
-            echo "- Result: all stock, static, on-demand, and failure cases passed"
+            echo "- Issue: \`MoonLadderStudios/MoonMind#3456\` (parent \`#3448\`)"
+            echo "- Result: product-create, stock, static, on-demand, and failure cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Link passing matrix from issue 3420
+      - name: Link passing acceptance report from issues 3456 and 3448
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,8 +286,9 @@ jobs:
             echo
             echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Modes: \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
+            echo "- Modes: \`product\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
             echo "- Durable artifact: \`${artifact}\`"
-            echo "- Evidence refs and immutable image digests: the four \`report.json\` trees in \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the five \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
-          gh issue comment 3420 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3456 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"

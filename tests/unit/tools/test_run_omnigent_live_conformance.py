@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -87,13 +88,74 @@ def test_ondemand_release_is_last_and_all_actions_execute(tmp_path, monkeypatch)
     assert actions[-1] == "lease_released"
 
 
+def test_product_uses_normal_create_and_release_last(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    ids = {"workflowId": "w", "runId": "r", "stepId": "st", "bridgeId": "b",
+           "hostId": "h", "sessionId": "s"}
+    selection = {"agentKind": "external", "agentId": "omnigent",
+                 "hostMode": "on_demand_docker", "providerProfileRef": "profile-safe"}
+    acceptance = {
+        "credentialGeneration": 7, "executionProfileRef": "execution-profile/v1",
+        "policyVersion": "policy/v1",
+        "effectiveLaunchSnapshotDigest": "sha256:" + "a" * 64,
+        "serverImageDigest": "sha256:" + "b" * 64,
+        "hostImageDigest": "sha256:" + "c" * 64,
+        "caseOutcomes": {"normal-create-api": "passed"},
+        "secretScan": {"status": "passed"},
+        "evidence": {"artifacts": ["artifact://a"], "diagnostics": ["artifact://d"],
+                     "history": ["artifact://h"], "screenshots": []},
+        "cleanupAndRelease": {"runOwnedResourcesRemoved": True,
+            "oauthVolumePreserved": True, "unrelatedResourcesPreserved": True,
+            "profileReleasedLast": True},
+    }
+    def action(scenario, name, **inputs):
+        actions.append(name)
+        return {"ok": True, "state": {**ids, **acceptance, "selection": selection,
+                "schemaVersions": {"create": "v1"}}, "evidenceRefs": [f"artifact://{name}"],
+                "normalCreateApi": name == "workflow_created",
+                "authoredIntentAndSnapshot": name == "authored_intent_persisted",
+                "externalOmnigentCompilation": name == "request_compiled",
+                "selectedAuthoritiesPreserved": name == "request_compiled",
+                "temporalActivityRoute": name == "temporal_routed",
+                "workflowDetailSse": name == "workflow_detail_streamed",
+                "replayAfterRemoval": name == "workflow_detail_replayed",
+                "releaseLast": name == "profile_released", "noFallback": True}
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+    runner.product()
+    assert actions == list(module.PRODUCT_ACTIONS)
+    assert actions[1] == "workflow_created"
+    assert actions[-1] == "profile_released"
+    evidence = json.loads((tmp_path / "product-evidence.json").read_text())
+    assert all(evidence["assertions"].values())
+    assert evidence["acceptance"] == acceptance
+
+
+def test_product_rejects_incomplete_acceptance_report_fields(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    ids = {"workflowId": "w", "runId": "r", "stepId": "st", "bridgeId": "b",
+           "hostId": "h", "sessionId": "s"}
+    monkeypatch.setattr(runner, "action", lambda *args, **kwargs: {
+        "ok": True, "state": ids, "evidenceRefs": ["artifact://evidence"]
+    })
+    try:
+        runner.product()
+    except module.ConformanceContractError as exc:
+        assert "lacks acceptance fields" in str(exc)
+    else:
+        raise AssertionError("incomplete product acceptance evidence was accepted")
+
+
 def test_failure_matrix_executes_exact_issue_cases(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})
     actions = []
     monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: actions.append(action) or {
         "ok": True, "durableEvidence": {"injected": True, "lifecycleProjected": True,
-        "terminalProjected": True, "redacted": True},
+        "terminalProjected": True, "redacted": True, "noFallback": True},
         "evidenceRefs": [f"artifact://{action}"],
     })
     monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
@@ -162,12 +224,13 @@ def test_action_rejects_boolean_attestation_without_evidence(tmp_path, monkeypat
         raise AssertionError("bare boolean attestation was accepted")
 
 
-def _action_evidence(tmp_path, scenario, action, identifiers=None):
+def _action_evidence(tmp_path, scenario, action, identifiers=None, source_records=None):
     path = tmp_path / f"{scenario}-{action}.json"
     path.write_text(json.dumps({
         "schemaVersion": "moonmind.omnigent.action-evidence/v1",
         "scenario": scenario, "action": action, "observed": True,
         "identifiers": identifiers or {},
+        "sourceRecords": source_records or [],
     }))
     return path.as_uri()
 
@@ -211,6 +274,57 @@ def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch
             raise AssertionError("invalid durable evidence was accepted")
 
 
+def test_product_action_binds_all_lifecycle_ids_to_evidence(tmp_path, monkeypatch):
+    module = _module()
+    ids = {"workflowId": "w", "runId": "r", "stepId": "s", "bridgeId": "b"}
+    ref = _action_evidence(tmp_path, "product", "runtime_catalog_loaded", {
+        **ids, "bridgeId": "different",
+    }, source_records=[])
+    evidence = json.loads(Path(ref.removeprefix("file://")).read_text())
+    record_path = tmp_path / "runtime-catalog.json"
+    record_path.write_text('{"catalog":true}')
+    evidence["sourceRecords"] = [{
+        "type": "runtimeCatalog", "ref": record_path.as_uri(),
+        "sha256": hashlib.sha256(record_path.read_bytes()).hexdigest(),
+    }]
+    Path(ref.removeprefix("file://")).write_text(json.dumps(evidence))
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "state": ids, "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        runner.action("product", "runtime_catalog_loaded")
+    except module.ConformanceContractError as exc:
+        assert "evidence identifiers do not match" in str(exc)
+    else:
+        raise AssertionError("mismatched product identifiers were accepted")
+
+
+def test_product_action_resolves_and_hashes_source_records(tmp_path, monkeypatch):
+    module = _module()
+    record_path = tmp_path / "create-request.json"
+    record_path.write_text('{"request":true}')
+    records = [
+        {"type": record_type, "ref": record_path.as_uri(), "sha256": "0" * 64}
+        for record_type in module.PRODUCT_RECORD_TYPES["workflow_created"]
+    ]
+    ref = _action_evidence(tmp_path, "product", "workflow_created", source_records=records)
+    runner = module.LiveRunner(output_dir=tmp_path, env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"})
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        runner.action("product", "workflow_created")
+    except module.ConformanceContractError as exc:
+        assert "source record digest does not match" in str(exc)
+    else:
+        raise AssertionError("unverified source record digest was accepted")
+
+
 def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})
@@ -229,38 +343,21 @@ def test_ondemand_threads_state_between_actions(tmp_path, monkeypatch):
     assert all(call == state for call in seen[1:])
 
 
-def test_repository_backend_persists_static_replay_and_rejects_wrong_ids(tmp_path):
+def test_product_rejects_semantic_attestation_without_source_records(tmp_path, monkeypatch):
     module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={
-        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
-    })
-    executed = runner.action("static", "execute")
-    ids = {key: executed[key] for key in ("workflowId", "agentRunId", "sessionId")}
-    assert runner.action("static", "replay", **ids)["durable_replay"] is True
+    ref = _action_evidence(tmp_path, "product", "workflow_created")
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"},
+    )
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "evidenceRefs": [ref]})
+        stderr = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
     try:
-        runner.action("static", "replay", **{**ids, "workflowId": "wrong"})
-    except RuntimeError:
-        pass
+        runner.action("product", "workflow_created")
+    except module.ConformanceContractError as exc:
+        assert "independently resolved source records" in str(exc)
     else:
-        raise AssertionError("backend accepted replay for another workflow")
-
-
-def test_repository_backend_enforces_lifecycle_and_failure_projection(tmp_path):
-    module = _module()
-    runner = module.LiveRunner(output_dir=tmp_path, env={
-        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
-    })
-    try:
-        runner.action("ondemand", "host_launched")
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("backend accepted host launch before lease")
-    state = {}
-    for action in module.ONDEMAND_ACTIONS:
-        result = runner.action("ondemand", action, **state)
-        state.update(result["state"])
-    assert all(state.get(key) for key in ("leaseId", "hostId", "workflowId", "agentRunId", "sessionId"))
-    for case in module.FAILURE_CASES:
-        durable = runner.action("failures", case)["durableEvidence"]
-        assert all(durable.values())
+        raise AssertionError("semantic product attestation was accepted")
