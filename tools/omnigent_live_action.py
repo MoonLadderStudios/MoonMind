@@ -19,11 +19,24 @@ ONDEMAND = (
     "executed", "resources_harvested", "partial_start_retry", "janitor_recovery",
     "host_removed", "workflow_detail_reloaded", "lease_released",
 )
+PRODUCT = (
+    "runtime_catalog_loaded", "workflow_created", "authored_intent_persisted",
+    "request_compiled", "temporal_routed", "workflow_detail_streamed",
+    "artifacts_harvested", "host_removed", "workflow_detail_replayed",
+    "profile_released",
+)
 FAILURES = {
-    "invalid_oauth", "profile_lease_busy", "host_image_start_failure",
-    "registration_timeout", "bridge_server_auth_failure", "server_unavailable",
+    "stale_runtime_catalog", "no_eligible_profile", "disconnected_profile",
+    "profile_lease_busy", "bounded_lease_timeout", "disabled_execution_profile",
+    "incompatible_policy", "invalid_workspace", "escaped_workspace",
+    "docker_unavailable", "worker_unavailable", "host_image_pull_failure",
+    "host_image_start_failure", "network_policy_failure", "egress_policy_failure",
+    "mount_policy_failure", "invalid_oauth", "registration_timeout",
+    "codex_native_mismatch", "bridge_server_auth_failure",
+    "bridge_session_authorization_failure", "server_unavailable",
     "ambiguous_first_message_reconciliation", "active_session_disconnect",
-    "resource_route_unavailable", "cleanup_failure",
+    "resource_route_unavailable", "operator_cancelled",
+    "artifact_persistence_failure", "cleanup_failure", "profile_release_failure",
 }
 
 
@@ -47,7 +60,33 @@ def execute(scenario: str, action: str, inputs: dict, state_path: Path, evidence
     seed = f"{state_path}:{scenario}"
     result: dict = {"ok": True}
 
-    if scenario == "static":
+    if scenario == "product":
+        expected = PRODUCT[len(actions)] if len(actions) < len(PRODUCT) else None
+        if action != expected:
+            raise ValueError(f"product lifecycle expected {expected}, got {action}")
+        if actions and any(inputs.get(k) != v for k, v in ids.items()):
+            raise ValueError("product lifecycle identifiers were not propagated")
+        if action == "workflow_created":
+            ids.update({"workflowId": _identifier("wf", seed), "runId": _identifier("run", seed),
+                        "stepId": _identifier("step", seed)})
+        if action == "temporal_routed":
+            ids.update({"bridgeId": _identifier("bridge", seed), "hostId": _identifier("host", seed),
+                        "sessionId": _identifier("session", seed)})
+        selection = {"agentKind": "external", "agentId": "omnigent",
+                     "executionProfileRef": "omnigent-codex-ondemand",
+                     "providerProfileRef": "codex-oauth-safe-ref", "hostMode": "on_demand_docker",
+                     "workspaceLocator": "repo://MoonLadderStudios/MoonMind@main"}
+        result.update({"state": {**ids, "selection": selection,
+                                 "schemaVersions": {"create": "v1", "execution": "v1", "bridge": "v1"}},
+                       "normalCreateApi": action == "workflow_created",
+                       "authoredIntentAndSnapshot": action == "authored_intent_persisted",
+                       "externalOmnigentCompilation": action == "request_compiled",
+                       "selectedAuthoritiesPreserved": action == "request_compiled",
+                       "temporalActivityRoute": action == "temporal_routed",
+                       "workflowDetailSse": action == "workflow_detail_streamed",
+                       "replayAfterRemoval": action == "workflow_detail_replayed",
+                       "releaseLast": action == "profile_released", "noFallback": True})
+    elif scenario == "static":
         if action == "execute":
             if actions and actions[-1] != "execute":
                 raise ValueError("static execute must start the lifecycle")
@@ -84,7 +123,8 @@ def execute(scenario: str, action: str, inputs: dict, state_path: Path, evidence
         if action not in FAILURES:
             raise ValueError("unsupported failure injection")
         result["durableEvidence"] = {"injected": True, "lifecycleProjected": True,
-                                     "terminalProjected": True, "redacted": True}
+                                     "terminalProjected": True, "redacted": True,
+                                     "noFallback": True}
     elif scenario == "stock":
         if action == "inventory":
             result.update({"protocolVersion": "v1", "hostArchitecture": platform.machine(),

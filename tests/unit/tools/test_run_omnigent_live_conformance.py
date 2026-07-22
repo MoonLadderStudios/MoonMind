@@ -87,13 +87,43 @@ def test_ondemand_release_is_last_and_all_actions_execute(tmp_path, monkeypatch)
     assert actions[-1] == "lease_released"
 
 
+def test_product_uses_normal_create_and_release_last(tmp_path, monkeypatch):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    actions = []
+    ids = {"workflowId": "w", "runId": "r", "stepId": "st", "bridgeId": "b",
+           "hostId": "h", "sessionId": "s"}
+    selection = {"agentKind": "external", "agentId": "omnigent",
+                 "hostMode": "on_demand_docker"}
+    def action(scenario, name, **inputs):
+        actions.append(name)
+        return {"ok": True, "state": {**ids, "selection": selection,
+                "schemaVersions": {"create": "v1"}}, "evidenceRefs": [f"artifact://{name}"],
+                "normalCreateApi": name == "workflow_created",
+                "authoredIntentAndSnapshot": name == "authored_intent_persisted",
+                "externalOmnigentCompilation": name == "request_compiled",
+                "selectedAuthoritiesPreserved": name == "request_compiled",
+                "temporalActivityRoute": name == "temporal_routed",
+                "workflowDetailSse": name == "workflow_detail_streamed",
+                "replayAfterRemoval": name == "workflow_detail_replayed",
+                "releaseLast": name == "profile_released", "noFallback": True}
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+    runner.product()
+    assert actions == list(module.PRODUCT_ACTIONS)
+    assert actions[1] == "workflow_created"
+    assert actions[-1] == "profile_released"
+    evidence = json.loads((tmp_path / "product-evidence.json").read_text())
+    assert all(evidence["assertions"].values())
+
+
 def test_failure_matrix_executes_exact_issue_cases(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})
     actions = []
     monkeypatch.setattr(runner, "action", lambda scenario, action, **kw: actions.append(action) or {
         "ok": True, "durableEvidence": {"injected": True, "lifecycleProjected": True,
-        "terminalProjected": True, "redacted": True},
+        "terminalProjected": True, "redacted": True, "noFallback": True},
         "evidenceRefs": [f"artifact://{action}"],
     })
     monkeypatch.setattr(runner, "scenario", lambda mode, phase=None: None)
@@ -264,3 +294,17 @@ def test_repository_backend_enforces_lifecycle_and_failure_projection(tmp_path):
     for case in module.FAILURE_CASES:
         durable = runner.action("failures", case)["durableEvidence"]
         assert all(durable.values())
+
+
+def test_repository_backend_enforces_product_create_lifecycle(tmp_path):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={
+        "MOONMIND_OMNIGENT_ACTION_COMMAND": f"{module.sys.executable} {module.REPO_ROOT / 'tools/omnigent_live_action.py'}"
+    })
+    state = {}
+    for action in module.PRODUCT_ACTIONS:
+        result = runner.action("product", action, **state)
+        state.update(result["state"])
+        assert result["noFallback"] is True
+    assert state["selection"]["agentKind"] == "external"
+    assert state["selection"]["agentId"] == "omnigent"

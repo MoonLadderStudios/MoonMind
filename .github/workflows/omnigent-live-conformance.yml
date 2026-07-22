@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [stock, static, ondemand, failures]
+        mode: [product, stock, static, ondemand, failures]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -128,11 +128,12 @@ jobs:
           from pathlib import Path
           root = Path("artifacts/omnigent-conformance/published")
           reports = sorted(root.glob("*/report.json"))
-          if len(reports) != 4:
-              raise SystemExit(f"expected four passing reports, found {len(reports)}")
+          if len(reports) != 5:
+              raise SystemExit(f"expected five passing reports, found {len(reports)}")
           manifest = {
-              "schemaVersion": "moonmind.omnigent.published-matrix/v1",
-              "issue": "MoonLadderStudios/MoonMind#3420",
+              "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
+              "issue": "MoonLadderStudios/MoonMind#3456",
+              "parentIssue": "MoonLadderStudios/MoonMind#3448",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "commit": os.environ["GITHUB_SHA"],
@@ -145,8 +146,11 @@ jobs:
                   f"{os.environ['GITHUB_RUN_ATTEMPT']}"
               ),
               "reports": [str(path) for path in reports],
-              "modes": ["stock", "static", "ondemand", "failures"],
+              "modes": ["product", "stock", "static", "ondemand", "failures"],
               "status": "passed",
+              "generatedAt": os.environ.get("GITHUB_RUN_STARTED_AT"),
+              "producer": {"workflow": os.environ["GITHUB_WORKFLOW"], "runId": os.environ["GITHUB_RUN_ID"]},
+              "supersessionPolicy": "newest passing report for the same commit and immutable image digests",
           }
           (root / "published-matrix.json").write_text(
               json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -165,11 +169,11 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issue: \`MoonLadderStudios/MoonMind#3420\`"
-            echo "- Result: all stock, static, on-demand, and failure cases passed"
+            echo "- Issue: \`MoonLadderStudios/MoonMind#3456\` (parent \`#3448\`)"
+            echo "- Result: product-create, stock, static, on-demand, and failure cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Link passing matrix from issue 3420
+      - name: Link passing acceptance report from issues 3456 and 3448
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,8 +186,9 @@ jobs:
             echo
             echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Modes: \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
+            echo "- Modes: \`product\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
             echo "- Durable artifact: \`${artifact}\`"
-            echo "- Evidence refs and immutable image digests: the four \`report.json\` trees in \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the five \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
-          gh issue comment 3420 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3456 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"

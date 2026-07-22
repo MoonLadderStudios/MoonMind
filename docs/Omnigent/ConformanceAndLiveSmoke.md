@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-07-17
-**Authority:** MoonLadderStudios/MoonMind#3368 conformance evidence contract
+**Updated:** 2026-07-22
+**Authority:** MoonLadderStudios/MoonMind#3456 product acceptance and conformance evidence contract
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -48,6 +48,14 @@ the report.
 
 ## Live-run boundaries
 
+The controlling product case begins with the normal `/api/executions` create
+payload produced by `/workflows/new`. Its evidence must bind authored intent and
+the task-input snapshot to compilation as `external/omnigent`, the selected
+Provider Profile, execution profile, policy/host mode, and workspace authority.
+It then follows the production Temporal/activity route and the Workflow Detail
+and SSE read surfaces. A raw `AgentExecutionRequest`, manually selected host, or
+action-adapter-only execution cannot satisfy this case.
+
 The static runner uses canonical `docker-compose.yaml` and the
 `omnigent-host-codex` profile. The on-demand runner uses the production Provider
 Profile lease and host lifecycle. Both must validate the already-enrolled OAuth
@@ -90,12 +98,13 @@ removes that project's containers and networks only; it intentionally never
 passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
 runner always attempts cleanup and evidence scanning, including after a failed
 startup or journey. `--mode static` covers restart and replay; `stock`,
-`ondemand`, and `failures` can be gated independently in provider environments.
+`product`, `ondemand`, and `failures` can be gated independently in provider
+environments.
 
 ## Credentialed CI publication
 
 `.github/workflows/omnigent-live-conformance.yml` is the scheduled and manually
-dispatchable publication gate for MoonLadderStudios/MoonMind#3368. It runs on a
+dispatchable publication gate for MoonLadderStudios/MoonMind#3456. It runs on a
 dedicated `omnigent-provider-verification` self-hosted runner so the enrolled
 OAuth profile and live action adapter remain outside GitHub-hosted workers. The
 protected environment supplies the adapter command; repository variables supply
@@ -103,9 +112,19 @@ the digest-pinned server and host images plus the four bounded evidence-channel
 paths. Manual dispatch may override the two image references, but the workflow
 rejects mutable references before provider execution.
 
-Stock proxy, static restart/replay, on-demand lifecycle, and failure/redaction
-run as independent matrix jobs. Each job uploads evidence even on failure. The
-publication job runs only after all four jobs pass, combines their reports, and
-uploads `published-matrix.json` with the four report trees as the durable GitHub
-Actions artifact. A configured workflow or an individual passing case is not
-published conformance evidence.
+Normal-create product journey, stock proxy, static restart/replay, on-demand
+lifecycle, and failure/redaction run as independent matrix jobs. Each job
+uploads evidence even on failure. The publication job runs only after all five
+jobs pass, combines their reports, and uploads a
+`moonmind.omnigent.product-acceptance/v1` manifest with the five report trees as
+the durable GitHub Actions artifact. It links that passing report from #3456
+and parent #3448. A configured workflow, fixture-generated success, or an
+individual passing case is not published acceptance evidence.
+
+Omnigent selection remains evidence-gated and must not become a general default
+until this report passes for the deployed commit and immutable images. Canary
+enablement is an explicit execution-profile/policy choice. Rollback disables
+new Omnigent selection while preserving Workflow Detail reads for historical
+bridge records; choosing direct Codex is a separate product/deployment decision,
+never a per-request fallback. Cleanup failures retain `janitorRequired` evidence,
+and the Provider Profile is released only after credential-consuming host cleanup.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run credentialed Omnigent conformance journeys for #3368.
+"""Run credentialed Omnigent conformance and product journeys for #3456.
 
 The runner owns only an isolated Compose project.  In particular, it never
 removes volumes: the enrolled Codex OAuth volume is operator-owned evidence,
@@ -38,6 +38,7 @@ PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 PROJECT = "moonmind-test-omnigent-live"
 PROVIDER_TEST = "tests/provider/omnigent/test_omnigent_smoke.py"
 LIVE_CASES = {
+    "product": {"product.normal-create-api"},
     "stock": {
         "stock-images.proxy",
         "proxy.routes",
@@ -56,10 +57,23 @@ STOCK_ROUTES = (
     "session.files", "session.content", "terminal.snapshot",
 )
 FAILURE_CASES = (
-    "invalid_oauth", "profile_lease_busy", "host_image_start_failure",
-    "registration_timeout", "bridge_server_auth_failure", "server_unavailable",
+    "stale_runtime_catalog", "no_eligible_profile", "disconnected_profile",
+    "profile_lease_busy", "bounded_lease_timeout", "disabled_execution_profile",
+    "incompatible_policy", "invalid_workspace", "escaped_workspace",
+    "docker_unavailable", "worker_unavailable", "host_image_pull_failure",
+    "host_image_start_failure", "network_policy_failure", "egress_policy_failure",
+    "mount_policy_failure", "invalid_oauth", "registration_timeout",
+    "codex_native_mismatch", "bridge_server_auth_failure",
+    "bridge_session_authorization_failure", "server_unavailable",
     "ambiguous_first_message_reconciliation", "active_session_disconnect",
-    "resource_route_unavailable", "cleanup_failure",
+    "resource_route_unavailable", "operator_cancelled",
+    "artifact_persistence_failure", "cleanup_failure", "profile_release_failure",
+)
+PRODUCT_ACTIONS = (
+    "runtime_catalog_loaded", "workflow_created", "authored_intent_persisted",
+    "request_compiled", "temporal_routed", "workflow_detail_streamed",
+    "artifacts_harvested", "host_removed", "workflow_detail_replayed",
+    "profile_released",
 )
 ONDEMAND_ACTIONS = (
     "lease_acquired", "host_launched", "preflight_ready", "session_bound",
@@ -67,6 +81,7 @@ ONDEMAND_ACTIONS = (
     "host_removed", "workflow_detail_reloaded", "lease_released",
 )
 SCENARIOS = {
+    "product": f"{PROVIDER_TEST}::test_live_product_create_api_journey",
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
     "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
     "ondemand": f"{PROVIDER_TEST}::test_live_ondemand_oauth_lifecycle_and_cleanup",
@@ -79,6 +94,7 @@ EVIDENCE_ENV = {
     "archives": "MOONMIND_OMNIGENT_ARCHIVE_EVIDENCE",
 }
 SCENARIO_EVIDENCE_ENV = {
+    "product": "MOONMIND_OMNIGENT_PRODUCT_EVIDENCE",
     "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
     "static": "MOONMIND_OMNIGENT_STATIC_EVIDENCE",
     "ondemand": "MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE",
@@ -242,6 +258,41 @@ class LiveRunner:
         })
         self.scenario("stock")
 
+    def product(self) -> None:
+        """Drive the normal product create contract, never a raw execution request."""
+        state: dict[str, object] = {}
+        results: dict[str, dict[str, object]] = {}
+        for action in PRODUCT_ACTIONS:
+            result = self.action("product", action, **state)
+            next_state = result.get("state")
+            if not isinstance(next_state, dict):
+                raise ConformanceContractError(f"product/{action} did not return lifecycle state")
+            state.update(next_state)
+            results[action] = result
+        required = ("workflowId", "runId", "stepId", "bridgeId", "hostId", "sessionId")
+        if not all(state.get(key) for key in required):
+            raise ConformanceContractError("product journey lacks durable product identifiers")
+        assertions = {
+            "normal_create_api": bool(results["workflow_created"].get("normalCreateApi")),
+            "authored_intent_and_snapshot": bool(results["authored_intent_persisted"].get("authoredIntentAndSnapshot")),
+            "external_omnigent_compilation": bool(results["request_compiled"].get("externalOmnigentCompilation")),
+            "selected_profile_policy_workspace": bool(results["request_compiled"].get("selectedAuthoritiesPreserved")),
+            "real_temporal_activity_route": bool(results["temporal_routed"].get("temporalActivityRoute")),
+            "workflow_detail_sse": bool(results["workflow_detail_streamed"].get("workflowDetailSse")),
+            "release_last": bool(results["profile_released"].get("releaseLast")),
+            "replay_after_host_removal": bool(results["workflow_detail_replayed"].get("replayAfterRemoval")),
+            "no_fallback": all(bool(result.get("noFallback")) for result in results.values()),
+        }
+        if not all(assertions.values()):
+            raise ConformanceContractError("product journey did not prove every controlling assertion")
+        self.write_evidence("product", {
+            "issue": "MoonLadderStudios/MoonMind#3456", "actions": list(PRODUCT_ACTIONS),
+            "identifiers": {key: state[key] for key in required}, "assertions": assertions,
+            "selection": state.get("selection"), "schemaVersions": state.get("schemaVersions"),
+            "evidenceRefs": [ref for result in results.values() for ref in result["evidenceRefs"]],
+        })
+        self.scenario("product")
+
     @staticmethod
     def compose(*args: str) -> list[str]:
         return [
@@ -339,7 +390,8 @@ class LiveRunner:
             if not isinstance(durable, dict):
                 raise ConformanceContractError(f"failure {case} lacks durable evidence")
             cases[case] = {key: bool(durable.get(key)) for key in (
-                "injected", "lifecycleProjected", "terminalProjected", "redacted")}
+                "injected", "lifecycleProjected", "terminalProjected", "redacted",
+                "noFallback")}
             cases[case]["evidenceRefs"] = result["evidenceRefs"]
         self.write_evidence("failures", {"failureCases": cases})
         self.scenario("failures")
@@ -391,7 +443,9 @@ def main() -> int:
     try:
         for mode in selected:
             try:
-                if mode == "stock":
+                if mode == "product":
+                    runner.product()
+                elif mode == "stock":
                     runner.stock(images)
                 elif mode == "static":
                     runner.static()
