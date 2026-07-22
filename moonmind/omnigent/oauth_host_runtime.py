@@ -436,7 +436,8 @@ class OmnigentOAuthHostRuntime:
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
-        host_path = await self._discover_upstream_path()
+        host_image_ref = str(effective_launch["hostImageRef"])
+        host_path = await self._discover_upstream_path(host_image_ref)
         # A retry may find a stopped container with this deterministic name.
         # Remove only that lease-owned container, then initialize the dedicated
         # state volume as root before the actual host drops to UID/GID 1000.
@@ -455,7 +456,7 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--entrypoint",
             "/opt/moonmind/init-codex-oauth-host.sh",
-            str(effective_launch["hostImageRef"]),
+            host_image_ref,
         )
         labels = {
             "moonmind.kind": "omnigent-oauth-host",
@@ -571,10 +572,10 @@ class OmnigentOAuthHostRuntime:
         args.extend(["--entrypoint", "/usr/bin/env"])
         for key in _FORBIDDEN_ENV:
             args.extend(["-u", key])
-        args.extend([self._image, "/opt/moonmind/start-codex-oauth-host.sh"])
+        args.extend([host_image_ref, "/opt/moonmind/start-codex-oauth-host.sh"])
         await self._run(*args, env=child_env)
 
-    async def _discover_upstream_path(self) -> str:
+    async def _discover_upstream_path(self, image_ref: str) -> str:
         """Read the selected image's PATH without replacing image-specific entries."""
         result = await self._run(
             "docker",
@@ -582,7 +583,7 @@ class OmnigentOAuthHostRuntime:
             "inspect",
             "--format",
             "{{range .Config.Env}}{{println .}}{{end}}",
-            self._image,
+            image_ref,
             check=False,
         )
         if result[0] == 0:
