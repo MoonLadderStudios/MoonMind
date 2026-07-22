@@ -17,6 +17,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import WorkflowSettings, settings
+from moonmind.omnigent.execution_profiles import public_execution_catalog
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.runtime_defaults import (
     DEFAULT_REPOSITORY,
@@ -372,8 +373,6 @@ def _build_repository_options(
                 option.value,
                 source="github",
             )
-
-    from moonmind.omnigent.execution_profiles import public_execution_catalog
 
     return {
         "items": [option.to_payload() for option in options],
