@@ -12,6 +12,12 @@ from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 
 
+@pytest.fixture(autouse=True)
+def immutable_bootstrap_images(monkeypatch) -> None:
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
+    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "example.test/host@sha256:" + "2" * 64)
+
+
 def test_versioned_profile_and_policy_compile_to_stable_safe_snapshot() -> None:
     first = compile_effective_launch(
         profile_ref="omnigent-codex@1",
@@ -77,6 +83,26 @@ def test_policy_rejects_mutable_image_before_launch() -> None:
             cleanup={"mode": "remove"},
             controlCapabilities=(),
         )
+
+
+def test_compile_rejects_missing_or_placeholder_bootstrap_images(monkeypatch) -> None:
+    monkeypatch.delenv("OMNIGENT_IMAGE_REF")
+    with pytest.raises(OmnigentOAuthHostError) as missing:
+        compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex-oauth",
+        )
+    assert missing.value.code == "OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE"
+
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "0" * 64)
+    with pytest.raises(OmnigentOAuthHostError) as placeholder:
+        compile_effective_launch(
+            profile_ref="omnigent-codex@1",
+            policy_ref="codex-on-demand@1",
+            provider_profile_id="codex-oauth",
+        )
+    assert placeholder.value.code == "OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE"
 
 
 def test_workflow_cannot_supply_host_or_credential_authority() -> None:

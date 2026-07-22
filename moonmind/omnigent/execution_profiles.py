@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from typing import Any, Literal, Mapping
 
@@ -16,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_REF = re.compile(r"^[a-z0-9][a-z0-9._:/-]{0,127}$")
 
 
@@ -74,8 +76,10 @@ class OmnigentLaunchPolicy(BaseModel):
                 ("server", self.server_image_ref),
                 ("host", self.host_image_ref),
             ):
-                if not _DIGEST_IMAGE.fullmatch(image):
+                if not (_DIGEST_IMAGE.fullmatch(image) or image.startswith("bootstrap://")):
                     raise ValueError(f"{label} image must use an immutable sha256 digest")
+                if image.endswith(_PLACEHOLDER_DIGEST):
+                    raise ValueError(f"{label} image digest must not be a placeholder")
         if not _SAFE_REF.fullmatch(self.network_ref) or self.network_ref.startswith(
             ("/", ".")
         ):
@@ -116,8 +120,11 @@ class OmnigentLaunchPolicy(BaseModel):
         return self
 
 
-_IMAGE = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "0" * 64
-_SERVER_IMAGE = "ghcr.io/omnigent-ai/omnigent@sha256:" + "0" * 64
+# Bootstrap values are resolved from operator-owned immutable configuration when
+# the catalog is compiled. Mutable tags and synthetic placeholder digests never
+# become product launch authority.
+_IMAGE = "bootstrap://OMNIGENT_HOST_IMAGE_REF"
+_SERVER_IMAGE = "bootstrap://OMNIGENT_IMAGE_REF"
 _COMMON = dict(
     serverImageRef=_SERVER_IMAGE,
     hostImageRef=_IMAGE,
@@ -135,8 +142,6 @@ _COMMON = dict(
         "oauth_home",
         "omnigent_state",
         "skills_tools",
-        "artifacts",
-        "cache",
     ),
     capture={"required": True, "retentionDays": 30},
     controlCapabilities=("interrupt", "terminate", "clear_context"),
@@ -211,6 +216,20 @@ def compile_effective_launch(
             "Omnigent launch policy is missing or disabled",
             code="OMNIGENT_LAUNCH_POLICY_UNAVAILABLE",
         )
+    policy_payload = policy.model_dump(by_alias=True, mode="json")
+    for field, variable in (
+        ("serverImageRef", "OMNIGENT_IMAGE_REF"),
+        ("hostImageRef", "OMNIGENT_HOST_IMAGE_REF"),
+    ):
+        value = policy_payload[field]
+        if str(value).startswith("bootstrap://"):
+            value = os.getenv(variable, "").strip()
+        if not _DIGEST_IMAGE.fullmatch(str(value)) or str(value).endswith(_PLACEHOLDER_DIGEST):
+            raise OmnigentOAuthHostError(
+                f"{variable} must name a deployable immutable sha256 image",
+                code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
+            )
+        policy_payload[field] = value
     payload = {
         "schemaVersion": 1,
         "executionProfileRef": profile.ref,
@@ -219,7 +238,7 @@ def compile_effective_launch(
         "endpointRef": profile.endpoint_ref,
         "agentName": profile.agent_name,
         "harness": profile.harness,
-        **policy.model_dump(by_alias=True, mode="json"),
+        **policy_payload,
         "capture": {**profile.capture_defaults, **policy.capture},
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
