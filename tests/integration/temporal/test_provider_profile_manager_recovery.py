@@ -41,7 +41,8 @@ class _ProviderProfileActivities:
                     "credential_source": "oauth_volume",
                     "runtime_materialization_mode": "oauth_home",
                     "max_parallel_runs": 1,
-                    "enabled": True,
+                    "enabled": False,
+                    "launch_ready": False,
                     "is_default": True,
                 }
             ]

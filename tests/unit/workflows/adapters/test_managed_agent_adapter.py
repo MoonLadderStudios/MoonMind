@@ -28,6 +28,7 @@ from api_service.db.models import (
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
+    ProviderProfileSlotLease,
     RuntimeMaterializationMode,
 )
 from moonmind.auth.env_shaping import (
@@ -1443,6 +1444,79 @@ async def test_provider_profile_list_filters_to_launch_ready_profiles(
         assert [profile["profile_id"] for profile in result["profiles"]] == [
             "ready-secret"
         ]
+
+
+async def test_provider_profile_list_includes_unavailable_profiles_with_leases(
+    tmp_path: Path,
+):
+    """Lease recovery retains disabled/unready owners without routing to them."""
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add_all(
+                [
+                    ManagedAgentProviderProfile(
+                        profile_id="disabled-leased",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=False,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="unready-leased",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=True,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                    ),
+                    ProviderProfileSlotLease(
+                        runtime_id="codex_cli",
+                        workflow_id="disabled-owner",
+                        profile_id="disabled-leased",
+                    ),
+                    ProviderProfileSlotLease(
+                        runtime_id="codex_cli",
+                        workflow_id="unready-owner",
+                        profile_id="unready-leased",
+                    ),
+                ]
+            )
+            await session.commit()
+
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+            session_factory
+        )
+        try:
+            result = await activities.provider_profile_list(runtime_id="codex_cli")
+        finally:
+            _db_base_mod.get_async_session_context = orig
+
+        profiles = {
+            profile["profile_id"]: profile for profile in result["profiles"]
+        }
+        assert set(profiles) == {"disabled-leased", "unready-leased"}
+        assert profiles["disabled-leased"]["enabled"] is False
+        assert profiles["disabled-leased"]["launch_ready"] is False
+        assert profiles["unready-leased"]["enabled"] is True
+        assert profiles["unready-leased"]["launch_ready"] is False
 
 async def test_provider_profile_list_preserves_secret_ref_materialization_fields(
     tmp_path: Path,

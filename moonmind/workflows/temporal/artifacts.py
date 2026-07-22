@@ -3284,6 +3284,7 @@ class TemporalArtifactActivities:
 
         from api_service.db.models import (
             ManagedAgentProviderProfile,
+            ProviderProfileSlotLease,
         )
         from api_service.db.base import get_async_session_context
         from api_service.services.provider_profile_readiness import (
@@ -3299,7 +3300,6 @@ class TemporalArtifactActivities:
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile).where(
                 ManagedAgentProviderProfile.runtime_id == runtime_id,
-                ManagedAgentProviderProfile.enabled.is_(True),
             ).order_by(
                 ManagedAgentProviderProfile.is_default.desc(),
                 ManagedAgentProviderProfile.priority.desc(),
@@ -3307,6 +3307,12 @@ class TemporalArtifactActivities:
             )
             result = await session.execute(stmt)
             rows = list(result.scalars().all())
+            leased_profile_result = await session.execute(
+                select(ProviderProfileSlotLease.profile_id).where(
+                    ProviderProfileSlotLease.runtime_id == runtime_id
+                )
+            )
+            leased_profile_ids = set(leased_profile_result.scalars().all())
             managed_secret_statuses = await _managed_secret_statuses_for_profiles(
                 session=session,
                 rows=rows,
@@ -3314,10 +3320,11 @@ class TemporalArtifactActivities:
 
         profiles = []
         for row in rows:
-            if not provider_profile_launch_ready(
+            launch_ready = provider_profile_launch_ready(
                 row,
                 managed_secret_statuses=managed_secret_statuses,
-            ):
+            )
+            if not launch_ready and row.profile_id not in leased_profile_ids:
                 continue
             command_behavior = row.command_behavior or {}
             billing_metadata = (
@@ -3370,7 +3377,7 @@ class TemporalArtifactActivities:
                     "rate_limit_policy": row.rate_limit_policy.value,
                     "max_lease_duration_seconds": row.max_lease_duration_seconds,
                     "enabled": row.enabled,
-                    "launch_ready": True,
+                    "launch_ready": launch_ready,
                     "auth_state": row.auth_state.value if row.auth_state else None,
                     "disabled_reason": (
                         row.disabled_reason.value if row.disabled_reason else None
