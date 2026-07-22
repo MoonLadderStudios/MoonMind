@@ -8,6 +8,8 @@
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
 
+The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
+
 ## Related documents
 
 - [`docs/Temporal/WorkflowExecutionProductModel.md`](./WorkflowExecutionProductModel.md)

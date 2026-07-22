@@ -1,5 +1,7 @@
 # Workspace locators
 
+The **Codex via Omnigent** product path applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md). Workflow Create never authors absolute paths or daemon bind sources.
+
 Durable workflow payloads identify workspaces with the discriminated
 `workspaceLocator` contract. A sandbox locator carries `workspaceId` and a relative
 subpath; a managed-runtime locator carries `runtimeId`, `agentRunId`, and a relative

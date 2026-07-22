@@ -144,6 +144,8 @@ Changing any identifier above is a deliberate, owner-approved invariant change: 
 
 ### Remaining work
 
+The execution slices below consume the canonical [Codex via Omnigent Create-to-host contract](Omnigent/CodexCreateToHostContract.md) established for MoonLadderStudios/MoonMind#3449; design completion does not mark these implementation or credentialed-conformance slices complete.
+
 - [x] **2.0 Declarative design reconciliation** — `docs/Omnigent/OmnigentAdapter.md`, `docs/Omnigent/OmnigentHostOAuth.md`, `docs/Omnigent/CombinedStackValidationAndRollback.md`, and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` now define the actual hybrid ownership model, canonical Compose plus deterministic on-demand paths, durable host lease, registration/readiness contract, capacity hierarchy, workspace/mount/network boundaries, evidence authority, immutable-image conformance boundary, and cleanup-before-release semantics.
 - [ ] **2.1 Product-owned host launch selection** — replace the bootstrap-only `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` decision with an explicit versioned policy/profile host mode that selects static Compose or on-demand Docker without workflow JSON editing, manual `hostId` handling, or silent fallback.
 - [ ] **2.2 Workspace and shared Docker substrate convergence** — move the current private hashed workspace and raw Docker path boundary behind canonical `WorkspaceLocator`, owning-worker authority checks, daemon-visible mount translation, bounded/redacted logs, output manifests, runtime diagnostics, artifact handoff, and reusable cleanup primitives while preserving the distinct long-lived host/session lease model.

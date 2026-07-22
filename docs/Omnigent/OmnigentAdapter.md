@@ -8,6 +8,8 @@
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines the durable desired state and the compatibility rules that implementations must preserve.
 
+The normal product selection and request-compilation boundary for **Codex via Omnigent** is owned by [`CodexCreateToHostContract.md`](./CodexCreateToHostContract.md). This adapter preserves its `external/omnigent` identity and nested `codex-native` harness choice.
+
 ## Related documents
 
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)

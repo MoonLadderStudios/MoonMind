@@ -762,6 +762,8 @@ Advanced/debug views may disclose the underlying implementation terms.
 
 ## 15. Submit integration
 
+The canonical `/workflows/new` selection and trusted compilation contract for **Codex via Omnigent** is [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md). The form authors product intent; it does not author runtime host, session, credential, filesystem, or daemon authority.
+
 ## 15.1 Default posture
 
 Temporal console integration should remain **read-first**.
