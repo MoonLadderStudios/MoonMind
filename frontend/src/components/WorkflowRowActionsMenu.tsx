@@ -504,17 +504,9 @@ export function WorkflowRowActionsMenu({
 
   return (
     <div className="workflow-row-actions">
-      <WorkflowActionsMenu
-        items={items}
-        triggerContent={KEBAB_ICON}
-        triggerAriaLabel="Actions"
-        triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
-        menuAriaLabel="Actions"
-        emptyMessage={emptyMessage}
-        onOpenChange={(open) => {
-          if (open) setHasOpened(true);
-        }}
-      />
+      {items.map((item) => (
+        
+      ))}
       <DashboardActionDialog
         open={activeDialog === 'rename'}
         title="Rename workflow"
