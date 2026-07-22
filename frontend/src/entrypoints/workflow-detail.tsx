@@ -6017,7 +6017,14 @@ function BridgeSessionLogsPanel({
   const canCancel = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
   const canHarvest = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.harvestResources && !isTerminal);
   const canStop = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.stop && !isTerminal);
-  const canRemove = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.terminalCleanup);
+  const canRemove = Boolean(
+    actionsEnabled
+      && projection.providerSessionRef
+      && (
+        projection.capabilities.terminalCleanup
+        || (isTerminal && projection.compatibilityProfile === 'omnigent.embedded.v1')
+      ),
+  );
   const canResolveElicitation = Boolean(
     actionsEnabled && projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
   );

@@ -917,6 +917,7 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
     await store.bind_embedded_runner(
         "idem-embedded", host_id="host-1", runner_id="runner-1"
     )
+    row = await store.get_existing("idem-embedded")
 
     class Channels:
         calls = 0
@@ -984,14 +985,14 @@ async def test_stop_runner_uses_durable_exact_host_binding(store) -> None:
         "reconciled": True, "runnerId": "runner-1",
     }
     assert cleanup_result == {
-        "ok": True, "status": "stopped", "runnerId": "runner-1"
+        "ok": True, "status": "cleanup_scheduled", "runnerId": "runner-1"
     }
     assert cleanup_duplicate == {
         "ok": True, "status": "completed",
         "idempotencyKey": "cleanup-request-1", "reconciled": True,
         "runnerId": "runner-1",
     }
-    assert channels.calls == 2
+    assert channels.calls == 1
     assert row.status == "canceled"
     assert row.metadata_["embedded_runner_lifecycle"]["state"] == "stopped"
     assert "embedded_runner_exit" not in row.metadata_

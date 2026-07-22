@@ -476,6 +476,12 @@ class OmnigentEmbeddedHostProtocolFacade:
         )
         if not claimed:
             return {**(await self._reconcile_claimed_control(control_key)), "runnerId": runner_id}
+        if terminal and control_type == "terminal_cleanup":
+            await self._record_control(
+                row, control_key, control_type, "completed",
+                summary="Terminal resources queued for janitor cleanup", actor=actor,
+            )
+            return {"ok": True, "status": "cleanup_scheduled", "runnerId": runner_id}
         if not terminal:
             await self._run_store.mark_embedded_runner_state(
                 row.idempotency_key,
@@ -1274,9 +1280,26 @@ class OmnigentEmbeddedHostProtocolFacade:
     ) -> dict[str, Any]:
         """Stop the exact bound runner through the common facade contract."""
 
-        return await self.stop_runner(
-            session_id=session_id, payload=payload, actor=actor
-        )
+        if payload is None:
+            row = await self._run_store.get_session_by_provider_session_id(session_id)
+            if row is not None:
+                payload = {
+                    "idempotencyKey": (
+                        f"internal-stop:{row.bridge_session_id}:"
+                        f"{row.omnigent_runner_id}"
+                    ),
+                    "expectedWorkflowId": row.moonmind_workflow_id,
+                    "expectedRunId": row.moonmind_run_id,
+                    "expectedStepExecutionId": row.step_execution_id,
+                    "expectedAgentRunId": row.moonmind_agent_run_id,
+                    "expectedBridgeSessionId": row.bridge_session_id,
+                    "expectedSessionId": row.omnigent_session_id,
+                    "expectedHostId": row.omnigent_host_id,
+                    "expectedRunnerId": row.omnigent_runner_id,
+                    "expectedTurnState": row.first_message_state,
+                    "expectedTerminalState": row.status,
+                }
+        return await self.stop_runner(session_id=session_id, payload=payload, actor=actor)
 
     async def cleanup_session(
         self, session_id: str, *, payload: dict[str, Any],

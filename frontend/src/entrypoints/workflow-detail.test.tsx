@@ -8263,7 +8263,7 @@ describe('Workflow Detail Entrypoint', () => {
       const url = String(input);
       if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
         bridgeSessionId: 'brs-interventions', status: 'running', providerSessionRef: 'provider-session',
-        workflowId: 'test-123', agentRunId: 'agent-run-1', compatibilityProfile: 'omnigent.embedded.v1',
+        compatibilityProfile: 'omnigent.embedded.v1',
         providerProfileId: 'codex-profile', executionProfileRef: 'codex-default@2', launchPolicyRef: 'restricted@3',
         hostMode: 'on_demand_docker', effectiveLaunchSnapshotRef: 'omnigent-launch:sha256:safe-ref',
         hostLeaseRef: 'host-lease-1', credentialGeneration: 4,
