@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from moonmind.omnigent.execution_profiles import (
     OmnigentLaunchPolicy,
     compile_effective_launch,
+    public_execution_catalog,
     selection_from_request,
 )
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
@@ -78,3 +79,15 @@ def test_product_selection_is_explicit_and_versioned() -> None:
             }
         }
     ) == ("omnigent-codex@1", "codex-static@1")
+
+
+def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
+    catalog = public_execution_catalog()
+    assert [profile["ref"] for profile in catalog["profiles"]] == [
+        "omnigent-codex@1"
+    ]
+    assert {policy["ref"] for policy in catalog["policies"]} == {
+        "codex-static@1",
+        "codex-on-demand@1",
+    }
+    assert "credential" not in str(catalog).lower()

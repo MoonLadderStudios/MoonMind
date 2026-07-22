@@ -373,6 +373,8 @@ def _build_repository_options(
                 source="github",
             )
 
+    from moonmind.omnigent.execution_profiles import public_execution_catalog
+
     return {
         "items": [option.to_payload() for option in options],
         "error": discovery_error,
@@ -756,6 +758,7 @@ def build_runtime_config(
         },
         "system": {
             **system_metadata,
+            "omnigentExecutionCatalog": public_execution_catalog(),
             "defaultRepository": default_repository,
             "repositoryOptions": repository_options,
             "defaultRuntime": default_runtime,

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import os
 import shutil
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,8 @@ _TOOLS_PATH = "/opt/moonmind-tools/bin"
 _DEFAULT_HOST_PATH = (
     "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
 )
+_DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 
 
 class OmnigentOAuthHostRuntime:
@@ -108,7 +111,13 @@ class OmnigentOAuthHostRuntime:
         required_capabilities: tuple[str, ...] = (),
         github_token: str | None = None,
         github_mutation_required: bool = False,
+        effective_launch: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # Validate the complete product-owned decision before materializing skills,
+        # cloning a repository, creating volumes, or starting a container.
+        launch = self._validate_effective_launch(
+            binding=binding, effective_launch=effective_launch
+        )
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
             resolved_skillset_ref=resolved_skillset_ref,
@@ -133,6 +142,7 @@ class OmnigentOAuthHostRuntime:
                 workspace_source=workspace_source,
                 skill_projection=skill_projection,
                 github_token=github_token,
+                effective_launch=launch,
             )
             await self._exec_check(container_name)
             await self._exec_tools_check(container_name)
@@ -185,6 +195,77 @@ class OmnigentOAuthHostRuntime:
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
         return validated
+
+    @staticmethod
+    def _validate_effective_launch(
+        *,
+        binding: OmnigentOAuthHostBinding,
+        effective_launch: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(effective_launch, Mapping):
+            raise OmnigentOAuthHostError(
+                "effective launch policy is required before host mutation",
+                code="OMNIGENT_EFFECTIVE_LAUNCH_REQUIRED",
+            )
+        launch = dict(effective_launch)
+        expected_mode = (
+            "on_demand_docker" if binding.host_launch_profile_ref else "static_compose"
+        )
+        if launch.get("hostMode") != expected_mode:
+            raise OmnigentOAuthHostError(
+                "effective launch host mode conflicts with the durable binding",
+                code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+            )
+        if not str(launch.get("snapshotRef") or "").startswith(
+            "omnigent-launch:sha256:"
+        ):
+            raise OmnigentOAuthHostError(
+                "effective launch snapshot reference is invalid",
+                code="OMNIGENT_EFFECTIVE_LAUNCH_INVALID",
+            )
+        if not _DIGEST_IMAGE.fullmatch(str(launch.get("hostImageRef") or "")):
+            raise OmnigentOAuthHostError(
+                "host image must be an immutable sha256 reference",
+                code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
+            )
+        network = str(launch.get("networkRef") or "")
+        if not _SAFE_NETWORK.fullmatch(network):
+            raise OmnigentOAuthHostError(
+                "network must be a named deployment network",
+                code="OMNIGENT_LAUNCH_NETWORK_UNREALIZABLE",
+            )
+        limits = launch.get("limits")
+        required_limits = {
+            "cpuMillis", "memoryMiB", "processes", "timeoutSeconds",
+            "temporaryStorageMiB",
+        }
+        if not isinstance(limits, Mapping) or set(limits) != required_limits or any(
+            not isinstance(limits[key], int) or limits[key] <= 0
+            for key in required_limits
+        ):
+            raise OmnigentOAuthHostError(
+                "launch resource limits are incomplete or invalid",
+                code="OMNIGENT_LAUNCH_RESOURCES_UNREALIZABLE",
+            )
+        required_mounts = {
+            "workspace", "oauth_home", "omnigent_state", "skills_tools", "artifacts", "cache"
+        }
+        if set(launch.get("mountClasses") or ()) != required_mounts:
+            raise OmnigentOAuthHostError(
+                "launch mount classes cannot be realized by the Codex host",
+                code="OMNIGENT_LAUNCH_MOUNTS_UNREALIZABLE",
+            )
+        if not launch.get("enforcedEgress"):
+            raise OmnigentOAuthHostError(
+                "launch policy must enforce egress",
+                code="OMNIGENT_LAUNCH_EGRESS_UNREALIZABLE",
+            )
+        if launch.get("runtimeUid") != 1000 or launch.get("runtimeGid") != 1000:
+            raise OmnigentOAuthHostError(
+                "Codex host UID/GID policy is unrealizable",
+                code="OMNIGENT_LAUNCH_IDENTITY_UNREALIZABLE",
+            )
+        return launch
 
     async def _prepare_skill_projection(
         self,
@@ -301,6 +382,7 @@ class OmnigentOAuthHostRuntime:
         workspace_source: Path,
         skill_projection: Path,
         github_token: str | None = None,
+        effective_launch: Mapping[str, Any],
     ) -> None:
         if await self.container_exists(container_name):
             return
@@ -325,7 +407,7 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--entrypoint",
             "/opt/moonmind/init-codex-oauth-host.sh",
-            self._image,
+            str(effective_launch["hostImageRef"]),
         )
         labels = {
             "moonmind.kind": "omnigent-oauth-host",
@@ -343,14 +425,20 @@ class OmnigentOAuthHostRuntime:
             "--name",
             container_name,
             "--user",
-            "1000:1000",
+            f"{effective_launch['runtimeUid']}:{effective_launch['runtimeGid']}",
             "--workdir",
             "/home/app",
             "--network",
-            self._network,
+            str(effective_launch["networkRef"]),
+            "--cpus",
+            str(int(effective_launch["limits"]["cpuMillis"]) / 1000),
+            "--memory",
+            f"{effective_launch['limits']['memoryMiB']}m",
+            "--pids-limit",
+            str(effective_launch["limits"]["processes"]),
             "--read-only",
             "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=256m",
+            f"/tmp:rw,noexec,nosuid,size={effective_launch['limits']['temporaryStorageMiB']}m",
             "--mount",
             f"type=volume,src={mount.auth_volume_ref.volume_ref},dst=/home/app/.codex",
             "--mount",

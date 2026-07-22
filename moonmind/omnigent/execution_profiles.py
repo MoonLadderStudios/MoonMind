@@ -178,6 +178,23 @@ PROFILES = {
 }
 
 
+def public_execution_catalog() -> dict[str, Any]:
+    """Return the safe, product-selectable built-in catalog for Workflow Create."""
+
+    return {
+        "profiles": [
+            profile.model_dump(by_alias=True, mode="json") | {"ref": profile.ref}
+            for profile in PROFILES.values()
+            if profile.enabled
+        ],
+        "policies": [
+            policy.model_dump(by_alias=True, mode="json") | {"ref": policy.ref}
+            for policy in POLICIES.values()
+            if policy.enabled
+        ],
+    }
+
+
 def compile_effective_launch(
     *, profile_ref: str, policy_ref: str | None, provider_profile_id: str
 ) -> dict[str, Any]:
