@@ -947,7 +947,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
-    stop_grace_period: ${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}s
+    stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
     labels:
       moonmind.effective_launch_ref: ${OMNIGENT_EFFECTIVE_LAUNCH_REF:-bootstrap}
       moonmind.capture_required: "true"

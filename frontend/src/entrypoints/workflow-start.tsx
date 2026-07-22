@@ -376,6 +376,7 @@ interface DashboardConfig {
     defaultEffortByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
     supportedAgentRuntimes?: string[];
+    supportedRuntimes?: string[];
     repositoryOptions?: {
       items?: Array<{
         value?: string | null;
@@ -5897,7 +5898,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
   const supportedAgentRuntimes = dashboardConfig.system
-    ?.supportedAgentRuntimes || ["codex_cli", "claude_code"];
+    ?.supportedAgentRuntimes ||
+    dashboardConfig.system?.supportedRuntimes || ["codex_cli", "claude_code"];
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -6287,13 +6289,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
+  const providerProfileRuntime =
+    runtime === "omnigent" ? "codex_cli" : runtime;
   const providerProfilesQuery = useQuery({
     ...configQueryDefaults,
-    queryKey: ["workflow-start", "provider-profiles", runtime],
+    queryKey: ["workflow-start", "provider-profiles", providerProfileRuntime],
     queryFn: async (): Promise<ProviderProfile[]> => {
       const separator = providerProfilesEndpoint.includes("?") ? "&" : "?";
       const response = await fetch(
-        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(runtime)}`,
+        `${providerProfilesEndpoint}${separator}runtime_id=${encodeURIComponent(providerProfileRuntime)}`,
         {
           headers: { Accept: "application/json" },
         },

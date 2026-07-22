@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -49,6 +52,15 @@ def test_mutated_snapshot_fails_conflict_validation() -> None:
     with pytest.raises(OmnigentOAuthHostError) as error:
         validate_effective_launch_snapshot(launch)
     assert error.value.code == "OMNIGENT_EFFECTIVE_LAUNCH_CONFLICT"
+
+
+def test_profile_identifier_may_contain_token_word() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex-token-profile",
+    )
+    validate_effective_launch_snapshot(launch)
 
 
 def test_missing_explicit_policy_fails_closed() -> None:
@@ -169,6 +181,14 @@ def test_runtime_revalidates_complete_on_demand_policy_before_mutation(
         provider_profile_id="codex-oauth",
     )
     launch[field] = value
+    canonical = json.dumps(
+        {key: item for key, item in launch.items() if key != "snapshotRef"},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    launch["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
 
     with pytest.raises(OmnigentOAuthHostError) as error:
         OmnigentOAuthHostRuntime._validate_effective_launch(

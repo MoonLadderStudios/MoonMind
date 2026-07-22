@@ -262,8 +262,20 @@ def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
             "effective launch snapshot digest does not match its content",
             code="OMNIGENT_EFFECTIVE_LAUNCH_CONFLICT",
         )
-    serialized = canonical.lower()
-    if any(marker in serialized for marker in ("credential", "password", "token", "docker.sock")):
+    authority_markers = ("credential", "password", "token", "secret")
+
+    def contains_forbidden_authority(value: object) -> bool:
+        if isinstance(value, Mapping):
+            return any(
+                any(marker in str(key).lower() for marker in authority_markers)
+                or contains_forbidden_authority(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, (list, tuple)):
+            return any(contains_forbidden_authority(item) for item in value)
+        return isinstance(value, str) and "docker.sock" in value.lower()
+
+    if contains_forbidden_authority(payload):
         raise OmnigentOAuthHostError(
             "effective launch snapshot contains forbidden authority",
             code="OMNIGENT_EFFECTIVE_LAUNCH_FORBIDDEN_AUTHORITY",

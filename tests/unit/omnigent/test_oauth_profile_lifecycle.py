@@ -159,6 +159,15 @@ def _checkpoint() -> OmnigentCheckpointIdentity:
     )
 
 
+def test_legacy_checkpoint_without_effective_launch_ref_remains_loadable() -> None:
+    payload = _checkpoint().model_dump(by_alias=True, mode="json")
+    payload.pop("effectiveLaunchRef")
+
+    checkpoint = OmnigentCheckpointIdentity.model_validate(payload)
+
+    assert checkpoint.effective_launch_ref is None
+
+
 def test_oauth_host_runtime_defaults_to_published_image(monkeypatch) -> None:
     monkeypatch.delenv("OMNIGENT_HOST_IMAGE", raising=False)
     monkeypatch.delenv("OMNIGENT_HOST_IMAGE_TAG", raising=False)

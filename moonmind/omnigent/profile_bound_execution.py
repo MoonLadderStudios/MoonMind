@@ -276,7 +276,17 @@ class OmnigentProfileBoundExecutionCoordinator:
                 request.parameters
             )
             binding = await self._hosts.get_binding_for_profile(profile_id)
-            if requested_target:
+            if binding is not None and binding.effective_launch_snapshot is not None:
+                effective_launch = dict(binding.effective_launch_snapshot)
+                if requested_target and (
+                    effective_launch.get("executionProfileRef") != requested_target
+                    or effective_launch.get("launchPolicyRef") != requested_policy
+                ):
+                    raise OmnigentOAuthHostError(
+                        "explicit launch selection conflicts with the durable host binding",
+                        code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+                    )
+            elif requested_target:
                 effective_launch = compile_effective_launch(
                     profile_ref=requested_target,
                     policy_ref=requested_policy,
@@ -294,13 +304,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                             code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
                         )
             elif binding is not None:
-                if binding.effective_launch_snapshot is not None:
-                    effective_launch = dict(binding.effective_launch_snapshot)
-                else:
-                    raise OmnigentOAuthHostError(
-                        "durable host binding predates effective launch authority",
-                        code="OMNIGENT_LEGACY_BINDING_REQUIRES_RESELECTION",
-                    )
+                raise OmnigentOAuthHostError(
+                    "durable host binding predates effective launch authority",
+                    code="OMNIGENT_LEGACY_BINDING_REQUIRES_RESELECTION",
+                )
             else:
                 bootstrap_on_demand = bool(
                     os.getenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE")

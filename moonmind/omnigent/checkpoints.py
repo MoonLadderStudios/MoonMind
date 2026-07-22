@@ -29,11 +29,13 @@ class OmnigentCheckpointIdentity(BaseModel):
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     terminal_ref: str | None = Field(None, alias="terminalRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
-    effective_launch_ref: str = Field(..., alias="effectiveLaunchRef", min_length=1)
+    effective_launch_ref: str | None = Field(None, alias="effectiveLaunchRef", min_length=1)
 
     @model_validator(mode="after")
     def _reject_raw_credential_like_values(self) -> "OmnigentCheckpointIdentity":
-        if not self.effective_launch_ref.startswith("omnigent-launch:sha256:"):
+        if self.effective_launch_ref is not None and not self.effective_launch_ref.startswith(
+            "omnigent-launch:sha256:"
+        ):
             raise ValueError("effectiveLaunchRef must identify an effective launch snapshot")
         for field, value in self.model_dump(mode="json").items():
             if not isinstance(value, str):
