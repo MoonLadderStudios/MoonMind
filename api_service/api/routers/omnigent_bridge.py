@@ -883,8 +883,17 @@ class BridgeSessionResolution(BaseModel):
     terminal_evidence_available: bool
     compatibility_profile: str
     provider_profile_id: str | None = None
+    provider_lease_ref: str | None = None
+    credential_generation: int | None = None
     host_binding_ref: str | None = None
+    host_lease_ref: str | None = None
+    host_mode: str | None = None
+    execution_profile_ref: str | None = None
+    launch_policy_ref: str | None = None
+    effective_launch_snapshot_ref: str | None = None
     provider_session_ref: str | None = None
+    omnigent_host_ref: str | None = None
+    omnigent_runner_ref: str | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -1125,6 +1134,11 @@ async def resolve_omnigent_bridge_session_projection(
         store=store,
     )
     page = await store.list_event_page(row.bridge_session_id, after=0, limit=1)
+    launch = (
+        getattr(row, "effective_launch_snapshot_json", None)
+        if isinstance(getattr(row, "effective_launch_snapshot_json", None), dict)
+        else {}
+    )
     return BridgeSessionResolution(
         bridge_session_id=row.bridge_session_id,
         workflow_id=row.moonmind_workflow_id,
@@ -1138,8 +1152,17 @@ async def resolve_omnigent_bridge_session_projection(
         terminal_evidence_available=_terminal_envelope(row) is not None,
         compatibility_profile=row.compatibility_profile,
         provider_profile_id=row.provider_profile_id,
+        provider_lease_ref=getattr(row, "provider_lease_id", None),
+        credential_generation=getattr(row, "credential_generation", None),
         host_binding_ref=row.host_binding_ref,
+        host_lease_ref=getattr(row, "host_lease_ref", None),
+        host_mode=str(launch.get("hostMode") or "") or None,
+        execution_profile_ref=str(launch.get("executionProfileRef") or "") or None,
+        launch_policy_ref=str(launch.get("launchPolicyRef") or "") or None,
+        effective_launch_snapshot_ref=str(launch.get("snapshotRef") or "") or None,
         provider_session_ref=row.omnigent_session_id,
+        omnigent_host_ref=getattr(row, "omnigent_host_id", None),
+        omnigent_runner_ref=getattr(row, "omnigent_runner_id", None),
         capabilities=_projection_capabilities(row),
     )
 

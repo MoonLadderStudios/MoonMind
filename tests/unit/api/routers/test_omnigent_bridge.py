@@ -977,13 +977,37 @@ def test_session_authorization_reports_structured_error_when_proxy_is_missing() 
 
 
 def test_resolve_bridge_session_projection_returns_latest_binding() -> None:
-    client, _, _ = _build()
+    client, _, _ = _build(store=_FakeStore(session_overrides={
+        "provider_lease_id": "provider-lease-1",
+        "credential_generation": 4,
+        "host_lease_ref": "host-lease-1",
+        "omnigent_host_id": "host-1",
+        "omnigent_runner_id": "runner-1",
+        "effective_launch_snapshot_json": {
+            "hostMode": "on_demand_docker",
+            "executionProfileRef": "codex-default@2",
+            "launchPolicyRef": "restricted@3",
+            "snapshotRef": "omnigent-launch:sha256:safe-ref",
+        },
+    }))
     resp = client.get(
         f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/resolve?workflowId=mm%3Aw1"
     )
     assert resp.status_code == 200
     assert resp.json()["bridgeSessionId"] == "brs-1"
     assert resp.json()["workflowId"] == "mm:w1"
+    expected_identity = {
+        "providerLeaseRef": "provider-lease-1",
+        "credentialGeneration": 4,
+        "hostLeaseRef": "host-lease-1",
+        "hostMode": "on_demand_docker",
+        "executionProfileRef": "codex-default@2",
+        "launchPolicyRef": "restricted@3",
+        "effectiveLaunchSnapshotRef": "omnigent-launch:sha256:safe-ref",
+        "omnigentHostRef": "host-1",
+        "omnigentRunnerRef": "runner-1",
+    }
+    assert {key: resp.json()[key] for key in expected_identity} == expected_identity
 
 
 def test_resolve_bridge_session_projection_filters_capabilities_to_booleans() -> None:

@@ -8263,7 +8263,11 @@ describe('Workflow Detail Entrypoint', () => {
       const url = String(input);
       if (url.includes('/bridge-sessions/resolve')) return Promise.resolve({ ok: true, json: async () => ({
         bridgeSessionId: 'brs-interventions', status: 'running', providerSessionRef: 'provider-session',
-        capabilities: { resolveElicitation: true, clearSession: true, cancelSession: true },
+        workflowId: 'test-123', agentRunId: 'agent-run-1', compatibilityProfile: 'omnigent.embedded.v1',
+        providerProfileId: 'codex-profile', executionProfileRef: 'codex-default@2', launchPolicyRef: 'restricted@3',
+        hostMode: 'on_demand_docker', effectiveLaunchSnapshotRef: 'omnigent-launch:sha256:safe-ref',
+        hostLeaseRef: 'host-lease-1', credentialGeneration: 4, omnigentHostRef: 'host-1', omnigentRunnerRef: 'runner-1',
+        capabilities: { resolveElicitation: true, clearSession: true, cancelSession: true, stop: true, terminalCleanup: true },
       }) } as Response);
       if (url.includes('/bridge-sessions/brs-interventions/events')) return Promise.resolve({ ok: true, json: async () => ({
         schemaVersion: 'moonmind.bridge-session-events-page.v1', bridgeSessionId: 'brs-interventions',
@@ -8280,6 +8284,10 @@ describe('Workflow Detail Entrypoint', () => {
     try {
       renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
       expect(await screen.findByRole('region', { name: 'Pending operator request el-pending' })).toBeTruthy();
+      const identity = screen.getByRole('region', { name: 'Omnigent runtime identity' });
+      expect(identity.textContent).toContain('Codex via Omnigent');
+      expect(identity.textContent).toContain('codex-profile');
+      expect(identity.textContent).toContain('omnigent-launch:sha256:safe-ref');
       expect(screen.getAllByText('Previously approved by operator.').length).toBeGreaterThan(0);
       expect(screen.queryByRole('region', { name: 'Pending operator request el-resolved' })).toBeNull();
 
@@ -8295,6 +8303,14 @@ describe('Workflow Detail Entrypoint', () => {
       await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
         String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
         JSON.parse(String((init as RequestInit).body)).type === 'session.cancel')).toBe(true));
+      fireEvent.click(screen.getByRole('button', { name: 'Stop session' }));
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
+        String(url).endsWith('/omnigent/v1/sessions/provider-session/events') &&
+        JSON.parse(String((init as RequestInit).body)).type === 'stop_session')).toBe(true));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove owned session' }));
+      await waitFor(() => expect(fetchSpy.mock.calls.some(([url, init]) =>
+        String(url).endsWith('/omnigent/v1/sessions/provider-session') &&
+        (init as RequestInit).method === 'DELETE')).toBe(true));
     } finally {
       confirmSpy.mockRestore();
       window.EventSource = priorEventSource;
@@ -8319,6 +8335,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Clear session' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Cancel session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Stop session' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove owned session' })).toBeNull();
     } finally {
       window.EventSource = priorEventSource;
     }

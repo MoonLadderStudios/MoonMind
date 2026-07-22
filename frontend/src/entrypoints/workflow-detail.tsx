@@ -2504,7 +2504,19 @@ type BridgeSessionProjection = {
   agentRunId?: string | undefined;
   idempotencyKey?: string | undefined;
   status?: string | undefined;
+  compatibilityProfile?: string | undefined;
+  providerProfileId?: string | undefined;
+  providerLeaseRef?: string | undefined;
+  credentialGeneration?: number | undefined;
+  hostBindingRef?: string | undefined;
+  hostLeaseRef?: string | undefined;
+  hostMode?: string | undefined;
+  executionProfileRef?: string | undefined;
+  launchPolicyRef?: string | undefined;
+  effectiveLaunchSnapshotRef?: string | undefined;
   providerSessionRef?: string | undefined;
+  omnigentHostRef?: string | undefined;
+  omnigentRunnerRef?: string | undefined;
   capabilities: Record<string, boolean>;
 };
 
@@ -2656,7 +2668,19 @@ async function resolveBridgeSessionProjection({
     agentRunId: typeof body.agentRunId === 'string' ? body.agentRunId : undefined,
     idempotencyKey: typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined,
     status: typeof body.status === 'string' ? body.status : undefined,
+    compatibilityProfile: typeof body.compatibilityProfile === 'string' ? body.compatibilityProfile : undefined,
+    providerProfileId: typeof body.providerProfileId === 'string' ? body.providerProfileId : undefined,
+    providerLeaseRef: typeof body.providerLeaseRef === 'string' ? body.providerLeaseRef : undefined,
+    credentialGeneration: typeof body.credentialGeneration === 'number' ? body.credentialGeneration : undefined,
+    hostBindingRef: typeof body.hostBindingRef === 'string' ? body.hostBindingRef : undefined,
+    hostLeaseRef: typeof body.hostLeaseRef === 'string' ? body.hostLeaseRef : undefined,
+    hostMode: typeof body.hostMode === 'string' ? body.hostMode : undefined,
+    executionProfileRef: typeof body.executionProfileRef === 'string' ? body.executionProfileRef : undefined,
+    launchPolicyRef: typeof body.launchPolicyRef === 'string' ? body.launchPolicyRef : undefined,
+    effectiveLaunchSnapshotRef: typeof body.effectiveLaunchSnapshotRef === 'string' ? body.effectiveLaunchSnapshotRef : undefined,
     providerSessionRef: typeof body.providerSessionRef === 'string' ? body.providerSessionRef : undefined,
+    omnigentHostRef: typeof body.omnigentHostRef === 'string' ? body.omnigentHostRef : undefined,
+    omnigentRunnerRef: typeof body.omnigentRunnerRef === 'string' ? body.omnigentRunnerRef : undefined,
     capabilities: body.capabilities && typeof body.capabilities === 'object'
       ? Object.fromEntries(Object.entries(body.capabilities).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
       : {},
@@ -2670,6 +2694,13 @@ async function postBridgeSessionControl(
 ): Promise<void> {
   const resp = await fetch(joinApiBasePath(apiBase, `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}/events`), {
     method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw buildObservabilityRequestError(resp.status);
+}
+
+async function removeBridgeSession(apiBase: string, providerSessionRef: string): Promise<void> {
+  const resp = await fetch(joinApiBasePath(apiBase, `/omnigent/v1/sessions/${encodeURIComponent(providerSessionRef)}`), {
+    method: 'DELETE', credentials: 'include',
   });
   if (!resp.ok) throw buildObservabilityRequestError(resp.status);
 }
@@ -5986,6 +6017,8 @@ function BridgeSessionLogsPanel({
   const canClear = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.clearSession && !isTerminal);
   const canCancel = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.cancelSession && !isTerminal);
   const canHarvest = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.harvestResources && !isTerminal);
+  const canStop = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.stop && !isTerminal);
+  const canRemove = Boolean(actionsEnabled && projection.providerSessionRef && projection.capabilities.terminalCleanup);
   const canResolveElicitation = Boolean(
     actionsEnabled && projection.providerSessionRef && projection.capabilities.resolveElicitation && !isTerminal,
   );
@@ -6040,6 +6073,13 @@ function BridgeSessionLogsPanel({
     catch (error) { setControlError((error as Error).message); }
     finally { setControlBusy(false); }
   };
+  const removeSession = async () => {
+    if (!projection.providerSessionRef || !canRemove) return;
+    setControlError(null); setControlBusy(true);
+    try { await removeBridgeSession(apiBase, projection.providerSessionRef); }
+    catch (error) { setControlError((error as Error).message); }
+    finally { setControlBusy(false); }
+  };
   const resolveElicitation = async (elicitationId: string, decision: 'approved' | 'rejected') => {
     if (!projection.providerSessionRef || !canResolveElicitation) return;
     setControlError(null); setControlBusy(true);
@@ -6061,6 +6101,31 @@ function BridgeSessionLogsPanel({
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
       </p>
+      <section className="card stack" aria-label="Omnigent runtime identity">
+        <h3>Codex via Omnigent</h3>
+        <dl className="details-grid">
+          {([
+            ['Provider Profile', projection.providerProfileId],
+            ['Execution profile', projection.executionProfileRef],
+            ['Launch policy', projection.launchPolicyRef],
+            ['Host mode', projection.hostMode],
+            ['Launch snapshot', projection.effectiveLaunchSnapshotRef],
+            ['Source mode', projection.compatibilityProfile],
+            ['Workflow', projection.workflowId],
+            ['Agent run', projection.agentRunId],
+            ['Bridge session', bridgeSessionId],
+            ['Provider session', projection.providerSessionRef],
+            ['Omnigent host', projection.omnigentHostRef],
+            ['Omnigent runner', projection.omnigentRunnerRef],
+            ['Credential generation', projection.credentialGeneration],
+            ['Provider lease', projection.providerLeaseRef],
+            ['Host binding', projection.hostBindingRef],
+            ['Host lease', projection.hostLeaseRef],
+          ] as Array<[string, string | number | undefined]>).filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => (
+            <div key={label}><dt>{label}</dt><dd><code className="text-xs break-all">{value}</code></dd></div>
+          ))}
+        </dl>
+      </section>
       {eventsQuery.data && 'terminalEnvelope' in eventsQuery.data && eventsQuery.data.terminalEnvelope
         ? <BridgeTerminalEvidence apiBase={apiBase} envelope={eventsQuery.data.terminalEnvelope} />
         : null}
@@ -6128,7 +6193,7 @@ function BridgeSessionLogsPanel({
           </div>
         )}
       </div>
-      {(canSend || canInterrupt || canClear || canCancel || canHarvest || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
+      {(canSend || canInterrupt || canClear || canCancel || canHarvest || canStop || canRemove || pendingElicitations.length > 0 || optimisticMessages.length > 0) ? (
         <section className="stack chat-session-controls" aria-label="Bridge session controls">
           <h3>Session Controls</h3>
           {controlError ? <div className="notice error">{controlError}</div> : null}
@@ -6150,8 +6215,10 @@ function BridgeSessionLogsPanel({
           ))}
           {canInterrupt ? <button type="button" className="secondary" onClick={() => void interrupt()} disabled={controlBusy}>Interrupt turn</button> : null}
           {canHarvest ? <button type="button" className="secondary" onClick={() => void runControl({ type: 'harvest_session', clientEventKey: crypto.randomUUID() }).then(() => resourcesQuery.refetch())} disabled={controlBusy}>Harvest evidence</button> : null}
+          {canStop ? <button type="button" className="danger" onClick={() => { if (window.confirm('Stop this Omnigent session?')) void runControl({ type: 'stop_session', clientEventKey: crypto.randomUUID() }); }} disabled={controlBusy}>Stop session</button> : null}
           {canClear ? <button type="button" className="secondary" onClick={() => { if (window.confirm('Clear this bridge session?')) void runControl({ type: 'clear_session' }); }} disabled={controlBusy}>Clear session</button> : null}
           {canCancel ? <button type="button" className="danger" onClick={() => { if (window.confirm('Cancel this bridge session?')) void runControl({ type: 'session.cancel' }); }} disabled={controlBusy}>Cancel session</button> : null}
+          {canRemove ? <button type="button" className="danger" onClick={() => { if (window.confirm('Remove the owned Omnigent session after evidence harvest?')) void removeSession(); }} disabled={controlBusy}>Remove owned session</button> : null}
         </section>
       ) : null}
     </div>
