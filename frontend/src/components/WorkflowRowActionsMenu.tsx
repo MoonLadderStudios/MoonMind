@@ -574,7 +574,10 @@ export function WorkflowRowActionsMenu({
           className="secondary"
           onClick={item.onClick}
           disabled={item.disabled}
-        ></button>
+        >
+          {item.icon && <span className="icon">{item.icon}</span>}
+          {item.label}
+        </button>
       ))}
       <DashboardActionDialog
         open={activeDialog === "rename"}
