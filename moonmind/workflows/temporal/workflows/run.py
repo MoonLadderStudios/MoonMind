@@ -14076,12 +14076,6 @@ class MoonMindRunWorkflow:
             "publicationBlockedBy"
         ):
             return False
-        if (
-            self._publish_status == "published"
-            and self._publish_context.get("storyOutputMode") in {"jira", "github"}
-        ):
-            return False
-
         commit_count = self._publish_context.get("commitCount")
         has_commits = (
             not isinstance(commit_count, bool)
@@ -14096,6 +14090,11 @@ class MoonMindRunWorkflow:
             self._publish_context.get("pullRequestUrl"), max_chars=500
         ):
             return True
+        if (
+            self._publish_status == "published"
+            and self._publish_context.get("storyOutputMode") in {"jira", "github"}
+        ):
+            return False
         if self._publish_status in {"not_required", "skipped"}:
             return False
         return not pr_publish_optional

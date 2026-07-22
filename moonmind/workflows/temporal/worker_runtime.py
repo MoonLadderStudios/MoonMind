@@ -1373,7 +1373,6 @@ def _is_explicit_pr_handoff_node(
         )
         if role == "pull-request-handoff":
             return True
-    has_jira_orchestrate = _task_has_applied_template(task_payload, "jira-orchestrate")
     has_jira_implement = _task_has_applied_template(task_payload, "jira-implement")
     if has_jira_implement and _template_step_id_matches(
         node,

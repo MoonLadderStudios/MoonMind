@@ -5045,6 +5045,21 @@ async def test_run_execution_stage_reopens_pr_gate_after_later_push(
     assert "noCommitPublish" not in workflow._publish_context
 
 
+def test_authoritative_pr_requirement_prefers_commits_over_stale_story_output() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._integration = None
+    workflow._publish_status = "published"
+    workflow._publish_context = {
+        "storyOutputMode": "github",
+        "commitCount": 2,
+    }
+
+    assert workflow._authoritative_pr_requirement(
+        publish_mode="pr",
+        pr_publish_optional=False,
+    ) is True
+
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     monkeypatch: pytest.MonkeyPatch,

@@ -514,6 +514,53 @@ class TestPushWorkspaceBranch:
         assert mock_exec.await_args.kwargs["user"] == 1000
         assert mock_exec.await_args.kwargs["group"] == 1000
 
+    def test_git_ownership_repair_includes_files_without_following_symlinks(self):
+        git_stat = MagicMock(st_mode=0o040000)
+
+        with (
+            patch.object(
+                activity_runtime_module,
+                "_managed_agent_subprocess_kwargs",
+                return_value={"user": 1000, "group": 1000},
+            ),
+            patch.object(activity_runtime_module.os, "lstat", return_value=git_stat),
+            patch.object(activity_runtime_module.os, "O_DIRECTORY", 0x10000, create=True),
+            patch.object(activity_runtime_module.os, "O_NOFOLLOW", 0x20000, create=True),
+            patch.object(activity_runtime_module.os, "open", return_value=99),
+            patch.object(activity_runtime_module.os, "fchown", create=True) as fchown,
+            patch.object(
+                activity_runtime_module.os,
+                "fwalk",
+                return_value=[
+                    (".", ["objects"], ["COMMIT_EDITMSG"], 101),
+                    ("logs", [], ["HEAD"], 102),
+                ],
+                create=True,
+            ),
+            patch.object(activity_runtime_module.os, "chown", create=True) as chown,
+            patch.object(activity_runtime_module.os, "close") as close,
+        ):
+            activity_runtime_module._normalize_managed_git_ownership(
+                "/work/agent_jobs/mm:run-1/repo"
+            )
+
+        fchown.assert_called_once_with(99, 1000, 1000)
+        assert [ownership_call.args[0] for ownership_call in chown.call_args_list] == [
+            "objects",
+            "COMMIT_EDITMSG",
+            "HEAD",
+        ]
+        assert [ownership_call.kwargs["dir_fd"] for ownership_call in chown.call_args_list] == [
+            101,
+            101,
+            102,
+        ]
+        assert all(
+            ownership_call.kwargs["follow_symlinks"] is False
+            for ownership_call in chown.call_args_list
+        )
+        close.assert_called_once_with(99)
+
     @pytest.mark.asyncio
     async def test_push_protected_branch_main(self):
         store = _make_mock_store()

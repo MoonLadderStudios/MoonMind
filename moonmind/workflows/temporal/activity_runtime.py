@@ -349,13 +349,13 @@ def _normalize_managed_git_ownership(workspace: str) -> None:
     git_fd = os.open(git_dir, os.O_RDONLY | directory_flag | no_follow_flag)
     try:
         os.fchown(git_fd, _MANAGED_AGENT_UID, _MANAGED_AGENT_GID)
-        for _root, dirnames, _filenames, directory_fd in os.fwalk(
+        for _root, dirnames, filenames, directory_fd in os.fwalk(
             ".",
             topdown=True,
             follow_symlinks=False,
             dir_fd=git_fd,
         ):
-            for name in dirnames:
+            for name in (*dirnames, *filenames):
                 os.chown(
                     name,
                     _MANAGED_AGENT_UID,

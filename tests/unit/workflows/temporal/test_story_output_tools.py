@@ -453,6 +453,41 @@ async def test_update_github_issue_status_blocks_done_when_pushed_changes_have_n
 
 
 @pytest.mark.asyncio
+async def test_update_github_issue_status_uses_pr_url_from_publish_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/Tactics",
+            "issueNumber": 2231,
+            "mode": "finalize_after_pr_or_done",
+            "requireVerification": False,
+            "previousOutputs": {
+                "publishContext": {
+                    "pushStatus": "pushed",
+                    "commitCount": 6,
+                    "pullRequestUrl": (
+                        "https://github.com/MoonLadderStudios/Tactics/pull/2240"
+                    ),
+                },
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["appliedActions"] == ["patch_issue", "comment"]
+    assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
+    assert service.token_requests == [
+        "MoonLadderStudios/Tactics",
+        "MoonLadderStudios/Tactics",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("require_verification", [None, "", "   "])
 async def test_update_github_issue_status_requires_verification_for_blank_values(
     tmp_path,

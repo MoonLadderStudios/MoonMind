@@ -5019,6 +5019,8 @@ def _github_status_pull_request_url(
 ) -> str:
     previous_outputs = _github_status_previous_outputs(inputs, context)
     previous_metadata = _mapping(previous_outputs.get("metadata"))
+    publish_context = _mapping(previous_outputs.get("publishContext"))
+    snake_publish_context = _mapping(previous_outputs.get("publish_context"))
     return _first_string(
         inputs.get("pullRequestUrl"),
         inputs.get("pull_request_url"),
@@ -5030,6 +5032,14 @@ def _github_status_pull_request_url(
         previous_metadata.get("pull_request_url"),
         previous_metadata.get("prUrl"),
         previous_metadata.get("pr_url"),
+        publish_context.get("pullRequestUrl"),
+        publish_context.get("pull_request_url"),
+        publish_context.get("prUrl"),
+        publish_context.get("pr_url"),
+        snake_publish_context.get("pullRequestUrl"),
+        snake_publish_context.get("pull_request_url"),
+        snake_publish_context.get("prUrl"),
+        snake_publish_context.get("pr_url"),
         _pull_request_url_from_artifact_path(inputs, context),
     )
 
