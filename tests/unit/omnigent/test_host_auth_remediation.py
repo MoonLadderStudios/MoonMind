@@ -398,6 +398,7 @@ async def test_cross_channel_serializers_redact_or_reject_host_secret(caplog) ->
             bridgeSessionId="bridge",
             externalStateRef="artifact://external",
             idempotencyKey="idem",
+            effectiveLaunchRef="omnigent-launch:sha256:" + "0" * 64,
         )
 
     # The actual artifact gateway boundary redacts structured diagnostics.

@@ -107,6 +107,8 @@ export type TemporalSubmissionDraftPresetPayload = {
 export type TemporalSubmissionDraft = {
   runtime: string | null;
   providerProfile: string | null;
+  omnigentExecutionTargetRef: string | null;
+  omnigentLaunchPolicyRef: string | null;
   model: string | null;
   effort: string | null;
   modelTier: number | null;
@@ -896,6 +898,8 @@ export function buildTemporalSubmissionDraftFromExecution(
     : workflowRecord(artifactParams);
   const runtime = objectValue(task.runtime);
   const artifactRuntime = objectValue(artifactTask.runtime);
+  const omnigent = objectValue(params.omnigent);
+  const artifactOmnigent = objectValue(artifactParams.omnigent);
   const git = objectValue(task.git);
   const artifactGit = objectValue(artifactTask.git);
   const publish = objectValue(task.publish);
@@ -985,6 +989,16 @@ export function buildTemporalSubmissionDraftFromExecution(
       params.profileId,
       runtime.profileId,
       artifactRuntime.profileId,
+    ),
+    omnigentExecutionTargetRef: nullableStringValue(
+      snapshotDraft.omnigentExecutionTargetRef,
+      omnigent.executionTargetRef,
+      artifactOmnigent.executionTargetRef,
+    ),
+    omnigentLaunchPolicyRef: nullableStringValue(
+      snapshotDraft.omnigentLaunchPolicyRef,
+      omnigent.launchPolicyRef,
+      artifactOmnigent.launchPolicyRef,
     ),
     model: nullableStringValue(
       snapshotDraft.model,

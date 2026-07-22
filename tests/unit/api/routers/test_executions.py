@@ -4210,6 +4210,38 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_preserves_omnigent_selection(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "targetRuntime": "omnigent",
+                "omnigent": {
+                    "executionTargetRef": "on-demand-docker",
+                    "launchPolicyRef": "codex-on-demand@1",
+                },
+                "workflow": {"instructions": "Run through Omnigent."},
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["omnigent"] == {
+        "executionTargetRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
+    }
+
+
 def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -8692,6 +8724,26 @@ def test_create_recurring_schedule_accepts_snake_case_target_aliases() -> None:
     assert target["initialParameters"] == {
         "action": "plan",
         "options": {"dryRun": True},
+    }
+
+
+def test_recurring_target_preserves_omnigent_selection_in_initial_parameters() -> None:
+    target = _build_recurring_target(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"workflow": {"instructions": "Run nightly"}},
+            "omnigent": {
+                "executionTargetRef": "on-demand-docker",
+                "launchPolicyRef": "codex-on-demand@1",
+            },
+        },
+        runtime_metadata={"targetRuntime": "omnigent"},
+    )
+
+    assert target["initialParameters"]["targetRuntime"] == "omnigent"
+    assert target["initialParameters"]["omnigent"] == {
+        "executionTargetRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
     }
 
 

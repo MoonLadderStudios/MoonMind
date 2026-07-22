@@ -3592,6 +3592,50 @@ def test_runtime_planner_preserves_jira_implement_pr_handoff_instructions():
     assert "commit your work" not in pr_node["inputs"]["instructions"]
 
 
+def test_runtime_planner_preserves_github_issue_pr_handoff_instructions():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Implement GitHub issue org/repo#2231.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [{"slug": "github-issue-implement"}],
+                "steps": [
+                    {
+                        "id": "implement",
+                        "title": "Implement",
+                        "instructions": "Implement the GitHub issue.",
+                    },
+                    {
+                        "id": "create-pr",
+                        "title": "Create pull request",
+                        "annotations": {
+                            "issueImplementRole": "pull-request-handoff",
+                        },
+                        "instructions": (
+                            "Create a pull request and record pull_request_url."
+                        ),
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    pr_node = plan["nodes"][1]
+    assert pr_node["inputs"]["publishMode"] == "pr"
+    assert "Create a pull request" in pr_node["inputs"]["instructions"]
+    assert (
+        "Do NOT push or create a pull request"
+        not in pr_node["inputs"]["instructions"]
+    )
+    assert "commit your work" not in pr_node["inputs"]["instructions"]
+
+
 @pytest.mark.parametrize("step_index", [12, 13])
 def test_runtime_planner_preserves_jira_orchestrate_pr_handoff_step_id_fallback(
     step_index,
@@ -4414,6 +4458,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     ):
         mock_settings.workflow.workflow_docker_mode = "profiles"
         mock_backend_cls.return_value.check_readiness = AsyncMock()
+        mock_backend_cls.return_value.network_ready = AsyncMock(return_value=True)
         resources, handlers = await _build_runtime_activities(topology)
 
     mock_backend_cls.return_value.check_readiness.assert_awaited_once()
@@ -4599,6 +4644,7 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
         ) as mock_backend_cls,
     ):
         mock_backend_cls.return_value.check_readiness = AsyncMock()
+        mock_backend_cls.return_value.network_ready = AsyncMock(return_value=True)
         resources, _handlers = await _build_runtime_activities(topology)
 
     mock_agent_runtime_activities_cls.assert_called_once()

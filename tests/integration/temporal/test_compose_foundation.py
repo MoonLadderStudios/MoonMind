@@ -633,7 +633,12 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "CODEX_VOLUME_PATH": "/home/app/.codex",
         "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
+        "OMNIGENT_EXECUTION_TIMEOUT_SECONDS": "${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}",
+        "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
+        "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
+        "OMNIGENT_CAPTURE_RETENTION_DAYS": "${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}",
     }
+    assert host_service["stop_grace_period"] == "${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s"
     entrypoint = host_service["entrypoint"]
     assert entrypoint[:2] == ["/usr/bin/env", "-u"]
     assert set(entrypoint[2::2]) == {

@@ -151,6 +151,9 @@ class OmnigentOAuthHostRepository:
             maxSessionsPerHost=1,
             staticHostId=record.static_host_id,
             hostLaunchProfileRef=record.host_launch_profile_ref,
+            executionProfileRef=record.execution_profile_ref,
+            launchPolicyRef=record.launch_policy_ref,
+            effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
         )
 
     async def get_binding_for_profile(
@@ -176,6 +179,9 @@ class OmnigentOAuthHostRepository:
         endpoint_ref: str,
         static_host_id: str | None = None,
         host_launch_profile_ref: str | None = None,
+        execution_profile_ref: str | None = None,
+        launch_policy_ref: str | None = None,
+        effective_launch_snapshot: dict[str, Any] | None = None,
     ) -> OmnigentOAuthHostBinding:
         if static_host_id and host_launch_profile_ref:
             raise ValueError(
@@ -203,6 +209,9 @@ class OmnigentOAuthHostRepository:
                     ),
                     static_host_id=static_host_id,
                     host_launch_profile_ref=host_launch_profile_ref,
+                    execution_profile_ref=execution_profile_ref,
+                    launch_policy_ref=launch_policy_ref,
+                    effective_launch_snapshot_json=effective_launch_snapshot,
                 )
                 session.add(record)
             else:
@@ -213,6 +222,10 @@ class OmnigentOAuthHostRepository:
                 )
                 record.static_host_id = static_host_id
                 record.host_launch_profile_ref = host_launch_profile_ref
+                if effective_launch_snapshot is not None:
+                    record.execution_profile_ref = execution_profile_ref
+                    record.launch_policy_ref = launch_policy_ref
+                    record.effective_launch_snapshot_json = effective_launch_snapshot
             await session.commit()
             await session.refresh(record)
             return self._binding_model(record, profile)
@@ -290,6 +303,11 @@ class OmnigentOAuthHostRepository:
                     raise OmnigentOAuthHostError(
                         "idempotency key is already bound to another host lease"
                     )
+                if existing.effective_launch_snapshot_json != binding.effective_launch_snapshot:
+                    raise OmnigentOAuthHostError(
+                        "retry launch snapshot does not match the durable host lease",
+                        code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
+                    )
                 return self._lease_model(existing)
             record = OmnigentOAuthHostLeaseRecord(
                 lease_id=lease_id,
@@ -301,6 +319,7 @@ class OmnigentOAuthHostRepository:
                 agent_run_id=agent_run_id,
                 idempotency_key=idempotency_key,
                 lease_purpose=lease_purpose,
+                effective_launch_snapshot_json=binding.effective_launch_snapshot,
                 container_name=(
                     deterministic_host_container_name(lease_id)
                     if binding.host_launch_profile_ref
@@ -343,6 +362,7 @@ class OmnigentOAuthHostRepository:
             omnigentHostId=record.omnigent_host_id,
             omnigentSessionId=record.omnigent_session_id,
             bridgeSessionId=record.bridge_session_id,
+            effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
             status=record.status,
             acquiredAt=record.acquired_at,
             lastHeartbeatAt=record.last_heartbeat_at,

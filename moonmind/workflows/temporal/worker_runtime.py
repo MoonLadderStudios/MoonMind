@@ -1351,15 +1351,11 @@ def _template_step_id_matches(
     return len(parts) >= 4 and parts[3] == f"{step_index:02d}"
 
 
-def _is_jira_pr_handoff_node(
+def _is_explicit_pr_handoff_node(
     node: Mapping[str, Any],
     *,
     task_payload: Mapping[str, Any],
 ) -> bool:
-    has_jira_orchestrate = _task_has_applied_template(task_payload, "jira-orchestrate")
-    has_jira_implement = _task_has_applied_template(task_payload, "jira-implement")
-    if not has_jira_orchestrate and not has_jira_implement:
-        return False
     inputs = node.get("inputs")
     if not isinstance(inputs, Mapping):
         return False
@@ -1369,6 +1365,7 @@ def _is_jira_pr_handoff_node(
             str(
                 annotations.get("jiraOrchestrateRole")
                 or annotations.get("jiraImplementRole")
+                or annotations.get("issueImplementRole")
                 or ""
             )
             .strip()
@@ -1376,6 +1373,7 @@ def _is_jira_pr_handoff_node(
         )
         if role == "pull-request-handoff":
             return True
+    has_jira_implement = _task_has_applied_template(task_payload, "jira-implement")
     if has_jira_implement and _template_step_id_matches(
         node,
         slug="jira-implement",
@@ -2267,7 +2265,7 @@ def _build_runtime_planner():
                     not _jira_agent_skill_selected(publish_selected_skill)
                     or publish_selected_skill.lower() in _MOONSPEC_BREAKDOWN_TOOLS
                 )
-                and not _is_jira_pr_handoff_node(
+                and not _is_explicit_pr_handoff_node(
                     publish_node,
                     task_payload=task_payload,
                 )
@@ -2635,6 +2633,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    container_job_backend = None
+    enforced_network_refs: list[str] = []
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
@@ -2749,8 +2749,19 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 # Fail fast at startup when the deployment-selected endpoint is
                 # missing or unreachable rather than at first job launch.
                 await container_job_backend.check_readiness()
+                from moonmind.omnigent.execution_profiles import POLICIES
+
+                enforced_network_refs = []
+                for policy in POLICIES.values():
+                    if (
+                        policy.enabled
+                        and policy.enforced_egress
+                        and await container_job_backend.network_ready(policy.network_ref)
+                    ):
+                        enforced_network_refs.append(policy.network_ref)
             else:
                 container_job_backend = None
+                enforced_network_refs = []
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,
@@ -2811,6 +2822,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             topology.fleet,
             ", ".join(binding_descriptors) if binding_descriptors else "(none)",
         )
+        resources.container_job_backend = container_job_backend  # type: ignore[attr-defined]
+        resources.enforced_network_refs = tuple(enforced_network_refs)  # type: ignore[attr-defined]
         return resources, [
             binding.handler for binding in bindings
         ] + [
@@ -2968,6 +2981,17 @@ async def main_async() -> None:
         ]
         health_state.workers_constructed = True
         health_state.readiness_metadata = spec.readiness_payload()
+        if topology.fleet == AGENT_RUNTIME_FLEET:
+            container_job_backend = getattr(
+                runtime_resources, "container_job_backend", None
+            )
+            enforced_network_refs = getattr(
+                runtime_resources, "enforced_network_refs", ()
+            )
+            health_state.readiness_metadata["containerBackend"] = {
+                "ready": container_job_backend is not None,
+                "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
+            }
 
         logger.info(
             "Temporal executable worker specification: %s",

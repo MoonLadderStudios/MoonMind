@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import os
 import shutil
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_mounted_tools,
@@ -51,6 +53,9 @@ _TOOLS_PATH = "/opt/moonmind-tools/bin"
 _DEFAULT_HOST_PATH = (
     "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
 )
+_DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_PLACEHOLDER_DIGEST = "0" * 64
+_SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 
 
 class OmnigentOAuthHostRuntime:
@@ -79,7 +84,7 @@ class OmnigentOAuthHostRuntime:
                 tag = os.getenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
                 self._image = f"{base_image}:{tag}"
         self._network = network or os.getenv(
-            "OMNIGENT_HOST_NETWORK", "moonmind_local-network"
+            "OMNIGENT_HOST_NETWORK", "local-network"
         )
         self._server_url = server_url or os.getenv(
             "OMNIGENT_SERVER_INTERNAL_URL", "http://omnigent:8000"
@@ -108,7 +113,13 @@ class OmnigentOAuthHostRuntime:
         required_capabilities: tuple[str, ...] = (),
         github_token: str | None = None,
         github_mutation_required: bool = False,
+        effective_launch: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # Validate the complete product-owned decision before materializing skills,
+        # cloning a repository, creating volumes, or starting a container.
+        launch = self._validate_effective_launch(
+            binding=binding, effective_launch=effective_launch
+        )
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
             resolved_skillset_ref=resolved_skillset_ref,
@@ -133,11 +144,14 @@ class OmnigentOAuthHostRuntime:
                 workspace_source=workspace_source,
                 skill_projection=skill_projection,
                 github_token=github_token,
+                effective_launch=launch,
             )
             await self._exec_check(container_name)
             await self._exec_tools_check(container_name)
         else:
-            await self._compose_static_check(skill_projection=skill_projection)
+            await self._compose_static_check(
+                skill_projection=skill_projection, effective_launch=launch
+            )
 
         host = await self._resolve_exact_host(binding=binding, host_lease=host_lease)
         host_id = str(host.get("id") or host.get("host_id") or host.get("hostId") or "")
@@ -185,6 +199,121 @@ class OmnigentOAuthHostRuntime:
         validated["activeSkillsPath"] = str(skill_projection)
         validated["mountedTools"] = mounted_tool_evidence
         return validated
+
+    @staticmethod
+    def _validate_effective_launch(
+        *,
+        binding: OmnigentOAuthHostBinding,
+        effective_launch: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(effective_launch, Mapping):
+            raise OmnigentOAuthHostError(
+                "effective launch policy is required before host mutation",
+                code="OMNIGENT_EFFECTIVE_LAUNCH_REQUIRED",
+            )
+        launch = dict(effective_launch)
+        validate_effective_launch_snapshot(launch)
+        expected_mode = (
+            "on_demand_docker" if binding.host_launch_profile_ref else "static_compose"
+        )
+        if launch.get("hostMode") != expected_mode:
+            raise OmnigentOAuthHostError(
+                "effective launch host mode conflicts with the durable binding",
+                code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+            )
+        if not str(launch.get("snapshotRef") or "").startswith(
+            "omnigent-launch:sha256:"
+        ):
+            raise OmnigentOAuthHostError(
+                "effective launch snapshot reference is invalid",
+                code="OMNIGENT_EFFECTIVE_LAUNCH_INVALID",
+            )
+        if (not _DIGEST_IMAGE.fullmatch(str(launch.get("hostImageRef") or ""))
+                or str(launch.get("hostImageRef")).endswith(_PLACEHOLDER_DIGEST)):
+            raise OmnigentOAuthHostError(
+                "host image must be an immutable sha256 reference",
+                code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
+            )
+        if (not _DIGEST_IMAGE.fullmatch(str(launch.get("serverImageRef") or ""))
+                or str(launch.get("serverImageRef")).endswith(_PLACEHOLDER_DIGEST)):
+            raise OmnigentOAuthHostError(
+                "server image must be an immutable sha256 reference",
+                code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
+            )
+        network = str(launch.get("networkRef") or "")
+        if not _SAFE_NETWORK.fullmatch(network):
+            raise OmnigentOAuthHostError(
+                "network must be a named deployment network",
+                code="OMNIGENT_LAUNCH_NETWORK_UNREALIZABLE",
+            )
+        limits = launch.get("limits")
+        required_limits = {
+            "cpuMillis", "memoryMiB", "processes", "timeoutSeconds",
+            "temporaryStorageMiB",
+        }
+        if not isinstance(limits, Mapping) or set(limits) != required_limits or any(
+            not isinstance(limits[key], int) or limits[key] <= 0
+            for key in required_limits
+        ):
+            raise OmnigentOAuthHostError(
+                "launch resource limits are incomplete or invalid",
+                code="OMNIGENT_LAUNCH_RESOURCES_UNREALIZABLE",
+            )
+        required_mounts = {
+            "workspace", "oauth_home", "omnigent_state", "skills_tools"
+        }
+        if set(launch.get("mountClasses") or ()) != required_mounts:
+            raise OmnigentOAuthHostError(
+                "launch mount classes cannot be realized by the Codex host",
+                code="OMNIGENT_LAUNCH_MOUNTS_UNREALIZABLE",
+            )
+        if not launch.get("enforcedEgress"):
+            raise OmnigentOAuthHostError(
+                "launch policy must enforce egress",
+                code="OMNIGENT_LAUNCH_EGRESS_UNREALIZABLE",
+            )
+        if launch.get("runtimeUid") != 1000 or launch.get("runtimeGid") != 1000:
+            raise OmnigentOAuthHostError(
+                "Codex host UID/GID policy is unrealizable",
+                code="OMNIGENT_LAUNCH_IDENTITY_UNREALIZABLE",
+            )
+        if launch.get("readOnlyRoot") is not True:
+            raise OmnigentOAuthHostError(
+                "Codex host policy must require a read-only root filesystem",
+                code="OMNIGENT_LAUNCH_ROOT_UNREALIZABLE",
+            )
+        capture = launch.get("capture")
+        if (
+            not isinstance(capture, Mapping)
+            or capture.get("required") is not True
+            or not isinstance(capture.get("retentionDays"), int)
+            or capture["retentionDays"] <= 0
+        ):
+            raise OmnigentOAuthHostError(
+                "launch capture and retention policy is unrealizable",
+                code="OMNIGENT_LAUNCH_CAPTURE_UNREALIZABLE",
+            )
+        cleanup = launch.get("cleanup")
+        expected_cleanup = "remove" if expected_mode == "on_demand_docker" else "drain"
+        if (
+            not isinstance(cleanup, Mapping)
+            or cleanup.get("mode") != expected_cleanup
+            or cleanup.get("janitor") is not True
+        ):
+            raise OmnigentOAuthHostError(
+                "launch cleanup and janitor policy is unrealizable",
+                code="OMNIGENT_LAUNCH_CLEANUP_UNREALIZABLE",
+            )
+        if set(launch.get("controlCapabilities") or ()) != {
+            "interrupt",
+            "terminate",
+            "clear_context",
+        }:
+            raise OmnigentOAuthHostError(
+                "launch control capabilities are unrealizable",
+                code="OMNIGENT_LAUNCH_CONTROLS_UNREALIZABLE",
+            )
+        return launch
 
     async def _prepare_skill_projection(
         self,
@@ -301,12 +430,14 @@ class OmnigentOAuthHostRuntime:
         workspace_source: Path,
         skill_projection: Path,
         github_token: str | None = None,
+        effective_launch: Mapping[str, Any],
     ) -> None:
         if await self.container_exists(container_name):
             return
         mount = binding.credential_mount_ref
         state_volume = f"{container_name}-state"
-        host_path = await self._discover_upstream_path()
+        host_image_ref = str(effective_launch["hostImageRef"])
+        host_path = await self._discover_upstream_path(host_image_ref)
         # A retry may find a stopped container with this deterministic name.
         # Remove only that lease-owned container, then initialize the dedicated
         # state volume as root before the actual host drops to UID/GID 1000.
@@ -325,7 +456,7 @@ class OmnigentOAuthHostRuntime:
             f"type=bind,src={self._scripts_dir},dst=/opt/moonmind,readonly",
             "--entrypoint",
             "/opt/moonmind/init-codex-oauth-host.sh",
-            self._image,
+            host_image_ref,
         )
         labels = {
             "moonmind.kind": "omnigent-oauth-host",
@@ -335,6 +466,12 @@ class OmnigentOAuthHostRuntime:
             "moonmind.workflow_id": "activity-owned",
             "moonmind.credential_generation": str(host_lease.credential_generation),
             "moonmind.expires_at": host_lease.expires_at.isoformat(),
+            "moonmind.effective_launch_ref": str(effective_launch["snapshotRef"]),
+            "moonmind.capture_required": str(effective_launch["capture"]["required"]).lower(),
+            "moonmind.capture_retention_days": str(effective_launch["capture"]["retentionDays"]),
+            "moonmind.cleanup_mode": str(effective_launch["cleanup"]["mode"]),
+            "moonmind.control_capabilities": ",".join(effective_launch["controlCapabilities"]),
+            "moonmind.timeout_seconds": str(effective_launch["limits"]["timeoutSeconds"]),
         }
         args = [
             "docker",
@@ -343,14 +480,22 @@ class OmnigentOAuthHostRuntime:
             "--name",
             container_name,
             "--user",
-            "1000:1000",
+            f"{effective_launch['runtimeUid']}:{effective_launch['runtimeGid']}",
             "--workdir",
             "/home/app",
             "--network",
-            self._network,
+            str(effective_launch["networkRef"]),
+            "--cpus",
+            str(int(effective_launch["limits"]["cpuMillis"]) / 1000),
+            "--memory",
+            f"{effective_launch['limits']['memoryMiB']}m",
+            "--pids-limit",
+            str(effective_launch["limits"]["processes"]),
+            "--stop-timeout",
+            "20",
             "--read-only",
             "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=256m",
+            f"/tmp:rw,noexec,nosuid,size={effective_launch['limits']['temporaryStorageMiB']}m",
             "--mount",
             f"type=volume,src={mount.auth_volume_ref.volume_ref},dst=/home/app/.codex",
             "--mount",
@@ -381,6 +526,14 @@ class OmnigentOAuthHostRuntime:
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
             "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills",
+            "--env",
+            f"OMNIGENT_EXECUTION_TIMEOUT_SECONDS={effective_launch['limits']['timeoutSeconds']}",
+            "--env",
+            "OMNIGENT_EXECUTION_TIMEOUT_OWNER=temporal_workflow",
+            "--env",
+            "OMNIGENT_CAPTURE_OWNER=moonmind_bridge",
+            "--env",
+            f"OMNIGENT_CAPTURE_RETENTION_DAYS={effective_launch['capture']['retentionDays']}",
             "--env",
             "PATH=/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
         ]
@@ -419,10 +572,10 @@ class OmnigentOAuthHostRuntime:
         args.extend(["--entrypoint", "/usr/bin/env"])
         for key in _FORBIDDEN_ENV:
             args.extend(["-u", key])
-        args.extend([self._image, "/opt/moonmind/start-codex-oauth-host.sh"])
+        args.extend([host_image_ref, "/opt/moonmind/start-codex-oauth-host.sh"])
         await self._run(*args, env=child_env)
 
-    async def _discover_upstream_path(self) -> str:
+    async def _discover_upstream_path(self, image_ref: str) -> str:
         """Read the selected image's PATH without replacing image-specific entries."""
         result = await self._run(
             "docker",
@@ -430,7 +583,7 @@ class OmnigentOAuthHostRuntime:
             "inspect",
             "--format",
             "{{range .Config.Env}}{{println .}}{{end}}",
-            self._image,
+            image_ref,
             check=False,
         )
         if result[0] == 0:
@@ -560,10 +713,46 @@ class OmnigentOAuthHostRuntime:
             "omnigent-tools-init",
         )
 
-    async def _compose_static_check(self, *, skill_projection: Path | None = None) -> None:
+    async def _compose_static_check(
+        self,
+        *,
+        skill_projection: Path | None = None,
+        effective_launch: Mapping[str, Any] | None = None,
+    ) -> None:
         child_env = dict(os.environ)
         if skill_projection is not None:
             child_env["OMNIGENT_ACTIVE_SKILLS_DIR"] = str(skill_projection)
+        if effective_launch is not None:
+            child_env.update(
+                {
+                    "OMNIGENT_HOST_IMAGE_REF": str(effective_launch["hostImageRef"]),
+                    "OMNIGENT_IMAGE_REF": str(effective_launch["serverImageRef"]),
+                    "OMNIGENT_EFFECTIVE_LAUNCH_REF": str(effective_launch["snapshotRef"]),
+                    "OMNIGENT_HOST_CPU_LIMIT": str(
+                        int(effective_launch["limits"]["cpuMillis"]) / 1000
+                    ),
+                    "OMNIGENT_HOST_MEMORY_LIMIT": (
+                        f"{effective_launch['limits']['memoryMiB']}m"
+                    ),
+                    "OMNIGENT_HOST_PIDS_LIMIT": str(
+                        effective_launch["limits"]["processes"]
+                    ),
+                    "OMNIGENT_HOST_TMPFS_LIMIT": (
+                        f"{effective_launch['limits']['temporaryStorageMiB']}m"
+                    ),
+                    "OMNIGENT_HOST_TIMEOUT_SECONDS": str(
+                        effective_launch["limits"]["timeoutSeconds"]
+                    ),
+                    "OMNIGENT_CAPTURE_RETENTION_DAYS": str(
+                        effective_launch["capture"]["retentionDays"]
+                    ),
+                    "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
+                    "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
+                    "OMNIGENT_CONTROL_CAPABILITIES": ",".join(
+                        effective_launch["controlCapabilities"]
+                    ),
+                }
+            )
         await self._run(
             "docker",
             "compose",

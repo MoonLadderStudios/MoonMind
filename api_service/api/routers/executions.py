@@ -230,6 +230,7 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
     "claude_code",
     "codex_cloud",
     "jules",
+    "omnigent",
     # Legacy aliases accepted and normalized below.
     "codex",
     "claude",
@@ -10124,7 +10125,7 @@ async def _create_execution_from_workflow_request(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, codex_cloud, jules."
+                "Must be one of: codex_cli, claude_code, codex_cloud, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -10205,6 +10206,8 @@ async def _create_execution_from_workflow_request(
         "publishMode": publish_payload["mode"],
         "stepCount": step_count,
     }
+    if isinstance(payload.get("omnigent"), Mapping):
+        initial_parameters["omnigent"] = dict(payload["omnigent"])
     if "modelTier" in runtime_payload:
         initial_parameters["modelTier"] = runtime_payload.get("modelTier")
     if "tierFallback" in runtime_payload:
@@ -10528,7 +10531,7 @@ async def _resolve_recurring_runtime_metadata(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, codex_cloud, jules."
+                "Must be one of: codex_cli, claude_code, codex_cloud, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -10717,6 +10720,10 @@ def _build_recurring_target(
                 target["initialParameters"],
                 runtime_metadata,
             )
+            if isinstance(target_payload.get("omnigent"), Mapping):
+                target["initialParameters"]["omnigent"] = dict(
+                    target_payload["omnigent"]
+                )
         for source_keys, target_key in (
             (("title",), "title"),
             (("inputArtifactRef", "input_artifact_ref"), "inputArtifactRef"),

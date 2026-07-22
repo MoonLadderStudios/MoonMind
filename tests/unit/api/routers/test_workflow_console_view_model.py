@@ -130,6 +130,12 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert "defaultRepository" in config["system"]
+    omnigent_catalog = config["system"]["omnigentExecutionCatalog"]
+    assert omnigent_catalog["profiles"][0]["ref"] == "omnigent-codex@1"
+    assert {policy["hostMode"] for policy in omnigent_catalog["policies"]} == {
+        "static_compose",
+        "on_demand_docker",
+    }
     assert "buildId" in config["system"]
     assert config["system"]["defaultRuntime"] in ("codex_cli", "claude_code")
     assert "defaultModel" in config["system"]

@@ -4895,6 +4895,172 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
 
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_reopens_pr_gate_after_later_push(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:ede07a85-049a-4860-ae0b-b016c488cda0."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/Tactics"
+    workflow._canonical_no_commit_outcome_enabled = True
+    workflow._authoritative_publish_outcome_enabled = True
+    create_pr_payloads: list[dict[str, object]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "repo.create_pr":
+            assert payload is not None
+            create_pr_payloads.append(payload)
+            return {
+                "url": "https://github.com/MoonLadderStudios/Tactics/pull/2240",
+                "created": True,
+                "headSha": "abc123",
+            }
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "GitHub Issue Implement",
+                        "created_at": "2026-07-21T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        _agent_runtime_step("assess"),
+                        _agent_runtime_step("publish"),
+                    ],
+                    "edges": [{"from": "assess", "to": "publish"}],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    child_calls = 0
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal child_calls
+        child_calls += 1
+        if child_calls == 1:
+            return {
+                "summary": "Assessment completed without repository changes.",
+                "metadata": {
+                    "push_status": "no_commits",
+                    "push_branch": "feature/issue-2231",
+                    "push_commit_count": 0,
+                },
+                "output_refs": [],
+            }
+        return {
+            "summary": "Implementation branch published.",
+            "metadata": {
+                "push_status": "pushed",
+                "push_branch": "feature/issue-2231",
+                "push_commit_count": 6,
+                "push_head_sha": "abc123",
+            },
+            "output_refs": [],
+        }
+
+    async def bind_publish_request(request: object) -> object:
+        return request
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        bind_publish_request,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+            run_workflow_module.RUN_AUTHORITATIVE_PR_REQUIREMENT_PATCH,
+            run_workflow_module.RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+        },
+    )
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/Tactics",
+            "publishMode": "pr",
+            "workflow": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "github-issue-implement",
+                        "version": "1.0.0",
+                        "composition": {"includes": []},
+                    }
+                ]
+            },
+        },
+        plan_ref="art_plan_1",
+    )
+
+    assert child_calls == 2
+    assert len(create_pr_payloads) == 1
+    assert create_pr_payloads[0]["head"] == "feature/issue-2231"
+    assert workflow._pull_request_url == (
+        "https://github.com/MoonLadderStudios/Tactics/pull/2240"
+    )
+    assert workflow._publish_context["commitCount"] == 6
+    assert "noCommitPublish" not in workflow._publish_context
+
+
+def test_authoritative_pr_requirement_prefers_commits_over_stale_story_output() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._integration = None
+    workflow._publish_status = "published"
+    workflow._publish_context = {
+        "storyOutputMode": "github",
+        "commitCount": 2,
+    }
+
+    assert workflow._authoritative_pr_requirement(
+        publish_mode="pr",
+        pr_publish_optional=False,
+    ) is True
+
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

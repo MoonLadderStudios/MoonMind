@@ -12,6 +12,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import type { components } from "../generated/openapi";
 import { navigateTo } from "../lib/navigation";
 import { requestWorkflowStartRouteChange } from "../lib/workflowStartRouteGuard";
 import {
@@ -499,6 +500,311 @@ const mockPayload: BootPayload = {
     dashboardConfig: mockDashboardConfig,
   },
 };
+
+describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
+  let fetchSpy: MockInstance;
+  let readinessRequests: number;
+
+  beforeEach(() => {
+    window.history.pushState({}, "Create Workflow", "/workflows/new");
+    readinessRequests = 0;
+    fetchSpy = vi.spyOn(window, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+            runtimeId: "omnigent",
+            displayName: "Codex via Omnigent",
+            available: false,
+            eligibleProviderProfiles: [],
+            gateReasons: [{
+              code: "no_eligible_codex_oauth_profile",
+              message: "Connect and validate a Codex OAuth Provider Profile.",
+              remediationHref: "/settings#provider-profiles",
+            }],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+  });
+
+  afterEach(() => fetchSpy.mockRestore());
+
+  function omnigentPayload(): BootPayload {
+    return {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            supportedAgentRuntimes: ["codex_cli", "claude_code", "jules"],
+            omnigentExecutionCatalog: {
+              profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1" }],
+              policies: [{ ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker" }],
+            },
+          },
+        },
+      },
+    } as BootPayload;
+  }
+
+  const readyOmnigentCatalog = {
+    schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+    runtimeId: "omnigent",
+    displayName: "Codex via Omnigent",
+    agentKind: "external",
+    agentId: "omnigent",
+    harness: "codex-native",
+    available: true,
+    defaultExecutionProfileRef: "omnigent-codex-default",
+    executionProfiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", available: true, policyRefs: ["on-demand-v1"], gateReasons: [] }],
+    eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", busy: false, queueWhenBusy: true }],
+    ineligibleProviderProfiles: [],
+    hostModes: ["on_demand_docker"],
+    gateReasons: [],
+  } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+
+  it("keeps an unavailable runtime unselectable and explicitly revalidates stale readiness", async () => {
+    renderWorkflowStartPage(mockPayload);
+
+    const option = await screen.findByRole("option", { name: "Codex via Omnigent" });
+    await waitFor(() => expect((option as HTMLOptionElement).disabled).toBe(true));
+    expect(screen.getByText(/Connect and validate a Codex OAuth Provider Profile/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh readiness" }));
+    await waitFor(() => expect(readinessRequests).toBe(2));
+  });
+
+  it("gates a busy Omnigent selection and hides unsupported model authority", async () => {
+    const payload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          ...mockDashboardConfig,
+          system: {
+            ...mockDashboardConfig.system,
+            omnigentExecutionCatalog: {
+              profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1" }],
+              policies: [{ ref: "on-demand-v1", hostMode: "on_demand_docker" }],
+            },
+          },
+        },
+      },
+    } as BootPayload;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            schemaVersion: "moonmind.omnigent-codex-readiness.v1",
+            runtimeId: "omnigent",
+            displayName: "Codex via Omnigent",
+            available: true,
+            defaultExecutionProfileRef: "omnigent-codex-default",
+            executionProfiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", available: true, policyRefs: ["on-demand-v1"], gateReasons: [] }],
+            eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", busy: true, queueWhenBusy: false }],
+            ineligibleProviderProfiles: [],
+            gateReasons: [],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(payload);
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+
+    expect(await screen.findByText(/busy and does not support queued waiting/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText("Workflow model tier intent")).toBeNull();
+    expect(screen.queryByLabelText("Hard override model")).toBeNull();
+    expect(document.querySelector('[name="hostId"], [name*="volume"], [name*="token"]')).toBeNull();
+  });
+
+  it("revalidates and submits only canonical Omnigent intent before opening Workflow Detail", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-created" }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    const runtime = await screen.findByLabelText("Runtime");
+    expect(within(runtime).getByRole("option", { name: "Codex CLI" })).toBeTruthy();
+    expect(within(runtime).getByRole("option", { name: "Claude Code" })).toBeTruthy();
+    expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
+    runtime.focus();
+    expect(document.activeElement).toBe(runtime);
+    fireEvent.change(runtime, { target: { value: "omnigent" } });
+    expect((runtime as HTMLSelectElement).value).toBe("omnigent");
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
+
+    expect(await screen.findByText("Runtime: Codex via Omnigent")).toBeTruthy();
+    expect(screen.getByText("Host mode: On-demand Docker")).toBeTruthy();
+    expect(screen.getByLabelText("Execution target").getAttribute("name")).toBe("omnigentExecutionTargetRef");
+    expect(screen.getByLabelText("Execution target").closest(".grid-2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-created?source=temporal"));
+    expect(readinessRequests).toBeGreaterThanOrEqual(2);
+    const createCall = fetchSpy.mock.calls.find(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST");
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload).toMatchObject({
+      targetRuntime: "omnigent",
+      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
+      task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
+    });
+    expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
+  });
+
+  it.each([
+    ["deferred", "deferred_minutes", "Minutes from now", "5", { mode: "once" }],
+    ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: "2099-01-01T12:00:00.000Z" }],
+    ["recurring", "recurring", "Cron Expression", "0 4 * * *", { mode: "recurring", cron: "0 4 * * *", timezone: "UTC" }],
+  ])("preserves canonical Omnigent refs in %s schedule submissions", async (_label, mode, fieldLabel, fieldValue, expectedSchedule) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: `mm:omnigent-${mode}` }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: `Exercise ${mode} scheduling.` } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: mode } });
+    fireEvent.change(screen.getByLabelText(fieldLabel), { target: { value: fieldValue } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(true));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST");
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload).toMatchObject({
+      targetRuntime: "omnigent",
+      omnigent: { executionTargetRef: "omnigent-codex-default", launchPolicyRef: "on-demand-v1" },
+      task: { runtime: { mode: "omnigent", profileId: "oauth-1" } },
+      schedule: expectedSchedule,
+    });
+  });
+
+  it("rejects a selection revoked by no-cache submit-time readiness without substitution", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        const body = readinessRequests === 1
+          ? readyOmnigentCatalog
+          : { ...readyOmnigentCatalog, available: false, gateReasons: [{ code: "deployment_unready", message: "Omnigent deployment became unavailable." }] };
+        return Promise.resolve({ ok: true, json: async () => body } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not launch stale authority." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(await screen.findByText("Omnigent deployment became unavailable.")).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
+    expect((screen.getByLabelText("Provider profile") as HTMLSelectElement).value).toBe("oauth-1");
+  });
+
+  it("fails closed when submit-time Omnigent readiness cannot be refreshed", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        if (readinessRequests > 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            json: async () => ({ detail: "readiness unavailable" }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => readyOmnigentCatalog,
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              profile_id: "oauth-1",
+              account_label: "Codex OAuth",
+              provider_id: "openai",
+            },
+          ],
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+      target: { value: "oauth-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Do not launch when readiness cannot be checked." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText("Codex via Omnigent readiness could not be verified."),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, options]) =>
+          String(url) === "/api/executions" &&
+          (options as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+  });
+});
 
 const historicalRuntimeCommand = {
   kind: "slash_command",
@@ -1024,6 +1330,11 @@ describe("WorkflowStart CSS Layout", () => {
     );
     expect(dashboardCss).toMatch(
       /@media \(max-width:\s*924px\) and \(min-width:\s*641px\)\s*\{[^}]*\.workflow-start-workspace \.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto;/s,
+    );
+    // The execution target/policy pair used by Omnigent is a canonical grid-2
+    // row, which collapses to one keyboard-ordered column on narrow screens.
+    expect(dashboardCss).toMatch(
+      /@media \(max-width:\s*900px\)\s*\{[^}]*\.grid-2\s*\{[^}]*grid-template-columns:\s*1fr;/s,
     );
   });
 });
