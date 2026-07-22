@@ -62,19 +62,6 @@ const RowActionsExecutionSchema = z
 type RowActionsExecution = z.infer<typeof RowActionsExecutionSchema>;
 type RowActionDialogKind = "rename" | "send-message";
 
-const KEBAB_ICON = (
-  <svg
-    aria-hidden="true"
-    className="td-workflow-actions-trigger-icon"
-    viewBox="0 0 16 16"
-    focusable="false"
-  >
-    <circle cx="8" cy="3" r="1.5" />
-    <circle cx="8" cy="8" r="1.5" />
-    <circle cx="8" cy="13" r="1.5" />
-  </svg>
-);
-
 const ACTION_AVAILABILITY_PENDING_REASON = "Checking availability…";
 const DEFAULT_WORKFLOW_ACTION_ERROR =
   "The workflow action could not be completed.";
@@ -174,7 +161,6 @@ export function WorkflowRowActionsMenu({
 }: WorkflowRowActionsMenuProps) {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
-  const [hasOpened, setHasOpened] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(
     null,
@@ -182,7 +168,7 @@ export function WorkflowRowActionsMenu({
 
   const detailQuery = useQuery({
     queryKey: ["workflow-row-actions-detail", workflowId],
-    enabled: actionsEnabled && hasOpened && Boolean(workflowId),
+    enabled: actionsEnabled && Boolean(workflowId),
     staleTime: 5000,
     queryFn: async () => {
       const response = await fetch(
@@ -534,11 +520,6 @@ export function WorkflowRowActionsMenu({
     workflowSubject,
   ]);
 
-  const emptyMessage = detailQuery.isLoading
-    ? "Loading actions…"
-    : detailQuery.isError
-      ? "Unable to load workflow actions."
-      : "No workflow actions are currently available.";
   const subject = workflowSubject;
   const closeDialog = () => {
     setActiveDialog(null);
