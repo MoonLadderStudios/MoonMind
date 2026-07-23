@@ -2297,6 +2297,48 @@ class FeatureFlagsSettings(BaseSettings):
             "CHECKPOINT_RESUME_MINIMUM_SHADOW_SUCCESS_RATIO",
         )
     )
+    publication_recovery_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_ENABLED",
+            "PUBLICATION_RECOVERY_ENABLED",
+        ),
+    )
+    publication_recovery_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_SHADOW",
+            "PUBLICATION_RECOVERY_SHADOW",
+        ),
+    )
+    publication_recovery_canary_repositories: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_CANARY_REPOSITORIES",
+            "PUBLICATION_RECOVERY_CANARY_REPOSITORIES",
+        ),
+    )
+    publication_recovery_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_CANARY_OWNER_IDS",
+            "PUBLICATION_RECOVERY_CANARY_OWNER_IDS",
+        ),
+    )
+    publication_recovery_allowed_modes: str = Field(
+        "pr,draft_pr",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_ALLOWED_MODES",
+            "PUBLICATION_RECOVERY_ALLOWED_MODES",
+        ),
+    )
+    publication_recovery_generation: str = Field(
+        "disabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__PUBLICATION_RECOVERY_GENERATION",
+            "PUBLICATION_RECOVERY_GENERATION",
+        ),
+    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",

@@ -209,7 +209,10 @@ from moonmind.workflows.executions.runtime_inheritance import (
     resolve_child_runtime_inheritance,
 )
 from moonmind.workflows.temporal.publication_recovery import (
+    PublicationRecoveryContract,
+    PublicationRecoveryRolloutPolicy,
     publication_action_eligibility,
+    publication_recovery_workflow_id,
 )
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from api_service.api.execution_principal import (
@@ -637,6 +640,15 @@ class RemediationApprovalDecisionResponse(BaseModel):
     workflowId: str
     requestId: str
     decision: str
+
+
+class PublicationRecoveryResponse(BaseModel):
+    sourceWorkflowId: str
+    sourceRunId: str
+    workflowId: str
+    runId: str
+    publicationIdempotencyKey: str
+    rolloutGeneration: str
 
 class RemediationCheckpointBranchRepairRequest(BaseModel):
     checkpointRef: str
@@ -14905,6 +14917,133 @@ def _canonical_execution_repository(
     value = params.get("repository") or task.get("repository")
     candidate = str(value or "").strip()
     return candidate or None
+
+
+def _csv_setting(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _publication_recovery_policy() -> PublicationRecoveryRolloutPolicy:
+    flags = settings.feature_flags
+    return PublicationRecoveryRolloutPolicy(
+        enabled=flags.publication_recovery_enabled,
+        shadow=flags.publication_recovery_shadow,
+        canaryRepositories=_csv_setting(
+            flags.publication_recovery_canary_repositories
+        ),
+        canaryOwnerIds=_csv_setting(flags.publication_recovery_canary_owner_ids),
+        allowedModes=_csv_setting(flags.publication_recovery_allowed_modes),
+        generation=flags.publication_recovery_generation,
+    )
+
+
+def _publication_recovery_contract_from_record(
+    canonical: TemporalExecutionCanonicalRecord,
+) -> PublicationRecoveryContract:
+    finish_summary = (
+        canonical.finish_summary_json
+        if isinstance(canonical.finish_summary_json, Mapping)
+        else {}
+    )
+    control_stop = finish_summary.get("controlStop")
+    control_stop = control_stop if isinstance(control_stop, Mapping) else {}
+    auxiliary = control_stop.get("auxiliaryOutcomes")
+    auxiliary = auxiliary if isinstance(auxiliary, Mapping) else {}
+    publication = auxiliary.get("gitPublication")
+    publication = publication if isinstance(publication, Mapping) else {}
+    payload = publication.get("recoveryContract")
+    eligible, reason = publication_action_eligibility(payload)
+    if publication.get("status") != "failed" or not eligible:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "Publication recovery is not available for this execution.",
+                "reason": reason or "publication_not_failed",
+            },
+        )
+    try:
+        return PublicationRecoveryContract.model_validate(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "Publication recovery evidence is invalid.",
+                "reason": "publication_recovery_contract_invalid",
+            },
+        ) from exc
+
+
+@router.post(
+    "/{workflow_id}/retry-publication",
+    response_model=PublicationRecoveryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def retry_execution_publication(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> PublicationRecoveryResponse:
+    """Start or reconcile exactly one publication-only linked workflow."""
+
+    canonical = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    contract = _publication_recovery_contract_from_record(canonical)
+    if (
+        contract.source_workflow_id != workflow_id
+        or contract.source_run_id != str(canonical.run_id or "")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_available",
+                "message": "Publication recovery source identity does not match.",
+                "reason": "publication_source_mismatch",
+            },
+        )
+    policy = _publication_recovery_policy()
+    reason = policy.admission_reason(
+        repository=contract.intent.repository,
+        owner_id=_owner_id(user),
+        mode=contract.intent.mode,
+    )
+    if reason is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "publication_retry_not_admitted",
+                "message": "Publication recovery is not admitted by current rollout policy.",
+                "reason": reason,
+            },
+        )
+    destination_id = publication_recovery_workflow_id(contract)
+    started = await adapter.start_workflow(
+        workflow_type="MoonMind.PublicationRecoveryV1",
+        workflow_id=destination_id,
+        input_args=contract.model_dump(mode="json", by_alias=True),
+        memo={
+            "source_workflow_id": contract.source_workflow_id,
+            "source_run_id": contract.source_run_id,
+            "publication_idempotency_key": (
+                contract.continuation.publication_idempotency_key
+            ),
+            "publication_recovery_generation": policy.generation,
+        },
+    )
+    return PublicationRecoveryResponse(
+        sourceWorkflowId=contract.source_workflow_id,
+        sourceRunId=contract.source_run_id,
+        workflowId=started.workflow_id,
+        runId=started.run_id,
+        publicationIdempotencyKey=(
+            contract.continuation.publication_idempotency_key
+        ),
+        rolloutGeneration=policy.generation,
+    )
 
 
 @router.post(
