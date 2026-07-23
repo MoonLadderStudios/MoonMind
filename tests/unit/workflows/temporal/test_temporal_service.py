@@ -3738,24 +3738,28 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
             },
             idempotency_key=None,
         )
-        source.state = MoonMindWorkflowState.FAILED
-        source.close_status = TemporalExecutionCloseStatus.FAILED
-        source.artifact_refs = list(source.artifact_refs or []) + [
+        canonical_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert canonical_source is not None
+        canonical_source.state = MoonMindWorkflowState.FAILED
+        canonical_source.close_status = TemporalExecutionCloseStatus.FAILED
+        canonical_source.artifact_refs = list(canonical_source.artifact_refs or []) + [
             "artifact://checkpoint/source",
             "artifact://checkpoint-validation",
         ]
         await session.commit()
         target = _typed_failed_step_recovery_target(
-            source_workflow_id=source.workflow_id,
-            source_run_id=source.run_id,
+            source_workflow_id=canonical_source.workflow_id,
+            source_run_id=canonical_source.run_id,
             destination_workflow_id="mm:typed-recovery-destination",
         )
 
         first = await service.create_typed_recovery_execution(
-            source, recovery_target=target
+            canonical_source, recovery_target=target
         )
         second = await service.create_typed_recovery_execution(
-            source, recovery_target=target
+            canonical_source, recovery_target=target
         )
 
         assert first["execution"] == second["execution"]
@@ -3767,8 +3771,8 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
             by_alias=True, mode="json"
         )
         assert destination.parameters["recoveryLineage"]["source"] == {
-            "workflowId": source.workflow_id,
-            "runId": source.run_id,
+            "workflowId": canonical_source.workflow_id,
+            "runId": canonical_source.run_id,
             "planRef": "artifact://plan/source",
             "planDigest": "sha256:plan",
             "taskInputSnapshotRef": "artifact://snapshot/source",
