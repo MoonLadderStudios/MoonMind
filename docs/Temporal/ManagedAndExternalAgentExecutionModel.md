@@ -1,5 +1,16 @@
 # Managed and External Agent Execution Model
 
+## Hybrid runtime capability ownership
+
+An admitted runtime capability snapshot freezes three independent planes: canonical
+agent identity and session continuity, repository workspace ownership, and host
+realization. For profile-bound Omnigent, identity remains `external/omnigent` with
+the `codex-native` harness. Omnigent owns session reattach evidence; MoonMind owns
+the sandbox `WorkspaceLocator`, repository checkpoint capture, validation, and
+restore. An `external_state_ref` proves session continuity only and cannot satisfy
+workspace restore preflight. Recovery uses the versioned, digested snapshot admitted
+with the run rather than rewriting it after registry or credential changes.
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  

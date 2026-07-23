@@ -67,7 +67,7 @@ def _build(**overrides):
             "run-tests": {"before_execution": "artifact://checkpoint/before"}
         },
         side_effect_records={},
-        checkpoint_kind="external_state_ref",
+        checkpoint_kind="worktree_archive",
         runtime_capabilities=resolve_runtime_execution_capabilities("omnigent"),
         restore_route_registered=True,
         failure_diagnostic={

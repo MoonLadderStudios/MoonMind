@@ -45,41 +45,39 @@ def test_resolve_checkpoint_policy_uses_enum_value() -> None:
     assert policy.workspace_policy == "start_from_last_passed_commit"
 
 
-def test_resolve_checkpoint_policy_uses_omnigent_external_state_after_execution() -> None:
+def test_resolve_checkpoint_policy_separates_omnigent_planes_after_execution() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.AFTER_EXECUTION,
-        capabilities=resolve_runtime_execution_capabilities("omnigent"),
+        capabilities=resolve_runtime_execution_capabilities("omnigent"), requested_state="both",
     )
 
-    assert policy.workspace_policy == "continue_from_previous_execution"
-    assert policy.checkpoint_kind == "external_state_ref"
+    assert policy.workspace_policy == "restore_pre_execution"
+    assert policy.checkpoint_kind == "worktree_archive"
     assert policy.resumable is True
-    assert policy.required_evidence == (
-        "externalStateRef",
-        "diagnosticsRef",
-        "runtimeSessionId",
-    )
+    assert policy.required_evidence == ("archiveRef", "manifestRef")
+    assert policy.session.checkpoint_kind == "external_state_ref"
+    assert policy.workspace.checkpoint_kind == "worktree_archive"
 
 
-def test_resolve_checkpoint_policy_uses_omnigent_external_state_before_execution() -> None:
+def test_resolve_checkpoint_policy_can_request_omnigent_session_state() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
-        capabilities=resolve_runtime_execution_capabilities("omnigent"),
+        capabilities=resolve_runtime_execution_capabilities("omnigent"), requested_state="session",
     )
 
     assert policy.workspace_policy == "continue_from_previous_execution"
     assert policy.checkpoint_kind == "external_state_ref"
     assert policy.required_evidence == (
         "externalStateRef",
-        "idempotencyKey",
         "runtimeSessionId",
+        "firstMessageEvidenceRef",
     )
 
 
 def test_resolve_checkpoint_policy_uses_canonical_external_capabilities() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
-        capabilities=resolve_runtime_execution_capabilities("omnigent"),
+        capabilities=resolve_runtime_execution_capabilities("omnigent"), requested_state="session",
     )
     control = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
@@ -128,8 +126,19 @@ def test_omnigent_unsupported_recovery_boundary_does_not_invent_local_capture() 
         },
     )
 
-    assert policy.checkpoint_kind is None
-    assert policy.workspace_policy == "restore_pre_execution"
+    assert policy.checkpoint_kind == "worktree_archive"
+    assert policy.workspace_policy == "start_from_last_passed_commit"
+
+
+def test_external_state_ref_never_satisfies_workspace_restore_preflight() -> None:
+    capability = resolve_runtime_execution_capabilities("omnigent")
+    policy = resolve_checkpoint_policy(
+        boundary="before_recovery_restoration", capabilities=capability,
+        requested_state="workspace",
+    )
+
+    assert policy.checkpoint_kind == "worktree_archive"
+    assert "external_state_ref" not in policy.supported_checkpoint_kinds
 
 
 def test_external_state_checkpoint_is_continue_only() -> None:

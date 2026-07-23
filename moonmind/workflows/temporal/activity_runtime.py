@@ -1346,6 +1346,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_command": ("sandbox", "sandbox_run_command"),
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "workspace.capture_checkpoint": ("sandbox", "workspace_capture_checkpoint"),
+    "workspace.apply_checkpoint": ("sandbox", "workspace_apply_policy"),
     "agent_runtime.capture_workspace_checkpoint": (
         "agent_runtime",
         "agent_runtime_capture_workspace_checkpoint",

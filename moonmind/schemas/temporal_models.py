@@ -327,6 +327,14 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
     checkpoint_restore_kinds: tuple[str, ...] = Field(default=(), alias="checkpointRestoreKinds")
     restore_activity: str | None = Field(None, alias="restoreActivity", max_length=200)
     workspace_authority: str | None = Field(None, alias="workspaceAuthority", max_length=100)
+    session_recoverable: bool | None = Field(None, alias="sessionRecoverable")
+    workspace_recoverable: bool | None = Field(None, alias="workspaceRecoverable")
+    authoritative_workspace_checkpoint_kind: str | None = Field(
+        None, alias="authoritativeWorkspaceCheckpointKind", max_length=100
+    )
+    partial_recovery_reason: str | None = Field(
+        None, alias="partialRecoveryReason", max_length=240
+    )
     checkpoint_ref: str | None = Field(None, alias="checkpointRef", max_length=500)
     source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
     source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)

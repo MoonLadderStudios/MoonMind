@@ -10119,6 +10119,14 @@ export interface components {
             restoreActivity?: string | null;
             /** Workspaceauthority */
             workspaceAuthority?: string | null;
+            /** Sessionrecoverable */
+            sessionRecoverable?: boolean | null;
+            /** Workspacerecoverable */
+            workspaceRecoverable?: boolean | null;
+            /** Authoritativeworkspacecheckpointkind */
+            authoritativeWorkspaceCheckpointKind?: string | null;
+            /** Partialrecoveryreason */
+            partialRecoveryReason?: string | null;
             /** Checkpointref */
             checkpointRef?: string | null;
             /** Sourceworkflowid */

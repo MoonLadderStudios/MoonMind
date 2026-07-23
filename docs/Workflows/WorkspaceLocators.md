@@ -1,5 +1,15 @@
 # Workspace locators
 
+## Hybrid session and workspace authority
+
+Workspace authority comes from the workspace plane of the frozen capability,
+independently of session identity. Profile-bound Omnigent accepts a MoonMind
+`sandbox` locator and mounts it at `/workspaces/run` in both static and on-demand
+hosts. MoonMind captures repository state through `workspace.capture_checkpoint`
+and restores it through `workspace.apply_checkpoint`, retaining normal containment,
+digest, and symlink checks. Omnigent session restore never applies a local archive,
+and workspace restore does not require the original Omnigent host.
+
 The **Codex via Omnigent** product path applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md). Workflow Create never authors absolute paths or daemon bind sources.
 
 Durable workflow payloads identify workspaces with the discriminated
