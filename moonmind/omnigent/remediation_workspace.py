@@ -94,11 +94,13 @@ class RemediationCheckpointRestorer(Protocol):
     async def restore(
         self, *, head: RemediationLoopHead, destination: Path,
         idempotency_key: str,
-    ) -> Mapping[str, Any]: ...
+    ) -> Mapping[str, Any]:
+        raise NotImplementedError
 
 
 class RemediationHeadLoader(Protocol):
-    async def load(self, ref: str) -> Mapping[str, Any]: ...
+    async def load(self, ref: str) -> Mapping[str, Any]:
+        raise NotImplementedError
 
 
 class ArtifactRemediationHeadLoader:
@@ -173,7 +175,8 @@ class RemediationWorkspaceOwner(Protocol):
     async def admit_and_resolve(
         self, *, binding: RemediationWorkspaceBinding, workflow_id: str,
         step_execution_id: str,
-    ) -> Mapping[str, Any]: ...
+    ) -> Mapping[str, Any]:
+        raise NotImplementedError
 
 
 class SandboxRemediationWorkspaceOwner:
