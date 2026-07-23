@@ -58,6 +58,10 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.control_stop_continuation import (
+    SqlControlStopContinuationRepository,
+    TemporalControlStopContinuationStarter,
+)
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
@@ -209,6 +213,12 @@ from moonmind.workflows.executions.runtime_inheritance import (
     resolve_child_runtime_inheritance,
 )
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
+from moonmind.services.control_stop_continuation import (
+    admit_control_stop_continuation,
+)
+from moonmind.workflows.executions.control_stop_continuation import (
+    ControlStopContinuationError,
+)
 from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
@@ -1677,6 +1687,14 @@ def _enum_value(value: object | None) -> str | None:
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
+
+
+def get_control_stop_continuation_starter(
+    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+) -> TemporalControlStopContinuationStarter:
+    """Compose the production continuation starter from the shared Temporal adapter."""
+
+    return TemporalControlStopContinuationStarter(adapter)
 
 async def get_temporal_client(
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
@@ -14149,6 +14167,91 @@ async def describe_execution(
         if agent_run_id:
             execution = execution.model_copy(update={"agent_run_id": agent_run_id})
     return execution
+
+
+class ContinueRemediationRequest(BaseModel):
+    """Select the frozen control-stop evidence owned by the source execution."""
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    control_stop_id: str = Field(alias="controlStopId", min_length=1, max_length=255)
+
+
+class ContinueRemediationResponse(BaseModel):
+    """Stable linked destination returned for both first and duplicate submissions."""
+
+    model_config = {"populate_by_name": True}
+
+    source_workflow_id: str = Field(alias="sourceWorkflowId")
+    source_run_id: str = Field(alias="sourceRunId")
+    control_stop_id: str = Field(alias="controlStopId")
+    destination_workflow_id: str = Field(alias="destinationWorkflowId")
+    workspace_head_ref: str = Field(alias="workspaceHeadRef")
+    remaining_work_ref: str = Field(alias="remainingWorkRef")
+    created: bool
+
+
+@router.post(
+    "/{workflow_id}/actions/continue-remediation",
+    response_model=ContinueRemediationResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def continue_remediation(
+    workflow_id: str,
+    payload: ContinueRemediationRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    starter: TemporalControlStopContinuationStarter = Depends(
+        get_control_stop_continuation_starter
+    ),
+    _actions_enabled: None = Depends(_ensure_actions_enabled),
+) -> ContinueRemediationResponse:
+    """Admit one deterministic continuation from authoritative frozen evidence."""
+
+    source = await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+    )
+    source_run_id = str(getattr(source, "run_id", "") or "").strip()
+    if not source_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "control_stop_source_run_missing",
+                "message": "The source execution has no authoritative run identity.",
+            },
+        )
+
+    try:
+        reservation = await admit_control_stop_continuation(
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+            control_stop_id=payload.control_stop_id,
+            repository=SqlControlStopContinuationRepository(session),
+            starter=starter,
+        )
+    except (ControlStopContinuationError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "control_stop_continuation_rejected",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return ContinueRemediationResponse(
+        sourceWorkflowId=reservation.source_workflow_id,
+        sourceRunId=reservation.source_run_id,
+        controlStopId=reservation.control_stop_id,
+        destinationWorkflowId=reservation.destination_workflow_id,
+        workspaceHeadRef=reservation.workspace_head_ref,
+        remainingWorkRef=reservation.remaining_work_ref,
+        created=reservation.created,
+    )
+
 
 @router.post(
     "/{workflow_id}/update",
