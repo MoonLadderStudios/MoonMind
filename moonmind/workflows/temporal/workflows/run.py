@@ -6200,6 +6200,8 @@ class MoonMindRunWorkflow:
                 "step_gate_result_ref",
                 "artifactRef",
                 "artifact_ref",
+                "diagnosticsRef",
+                "diagnostics_ref",
             ):
                 gate_result_ref = self._coerce_text(source.get(key), max_chars=400)
                 if gate_result_ref:
