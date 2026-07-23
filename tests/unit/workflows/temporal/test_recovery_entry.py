@@ -23,6 +23,9 @@ def test_failed_step_entry_compiles_before_semantic_work() -> None:
     assert policy.publication_only is False
     assert policy.restoration_only is False
     assert policy.side_effect_disposition_ref == "artifact://side-effects"
+    assert policy.execution_route == "failed_step"
+    assert policy.requires_budget_authority is False
+    assert policy.requires_side_effect_authority is True
 
 
 def test_entry_rejects_destination_identity_mismatch() -> None:
@@ -40,3 +43,36 @@ def test_entry_independently_readmits_frozen_contract() -> None:
         compile_recovery_entry_policy(
             payload, destination_workflow_id="recovery-workflow"
         )
+
+
+@pytest.mark.parametrize(
+    ("kind", "phase", "route", "semantic_work", "budget_authority"),
+    [
+        ("failed_step", "rerun_failed_step", "failed_step", True, False),
+        ("control_stop", "continue_to_gate", "gate", True, False),
+        ("control_stop", "continue_after_gate", "post_gate", True, False),
+        ("control_stop", "continue_to_remediation", "remediation", True, True),
+        ("publication", "resume_publication", "publication", False, False),
+        ("restoration_failure", "retry_restoration", "restoration", False, False),
+    ],
+)
+def test_entry_compiles_one_explicit_route_for_every_canonical_phase(
+    kind: str,
+    phase: str,
+    route: str,
+    semantic_work: bool,
+    budget_authority: bool,
+) -> None:
+    payload = _payload(kind)
+    payload["continuation"]["phase"] = phase
+    if phase == "continue_to_remediation":
+        payload["continuation"]["newBudgetRef"] = "artifact://new-budget"
+
+    policy = compile_recovery_entry_policy(
+        payload, destination_workflow_id="recovery-workflow"
+    )
+
+    assert policy.execution_route == route
+    assert policy.run_semantic_work is semantic_work
+    assert policy.requires_budget_authority is budget_authority
+    assert policy.requires_side_effect_authority is True

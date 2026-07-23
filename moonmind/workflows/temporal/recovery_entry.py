@@ -20,6 +20,9 @@ class RecoveryEntryPolicy:
     publication_idempotency_key: str | None
     publication_observation_ref: str | None
     side_effect_disposition_ref: str
+    execution_route: str
+    requires_budget_authority: bool
+    requires_side_effect_authority: bool
     run_semantic_work: bool
     publication_only: bool
     restoration_only: bool
@@ -41,6 +44,14 @@ def compile_recovery_entry_policy(
     phase = contract.continuation.phase
     publication_only = kind == "publication"
     restoration_only = kind == "restoration_failure"
+    execution_routes = {
+        "rerun_failed_step": "failed_step",
+        "continue_to_gate": "gate",
+        "continue_after_gate": "post_gate",
+        "continue_to_remediation": "remediation",
+        "resume_publication": "publication",
+        "retry_restoration": "restoration",
+    }
     return RecoveryEntryPolicy(
         target_kind=kind,
         continuation_phase=phase,
@@ -52,6 +63,9 @@ def compile_recovery_entry_policy(
         publication_idempotency_key=contract.target.publication_idempotency_key,
         publication_observation_ref=contract.target.publication_observation_ref,
         side_effect_disposition_ref=contract.side_effect_disposition_ref,
+        execution_route=execution_routes[phase],
+        requires_budget_authority=phase == "continue_to_remediation",
+        requires_side_effect_authority=True,
         run_semantic_work=not publication_only and not restoration_only,
         publication_only=publication_only,
         restoration_only=restoration_only,
