@@ -32,6 +32,25 @@ DETERMINISTIC_CASES = {
     "events.replay-overlap-schema-drift",
     "resources.bounds-and-secret-scan",
 }
+ISSUE_LINKS = (
+    "MoonLadderStudios/MoonMind#3480",
+    "MoonLadderStudios/MoonMind#3471",
+    "MoonLadderStudios/MoonMind#3456",
+)
+EVIDENCE_GROUPS = {
+    "cumulativeJourney": (
+        "tests/integration/reliability/test_checkpoint_cold_resume.py",
+        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
+        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+    ),
+    "failureAndRestartMatrix": (
+        "tests/integration/omnigent/test_embedded_recovery.py",
+    ),
+    "rolloutAndReplay": (
+        "tests/unit/workflows/temporal/test_report_workflow_rollout.py",
+        "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
+    ),
+}
 COMMANDS = (
     (
         sys.executable,
@@ -44,6 +63,18 @@ COMMANDS = (
         # compose-backed integration-ci job; the deterministic runner does not
         # provision a database service.
         "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
+        "-q",
+        "--tb=short",
+    ),
+    (
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/integration/reliability/test_checkpoint_cold_resume.py",
+        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
+        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/unit/workflows/temporal/test_report_workflow_rollout.py",
+        "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "-q",
         "--tb=short",
     ),
@@ -136,6 +167,10 @@ def main() -> int:
         "deterministicCoverage": {
             "requiredCaseIds": sorted(DETERMINISTIC_CASES),
             "missingCaseIds": sorted(missing_deterministic),
+            "issueLinks": list(ISSUE_LINKS),
+            "evidenceGroups": {
+                name: list(paths) for name, paths in EVIDENCE_GROUPS.items()
+            },
         },
     }
     evidence_path = args.output_dir / "runner-evidence.json"

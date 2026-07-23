@@ -2,7 +2,12 @@
   "profileVersion": "moonmind.omnigent.conformance/v4",
   "provenance": {
     "source": "MoonLadderStudios/MoonMind#3419",
-    "contract": "Omnigent bridge Milestone 1.8"
+    "contract": "Omnigent bridge Milestone 1.8",
+    "issueLinks": [
+      "MoonLadderStudios/MoonMind#3480",
+      "MoonLadderStudios/MoonMind#3471",
+      "MoonLadderStudios/MoonMind#3456"
+    ]
   },
   "cases": [
     {"id": "product.normal-create-api", "layer": "product-provider", "critical": true},
