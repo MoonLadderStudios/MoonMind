@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
+    RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
 )
@@ -95,6 +96,23 @@ class _CurrentRemediationReplayFixture:
         )
         assert decision.successor is not None
         return ["verify-1", decision.successor.logical_step_id]
+
+
+@workflow.defn(name="MM3475StaticLoopCutoverReplayFixture")
+class _LegacyStaticLoopCutoverReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        return ["verify-initial", "remediate-1", "verify-1"]
+
+
+@workflow.defn(name="MM3475StaticLoopCutoverReplayFixture")
+class _CurrentStaticLoopCutoverReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        commands = ["verify-initial", "remediate-1", "verify-1"]
+        if workflow.patched(RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH):
+            return ["controller", "remediation:1", "verification:1"]
+        return commands
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -342,6 +360,53 @@ async def test_moonspec_remediation_pre_and_post_patch_histories_replay() -> Non
     assert current_commands.count("verify-1") == 1
     replayer = Replayer(
         workflows=[_CurrentRemediationReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_static_remediation_history_replays_across_loop_schema_cutover() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3475-static-history",
+            workflows=[_LegacyStaticLoopCutoverReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyStaticLoopCutoverReplayFixture.run,
+                id="test-mm3475-static-history",
+                task_queue="test-mm3475-static-history",
+            )
+            assert await legacy.result() == [
+                "verify-initial",
+                "remediate-1",
+                "verify-1",
+            ]
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3475-controller-history",
+            workflows=[_CurrentStaticLoopCutoverReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentStaticLoopCutoverReplayFixture.run,
+                id="test-mm3475-controller-history",
+                task_queue="test-mm3475-controller-history",
+            )
+            assert await current.result() == [
+                "controller",
+                "remediation:1",
+                "verification:1",
+            ]
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentStaticLoopCutoverReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

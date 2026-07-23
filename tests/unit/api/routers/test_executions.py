@@ -913,7 +913,7 @@ async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -
     finally:
         await engine.dispose()
 
-    assert len(task_payload["steps"]) == 20
+    assert len(task_payload["steps"]) == 9
     assert task_payload["steps"][0]["tool"]["id"] == (
         "github.load_issue_preset_brief"
     )
@@ -14712,6 +14712,93 @@ def test_mm644_failed_task_edit_for_rerun_requires_authoritative_snapshot(
         missing_body["actions"]["disabledReasons"]["canEditForRerun"]
         == "original_task_input_snapshot_missing"
     )
+
+
+def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.finish_summary_json = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            "remainingWorkRef": "artifact://remaining/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "metrics": {"remediationAdmitted": True},
+            "auxiliaryOutcomes": {"gitPublication": {"status": "failed"}},
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canFullRetry"] is True
+    assert actions["canContinueRemediation"] is True
+    assert actions["canRetryPublication"] is True
+    assert actions["canResumeFromFailedStep"] is False
+    assert actions["actionEvidence"]["continueRemediation"] == {
+        "candidateRef": "artifact://workspace/final",
+        "remainingWorkRef": "artifact://remaining/final",
+    }
+
+
+@pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
+def test_workflow_gate_actions_ignore_malformed_optional_control_stop_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_field: str,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.finish_summary_json = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            malformed_field: "not-an-object",
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canFullRetry"] is True
+    assert actions["canContinueRemediation"] is False
+    assert actions["canRetryPublication"] is False
+
+
+def test_workflow_gate_actions_expose_action_specific_disabled_reasons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo["finishSummary"] = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            "remainingWorkRef": "artifact://remaining/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "metrics": {"remediationAdmitted": False},
+            "auxiliaryOutcomes": {"gitPublication": {"status": "not_attempted"}},
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canContinueRemediation"] is False
+    assert (
+        actions["disabledReasons"]["canContinueRemediation"]
+        == "remediation_not_admitted"
+    )
+    assert actions["canRetryPublication"] is False
+    assert (
+        actions["disabledReasons"]["canRetryPublication"]
+        == "publication_not_failed"
+    )
+    assert actions["actionEvidence"]["continueRemediation"] == {
+        "candidateRef": "artifact://workspace/final",
+        "remainingWorkRef": "artifact://remaining/final",
+    }
 
 
 def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:

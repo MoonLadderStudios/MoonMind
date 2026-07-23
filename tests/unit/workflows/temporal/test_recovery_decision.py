@@ -121,6 +121,14 @@ def test_checkpoint_resume_fails_closed(overrides, reason) -> None:
     assert decision.disabled_reason_code == reason
 
 
+def test_valid_checkpoint_without_recovery_target_has_target_reason() -> None:
+    decision = _decision(recovery_target_available=False)
+
+    assert decision.eligible is False
+    assert decision.disabled_reason_code == "RECOVERY_TARGET_UNAVAILABLE"
+    assert decision.checkpoint_ref == "artifact://checkpoint"
+
+
 def test_codex_worktree_archive_restore_is_eligible() -> None:
     decision = _decision(
         capabilities=resolve_runtime_execution_capabilities("codex_cli"),

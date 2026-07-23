@@ -116,6 +116,7 @@ def decide_checkpoint_recovery(
     restore_route_registered: bool,
     artifact_valid: bool,
     side_effect_safe: bool,
+    recovery_target_available: bool = True,
     live_session_id: str | None = None,
     session_reachable: bool = False,
     source_workflow_id: str | None = None,
@@ -128,6 +129,8 @@ def decide_checkpoint_recovery(
     phase = BOUNDARY_RESUME_PHASE.get(str(checkpoint_boundary or "").strip())
     if not checkpoint_ref or not artifact_valid:
         reason = "CHECKPOINT_ARTIFACT_INVALID"
+    elif not recovery_target_available:
+        reason = "RECOVERY_TARGET_UNAVAILABLE"
     elif not phase:
         reason = "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
     elif capabilities is None:

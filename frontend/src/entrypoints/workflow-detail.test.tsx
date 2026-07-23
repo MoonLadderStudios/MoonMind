@@ -625,6 +625,78 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  it('explains terminal quality-gate outcomes without claiming a failed step', async () => {
+    window.history.pushState(
+      {},
+      'Test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          runId: '02-run',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Quality gate stopped run',
+          summary: 'Remaining work is preserved.',
+          status: 'failed',
+          state: 'failed',
+          rawState: 'failed',
+          temporalStatus: 'failed',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          actions: {
+            canFullRetry: true,
+            actionEvidence: {
+              fullRetry: {
+                candidateRef: 'artifact://workspace/final',
+                remainingWorkRef: 'artifact://remaining/final',
+              },
+            },
+          },
+          finishSummary: {
+            finishOutcome: { code: 'FAILED', stage: 'finalizing' },
+            controlStop: {
+              kind: 'workflow_gate',
+              verdict: 'ADDITIONAL_WORK_NEEDED',
+              reasonCode: 'semantic_no_progress_exhausted',
+              remainingWorkRef: 'artifact://remaining/final',
+              workspaceHeadRef: 'artifact://workspace/final',
+              publicationFeasible: false,
+              publicationAttempted: false,
+            },
+          },
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Quality gate stopped this workflow' }),
+    ).toBeTruthy();
+    expect(screen.getByText('ADDITIONAL_WORK_NEEDED')).toBeTruthy();
+    expect(screen.getByText('artifact://remaining/final')).toBeTruthy();
+    expect(screen.getByText(/No failed Step Execution was fabricated/)).toBeTruthy();
+  });
+
   function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
     const selectedExecution = {
       taskId: 'test-123',
@@ -7025,6 +7097,21 @@ describe('Workflow Detail Entrypoint', () => {
                 baseRef: 'origin/main',
                 commitCount: 0,
                 pullRequestUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/456',
+                remediationLoop: {
+                  loopId: 'issue-implementation-remediation',
+                  status: 'verification_pending',
+                  attemptOrdinal: 1,
+                  hardMaxAttempts: 6,
+                  workspaceHeadRef: 'artifact://workspace/C1',
+                  latestVerdict: 'ADDITIONAL_WORK_NEEDED',
+                  continuationReason: 'remaining_work_admitted',
+                  continueAsNewCount: 0,
+                  materializedAttempts: [{
+                    attempt: 1,
+                    remediationStatus: 'completed',
+                    verificationStatus: 'ready',
+                  }],
+                },
               },
               lastStep: {
                 summary: 'Files edited in this run: none',
@@ -7055,9 +7142,96 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Run Summary')).toBeTruthy();
       expect(screen.getByText('feature/no-op')).toBeTruthy();
       expect(screen.getByText('origin/main')).toBeTruthy();
+      expect(screen.getByText('Remediation Loop')).toBeTruthy();
+      expect(screen.getByText('1 of 6')).toBeTruthy();
+      expect(screen.getByText('artifact://workspace/C1')).toBeTruthy();
+      expect(screen.getByText(/Attempt 1: remediation completed; verification ready/)).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/456' })).toBeTruthy();
       expect(screen.getAllByText(/no publishable diff was produced/).length).toBeGreaterThan(0);
     });
+  });
+
+  it('renders remediation trends, budgets, evidence, and exact stop dimension', async () => {
+    window.history.pushState({}, 'Remediation Test', '/workflows/remediation/overview?source=temporal');
+    const execution = {
+      taskId: 'remediation',
+      workflowId: 'remediation',
+      namespace: 'default',
+      runId: 'run-1',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Remediation run',
+      summary: 'Stopped on contract repair budget',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      closeStatus: 'FAILED',
+      summaryArtifactRef: 'art-remediation-summary',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:03Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-remediation-summary/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => JSON.stringify({
+            publishContext: {
+              boundedStoryLoop: {
+                continuationDecision: {
+                  continueLoop: false,
+                  reason: 'contract_repair_budget_exhausted',
+                  budget: {
+                    maxAttempts: 6,
+                    providerBudget: 4,
+                    tokenBudget: 1000,
+                    costBudget: 50,
+                    maxElapsedSeconds: 600,
+                    consumed: {
+                      attempts: 3,
+                      consecutiveNoProgressAttempts: 1,
+                      provider: 2,
+                      tokens: 500,
+                      cost: 20,
+                      elapsedSeconds: 300,
+                    },
+                  },
+                  gate: {
+                    progressVector: {
+                      classification: 'meaningful_progress',
+                      unresolvedGapScore: 5,
+                      priorUnresolvedGapScore: 8,
+                      requiredChecks: { passed: 7, failed: 1, not_run: 2 },
+                      priorRequiredChecks: { passed: 5, failed: 2, not_run: 3 },
+                      repeatedFailureSignatures: ['sha256:failure'],
+                      relevantDiffDigest: 'sha256:diff',
+                      gaps: [{ status: 'unresolved' }, { status: 'resolved' }],
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Remediation progress and budgets' })).toBeTruthy());
+    const region = screen.getByRole('region', { name: 'Remediation progress and budgets' });
+    expect(within(region).getByText('1 unresolved · score 5 (-3)')).toBeTruthy();
+    expect(within(region).getByText('Passed 7 (+2) · Failed 1 · Not run 2')).toBeTruthy();
+    expect(within(region).getByText('3 / 3')).toBeTruthy();
+    expect(within(region).getByText('Repeated failure signatures').closest('div')?.textContent).toContain('1');
+    expect(within(region).getByText('sha256:diff')).toBeTruthy();
+    expect(within(region).getByText('contract repair budget exhausted')).toBeTruthy();
   });
 
   it('renders auto publish mode and evidence with Auto labels', async () => {

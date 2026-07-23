@@ -6860,6 +6860,27 @@ export interface components {
              */
             canResumeFromFailedStep: boolean;
             /**
+             * Cancontinueremediation
+             * @default false
+             */
+            canContinueRemediation: boolean;
+            /**
+             * Canretrypublication
+             * @default false
+             */
+            canRetryPublication: boolean;
+            /**
+             * Canfullretry
+             * @default false
+             */
+            canFullRetry: boolean;
+            /** Actionevidence */
+            actionEvidence?: {
+                [key: string]: {
+                    [key: string]: string | null;
+                };
+            };
+            /**
              * Cancancel
              * @default false
              */
@@ -10234,7 +10255,7 @@ export interface components {
              */
             defaultAction: "continue_same_session" | "resume_from_workspace_checkpoint" | "full_retry" | "fix_environment" | "manual_intervention";
             /** Disabledreasoncode */
-            disabledReasonCode?: (("CHECKPOINT_CAPTURE_UNSUPPORTED" | "CHECKPOINT_RESTORE_UNSUPPORTED" | "CHECKPOINT_RESTORE_ROUTE_MISSING" | "CHECKPOINT_KIND_INCOMPATIBLE" | "CHECKPOINT_BOUNDARY_INCOMPATIBLE" | "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH" | "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING" | "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH" | "CHECKPOINT_ARTIFACT_INVALID" | "CHECKPOINT_SIDE_EFFECT_UNSAFE") | ("SAME_SESSION_UNREACHABLE" | "SAME_SESSION_CONTINUATION_UNSUPPORTED") | "environment_invalid") | null;
+            disabledReasonCode?: (("CHECKPOINT_CAPTURE_UNSUPPORTED" | "CHECKPOINT_RESTORE_UNSUPPORTED" | "CHECKPOINT_RESTORE_ROUTE_MISSING" | "CHECKPOINT_KIND_INCOMPATIBLE" | "CHECKPOINT_BOUNDARY_INCOMPATIBLE" | "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH" | "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING" | "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH" | "CHECKPOINT_ARTIFACT_INVALID" | "CHECKPOINT_SIDE_EFFECT_UNSAFE" | "RECOVERY_TARGET_UNAVAILABLE") | ("SAME_SESSION_UNREACHABLE" | "SAME_SESSION_CONTINUATION_UNSUPPORTED") | "environment_invalid") | null;
             /** Checkpointboundary */
             checkpointBoundary?: string | null;
             /** Resumephase */

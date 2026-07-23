@@ -131,6 +131,7 @@ CheckpointRecoveryDisabledReason = Literal[
     "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
     "CHECKPOINT_ARTIFACT_INVALID",
     "CHECKPOINT_SIDE_EFFECT_UNSAFE",
+    "RECOVERY_TARGET_UNAVAILABLE",
 ]
 SameSessionRecoveryDisabledReason = Literal[
     "SAME_SESSION_UNREACHABLE",
@@ -2927,6 +2928,12 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_resume: bool = Field(False, alias="canResume")
     can_failed_step_resume: bool = Field(
         False, alias="canResumeFromFailedStep"
+    )
+    can_continue_remediation: bool = Field(False, alias="canContinueRemediation")
+    can_retry_publication: bool = Field(False, alias="canRetryPublication")
+    can_full_retry: bool = Field(False, alias="canFullRetry")
+    action_evidence: dict[str, dict[str, str | None]] = Field(
+        default_factory=dict, alias="actionEvidence"
     )
     can_cancel: bool = Field(False, alias="canCancel")
     can_reject: bool = Field(False, alias="canReject")

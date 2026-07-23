@@ -2,8 +2,8 @@
 
 MoonMind embedded compatibility mode delegates runner authentication to the
 Omnigent submodule pinned at commit
-`3e88237c713a6b7130d325669f9aed7e8179f934`. The supported profile identifier is
-`omnigent.runner_tunnel.3e88237c`.
+`538494ff735a93f13e6914f264abb7feca037e57`. The supported profile identifier is
+`omnigent.runner_tunnel.538494ff`.
 
 The authoritative transport is the upstream websocket runner tunnel at
 `/v1/runners/{runner_id}/tunnel`. A stock runner supplies exactly one

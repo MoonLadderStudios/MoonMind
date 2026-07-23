@@ -48,6 +48,7 @@ from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.workflows.temporal.remediation_loop import RemediationLoopSpec
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -1546,7 +1547,40 @@ class SeedSyncResult:
 
 
 def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None:
-    """Reject partial or ambiguous annotated remediation chains."""
+    """Validate either the canonical loop or a replay-only static topology."""
+
+    loop_specs: list[Mapping[str, Any]] = []
+    for step in steps:
+        annotations = step.get("annotations")
+        if not isinstance(annotations, Mapping):
+            continue
+        raw_loop = annotations.get("remediationLoop")
+        if isinstance(raw_loop, Mapping):
+            loop_specs.append(raw_loop)
+    if loop_specs:
+        if len(loop_specs) != 1:
+            raise PresetValidationError(
+                "A resolved plan may declare only one remediation loop."
+            )
+        try:
+            RemediationLoopSpec.model_validate(loop_specs[0])
+        except ValueError as exc:
+            raise PresetValidationError(
+                f"Invalid remediation loop contract: {exc}"
+            ) from exc
+        if any(
+            isinstance(step.get("annotations"), Mapping)
+            and (
+                step["annotations"].get("moonSpecRemediationAttempt") is not None
+                or step["annotations"].get("moonSpecRemediationMaxAttempts")
+                is not None
+            )
+            for step in steps
+        ):
+            raise PresetValidationError(
+                "A remediation loop cannot be mixed with pre-expanded attempts."
+            )
+        return
 
     chain: list[tuple[int, str, int, int, bool]] = []
     for index, step in enumerate(steps):

@@ -427,10 +427,37 @@ class IncidentControlStopModel(BaseModel):
     reason_code: str = Field(..., alias="reasonCode", max_length=120)
     logical_step_id: str = Field(..., alias="logicalStepId", max_length=200)
     verdict: str | None = Field(None, max_length=120)
+    terminal_disposition: str = Field(
+        "failed_with_remaining_work", alias="terminalDisposition", max_length=120
+    )
     gate_result_ref: str | None = Field(None, alias="gateResultRef", max_length=500)
+    verification_ref: str | None = Field(
+        None, alias="verificationRef", max_length=500
+    )
     remaining_work_ref: str | None = Field(
         None, alias="remainingWorkRef", max_length=500
     )
+    terminal_handoff_ref: str | None = Field(
+        None, alias="terminalHandoffRef", max_length=500
+    )
+    workspace_head_ref: str | None = Field(
+        None, alias="workspaceHeadRef", max_length=500
+    )
+    exhausted_budget_dimension: str | None = Field(
+        None, alias="exhaustedBudgetDimension", max_length=120
+    )
+    last_accepted_step_execution_id: str | None = Field(
+        None, alias="lastAcceptedStepExecutionId", max_length=300
+    )
+    publication_feasible: bool = Field(False, alias="publicationFeasible")
+    publication_feasibility_reason: str | None = Field(
+        None, alias="publicationFeasibilityReason", max_length=120
+    )
+    publication_attempted: bool = Field(False, alias="publicationAttempted")
+    auxiliary_outcomes: dict[str, Any] = Field(
+        default_factory=dict, alias="auxiliaryOutcomes"
+    )
+    metrics: dict[str, Any] = Field(default_factory=dict)
     review_gate_budget: dict[str, Any] | None = Field(
         None, alias="reviewGateBudget"
     )
@@ -438,12 +465,28 @@ class IncidentControlStopModel(BaseModel):
         None, alias="remediationBudget"
     )
 
-    @field_validator("reason_code", "logical_step_id", "verdict", mode="before")
+    @field_validator(
+        "reason_code",
+        "logical_step_id",
+        "verdict",
+        "terminal_disposition",
+        "exhausted_budget_dimension",
+        "last_accepted_step_execution_id",
+        "publication_feasibility_reason",
+        mode="before",
+    )
     @classmethod
     def _strip_control_text(cls, value: Any) -> str | None:
         return _strip_optional_text(value)
 
-    @field_validator("gate_result_ref", "remaining_work_ref", mode="before")
+    @field_validator(
+        "gate_result_ref",
+        "verification_ref",
+        "remaining_work_ref",
+        "terminal_handoff_ref",
+        "workspace_head_ref",
+        mode="before",
+    )
     @classmethod
     def _validate_control_ref(cls, value: Any) -> str | None:
         return _compact_ref(value, field_name="control evidence ref")
