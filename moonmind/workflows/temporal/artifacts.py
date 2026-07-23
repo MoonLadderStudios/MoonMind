@@ -2669,9 +2669,31 @@ class TemporalArtifactActivities:
             "destinationWorkflowId": workflow_id,
             "destinationRunId": run_id,
         }
+        principal = f"workflow:{workflow_id}"
+        key_hash = hashlib.sha256(operation_key.encode()).hexdigest()
+        existing = await self._service.list_for_execution(
+            namespace=self._service._default_namespace,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            principal=principal,
+            link_type="result",
+        )
+        for artifact in existing:
+            metadata = dict(artifact.metadata_json or {})
+            if (
+                metadata.get("name") == "publication-recovery-result.json"
+                and metadata.get("idempotencyKeyHash") == key_hash
+                and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+            ):
+                return {
+                    **payload,
+                    "resultArtifactRef": build_artifact_ref(artifact).model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                }
         encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
         artifact, _upload = await self._service.create(
-            principal=f"workflow:{workflow_id}",
+            principal=principal,
             content_type="application/json",
             size_bytes=len(encoded),
             link=ExecutionRef(
@@ -2684,14 +2706,12 @@ class TemporalArtifactActivities:
                 "name": "publication-recovery-result.json",
                 "producer": "activity:publication_recovery.persist_result",
                 "labels": ["publication-recovery", "terminal"],
-                "idempotencyKeyHash": hashlib.sha256(
-                    operation_key.encode()
-                ).hexdigest(),
+                "idempotencyKeyHash": key_hash,
             },
         )
         completed = await self._service.write_complete(
             artifact_id=artifact.artifact_id,
-            principal=f"workflow:{workflow_id}",
+            principal=principal,
             payload=encoded,
             content_type="application/json",
         )

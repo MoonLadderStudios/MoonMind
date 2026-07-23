@@ -90,6 +90,14 @@ async def test_workflow_runs_only_publication_phases_and_restores_exact_candidat
                 "diffDigest": "sha256:" + "c" * 64,
                 "restorationEvidenceRef": "artifact://restoration",
             }
+        if name == "publication_recovery.publish_candidate":
+            return {
+                **payload["restoration"],
+                "publicationPush": {
+                    "push_status": "pushed",
+                    "push_head_sha": "a" * 40,
+                },
+            }
         if name == "publication_recovery.publish":
             return {"pullRequestUrl": "https://github.com/org/repo/pull/1"}
         if name == "publication_recovery.verify":
@@ -113,6 +121,7 @@ async def test_workflow_runs_only_publication_phases_and_restores_exact_candidat
     assert calls == [
         "publication_recovery.observe",
         "publication_recovery.restore_candidate",
+        "publication_recovery.publish_candidate",
         "publication_recovery.publish",
         "publication_recovery.verify",
         "publication_recovery.persist_result",

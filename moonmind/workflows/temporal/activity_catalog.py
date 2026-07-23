@@ -1560,6 +1560,7 @@ def build_default_activity_catalog(
                 ("publication_recovery.publish", "integration:github", cfg.activity_integrations_task_queue, INTEGRATIONS_FLEET),
                 ("publication_recovery.verify", "integration:github", cfg.activity_integrations_task_queue, INTEGRATIONS_FLEET),
                 ("publication_recovery.restore_candidate", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
+                ("publication_recovery.publish_candidate", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
                 ("publication_recovery.cleanup", "agent_runtime", cfg.activity_agent_runtime_task_queue, AGENT_RUNTIME_FLEET),
                 ("publication_recovery.persist_result", "artifacts", cfg.activity_artifacts_task_queue, ARTIFACTS_FLEET),
             )

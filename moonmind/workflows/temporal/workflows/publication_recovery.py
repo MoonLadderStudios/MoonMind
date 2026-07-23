@@ -99,6 +99,16 @@ class MoonMindPublicationRecoveryWorkflow:
                 task_queue=AGENT_RUNTIME_TASK_QUEUE,
             )
             validate_restored_candidate(contract, restoration)
+            self._phase = "publication_operation"
+            restoration = await self._activity(
+                "publication_recovery.publish_candidate",
+                {
+                    "contract": frozen,
+                    "restoration": restoration,
+                    "idempotencyKey": operation_key,
+                },
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+            )
 
         publication = {
             "pullRequestUrl": decision.existing_pull_request_url,

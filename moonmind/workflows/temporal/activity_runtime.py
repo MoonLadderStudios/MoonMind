@@ -1406,6 +1406,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "publication_recovery_restore_candidate",
     ),
+    "publication_recovery.publish_candidate": (
+        "agent_runtime",
+        "publication_recovery_publish_candidate",
+    ),
     "publication_recovery.cleanup": (
         "agent_runtime",
         "publication_recovery_cleanup",
@@ -4882,6 +4886,13 @@ class TemporalIntegrationActivities:
         repository = str(intent.get("repository") or "").strip()
         head = str(intent.get("headRef") or "").strip()
         base = str(intent.get("baseRef") or "").strip()
+        branch_repository = repository
+        branch_head = head
+        if ":" in head:
+            fork_owner, branch_head = head.split(":", 1)
+            repository_name = repository.partition("/")[2]
+            if fork_owner and repository_name and branch_head:
+                branch_repository = f"{fork_owner}/{repository_name}"
         token, error = await GitHubService.resolve_github_token(repo=repository)
         if not token:
             return {
@@ -4892,7 +4903,7 @@ class TemporalIntegrationActivities:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 branch_response = await client.get(
-                    f"https://api.github.com/repos/{repository}/git/ref/heads/{head}",
+                    f"https://api.github.com/repos/{branch_repository}/git/ref/heads/{branch_head}",
                     headers=headers,
                 )
                 if branch_response.status_code not in (200, 404):
@@ -4968,6 +4979,11 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 f"publication recovery failed before a PR was reconciled: {result.summary}"
             )
+        expected_draft = intent.get("mode") == "draft_pr"
+        if expected_draft and not (result.created or result.adopted):
+            raise TemporalActivityRuntimeError(
+                "publication recovery did not reconcile the authorized draft PR"
+            )
         return {
             "pullRequestUrl": result.url,
             "headSha": result.head_sha,
@@ -4986,6 +5002,9 @@ class TemporalIntegrationActivities:
         intent = dict(contract.get("intent") or {})
         target = dict(contract.get("target") or {})
         restoration = (payload or {}).get("restoration")
+        repository = str(intent.get("repository") or "").strip()
+        expected_head = str(continuation.get("expectedHeadSha") or "").strip()
+        base_ref = str(intent.get("baseRef") or "").strip()
         if (
             not observed.get("authoritative")
             or not observed.get("pullRequestExists")
@@ -4996,6 +5015,38 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 "publication recovery could not verify the expected remote PR head"
             )
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        token, _error = await GitHubService.resolve_github_token(repo=repository)
+        if not token:
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not measure remote candidate identity"
+            )
+        headers = GitHubService._github_headers(token)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                commit_response = await client.get(
+                    f"https://api.github.com/repos/{repository}/git/commits/{expected_head}",
+                    headers=headers,
+                )
+                compare_response = await client.get(
+                    f"https://api.github.com/repos/{repository}/compare/{base_ref}...{expected_head}",
+                    headers=headers,
+                )
+                commit_response.raise_for_status()
+                compare_response.raise_for_status()
+                tree_sha = str((commit_response.json().get("tree") or {}).get("sha") or "")
+                patch = "\n".join(
+                    str(item.get("patch") or "")
+                    for item in compare_response.json().get("files", [])
+                    if isinstance(item, Mapping)
+                )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not measure remote tree/diff identity"
+            ) from exc
+        observed_tree_digest = "sha256:" + hashlib.sha256(tree_sha.encode()).hexdigest()
+        observed_diff_digest = "sha256:" + hashlib.sha256(patch.encode()).hexdigest()
         from moonmind.workflows.temporal.publication_recovery import (
             PublicationRecoveryEvidence,
         )
@@ -5014,9 +5065,9 @@ class TemporalIntegrationActivities:
             expectedHeadSha=continuation.get("expectedHeadSha"),
             observedHeadSha=observed.get("pullRequestHeadSha"),
             expectedTreeDigest=continuation.get("expectedTreeDigest"),
-            observedTreeDigest=continuation.get("expectedTreeDigest"),
+            observedTreeDigest=observed_tree_digest,
             expectedDiffDigest=continuation.get("expectedDiffDigest"),
-            observedDiffDigest=continuation.get("expectedDiffDigest"),
+            observedDiffDigest=observed_diff_digest,
             repository=intent.get("repository"),
             baseRef=intent.get("baseRef"),
             headRef=intent.get("headRef"),
@@ -7240,6 +7291,37 @@ class TemporalAgentRuntimeActivities:
         }
         restored = await self._checkpoint_restore.restore(request)
         return {**restored, **expected_identity}
+
+    async def publication_recovery_publish_candidate(self, payload, /, **kwargs):
+        """Push a restored, verified candidate before GitHub PR reconciliation."""
+        raw = dict(payload or {})
+        contract = dict(raw.get("contract") or {})
+        continuation = dict(contract.get("continuation") or {})
+        intent = dict(contract.get("intent") or {})
+        restoration = dict(raw.get("restoration") or {})
+        locator = dict(restoration.get("destinationWorkspaceLocator") or {})
+        agent_run_id = str(locator.get("agentRunId") or "").strip()
+        expected_head = str(continuation.get("expectedHeadSha") or "").strip()
+        head_ref = str(intent.get("headRef") or "").strip()
+        branch = head_ref.split(":", 1)[-1]
+        if not agent_run_id or not expected_head or not branch:
+            raise TemporalActivityRuntimeError(
+                "publication recovery restored workspace identity is incomplete"
+            )
+        result = await self._push_workspace_branch(
+            agent_run_id,
+            target_branch=str(intent.get("baseRef") or ""),
+            head_branch=branch,
+            allow_target_branch_push=False,
+        )
+        if (
+            result.get("push_status") not in {"pushed", "already_published"}
+            or str(result.get("push_head_sha") or "") != expected_head
+        ):
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not push and verify the restored candidate"
+            )
+        return {**restoration, "publicationPush": result}
 
     async def publication_recovery_cleanup(self, payload, /, **kwargs):
         """Return bounded cleanup evidence for a remote-only recovery."""
