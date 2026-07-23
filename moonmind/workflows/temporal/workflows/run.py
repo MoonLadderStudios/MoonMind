@@ -123,6 +123,16 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.managed_session_errors import (
         is_managed_session_locator_mismatch_error,
     )
+    from moonmind.workflows.temporal.remediation_workspace_head import (
+        REMEDIATION_HEAD_MISMATCH,
+        RemediationAttemptInput,
+        RemediationAttemptOutput,
+        RemediationHeadError,
+        RemediationWorkspaceHead,
+        advance_head,
+        freeze_attempt_input,
+        project_head,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -1239,6 +1249,10 @@ class MoonMindRunWorkflow:
         self._plan_blocked_message: Optional[str] = None
         self._moonspec_gate_verdict: Optional[str] = None
         self._moonspec_gate_reason: Optional[str] = None
+        # Compact/ref-only candidate authority. Temporal owns this value for the
+        # lifetime of the workflow and replays it deterministically; filesystem
+        # paths and checkpoint bodies never enter workflow state.
+        self._remediation_workspace_head: RemediationWorkspaceHead | None = None
         self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
         # A valid verifier can stop workflow routing without fabricating a
@@ -5799,6 +5813,95 @@ class MoonMindRunWorkflow:
             "remediate remaining gaps"
         )
 
+    def _inject_remediation_workspace_baseline(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: dict[str, Any],
+    ) -> None:
+        """Freeze the authoritative candidate baseline for one remediation step.
+
+        The first remediation node must supply the workflow-owned head. Later
+        nodes may repeat the identical value for replay-safe plan portability,
+        but may not replace it. Head advancement remains capture/persistence
+        activity-owned and is intentionally not inferred from agent prose.
+        """
+        if not self._is_moonspec_remediation_step(node):
+            return
+        supplied = node_inputs.get("remediationWorkspaceHead")
+        if supplied is not None:
+            candidate = RemediationWorkspaceHead.model_validate(supplied)
+            if (
+                self._remediation_workspace_head is not None
+                and candidate != self._remediation_workspace_head
+            ):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "plan input cannot replace the workflow-owned remediation head",
+                )
+            self._remediation_workspace_head = candidate
+        if self._remediation_workspace_head is None:
+            # Legacy compiled plans do not yet carry a root checkpoint. Do not
+            # manufacture one from the live path; the compiler/persistence
+            # boundary must opt in by supplying authoritative checkpoint data.
+            return
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt is None:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "remediation attempt ordinal is required",
+            )
+        frozen = freeze_attempt_input(self._remediation_workspace_head, attempt)
+        node_inputs["remediationAttemptInput"] = frozen.model_dump(
+            by_alias=True, mode="json"
+        )
+        # This projection is safe for agent/UI metadata and makes the exact next
+        # baseline observable without leaking an authorized workspace path.
+        node_inputs["remediationWorkspaceHead"] = project_head(
+            self._remediation_workspace_head
+        )
+
+    def _advance_remediation_workspace_head(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+        execution_result: Any,
+        step_execution_id: str,
+    ) -> None:
+        """Consume captured attempt evidence before the next attempt is frozen."""
+        if not self._is_moonspec_remediation_step(node):
+            return
+        if self._remediation_workspace_head is None:
+            return
+        attempt_payload = node_inputs.get("remediationAttemptInput")
+        if not isinstance(attempt_payload, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "completed remediation step has no frozen attempt input",
+            )
+        outputs = self._effective_result_outputs(execution_result)
+        output_payload = (
+            outputs.get("remediationAttemptOutput")
+            if isinstance(outputs, Mapping)
+            else None
+        )
+        if not isinstance(output_payload, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "completed remediation step has no captured attempt output",
+            )
+        attempt = RemediationAttemptInput.model_validate(attempt_payload)
+        output = RemediationAttemptOutput.model_validate(output_payload)
+        updated, _ = advance_head(
+            self._remediation_workspace_head,
+            attempt,
+            output,
+            step_execution_id=step_execution_id,
+            transition_id=f"{self._remediation_workspace_head.loop_id}:{attempt.attempt_ordinal}",
+        )
+        self._remediation_workspace_head = updated
+
     def _has_remaining_moonspec_remediation_step(
         self,
         *,
@@ -6200,6 +6303,8 @@ class MoonMindRunWorkflow:
                 "step_gate_result_ref",
                 "artifactRef",
                 "artifact_ref",
+                "diagnosticsRef",
+                "diagnostics_ref",
             ):
                 gate_result_ref = self._coerce_text(source.get(key), max_chars=400)
                 if gate_result_ref:
@@ -6330,6 +6435,8 @@ class MoonMindRunWorkflow:
         ref = str(value or "").strip()
         if ref.startswith("artifact://"):
             return ref
+        if ref.startswith("art_"):
+            return f"artifact://{ref}"
         return None
 
     def _bounded_story_loop_gate_from_step_gate(
@@ -6372,15 +6479,23 @@ class MoonMindRunWorkflow:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
-        return TypedGateResult.model_validate(
+        return TypedGateResult.from_boundary_payload(
             {
                 "verdict": gate_result.verdict,
                 "terminalDisposition": terminal_disposition,
                 "gateResultRef": self._bounded_story_loop_artifact_ref(
                     gate_result_ref
                 ),
+                # The verifier report is itself the authoritative remaining-work
+                # evidence when it does not publish a separate extracted artifact.
+                # Never admit ADDITIONAL_WORK_NEEDED without a durable reference.
                 "remainingWorkRef": self._bounded_story_loop_artifact_ref(
                     gate_result.remaining_work_ref
+                )
+                or (
+                    self._bounded_story_loop_artifact_ref(gate_result_ref)
+                    if gate_result.verdict == "ADDITIONAL_WORK_NEEDED"
+                    else None
                 ),
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
@@ -8698,13 +8813,18 @@ class MoonMindRunWorkflow:
         if not scope.get("allowed"):
             raise ValueError(str(scope.get("reason") or "bounded story loop rejected"))
 
+        serialized_budgets = loop_input.budgets.model_dump(
+            by_alias=True, mode="json"
+        )
+        if serialized_budgets.get("maxElapsedSeconds") is None:
+            serialized_budgets.pop("maxElapsedSeconds")
         self._publish_context["boundedStoryLoop"] = {
             "selectedItemRef": compiled.selected_item_ref,
             "selectedItemDigest": compiled.selected_item_digest,
             "nodeKinds": [node.kind for node in compiled.nodes],
             "publishMode": loop_input.publish_mode,
             "mergeAutomationEnabled": loop_input.merge_automation_enabled,
-            "budgets": loop_input.budgets.model_dump(by_alias=True, mode="json"),
+            "budgets": serialized_budgets,
             "scopeGuard": scope,
         }
 
@@ -9325,6 +9445,10 @@ class MoonMindRunWorkflow:
                     return
 
                 node_inputs = dict(original_node_inputs)
+                self._inject_remediation_workspace_baseline(
+                    node=node,
+                    node_inputs=node_inputs,
+                )
                 if previous_review_feedback:
                     node_inputs = self._inject_review_feedback_into_inputs(
                         tool_type=tool_type,
@@ -10631,6 +10755,15 @@ class MoonMindRunWorkflow:
                     continue
                 continue
 
+            self._advance_remediation_workspace_head(
+                node=node,
+                node_inputs=node_inputs,
+                execution_result=execution_result,
+                step_execution_id=(
+                    f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                    f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                ),
+            )
             self._mark_step_terminal(
                 node_id,
                 status="completed",
