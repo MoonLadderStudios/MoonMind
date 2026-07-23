@@ -17068,7 +17068,24 @@ class MoonMindRunWorkflow:
                 "relativePath": "repo",
             }
 
-        remediation_workspace = node_inputs.get("remediationWorkspace")
+        # Remediation workspace authority is controller-produced runtime metadata.
+        # Never copy a plan/browser-authored top-level block into the canonical
+        # request: doing so would let one request attest its own loop head.
+        runtime_metadata = runtime_block.get("metadata")
+        moonmind_metadata = (
+            runtime_metadata.get("moonmind")
+            if isinstance(runtime_metadata, Mapping)
+            else None
+        )
+        remediation_workspace = (
+            moonmind_metadata.get("remediationWorkspaceAuthority")
+            if isinstance(moonmind_metadata, Mapping)
+            else None
+        )
+        if node_inputs.get("remediationWorkspace") is not None:
+            raise ValueError(
+                "remediationWorkspace must come from trusted runtime controller metadata"
+            )
         if isinstance(remediation_workspace, Mapping):
             if not (
                 agent_kind == "external"
@@ -17077,16 +17094,35 @@ class MoonMindRunWorkflow:
                 raise ValueError(
                     "remediationWorkspace is only supported by external/omnigent"
                 )
+            required_authority = {
+                "loopId", "branchRef", "attemptOrdinal", "baseCheckpointRef",
+                "baseWorkspaceDigest", "expectedHeadVersion", "headAuthorityRef",
+                "executionProfileRef",
+                "hostProfileRef", "launchPolicyRef", "workspaceCapabilitySnapshot",
+            }
+            missing = sorted(required_authority - set(remediation_workspace))
+            if missing:
+                raise ValueError(
+                    "remediation workspace authority is incomplete: " + ", ".join(missing)
+                )
+            if remediation_workspace.get("executionProfileRef") != execution_profile_ref:
+                raise ValueError(
+                    "remediation workspace profile does not match selected Provider Profile"
+                )
             remediation_workspace = {
-                **dict(remediation_workspace),
+                **{key: remediation_workspace[key] for key in required_authority},
                 "workflowId": wf_info.workflow_id,
                 "stepExecutionId": step_execution_payload["stepExecutionId"],
+                "workspacePolicy": "continue_from_loop_head",
             }
-            destination = remediation_workspace.get("destinationWorkspaceLocator")
-            if not isinstance(destination, Mapping):
-                raise ValueError(
-                    "remediationWorkspace requires destinationWorkspaceLocator"
-                )
+            destination = {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    f"{wf_info.workflow_id}:{step_execution_payload['stepExecutionId']}".encode()
+                ).hexdigest()[:24],
+                "relativePath": "repo",
+            }
+            remediation_workspace["destinationWorkspaceLocator"] = destination
             workspace_spec["workspaceLocator"] = dict(destination)
 
         terminal_contract_payload: dict[str, Any] | None = None

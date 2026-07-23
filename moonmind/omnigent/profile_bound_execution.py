@@ -385,6 +385,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "remediation workspace requires codex-native",
                         code="REMEDIATION_WORKSPACE_RUNTIME_MISMATCH",
                     )
+                if remediation.execution_profile_ref != profile_id:
+                    raise OmnigentOAuthHostError(
+                        "remediation workspace execution profile does not match workflow authorization",
+                        code="REMEDIATION_WORKSPACE_PROFILE_MISMATCH",
+                    )
+                if (
+                    remediation.host_profile_ref
+                    != str(effective_launch.get("executionProfileRef") or "")
+                    or remediation.launch_policy_ref
+                    != str(effective_launch.get("launchPolicyRef") or "")
+                ):
+                    raise OmnigentOAuthHostError(
+                        "remediation workspace launch snapshot does not match effective launch",
+                        code="REMEDIATION_WORKSPACE_LAUNCH_MISMATCH",
+                    )
                 current_stage = "remediation_workspace_admission"
                 await emit(current_stage, "started")
                 remediation_resolution = await self._workspace_owner.admit_and_resolve(
@@ -399,7 +414,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "loopId": remediation.loop_id,
                         "branchRef": remediation.branch_ref,
                         "attemptOrdinal": remediation.attempt_ordinal,
-                        "restoreEvidenceRef": remediation.restore_evidence_ref,
+                        "restoreEvidenceRef": remediation_resolution.get(
+                            "restoreEvidenceRef"
+                        ),
                         "workspaceState": remediation_resolution.get("workspaceState"),
                     },
                 )
@@ -515,7 +532,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                 workspace_key=(
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),
-                workspace_locator=self._workspace_locator(request),
+                workspace_locator=(
+                    remediation_resolution.get("workspaceLocator")
+                    if remediation_resolution is not None
+                    else self._workspace_locator(request)
+                ),
                 current_workflow_id=workflow_id,
                 current_step_execution_id=(
                     step_execution_id or request.idempotency_key

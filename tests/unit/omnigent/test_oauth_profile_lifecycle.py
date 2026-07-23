@@ -206,17 +206,18 @@ async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
             "baseCheckpointRef": "artifact://workspace/C1",
             "baseWorkspaceDigest": "sha256:" + "a" * 64,
             "expectedHeadVersion": 2,
-            "currentHeadCheckpointRef": "artifact://workspace/C1",
-            "currentHeadWorkspaceDigest": "sha256:" + "a" * 64,
-            "currentHeadVersion": 2,
+            "headAuthorityRef": "artifact://loop-head/2",
             "destinationWorkspaceLocator": {
                 "kind": "sandbox",
                 "workspaceId": workspace_id,
                 "relativePath": "repo",
             },
-            "restoreEvidenceRef": "artifact://restore/R2",
-            "restoreManifestRef": "artifact://restore/M2",
-            "restoreBaseCommit": "abc123",
+            "executionProfileRef": "codex",
+            "hostProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@1",
+            "workspaceCapabilitySnapshot": {
+                "locatorKind": "sandbox", "restore": True
+            },
         },
         parameters={"repositoryMutationRequired": True},
     )
