@@ -57,8 +57,12 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
     source: RestoreSource
     checkpoint: WorktreeArchiveCheckpoint
     destination: RestoreDestination
-    workspace_policy: Literal["restore_pre_execution"] = Field(alias="workspacePolicy")
-    resume_phase: Literal["rerun_failed_step", "continue_to_remediation"] = Field(
+    workspace_policy: Literal[
+        "restore_pre_execution", "restore_publication_candidate"
+    ] = Field(alias="workspacePolicy")
+    resume_phase: Literal[
+        "rerun_failed_step", "continue_to_remediation", "resume_publication"
+    ] = Field(
         alias="resumePhase"
     )
     capability_set_version: str = Field(alias="capabilitySetVersion", min_length=1)

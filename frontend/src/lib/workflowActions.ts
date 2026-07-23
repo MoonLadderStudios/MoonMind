@@ -57,6 +57,7 @@ export type WorkflowActionHandlers = {
   onRerun: () => void;
   onResumeFromFailedStep: () => void;
   onRecoverFromSelectedStep: () => void;
+  onRetryPublication: () => void;
   onPause: () => void;
   onResume: () => void;
   onApprove: () => void;
@@ -237,6 +238,13 @@ export function buildWorkflowActionMenuItems(
     available: canCreateRemediation,
     disabledReason: null,
     onSelect: handlers.onCreateRemediation,
+  });
+  addButton({
+    id: 'retry-publication',
+    label: 'Retry publication',
+    available: Boolean(actions.canRetryPublication),
+    disabledReason: disabledReason('canRetryPublication'),
+    onSelect: handlers.onRetryPublication,
   });
   if (taskEditingOn) {
     addButton({

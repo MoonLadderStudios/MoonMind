@@ -291,6 +291,26 @@ export function WorkflowRowActionsMenu({
     onError: onMutationError,
   });
 
+  const retryPublicationMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/retry-publication`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: invalidate,
+    onError: onMutationError,
+  });
+
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
       if (!execution) {
@@ -309,6 +329,7 @@ export function WorkflowRowActionsMenu({
     signalMutation.isPending ||
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
+    retryPublicationMutation.isPending ||
     createRemediationMutation.isPending;
 
   const editHref = workflowId
@@ -395,6 +416,10 @@ export function WorkflowRowActionsMenu({
           failedStepResumeMutation.mutate();
         },
         onRecoverFromSelectedStep: () => {},
+        onRetryPublication: () => {
+          setActionError(null);
+          retryPublicationMutation.mutate();
+        },
         onPause: () => {
           setActionError(null);
           signalMutation.mutate({ signalName: 'Pause', payload: {} });
@@ -467,6 +492,7 @@ export function WorkflowRowActionsMenu({
     execution,
     failedStepResumeMutation,
     rerunUnavailableReason,
+    retryPublicationMutation,
     signalMutation,
     taskEditingEnabled,
     toast,

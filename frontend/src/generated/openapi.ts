@@ -2085,6 +2085,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/retry-publication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Execution Publication
+         * @description Start or reconcile exactly one publication-only linked workflow.
+         */
+        post: operations["retry_execution_publication_api_executions__workflow_id__retry_publication_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/recover": {
         parameters: {
             query?: never;
@@ -6949,7 +6969,7 @@ export interface components {
             /** Actionevidence */
             actionEvidence?: {
                 [key: string]: {
-                    [key: string]: string | null;
+                    [key: string]: unknown;
                 };
             };
             /**
@@ -10097,6 +10117,21 @@ export interface components {
             status: string;
             /** Message */
             message: string;
+        };
+        /** PublicationRecoveryResponse */
+        PublicationRecoveryResponse: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Publicationidempotencykey */
+            publicationIdempotencyKey: string;
+            /** Rolloutgeneration */
+            rolloutGeneration: string;
         };
         /**
          * QueueSystemMetadataModel
@@ -16986,6 +17021,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_execution_publication_api_executions__workflow_id__retry_publication_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicationRecoveryResponse"];
                 };
             };
             /** @description Validation Error */

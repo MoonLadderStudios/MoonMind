@@ -80,6 +80,10 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "moonmind.workflows.temporal.workflows.pr_resolver",
         "MoonMindPRResolverWorkflow",
     ),
+    WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.publication_recovery",
+        "MoonMindPublicationRecoveryWorkflow",
+    ),
 )
 
 
