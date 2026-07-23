@@ -139,6 +139,7 @@ class RemediationLoopState(_Contract):
     plan_digest: str | None = Field(default=None, alias="planDigest")
     capability_digest: str | None = Field(default=None, alias="capabilityDigest")
     latest_verdict: str | None = Field(default=None, alias="latestVerdict")
+    latest_progress_ref: str | None = Field(default=None, alias="latestProgressRef")
     continuation_reason: str | None = Field(
         default=None, alias="continuationReason"
     )
@@ -151,7 +152,10 @@ class RemediationLoopState(_Contract):
         return self
 
     @field_validator(
-        "workspace_head_ref", "latest_verification_ref", "continuation_decision_ref"
+        "workspace_head_ref",
+        "latest_verification_ref",
+        "latest_progress_ref",
+        "continuation_decision_ref",
     )
     @classmethod
     def _artifact_refs_only(cls, value: str | None) -> str | None:
@@ -169,6 +173,7 @@ class RemediationContinuationDecision(_Contract):
         "BLOCKED",
         "NO_DETERMINATION",
         "FAILED_UNRECOVERABLE",
+        "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
     ]
     continue_loop: bool = Field(alias="continueLoop")
     reason: str
@@ -263,6 +268,36 @@ def record_verification_evidence(
         update={
             "latest_verification_ref": verification_ref,
             "phase": RemediationLoopPhase.CONTINUATION_DECIDING,
+        }
+    )
+
+
+def record_semantic_progress(
+    state: RemediationLoopState, *, progress_ref: str | None
+) -> RemediationLoopState:
+    """Update bounded no-progress counters from authoritative verifier evidence."""
+
+    if not progress_ref:
+        return state
+    repeated = progress_ref == state.latest_progress_ref
+    consumed = state.consumed_budgets.model_copy(
+        update={
+            "consecutive_semantic_no_progress": (
+                state.consumed_budgets.consecutive_semantic_no_progress + 1
+                if repeated
+                else 0
+            ),
+            "repeated_failure_signature": (
+                state.consumed_budgets.repeated_failure_signature + 1
+                if repeated
+                else 0
+            ),
+        }
+    )
+    return state.model_copy(
+        update={
+            "latest_progress_ref": progress_ref,
+            "consumed_budgets": consumed,
         }
     )
 
@@ -380,10 +415,12 @@ def materialize_attempt_nodes(
             "readOnlyWorkspaceHead": True,
         }
     )
+    remediation_inputs.setdefault("selectedSkill", spec.remediation_tool.name)
+    verifier_inputs.setdefault("selectedSkill", spec.verification_tool.name)
     remediation = {
         "id": remediation_id,
         "title": f"Remediate verification gaps (attempt {ordinal})",
-        "tool": spec.remediation_tool.model_dump(by_alias=True, mode="json"),
+        "tool": {"type": "agent_runtime", "name": "auto"},
         "inputs": remediation_inputs,
         "annotations": {
             **common_annotations,
@@ -393,7 +430,7 @@ def materialize_attempt_nodes(
     verification = {
         "id": verification_id,
         "title": f"Verify remediation (attempt {ordinal})",
-        "tool": spec.verification_tool.model_dump(by_alias=True, mode="json"),
+        "tool": {"type": "agent_runtime", "name": "auto"},
         "inputs": verifier_inputs,
         "annotations": {
             **common_annotations,
@@ -441,6 +478,15 @@ def decide_remediation_continuation(
     if normalized == "FAILED_UNRECOVERABLE":
         return RemediationContinuationDecision.model_validate(
             {**common, "continueLoop": False, "reason": "failed_unrecoverable", "nextPhase": "failed_unrecoverable"}
+        )
+    if normalized == "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION":
+        return RemediationContinuationDecision.model_validate(
+            {
+                **common,
+                "continueLoop": False,
+                "reason": "environment_contaminated_by_skill_projection",
+                "nextPhase": "blocked",
+            }
         )
     if normalized == "NO_DETERMINATION":
         can_retry = (

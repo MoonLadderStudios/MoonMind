@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     decide_remediation_continuation,
     materialize_attempt_nodes,
     project_remediation_loop,
+    record_semantic_progress,
     record_verification_evidence,
     remediation_step_execution_id,
     should_continue_as_new,
@@ -116,6 +117,30 @@ def test_acceptance_and_block_are_terminal_workflow_decisions() -> None:
     assert not accepted.continue_loop and not blocked.continue_loop
 
 
+def test_environment_contamination_is_a_terminal_block() -> None:
+    decision = decide_remediation_continuation(
+        spec=_spec(),
+        state=_state(),
+        verdict="ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+        gate_result_ref="artifact://gate/contaminated",
+    )
+
+    assert decision.continue_loop is False
+    assert decision.next_phase == RemediationLoopPhase.BLOCKED
+
+
+def test_repeated_progress_evidence_updates_no_progress_budgets() -> None:
+    first = record_semantic_progress(
+        _state(), progress_ref="artifact://remaining/R1"
+    )
+    repeated = record_semantic_progress(
+        first, progress_ref="artifact://remaining/R1"
+    )
+
+    assert repeated.consumed_budgets.consecutive_semantic_no_progress == 1
+    assert repeated.consumed_budgets.repeated_failure_signature == 1
+
+
 def test_semantic_step_execution_id_is_attempt_scoped() -> None:
     assert remediation_step_execution_id("wf", "run", "loop", "remediation", 2) == (
         "wf:run:loop:remediation:2"
@@ -191,6 +216,9 @@ def test_materialization_creates_only_the_admitted_pair() -> None:
         "wf:run:issue-implementation-remediation:verification:2"
     )
     assert verification["dependsOn"] == [remediation["id"]]
+    assert remediation["tool"] == {"type": "agent_runtime", "name": "auto"}
+    assert remediation["inputs"]["selectedSkill"] == "auto"
+    assert verification["inputs"]["selectedSkill"] == "moonspec-verify"
     assert verification["inputs"]["readOnlyWorkspaceHead"] is True
 
 

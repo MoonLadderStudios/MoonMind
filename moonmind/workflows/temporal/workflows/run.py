@@ -148,6 +148,7 @@ with workflow.unsafe.imports_passed_through():
         RemediationLoopState,
         materialize_attempt_nodes,
         project_remediation_loop,
+        record_semantic_progress,
         record_verification_evidence,
         should_continue_as_new,
         start_remediation_attempt,
@@ -3921,6 +3922,9 @@ class MoonMindRunWorkflow:
         verdict: str,
         gate_result_ref: str | None,
         remaining_work_ref: str | None,
+        current_index: int | None = None,
+        recoverable_evidence: bool = False,
+        workspace_head: Mapping[str, Any] | None = None,
     ) -> bool:
         """Apply verifier evidence and append exactly one admitted pair.
 
@@ -3933,6 +3937,17 @@ class MoonMindRunWorkflow:
         state = self._remediation_loop_state
         if spec is None or state is None:
             return False
+        if self._remediation_workspace_head is None and workspace_head is not None:
+            self._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+                workspace_head
+            )
+            state = state.model_copy(
+                update={
+                    "workspace_head_ref": (
+                        self._remediation_workspace_head.head_checkpoint_ref
+                    )
+                }
+            )
         if not gate_result_ref or not gate_result_ref.startswith("artifact://"):
             raise ValueError(
                 "dynamic remediation verification requires an artifact gate result"
@@ -3946,12 +3961,18 @@ class MoonMindRunWorkflow:
             state,
             verification_ref=gate_result_ref,
         )
+        state = record_semantic_progress(
+            state,
+            progress_ref=remaining_work_ref,
+        )
         decision = decide_remediation_continuation(
             spec=spec,
             state=state,
             verdict=verdict,
             gate_result_ref=gate_result_ref,
             remaining_work_ref=remaining_work_ref,
+            progress_ref=remaining_work_ref,
+            recoverable_evidence=recoverable_evidence,
         )
         decision_ref = await self._write_json_artifact(
             name=(
@@ -3980,7 +4001,12 @@ class MoonMindRunWorkflow:
                 workspace_head_ref=state.workspace_head_ref,
             )
             pair = [remediation, verification]
-            ordered_nodes.extend(pair)
+            insertion_index = (
+                len(ordered_nodes)
+                if current_index is None
+                else max(0, min(current_index, len(ordered_nodes)))
+            )
+            ordered_nodes[insertion_index:insertion_index] = pair
             pair_dependencies = {
                 str(node["id"]): [
                     str(dependency)
@@ -6525,6 +6551,11 @@ class MoonMindRunWorkflow:
                 node_inputs=node_inputs,
             )
         )
+        if role == "moonspec-remediation-loop":
+            return (
+                "Skipped workflow-owned MoonSpec remediation loop controller "
+                "metadata step."
+            )
         if not (is_remediation or is_verification_gate):
             return None
 
@@ -11602,6 +11633,20 @@ class MoonMindRunWorkflow:
                                 gate_result_ref=step_gate_result_ref,
                                 remaining_work_ref=(
                                     step_gate_result.remaining_work_ref
+                                ),
+                                current_index=index,
+                                recoverable_evidence=(
+                                    step_gate_result.recoverable_in_current_runtime
+                                ),
+                                workspace_head=(
+                                    outputs_for_gate.get("remediationWorkspaceHead")
+                                    if isinstance(
+                                        outputs_for_gate.get(
+                                            "remediationWorkspaceHead"
+                                        ),
+                                        Mapping,
+                                    )
+                                    else None
                                 ),
                             )
                         )

@@ -190,12 +190,23 @@ steps:
       kind: remediation_loop
       loopId: issue-implementation-remediation
       remediationTool:
-        type: skill
+        type: agent_runtime
         name: auto
-      verificationTool:
-        type: skill
-        name: moonspec-verify
         inputs:
+          selectedSkill: auto
+          issue_provider: '{{ inputs.issue_provider }}'
+          issue_ref: '{{ inputs.issue_ref }}'
+          brief_artifact_path: '{{ inputs.brief_artifact_path }}'
+          assessment_artifact_path: '{{ inputs.assessment_artifact_path }}'
+          verify_artifact_path: '{{ inputs.verify_artifact_path }}'
+          instructions: 'Fix only the gaps identified by the latest authoritative
+            moonspec-verify result and its remainingWorkRef, preserving the cumulative
+            remediation workspace head.'
+      verificationTool:
+        type: agent_runtime
+        name: auto
+        inputs:
+          selectedSkill: moonspec-verify
           verification_target: '{{ inputs.verification_target }}'
           issue_provider: '{{ inputs.issue_provider }}'
           issue_ref: '{{ inputs.issue_ref }}'

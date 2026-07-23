@@ -3499,6 +3499,57 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
 
 
 @pytest.mark.asyncio
+async def test_dynamic_verifier_inserts_attempt_before_handoff_nodes(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "verificationTool": {"type": "agent_runtime", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 2},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[{"id": "controller", "annotations": {"remediationLoop": loop}}]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    ordered_nodes = [
+        {"id": "initial-verifier"},
+        {"id": "controller"},
+        {"id": "create-pr"},
+    ]
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        current_index=1,
+    )
+
+    assert admitted is True
+    assert ordered_nodes[1]["id"].endswith(":remediation:1")
+    assert ordered_nodes[2]["id"].endswith(":verification:1")
+    assert [node["id"] for node in ordered_nodes[3:]] == [
+        "controller",
+        "create-pr",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_dynamic_verifier_terminal_decision_does_not_append_attempt(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
