@@ -6200,6 +6200,8 @@ class MoonMindRunWorkflow:
                 "step_gate_result_ref",
                 "artifactRef",
                 "artifact_ref",
+                "diagnosticsRef",
+                "diagnostics_ref",
             ):
                 gate_result_ref = self._coerce_text(source.get(key), max_chars=400)
                 if gate_result_ref:
@@ -6330,6 +6332,8 @@ class MoonMindRunWorkflow:
         ref = str(value or "").strip()
         if ref.startswith("artifact://"):
             return ref
+        if ref.startswith("art_"):
+            return f"artifact://{ref}"
         return None
 
     def _bounded_story_loop_gate_from_step_gate(
@@ -6372,15 +6376,23 @@ class MoonMindRunWorkflow:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
-        return TypedGateResult.model_validate(
+        return TypedGateResult.from_boundary_payload(
             {
                 "verdict": gate_result.verdict,
                 "terminalDisposition": terminal_disposition,
                 "gateResultRef": self._bounded_story_loop_artifact_ref(
                     gate_result_ref
                 ),
+                # The verifier report is itself the authoritative remaining-work
+                # evidence when it does not publish a separate extracted artifact.
+                # Never admit ADDITIONAL_WORK_NEEDED without a durable reference.
                 "remainingWorkRef": self._bounded_story_loop_artifact_ref(
                     gate_result.remaining_work_ref
+                )
+                or (
+                    self._bounded_story_loop_artifact_ref(gate_result_ref)
+                    if gate_result.verdict == "ADDITIONAL_WORK_NEEDED"
+                    else None
                 ),
                 "diagnosticsRef": self._bounded_story_loop_artifact_ref(
                     next(iter(gate_result.blocking_evidence_refs), None)
@@ -8698,13 +8710,18 @@ class MoonMindRunWorkflow:
         if not scope.get("allowed"):
             raise ValueError(str(scope.get("reason") or "bounded story loop rejected"))
 
+        serialized_budgets = loop_input.budgets.model_dump(
+            by_alias=True, mode="json"
+        )
+        if serialized_budgets.get("maxElapsedSeconds") is None:
+            serialized_budgets.pop("maxElapsedSeconds")
         self._publish_context["boundedStoryLoop"] = {
             "selectedItemRef": compiled.selected_item_ref,
             "selectedItemDigest": compiled.selected_item_digest,
             "nodeKinds": [node.kind for node in compiled.nodes],
             "publishMode": loop_input.publish_mode,
             "mergeAutomationEnabled": loop_input.merge_automation_enabled,
-            "budgets": loop_input.budgets.model_dump(by_alias=True, mode="json"),
+            "budgets": serialized_budgets,
             "scopeGuard": scope,
         }
 
