@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +18,31 @@ from moonmind.workflows.executions.control_stop_continuation import (
     ControlStopContinuationContract,
     ControlStopContinuationError,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.workflows.control_stop_continuation import (
+    WORKFLOW_NAME,
+)
+
+
+class TemporalControlStopContinuationStarter:
+    """Start or reconcile the one frozen destination workflow identity."""
+
+    def __init__(self, adapter: TemporalClientAdapter | None = None) -> None:
+        self._adapter = adapter or TemporalClientAdapter()
+
+    async def start_or_reconcile(
+        self, *, workflow_id: str, input_payload: Mapping[str, Any]
+    ) -> str:
+        result = await self._adapter.start_workflow(
+            workflow_type=WORKFLOW_NAME,
+            workflow_id=workflow_id,
+            input_args=dict(input_payload),
+        )
+        if result.workflow_id != workflow_id:
+            raise ControlStopContinuationError(
+                "Temporal reconciled a different continuation workflow identity"
+            )
+        return result.run_id
 
 
 class SqlControlStopContinuationRepository:
@@ -88,6 +115,9 @@ class SqlControlStopContinuationRepository:
                 raise ControlStopContinuationError(
                     "existing control-stop reservation conflicts with frozen contract"
                 )
+
+        # Persist lineage before the external Temporal start side effect.
+        await self._session.commit()
 
         return ControlStopContinuationReservation(
             destination_workflow_id=str(row.destination_workflow_id),
