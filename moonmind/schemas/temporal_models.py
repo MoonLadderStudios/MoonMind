@@ -116,6 +116,7 @@ RecoveryResumePhase = Literal[
     "rerun_failed_step",
     "continue_to_gate",
     "continue_after_gate",
+    "continue_to_remediation",
     "resume_publication",
     "retry_restoration",
 ]
@@ -739,10 +740,6 @@ class FailedRunRecoveryManifestModel(BaseModel):
             if not self.validation.checkpoint_ref:
                 raise ValueError(
                     "resume cannot be allowed without a validated checkpoint ref"
-                )
-            if not self.failed_logical_step_id:
-                raise ValueError(
-                    "resume cannot be allowed without a failed logical step"
                 )
             if self.blocked_reason:
                 raise ValueError(
