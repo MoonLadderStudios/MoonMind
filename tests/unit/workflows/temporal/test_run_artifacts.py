@@ -5347,6 +5347,10 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
                 "push_base_ref": "origin/main",
                 "push_commit_count": 2,
                 "push_head_sha": "abc123",
+                "acceptedRepositoryEvidence": {
+                    "pushStatus": "pushed",
+                    "evidenceRef": "artifact://repository/published",
+                },
             },
             "output_refs": [],
         }

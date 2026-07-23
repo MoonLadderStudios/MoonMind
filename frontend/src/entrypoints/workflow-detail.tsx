@@ -934,6 +934,7 @@ const ExecutionDetailSchema = z
       .nullable()
       .optional(),
     actions: ExecutionActionsSchema.optional(),
+    finishSummary: z.unknown().nullable().optional(),
     resume: z
       .object({
         available: z.boolean().optional(),
@@ -1766,6 +1767,49 @@ const RunSummaryArtifactSchema = z
           })
           .passthrough()
           .optional(),
+        boundedStoryLoop: z.object({
+          continuationDecision: z.object({
+            reason: z.string().optional(),
+            continueLoop: z.boolean().optional(),
+            progressVectorDigest: z.string().optional(),
+            gate: z.object({
+              progressVector: z.object({
+                classification: z.string(),
+                unresolvedGapScore: z.number().int().nonnegative(),
+                priorUnresolvedGapScore: z.number().int().nonnegative().nullable().optional(),
+                requiredChecks: z.record(z.string(), z.number().int().nonnegative()),
+                priorRequiredChecks: z.record(z.string(), z.number().int().nonnegative()).nullable().optional(),
+                regressions: z.array(z.string()).optional(),
+                repeatedFailureSignatures: z.array(z.string()).optional(),
+                newAuthoritativeEvidenceDigest: z.string().nullable().optional(),
+                relevantDiffDigest: z.string().nullable().optional(),
+                gaps: z.array(z.object({ status: z.string() }).passthrough()).optional(),
+              }).passthrough().optional(),
+            }).passthrough().optional(),
+            budget: z.object({
+              maxAttempts: z.number().int().positive().optional(),
+              maxElapsedSeconds: z.number().int().positive().nullable().optional(),
+              providerBudget: z.number().int().nonnegative().nullable().optional(),
+              tokenBudget: z.number().int().nonnegative().nullable().optional(),
+              costBudget: z.number().int().nonnegative().nullable().optional(),
+              consumed: z.record(z.string(), z.number().int().nonnegative()),
+            }).passthrough().optional(),
+          }).passthrough().optional(),
+        }).passthrough().optional(),
+      })
+      .passthrough()
+      .optional(),
+    controlStop: z
+      .object({
+        kind: z.string(),
+        verdict: z.string().nullable().optional(),
+        reasonCode: z.string().nullable().optional(),
+        remainingWorkRef: z.string().nullable().optional(),
+        workspaceHeadRef: z.string().nullable().optional(),
+        publicationFeasible: z.boolean().optional(),
+        publicationFeasibilityReason: z.string().nullable().optional(),
+        publicationAttempted: z.boolean().optional(),
+        auxiliaryOutcomes: z.record(z.string(), z.unknown()).optional(),
       })
       .passthrough()
       .optional(),
@@ -6597,6 +6641,7 @@ function RecoveryEvidencePanel({
       case 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING': return 'The immutable runtime capability snapshot is missing. Refresh recovery evidence.';
       case 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH': return `${runtime} capabilities changed. Refresh recovery evidence before retrying.`;
       case 'CHECKPOINT_ARTIFACT_INVALID': return 'The checkpoint artifact or its source identity is invalid. Retry from source.';
+      case 'RECOVERY_TARGET_UNAVAILABLE': return 'The checkpoint is valid, but this run has no supported recovery target. Use Edit for rerun or Full retry.';
       case 'CHECKPOINT_SIDE_EFFECT_UNSAFE': return 'Prior side effects make checkpoint restoration unsafe. Resolve them or retry from source.';
       case 'CHECKPOINT_BOUNDARY_INCOMPATIBLE': return 'This checkpoint boundary has no legal continuation phase. Retry from source.';
       case 'CHECKPOINT_CAPTURE_UNSUPPORTED': return `${runtime} cannot capture a restorable workspace checkpoint. Retry from source.`;
@@ -8313,7 +8358,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
     staleTime: evidenceStaleTime,
   });
-  const runSummary = runSummaryQuery.data;
+  const executionRunSummary = RunSummaryArtifactSchema.safeParse(
+    execution?.finishSummary,
+  );
+  const runSummary =
+    runSummaryQuery.data ||
+    (executionRunSummary.success ? executionRunSummary.data : null);
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
@@ -9307,6 +9357,36 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           {overviewTabActive && runSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
+              {runSummary.controlStop?.kind === 'workflow_gate' ? (
+                <div className="stack" aria-label="Quality gate outcome">
+                  <h4>Quality gate stopped this workflow</h4>
+                  <p>
+                    Every Step Execution completed as an operation, but the semantic quality gate
+                    did not accept the candidate. No failed Step Execution was fabricated.
+                  </p>
+                  <FlatFactGrid>
+                    <Fact label="Gate verdict">{runSummary.controlStop.verdict || '—'}</Fact>
+                    <Fact label="Stop reason">{runSummary.controlStop.reasonCode || '—'}</Fact>
+                    <Fact label="Publication feasible">
+                      {runSummary.controlStop.publicationFeasible ? 'Yes' : 'No'}
+                    </Fact>
+                    <Fact label="Publication outcome">
+                      {runSummary.controlStop.publicationAttempted ? 'Attempted' : 'Not attempted'}
+                    </Fact>
+                    <Fact label="Preserved candidate">
+                      <code className="text-xs break-all">{runSummary.controlStop.workspaceHeadRef || '—'}</code>
+                    </Fact>
+                    <Fact label="Authoritative remaining work">
+                      <code className="text-xs break-all">{runSummary.controlStop.remainingWorkRef || '—'}</code>
+                    </Fact>
+                  </FlatFactGrid>
+                  <p className="small">
+                    Edit for rerun and Full retry reuse the original task input. Continue remediation,
+                    when admitted, consumes the preserved candidate and remaining-work evidence.
+                    Publication retry only retries the publication handoff; it does not accept the work.
+                  </p>
+                </div>
+              ) : null}
               <FlatFactGrid>
                 {runSummary.finishOutcome ? (
                   <>
@@ -9379,6 +9459,43 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ))}
                 </FactGroup>
               ) : null}
+              {runSummary.publishContext?.boundedStoryLoop?.continuationDecision ? (() => {
+                const continuation = runSummary.publishContext.boundedStoryLoop.continuationDecision;
+                const progress = continuation.gate?.progressVector;
+                const consumed = continuation.budget?.consumed ?? {};
+                const attemptsUsed = consumed.attempts ?? 0;
+                const attemptsMaximum = continuation.budget?.maxAttempts;
+                const unresolvedGaps = progress?.gaps?.filter((gap) => !['passed', 'resolved', 'satisfied'].includes(gap.status)).length;
+                return (
+                  <section className="stack" aria-label="Remediation progress and budgets">
+                    <h4>Remediation progress</h4>
+                    <FlatFactGrid>
+                      <Fact label="Classification">{formatStatusLabel(progress?.classification) || '—'}</Fact>
+                      <Fact label="Gap trend">{progress ? `${unresolvedGaps ?? '—'} unresolved · score ${progress.unresolvedGapScore}${progress.priorUnresolvedGapScore === undefined || progress.priorUnresolvedGapScore === null ? '' : ` (${progress.unresolvedGapScore - progress.priorUnresolvedGapScore >= 0 ? '+' : ''}${progress.unresolvedGapScore - progress.priorUnresolvedGapScore})`}` : '—'}</Fact>
+                      <Fact label="Required checks">
+                        {progress ? `Passed ${progress.requiredChecks.passed ?? 0}${progress.priorRequiredChecks ? ` (${(progress.requiredChecks.passed ?? 0) - (progress.priorRequiredChecks.passed ?? 0) >= 0 ? '+' : ''}${(progress.requiredChecks.passed ?? 0) - (progress.priorRequiredChecks.passed ?? 0)})` : ''} · Failed ${progress.requiredChecks.failed ?? 0} · Not run ${progress.requiredChecks.not_run ?? 0}` : '—'}
+                      </Fact>
+                      <Fact label="Semantic no-progress cycles">{consumed.consecutiveNoProgressAttempts ?? 0}</Fact>
+                      <Fact label="Hard attempts used / remaining">
+                        {attemptsMaximum === undefined ? `${attemptsUsed} / —` : `${attemptsUsed} / ${Math.max(0, attemptsMaximum - attemptsUsed)}`}
+                      </Fact>
+                      <Fact label="Repeated failure signatures">{progress?.repeatedFailureSignatures?.length ?? 0}</Fact>
+                      <Fact label="Resource budgets">
+                        {`Provider ${consumed.provider ?? 0}/${continuation.budget?.providerBudget ?? '∞'} · Tokens ${consumed.tokens ?? 0}/${continuation.budget?.tokenBudget ?? '∞'} · Cost ${consumed.cost ?? 0}/${continuation.budget?.costBudget ?? '∞'} · Wall clock ${consumed.elapsedSeconds ?? 0}/${continuation.budget?.maxElapsedSeconds ?? '∞'}`}
+                      </Fact>
+                      <Fact label="Latest meaningful progress evidence">
+                        {progress?.classification === 'meaningful_progress'
+                          ? progress.newAuthoritativeEvidenceDigest || progress.relevantDiffDigest || 'Structured gap/check progress'
+                          : '—'}
+                      </Fact>
+                      <Fact label="Exact stop dimension">{continuation.continueLoop ? 'None' : formatStatusLabel(continuation.reason)}</Fact>
+                    </FlatFactGrid>
+                    {progress?.regressions?.length ? (
+                      <p className="small">Regressions: {progress.regressions.map((regression) => formatStatusLabel(regression)).join(', ')}</p>
+                    ) : null}
+                  </section>
+                );
+              })() : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>
                   <strong>Last Step</strong>
