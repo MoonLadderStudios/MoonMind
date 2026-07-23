@@ -8,6 +8,7 @@ from moonmind.services.control_stop_continuation import (
     admit_control_stop_continuation,
 )
 from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
     ControlStopContinuationError,
 )
 from tests.unit.workflows.executions.test_control_stop_continuation import _payload
@@ -72,26 +73,31 @@ class _Starter:
         return "existing-or-new-run"
 
 
+def _grant(payload: dict) -> ContinuationBudgetGrant:
+    return ContinuationBudgetGrant.model_validate(payload["continuationBudget"])
+
+
+async def _admit(*, repository, starter, payload):
+    return await admit_control_stop_continuation(
+        source_workflow_id="source-workflow",
+        source_run_id="source-run",
+        control_stop_id="verify:control-stop:6",
+        continuation_budget=_grant(payload),
+        instruction_changes_ref=payload.get("instructionChangesRef"),
+        instruction_changes_digest=payload.get("instructionChangesDigest"),
+        repository=repository,
+        starter=starter,
+    )
+
+
 @pytest.mark.asyncio
 async def test_duplicate_admission_reconciles_one_destination() -> None:
     payload = _payload()
     repository = _Repository(_evidence(payload))
     starter = _Starter()
 
-    first = await admit_control_stop_continuation(
-        source_workflow_id="source-workflow",
-        source_run_id="source-run",
-        control_stop_id="verify:control-stop:6",
-        repository=repository,
-        starter=starter,
-    )
-    second = await admit_control_stop_continuation(
-        source_workflow_id="source-workflow",
-        source_run_id="source-run",
-        control_stop_id="verify:control-stop:6",
-        repository=repository,
-        starter=starter,
-    )
+    first = await _admit(repository=repository, starter=starter, payload=payload)
+    second = await _admit(repository=repository, starter=starter, payload=payload)
 
     assert first.destination_workflow_id == second.destination_workflow_id
     assert len(repository.reservations) == 1
@@ -115,13 +121,7 @@ async def test_stale_evidence_fails_before_reservation_or_start() -> None:
     starter = _Starter()
 
     with pytest.raises(ControlStopContinuationError, match="missing or stale"):
-        await admit_control_stop_continuation(
-            source_workflow_id="source-workflow",
-            source_run_id="source-run",
-            control_stop_id="verify:control-stop:6",
-            repository=repository,
-            starter=starter,
-        )
+        await _admit(repository=repository, starter=starter, payload=payload)
 
     assert repository.reserve_calls == 0
     assert starter.workflow_ids == []
@@ -141,12 +141,43 @@ async def test_unpromoted_generation_fails_before_mutation() -> None:
     )
 
     with pytest.raises(ControlStopContinuationError, match="currently promoted"):
+        await _admit(repository=repository, starter=_Starter(), payload=payload)
+
+    assert repository.reserve_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_mismatch_fails_before_reservation_or_start() -> None:
+    payload = _payload()
+    repository = _Repository(_evidence(payload))
+    starter = _Starter()
+    requested = deepcopy(payload)
+    requested["continuationBudget"]["maxAttempts"] = 3
+
+    with pytest.raises(ControlStopContinuationError, match="authorized frozen grant"):
+        await _admit(repository=repository, starter=starter, payload=requested)
+
+    assert repository.reserve_calls == 0
+    assert starter.workflow_ids == []
+
+
+@pytest.mark.asyncio
+async def test_instruction_change_mismatch_fails_before_mutation() -> None:
+    payload = _payload()
+    repository = _Repository(_evidence(payload))
+    starter = _Starter()
+
+    with pytest.raises(ControlStopContinuationError, match="instruction changes"):
         await admit_control_stop_continuation(
             source_workflow_id="source-workflow",
             source_run_id="source-run",
             control_stop_id="verify:control-stop:6",
+            continuation_budget=_grant(payload),
+            instruction_changes_ref="artifact://instructions/new",
+            instruction_changes_digest="sha256:new",
             repository=repository,
-            starter=_Starter(),
+            starter=starter,
         )
 
     assert repository.reserve_calls == 0
+    assert starter.workflow_ids == []

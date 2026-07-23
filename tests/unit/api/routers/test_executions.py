@@ -15115,11 +15115,25 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
 
     first = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={"controlStopId": "verify:control-stop:6"},
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
     )
     duplicate = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={"controlStopId": "verify:control-stop:6"},
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
     )
 
     assert first.status_code == 202
@@ -15134,6 +15148,8 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
         assert invocation.kwargs["source_workflow_id"] == "mm:wf-1"
         assert invocation.kwargs["source_run_id"] == "run-2"
         assert invocation.kwargs["control_stop_id"] == "verify:control-stop:6"
+        assert invocation.kwargs["continuation_budget"].grant_id == "grant-1"
+        assert invocation.kwargs["instruction_changes_ref"] is None
 
 
 def test_continue_remediation_rejects_non_owner_before_admission(
@@ -15154,7 +15170,14 @@ def test_continue_remediation_rejects_non_owner_before_admission(
 
     response = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={"controlStopId": "verify:control-stop:6"},
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
     )
 
     assert response.status_code == 404

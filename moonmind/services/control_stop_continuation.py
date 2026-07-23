@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
     ControlStopContinuationContract,
     ControlStopContinuationError,
 )
@@ -97,6 +98,9 @@ async def admit_control_stop_continuation(
     source_workflow_id: str,
     source_run_id: str,
     control_stop_id: str,
+    continuation_budget: ContinuationBudgetGrant,
+    instruction_changes_ref: str | None,
+    instruction_changes_digest: str | None,
     repository: ControlStopContinuationRepository,
     starter: ControlStopContinuationStarter,
 ) -> ControlStopContinuationReservation:
@@ -121,6 +125,17 @@ async def admit_control_stop_continuation(
     ):
         raise ControlStopContinuationError(
             "requested source identity does not match authoritative evidence"
+        )
+    if contract.continuation_budget != continuation_budget:
+        raise ControlStopContinuationError(
+            "requested continuation budget does not match the authorized frozen grant"
+        )
+    if (
+        contract.instruction_changes_ref != instruction_changes_ref
+        or contract.instruction_changes_digest != instruction_changes_digest
+    ):
+        raise ControlStopContinuationError(
+            "requested instruction changes do not match authoritative evidence"
         )
     _assert_authoritative_evidence(contract, evidence)
 

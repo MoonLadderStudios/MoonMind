@@ -217,6 +217,7 @@ from moonmind.services.control_stop_continuation import (
     admit_control_stop_continuation,
 )
 from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
     ControlStopContinuationError,
 )
 from api_service.api.execution_principal import (
@@ -14175,6 +14176,23 @@ class ContinueRemediationRequest(BaseModel):
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
     control_stop_id: str = Field(alias="controlStopId", min_length=1, max_length=255)
+    continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
+    instruction_changes_ref: str | None = Field(
+        None, alias="instructionChangesRef", min_length=1
+    )
+    instruction_changes_digest: str | None = Field(
+        None, alias="instructionChangesDigest", min_length=1
+    )
+
+    @model_validator(mode="after")
+    def _paired_instruction_changes(self) -> "ContinueRemediationRequest":
+        if bool(self.instruction_changes_ref) != bool(
+            self.instruction_changes_digest
+        ):
+            raise ValueError(
+                "instruction changes require both a reference and digest"
+            )
+        return self
 
 
 class ContinueRemediationResponse(BaseModel):
@@ -14230,6 +14248,9 @@ async def continue_remediation(
             source_workflow_id=source.workflow_id,
             source_run_id=source_run_id,
             control_stop_id=payload.control_stop_id,
+            continuation_budget=payload.continuation_budget,
+            instruction_changes_ref=payload.instruction_changes_ref,
+            instruction_changes_digest=payload.instruction_changes_digest,
             repository=SqlControlStopContinuationRepository(session),
             starter=starter,
         )
