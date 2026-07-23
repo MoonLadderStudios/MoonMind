@@ -904,6 +904,63 @@ def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted(
     assert decision["hasRemainingRemediationStep"] is False
 
 
+def test_publication_feasibility_requires_typed_accepted_evidence() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._publication_feasibility(
+        {"outputs": {"push_commit_count": 2}}
+    )["reason"] == "publication_state_ambiguous"
+    assert workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "commitsAheadOfBase": 2,
+                    "evidenceRef": "artifact://repository/evidence",
+                }
+            }
+        }
+    ) == {
+        "feasible": True,
+        "reason": "commits_ahead_of_base",
+        "attempted": False,
+        "evidenceRefs": ("artifact://repository/evidence",),
+    }
+
+
+def test_publication_feasibility_distinguishes_no_change_and_unsafe() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    no_change = workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "repositoryChanged": False,
+                    "evidenceRef": "artifact://repository/no-change",
+                }
+            }
+        }
+    )
+    contaminated = workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "candidateContaminated": True,
+                    "evidenceRef": "artifact://repository/scan",
+                }
+            }
+        }
+    )
+
+    assert (no_change["feasible"], no_change["reason"]) == (
+        False,
+        "no_candidate_change",
+    )
+    assert (contaminated["feasible"], contaminated["reason"]) == (
+        False,
+        "candidate_contaminated",
+    )
+
+
 def test_parent_loop_preserves_legacy_remediation_scan_before_plan_routing_patch() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._step_ledger_rows = [

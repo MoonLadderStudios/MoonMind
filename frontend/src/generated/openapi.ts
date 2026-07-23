@@ -6839,6 +6839,15 @@ export interface components {
              * @default false
              */
             canResumeFromFailedStep: boolean;
+            canContinueRemediation: boolean;
+            canRetryPublication: boolean;
+            canFullRetry: boolean;
+            actionEvidence: {
+                [key: string]: {
+                    candidateRef?: string | null;
+                    remainingWorkRef?: string | null;
+                };
+            };
             /**
              * Cancancel
              * @default false

@@ -189,6 +189,8 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     LoopAttempt,
     LoopBudget,
     PublicationAction,
+    PublicationFeasibility,
+    RemainingWorkArtifact,
     TypedGateResult,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
@@ -1635,6 +1637,64 @@ class MoonMindRunWorkflow:
             **self._execute_kwargs_for_route(artifact_write_route),
         )
         return str(artifact_id)
+
+    async def _materialize_remaining_work_artifact(
+        self,
+        *,
+        gate: StepGateResult,
+        gate_result_ref: str,
+        workspace_head_ref: str | None,
+    ) -> str:
+        """Persist the canonical terminal-incomplete handoff.
+
+        This deliberately fails closed: a terminal ADDITIONAL_WORK_NEEDED
+        outcome is invalid without both a preserved candidate head and a
+        separately addressable remaining-work artifact.
+        """
+
+        gate_ref = self._bounded_story_loop_artifact_ref(gate_result_ref)
+        head_ref = self._bounded_story_loop_artifact_ref(workspace_head_ref)
+        if not gate_ref or not head_ref:
+            raise ValueError(
+                "terminal incomplete finalization requires gate and workspace head refs"
+            )
+        issues = [dict(issue) for issue in gate.issues]
+
+        def items(key: str) -> tuple[str, ...]:
+            return tuple(
+                str(issue.get(key) or "").strip()
+                for issue in issues
+                if str(issue.get(key) or "").strip()
+            )
+
+        artifact = RemainingWorkArtifact.model_validate(
+            {
+                "sourceGateResultRef": gate_ref,
+                "sourceVerificationRef": self._bounded_story_loop_artifact_ref(
+                    next(iter(gate.blocking_evidence_refs), None)
+                ),
+                "workspaceHeadRef": head_ref,
+                "gaps": items("remainingWork") or items("summary") or items("requirement"),
+                "requiredChecks": items("requiredCheck") or items("suggestedCommand"),
+                "blockedItems": items("blockedItem"),
+                "recommendedStartingFiles": items("suggestedFile"),
+                "recommendedCommands": items("suggestedCommand"),
+                "scopeLimitations": (),
+                "generatedAt": workflow.now().isoformat(),
+            }
+        )
+        artifact_id = await self._write_json_artifact(
+            name="reports/remaining_work_final.json",
+            payload=artifact.model_dump(by_alias=True, mode="json"),
+            metadata_json={
+                "artifact_kind": "remaining_work",
+                "schemaVersion": "remaining-work/v1",
+            },
+        )
+        artifact_ref = self._bounded_story_loop_artifact_ref(artifact_id)
+        if not artifact_ref:
+            raise ValueError("remaining-work artifact persistence returned no artifact ref")
+        return artifact_ref
 
     async def _record_step_execution_manifest(
         self,
@@ -11000,6 +11060,20 @@ class MoonMindRunWorkflow:
                             attempt_payload.get("checkpointAfterRef")
                             or attempt_payload.get("checkpointBeforeRef")
                         )
+                        if normalized_gate == "ADDITIONAL_WORK_NEEDED":
+                            remaining_work_ref = (
+                                await self._materialize_remaining_work_artifact(
+                                    gate=step_gate_result,
+                                    gate_result_ref=step_gate_result_ref,
+                                    workspace_head_ref=workspace_head_ref,
+                                )
+                            )
+                            gate_payload = dict(gate_payload)
+                            gate_payload["remainingWorkRef"] = remaining_work_ref
+                            continuation_decision["gate"] = gate_payload
+                            continuation_decision["remainingWorkRef"] = (
+                                remaining_work_ref
+                            )
                         feasibility = self._publication_feasibility(execution_result)
                         exhausted_budget_dimension = (
                             "consecutive_no_progress_attempts"
@@ -11025,6 +11099,18 @@ class MoonMindRunWorkflow:
                             "publicationFeasible": feasibility["feasible"],
                             "publicationFeasibilityReason": feasibility["reason"],
                             "publicationAttempted": False,
+                            "metrics": {
+                                "failureKind": "workflow_gate",
+                                "gateVerdict": normalized_gate,
+                                "gateReason": transition_reason,
+                                "publicationFeasibility": feasibility["reason"],
+                                "publicationRequested": publish_mode != "none",
+                                "publicationCompleted": False,
+                                "noChangeHandoff": not feasibility["feasible"],
+                                "candidatePreserved": bool(workspace_head_ref),
+                                "recoveryTargetAvailable": False,
+                                "remediationAdmitted": False,
+                            },
                             "auxiliaryOutcomes": {
                                 "evidencePublication": {"status": "preserved"},
                                 "gitPublication": {"status": "not_attempted"},
@@ -11104,6 +11190,9 @@ class MoonMindRunWorkflow:
                                 )
                             )
                             self._summary = draft_summary
+                            self._workflow_control_stop["metrics"][
+                                "publicationRequested"
+                            ] = True
                             # Draft publication is an explicit recovery handoff.
                             # The remaining plan is skipped below, so preserve
                             # already-pushed changes for the post-loop native PR
@@ -11153,6 +11242,18 @@ class MoonMindRunWorkflow:
                                     "continue_remediation_not_yet_admitted",
                                 ],
                             }
+                            no_change_ref = await self._write_json_artifact(
+                                name="reports/no_change_handoff.json",
+                                payload=dict(
+                                    self._publish_context["noChangeHandoff"]
+                                ),
+                                metadata_json={
+                                    "artifact_kind": "no_change_handoff",
+                                },
+                            )
+                            self._publish_context["noChangeHandoff"][
+                                "artifactRef"
+                            ] = self._bounded_story_loop_artifact_ref(no_change_ref)
                             control_stop_summary = (
                                 "Verification completed as an operation but the quality "
                                 f"gate returned {normalized_gate}. No pull request was "
@@ -14566,42 +14667,78 @@ class MoonMindRunWorkflow:
         """Classify accepted repository evidence before selecting a handoff."""
 
         if self._extract_pull_request_url(execution_result):
-            return {"feasible": True, "reason": "verified_remote_head"}
+            return PublicationFeasibility(
+                feasible=True, reason="verified_remote_head"
+            ).model_dump(by_alias=True)
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
-            return {"feasible": False, "reason": "publication_state_ambiguous"}
-        if outputs.get("publication_authorized") is False:
-            return {"feasible": False, "reason": "publication_unauthorized"}
-        if outputs.get("candidate_contaminated") is True:
-            return {"feasible": False, "reason": "candidate_contaminated"}
-        push_status = str(outputs.get("push_status") or "").strip().lower()
+            return PublicationFeasibility(
+                feasible=False, reason="publication_state_ambiguous"
+            ).model_dump(by_alias=True)
+        evidence = outputs.get("acceptedRepositoryEvidence")
+        if not isinstance(evidence, Mapping):
+            evidence = outputs.get("accepted_repository_evidence")
+        if not isinstance(evidence, Mapping):
+            return PublicationFeasibility(
+                feasible=False, reason="publication_state_ambiguous"
+            ).model_dump(by_alias=True)
+        evidence_refs = tuple(
+            ref
+            for ref in (
+                self._bounded_story_loop_artifact_ref(evidence.get("evidenceRef")),
+                self._bounded_story_loop_artifact_ref(evidence.get("candidateDiffRef")),
+            )
+            if ref
+        )
+        if evidence.get("publicationAuthorized") is False:
+            return PublicationFeasibility(
+                feasible=False,
+                reason="publication_unauthorized",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        if evidence.get("candidateContaminated") is True:
+            return PublicationFeasibility(
+                feasible=False,
+                reason="candidate_contaminated",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        push_status = str(evidence.get("pushStatus") or "").strip().lower()
         if push_status in {"pushed", "published"}:
-            return {"feasible": True, "reason": "verified_remote_head"}
-        commit_count = outputs.get("push_commit_count")
-        if commit_count is None:
-            commit_count = outputs.get("pushCommitCount")
+            return PublicationFeasibility(
+                feasible=True,
+                reason="verified_remote_head",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        commit_count = evidence.get("commitsAheadOfBase")
         if isinstance(commit_count, bool):
-            return {"feasible": False, "reason": "publication_state_ambiguous"}
+            commit_count = None
         if isinstance(commit_count, (int, float)):
-            return {
-                "feasible": int(commit_count) > 0,
-                "reason": (
+            return PublicationFeasibility(
+                feasible=int(commit_count) > 0,
+                reason=(
                     "commits_ahead_of_base"
                     if int(commit_count) > 0
                     else "no_candidate_change"
                 ),
-            }
-        if isinstance(commit_count, str) and commit_count.strip().isdigit():
-            count = int(commit_count.strip())
-            return {
-                "feasible": count > 0,
-                "reason": "commits_ahead_of_base" if count > 0 else "no_candidate_change",
-            }
-        if outputs.get("candidate_diff_ref") or outputs.get("candidateDiffRef"):
-            return {"feasible": True, "reason": "safe_candidate_diff"}
-        if outputs.get("repository_changed") is False:
-            return {"feasible": False, "reason": "no_candidate_change"}
-        return {"feasible": False, "reason": "publication_state_ambiguous"}
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        if evidence.get("candidateDiffRef"):
+            return PublicationFeasibility(
+                feasible=True,
+                reason="safe_candidate_diff",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        if evidence.get("repositoryChanged") is False:
+            return PublicationFeasibility(
+                feasible=False,
+                reason="no_candidate_change",
+                evidenceRefs=evidence_refs,
+            ).model_dump(by_alias=True)
+        return PublicationFeasibility(
+            feasible=False,
+            reason="publication_state_ambiguous",
+            evidenceRefs=evidence_refs,
+        ).model_dump(by_alias=True)
 
     @staticmethod
     def _sanitize_operator_summary(summary: str | None) -> str | None:
@@ -18874,6 +19011,8 @@ class MoonMindRunWorkflow:
             summary["blockedReason"] = manifest.blocked_reason
         if manifest_ref:
             summary["manifestRef"] = manifest_ref
+        if self._workflow_control_stop:
+            summary["controlStop"] = dict(self._workflow_control_stop)
         self._recovery_manifest_ref = manifest_ref
         self._recovery_manifest_summary = summary
         return summary, manifest_ref
@@ -18948,6 +19087,16 @@ class MoonMindRunWorkflow:
             refs["plan"] = self._plan_ref
         if self._input_ref:
             refs["taskInput"] = self._input_ref
+        if self._workflow_control_stop:
+            for key, ref_name in (
+                ("gateResultRef", "gateResult"),
+                ("verificationRef", "verification"),
+                ("remainingWorkRef", "remainingWork"),
+                ("workspaceHeadRef", "workspaceHead"),
+            ):
+                value = self._workflow_control_stop.get(key)
+                if isinstance(value, str) and value.strip():
+                    refs[ref_name] = value.strip()
         if isinstance(self._failure_diagnostic, Mapping):
             diagnostics_ref = self._failure_diagnostic.get("diagnosticsRef")
             if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
@@ -19202,6 +19351,32 @@ class MoonMindRunWorkflow:
                     "outcomes": self._dependency_outcomes(),
                 },
             }
+            if self._workflow_control_stop:
+                auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
+                if isinstance(auxiliary, dict):
+                    git_status = (
+                        "failed"
+                        if self._publish_status == "failed"
+                        else "completed"
+                        if self._publish_status == "published"
+                        else "not_attempted"
+                    )
+                    auxiliary["gitPublication"] = {"status": git_status}
+                    auxiliary["hostCleanup"] = {"status": "completed"}
+                    auxiliary["providerProfileRelease"] = {"status": "completed"}
+                    auxiliary["janitorRequired"] = False
+                metrics = self._workflow_control_stop.get("metrics")
+                if isinstance(metrics, dict):
+                    metrics["publicationCompleted"] = (
+                        self._publish_status == "published"
+                    )
+                finish_summary["primaryOutcome"] = dict(
+                    self._workflow_control_stop
+                )
+                finish_summary["controlStop"] = dict(self._workflow_control_stop)
+                finish_summary["runMetrics"] = dict(
+                    self._workflow_control_stop.get("metrics") or {}
+                )
             if self._operator_summary:
                 finish_summary["operatorSummary"] = self._operator_summary
             side_effects = self._finish_summary_side_effects()

@@ -934,6 +934,7 @@ const ExecutionDetailSchema = z
       .nullable()
       .optional(),
     actions: ExecutionActionsSchema.optional(),
+    finishSummary: z.unknown().nullable().optional(),
     resume: z
       .object({
         available: z.boolean().optional(),
@@ -1744,6 +1745,20 @@ const RunSummaryArtifactSchema = z
         baseRef: z.string().nullable().optional(),
         commitCount: z.union([z.number(), z.string()]).nullable().optional(),
         pullRequestUrl: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
+    controlStop: z
+      .object({
+        kind: z.string(),
+        verdict: z.string().nullable().optional(),
+        reasonCode: z.string().nullable().optional(),
+        remainingWorkRef: z.string().nullable().optional(),
+        workspaceHeadRef: z.string().nullable().optional(),
+        publicationFeasible: z.boolean().optional(),
+        publicationFeasibilityReason: z.string().nullable().optional(),
+        publicationAttempted: z.boolean().optional(),
+        auxiliaryOutcomes: z.record(z.string(), z.unknown()).optional(),
       })
       .passthrough()
       .optional(),
@@ -8278,7 +8293,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
     staleTime: evidenceStaleTime,
   });
-  const runSummary = runSummaryQuery.data;
+  const executionRunSummary = RunSummaryArtifactSchema.safeParse(
+    execution?.finishSummary,
+  );
+  const runSummary =
+    runSummaryQuery.data ||
+    (executionRunSummary.success ? executionRunSummary.data : null);
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
@@ -9272,6 +9292,36 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           {overviewTabActive && runSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
+              {runSummary.controlStop?.kind === 'workflow_gate' ? (
+                <div className="stack" aria-label="Quality gate outcome">
+                  <h4>Quality gate stopped this workflow</h4>
+                  <p>
+                    Every Step Execution completed as an operation, but the semantic quality gate
+                    did not accept the candidate. No failed Step Execution was fabricated.
+                  </p>
+                  <FlatFactGrid>
+                    <Fact label="Gate verdict">{runSummary.controlStop.verdict || '—'}</Fact>
+                    <Fact label="Stop reason">{runSummary.controlStop.reasonCode || '—'}</Fact>
+                    <Fact label="Publication feasible">
+                      {runSummary.controlStop.publicationFeasible ? 'Yes' : 'No'}
+                    </Fact>
+                    <Fact label="Publication outcome">
+                      {runSummary.controlStop.publicationAttempted ? 'Attempted' : 'Not attempted'}
+                    </Fact>
+                    <Fact label="Preserved candidate">
+                      <code className="text-xs break-all">{runSummary.controlStop.workspaceHeadRef || '—'}</code>
+                    </Fact>
+                    <Fact label="Authoritative remaining work">
+                      <code className="text-xs break-all">{runSummary.controlStop.remainingWorkRef || '—'}</code>
+                    </Fact>
+                  </FlatFactGrid>
+                  <p className="small">
+                    Edit for rerun and Full retry reuse the original task input. Continue remediation,
+                    when admitted, consumes the preserved candidate and remaining-work evidence.
+                    Publication retry only retries the publication handoff; it does not accept the work.
+                  </p>
+                </div>
+              ) : null}
               <FlatFactGrid>
                 {runSummary.finishOutcome ? (
                   <>

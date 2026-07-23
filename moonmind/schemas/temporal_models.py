@@ -2905,6 +2905,12 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_failed_step_resume: bool = Field(
         False, alias="canResumeFromFailedStep"
     )
+    can_continue_remediation: bool = Field(False, alias="canContinueRemediation")
+    can_retry_publication: bool = Field(False, alias="canRetryPublication")
+    can_full_retry: bool = Field(False, alias="canFullRetry")
+    action_evidence: dict[str, dict[str, str | None]] = Field(
+        default_factory=dict, alias="actionEvidence"
+    )
     can_cancel: bool = Field(False, alias="canCancel")
     can_reject: bool = Field(False, alias="canReject")
     can_send_message: bool = Field(False, alias="canSendMessage")
