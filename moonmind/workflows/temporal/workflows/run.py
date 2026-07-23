@@ -213,7 +213,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     PublicationAction,
     PublicationFeasibility,
     RemainingWorkArtifact,
-    RemediationLoopState,
+    RemediationLoopState as BoundedRemediationLoopState,
     RemediationProgressVector,
     TypedGateResult,
     advance_remediation_loop_state,
@@ -7010,13 +7010,13 @@ class MoonMindRunWorkflow:
         prior_progress_signature = None
         prior_no_progress_attempts = 0
         prior_progress_vector: RemediationProgressVector | None = None
-        prior_loop_state: RemediationLoopState | None = None
+        prior_loop_state: BoundedRemediationLoopState | None = None
         prior_consumed_counters: dict[str, int] = {}
         if isinstance(loop_context, Mapping):
             durable_state_payload = loop_context.get("durableLoopState")
             if isinstance(durable_state_payload, Mapping):
                 try:
-                    prior_loop_state = RemediationLoopState.model_validate(
+                    prior_loop_state = BoundedRemediationLoopState.model_validate(
                         durable_state_payload
                     )
                 except ValidationError:
