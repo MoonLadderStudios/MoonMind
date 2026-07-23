@@ -5350,6 +5350,20 @@ export interface components {
             currentHeadStepExecutionId?: string | null;
             /** Currentheadcheckpointref */
             currentHeadCheckpointRef?: string | null;
+            /** Currentheadcheckpointdigest */
+            currentHeadCheckpointDigest?: string | null;
+            /** Currentheadversion */
+            currentHeadVersion?: number | null;
+            /** Currentheadattemptordinal */
+            currentHeadAttemptOrdinal?: number | null;
+            /** Remediationloopid */
+            remediationLoopId?: string | null;
+            /** Remediationheadstatus */
+            remediationHeadStatus?: string | null;
+            /** Latestverificationref */
+            latestVerificationRef?: string | null;
+            /** Latestverificationverdict */
+            latestVerificationVerdict?: string | null;
             /** Artifactrefs */
             artifactRefs?: {
                 [key: string]: unknown;
@@ -10386,6 +10400,33 @@ export interface components {
             checkpointRef?: string | null;
             /** Contextartifactref */
             contextArtifactRef?: string | null;
+            /** Loopid */
+            loopId?: string | null;
+            /** Rootcheckpointref */
+            rootCheckpointRef?: string | null;
+            /** Rootworkspacedigest */
+            rootWorkspaceDigest?: string | null;
+            /** Headcheckpointref */
+            headCheckpointRef?: string | null;
+            /** Headworkspacedigest */
+            headWorkspaceDigest?: string | null;
+            /** Headstepexecutionid */
+            headStepExecutionId?: string | null;
+            /** Headattemptordinal */
+            headAttemptOrdinal?: number | null;
+            /** Headversion */
+            headVersion?: number | null;
+            /** Headstatus */
+            headStatus?: string | null;
+            /** Latestverificationref */
+            latestVerificationRef?: string | null;
+            /** Latestverificationverdict */
+            latestVerificationVerdict?: string | null;
+            /** Supersedescheckpointref */
+            supersedesCheckpointRef?: string | null;
+            /** Remainingworkref */
+            remainingWorkRef?: string | null;
+            nextActionBaseline?: components["schemas"]["RemediationNextActionBaselineModel"] | null;
             /** Createdat */
             createdAt?: string | null;
         };
@@ -10538,6 +10579,15 @@ export interface components {
             holder?: string | null;
             /** Releasedat */
             releasedAt?: string | null;
+        };
+        /** RemediationNextActionBaselineModel */
+        RemediationNextActionBaselineModel: {
+            /** Checkpointref */
+            checkpointRef: string;
+            /** Workspacedigest */
+            workspaceDigest: string;
+            /** Headversion */
+            headVersion: number;
         };
         /** RepositorySummarizationRequest */
         RepositorySummarizationRequest: {

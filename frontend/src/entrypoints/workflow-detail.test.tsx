@@ -6302,6 +6302,20 @@ describe('Workflow Detail Entrypoint', () => {
                     branchTurnId: 'cbt-remediation-inbound',
                     checkpointRef: 'artifact://checkpoints/inbound',
                     contextArtifactRef: 'art_context',
+                    rootCheckpointRef: 'artifact://workspace/C0',
+                    rootWorkspaceDigest: 'sha256:root',
+                    headCheckpointRef: 'artifact://workspace/C2',
+                    headWorkspaceDigest: 'sha256:candidate-two',
+                    headAttemptOrdinal: 2,
+                    headVersion: 3,
+                    headStatus: 'verified_incomplete',
+                    latestVerificationVerdict: 'ADDITIONAL_WORK_NEEDED',
+                    remainingWorkRef: 'artifact://verification/V2#remainingWork',
+                    nextActionBaseline: {
+                      checkpointRef: 'artifact://workspace/C2',
+                      workspaceDigest: 'sha256:candidate-two',
+                      headVersion: 3,
+                    },
                   },
                 ],
                 approvalState: { requestId: 'approval-1', decision: 'pending', canDecide: true },
@@ -6395,6 +6409,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText('mm:target-1').length).toBeGreaterThan(0);
     expect(screen.getByText('cbr-remediation-inbound')).toBeTruthy();
     expect(screen.getByText('cbr-remediation-outbound')).toBeTruthy();
+    expect(screen.getByText('verified incomplete')).toBeTruthy();
+    expect(screen.getByText('2 / 3')).toBeTruthy();
+    expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
+    expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(

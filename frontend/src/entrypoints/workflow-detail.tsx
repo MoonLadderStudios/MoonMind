@@ -1053,6 +1053,23 @@ const RemediationLinkSchema = z
             branchTurnId: z.string().nullable().optional(),
             checkpointRef: z.string().nullable().optional(),
             contextArtifactRef: z.string().nullable().optional(),
+            loopId: z.string().nullable().optional(),
+            rootCheckpointRef: z.string().nullable().optional(),
+            rootWorkspaceDigest: z.string().nullable().optional(),
+            headCheckpointRef: z.string().nullable().optional(),
+            headWorkspaceDigest: z.string().nullable().optional(),
+            headStepExecutionId: z.string().nullable().optional(),
+            headAttemptOrdinal: z.number().int().nullable().optional(),
+            headVersion: z.number().int().nullable().optional(),
+            headStatus: z.string().nullable().optional(),
+            latestVerificationRef: z.string().nullable().optional(),
+            latestVerificationVerdict: z.string().nullable().optional(),
+            remainingWorkRef: z.string().nullable().optional(),
+            nextActionBaseline: z.object({
+              checkpointRef: z.string(),
+              workspaceDigest: z.string(),
+              headVersion: z.number().int(),
+            }).nullable().optional(),
             operation: z.string().nullable().optional(),
             idempotencyKey: z.string().nullable().optional(),
             createdAt: z.string().nullable().optional(),
@@ -7210,6 +7227,14 @@ function RemediationCheckpointBranches({
               <Card label="Turn">{branch.branchTurnId || '—'}</Card>
               <Card label="Checkpoint">{branch.checkpointRef || '—'}</Card>
               <Card label="Context">{branch.contextArtifactRef || '—'}</Card>
+              <Card label="Head status">{branch.headStatus ? formatStatusLabel(branch.headStatus) : '—'}</Card>
+              <Card label="Attempt / version">{branch.headAttemptOrdinal != null && branch.headVersion != null ? `${branch.headAttemptOrdinal} / ${branch.headVersion}` : '—'}</Card>
+              <Card label="Root candidate"><code className="text-xs break-all">{branch.rootCheckpointRef || '—'}</code></Card>
+              <Card label="Current candidate"><code className="text-xs break-all">{branch.headCheckpointRef || '—'}</code></Card>
+              <Card label="Candidate digest"><code className="text-xs break-all">{branch.headWorkspaceDigest || '—'}</code></Card>
+              <Card label="Latest verification">{branch.latestVerificationVerdict || '—'}</Card>
+              <Card label="Next attempt baseline"><code className="text-xs break-all">{branch.nextActionBaseline ? `${branch.nextActionBaseline.checkpointRef} @ v${branch.nextActionBaseline.headVersion}` : '—'}</code></Card>
+              <Card label="Remaining work"><code className="text-xs break-all">{branch.remainingWorkRef || '—'}</code></Card>
             </div>
           </li>
         ))}

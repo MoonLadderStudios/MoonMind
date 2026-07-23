@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 from functools import lru_cache
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.api.enums.v1 import IndexedValueType
@@ -509,6 +515,11 @@ class RemediationLockOutcomeModel(BaseModel):
     holder: str | None = None
     releasedAt: datetime | str | None = None
 
+class RemediationNextActionBaselineModel(BaseModel):
+    checkpointRef: str
+    workspaceDigest: str
+    headVersion: int
+
 class RemediationCheckpointBranchLinkModel(BaseModel):
     workflowId: str
     branchId: str
@@ -517,7 +528,52 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
     idempotencyKey: str | None = None
     checkpointRef: str | None = None
     contextArtifactRef: str | None = None
+    loopId: str | None = None
+    rootCheckpointRef: str | None = None
+    rootWorkspaceDigest: str | None = None
+    headCheckpointRef: str | None = None
+    headWorkspaceDigest: str | None = None
+    headStepExecutionId: str | None = None
+    headAttemptOrdinal: int | None = None
+    headVersion: int | None = None
+    headStatus: str | None = None
+    latestVerificationRef: str | None = None
+    latestVerificationVerdict: str | None = None
+    supersedesCheckpointRef: str | None = None
+    remainingWorkRef: str | None = None
+    nextActionBaseline: RemediationNextActionBaselineModel | None = None
     createdAt: datetime | str | None = None
+
+    @field_validator(
+        "rootCheckpointRef",
+        "headCheckpointRef",
+        "latestVerificationRef",
+        "supersedesCheckpointRef",
+        "remainingWorkRef",
+    )
+    @classmethod
+    def remediation_refs_are_artifact_refs(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("artifact://"):
+            raise ValueError("remediation head references must be artifact refs")
+        return value
+
+    @field_validator("rootWorkspaceDigest", "headWorkspaceDigest")
+    @classmethod
+    def remediation_digests_are_sha256(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("sha256:"):
+            raise ValueError("remediation workspace digests must be sha256 digests")
+        return value
+
+    @model_validator(mode="after")
+    def next_baseline_matches_head(self) -> "RemediationCheckpointBranchLinkModel":
+        baseline = self.nextActionBaseline
+        if baseline is not None and baseline.model_dump() != {
+            "checkpointRef": self.headCheckpointRef,
+            "workspaceDigest": self.headWorkspaceDigest,
+            "headVersion": self.headVersion,
+        }:
+            raise ValueError("next action baseline must match the persisted head")
+        return self
 
 class RemediationLinkSummaryModel(BaseModel):
     remediationWorkflowId: str
