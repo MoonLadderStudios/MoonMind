@@ -16,6 +16,7 @@ function noopHandlers(): WorkflowActionHandlers {
     onRerun: vi.fn(),
     onResumeFromFailedStep: vi.fn(),
     onRecoverFromSelectedStep: vi.fn(),
+    onRetryPublication: vi.fn(),
     onPause: vi.fn(),
     onResume: vi.fn(),
     onApprove: vi.fn(),
@@ -153,6 +154,31 @@ describe('buildWorkflowActionMenuItems', () => {
       buildParams({ busy: true, actions: { canPause: true } }),
     );
     expect(items.find((item) => item.id === 'pause')?.disabledReason).toBe('action pending');
+  });
+
+  it('exposes publication-only retry with its projected eligibility', () => {
+    const handlers = noopHandlers();
+    const available = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: { canRetryPublication: true },
+        handlers,
+      }),
+    );
+    expect(available.map((item) => item.id)).toEqual(['retry-publication']);
+    available[0]?.onSelect?.();
+    expect(handlers.onRetryPublication).toHaveBeenCalledOnce();
+
+    const unavailable = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: { canRetryPublication: false },
+        disabledReason: (key) =>
+          key === 'canRetryPublication' ? 'Publication evidence is incomplete' : null,
+      }),
+    );
+    expect(unavailable[0]).toMatchObject({
+      id: 'retry-publication',
+      disabledReason: 'Publication evidence is incomplete',
+    });
   });
 
   it('uses a caller-provided pending reason for temporarily disabled actions', () => {

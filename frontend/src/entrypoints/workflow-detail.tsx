@@ -8494,6 +8494,29 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const retryPublicationMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/retry-publication`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Publication-only recovery started.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const selectedStepRecoveryMutation = useMutation({
     mutationFn: async () => {
       const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
@@ -8774,6 +8797,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     signalMutation.isPending ||
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
+    retryPublicationMutation.isPending ||
     selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
@@ -8890,6 +8914,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       onRerun,
       onResumeFromFailedStep,
       onRecoverFromSelectedStep,
+      onRetryPublication: () => {
+        setActionError(null);
+        retryPublicationMutation.mutate();
+      },
       onPause,
       onResume,
       onApprove,
