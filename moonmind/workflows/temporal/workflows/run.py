@@ -135,6 +135,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.remediation_loop import (
         apply_continuation_decision,
+        capture_remediation_candidate,
         decide_remediation_continuation,
         ConsumedRemediationBudgets,
         RemediationLoopPhase,
@@ -3726,10 +3727,32 @@ class MoonMindRunWorkflow:
         state = self._remediation_loop_state
         if spec is None or state is None:
             return
-        self._publish_context["remediationLoop"] = project_remediation_loop(
+        projection = project_remediation_loop(
             spec=spec,
             state=state,
         )
+        pairs: dict[int, dict[str, object]] = {}
+        for row in self._step_ledger_rows:
+            annotations = row.get("annotations")
+            if not isinstance(annotations, Mapping):
+                continue
+            if annotations.get("remediationLoopId") != spec.loop_id:
+                continue
+            raw_attempt = annotations.get("moonSpecRemediationAttempt")
+            if not isinstance(raw_attempt, int) or raw_attempt < 1:
+                continue
+            pair = pairs.setdefault(raw_attempt, {"attempt": raw_attempt})
+            role = str(annotations.get("issueImplementRole") or "")
+            if role == "moonspec-remediation":
+                pair["remediationStepExecutionId"] = row.get("logicalStepId")
+                pair["remediationStatus"] = row.get("status")
+            elif role == "moonspec-verification-gate":
+                pair["verificationStepExecutionId"] = row.get("logicalStepId")
+                pair["verificationStatus"] = row.get("status")
+        projection["materializedAttempts"] = [
+            pairs[attempt] for attempt in sorted(pairs)
+        ]
+        self._publish_context["remediationLoop"] = projection
 
     def _materialize_remediation_attempt(
         self,
@@ -3823,13 +3846,14 @@ class MoonMindRunWorkflow:
                 ]
                 for node in pair
             }
-            self._step_ledger_rows.extend(
-                build_initial_step_rows(
-                    ordered_nodes=pair,
-                    dependency_map=pair_dependencies,
-                    updated_at=workflow.now(),
-                )
+            pair_rows = build_initial_step_rows(
+                ordered_nodes=pair,
+                dependency_map=pair_dependencies,
+                updated_at=workflow.now(),
             )
+            for row, node in zip(pair_rows, pair, strict=True):
+                row["annotations"] = dict(node.get("annotations") or {})
+            self._step_ledger_rows.extend(pair_rows)
             for order, row in enumerate(self._step_ledger_rows, start=1):
                 row["order"] = order
             self._rebuild_step_ledger_index()
@@ -6026,6 +6050,36 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head
         )
 
+    def _inject_remediation_verification_baseline(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: dict[str, Any],
+    ) -> None:
+        """Bind an admitted verifier to the candidate captured by its attempt."""
+
+        if self._moonspec_step_role(node) != "moonspec-verification-gate":
+            return
+        annotations = self._node_annotations_mapping(node)
+        if not annotations.get("remediationLoopId"):
+            return
+        head = self._remediation_workspace_head
+        state = self._remediation_loop_state
+        if head is None or state is None:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic remediation verification has no captured workspace head",
+            )
+        attempt, _ = self._moonspec_remediation_attempt_metadata(node)
+        if attempt != state.attempt_ordinal or attempt != head.head_attempt_ordinal:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic verifier attempt does not match the workflow-owned head",
+            )
+        node_inputs["remediationWorkspaceHeadRef"] = head.head_checkpoint_ref
+        node_inputs["remediationWorkspaceHead"] = project_head(head)
+        node_inputs["readOnlyWorkspaceHead"] = True
+
     def _advance_remediation_workspace_head(
         self,
         *,
@@ -6066,6 +6120,20 @@ class MoonMindRunWorkflow:
             transition_id=f"{self._remediation_workspace_head.loop_id}:{attempt.attempt_ordinal}",
         )
         self._remediation_workspace_head = updated
+        state = self._remediation_loop_state
+        if state is not None:
+            if state.attempt_ordinal != attempt.attempt_ordinal:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_MISMATCH,
+                    "captured candidate does not match the active loop attempt",
+                )
+            self._remediation_loop_state = capture_remediation_candidate(
+                state.model_copy(
+                    update={"phase": RemediationLoopPhase.CANDIDATE_CAPTURING}
+                ),
+                workspace_head_ref=updated.head_checkpoint_ref,
+            )
+            self._sync_remediation_loop_projection()
 
     def _has_remaining_moonspec_remediation_step(
         self,
@@ -9615,6 +9683,10 @@ class MoonMindRunWorkflow:
 
                 node_inputs = dict(original_node_inputs)
                 self._inject_remediation_workspace_baseline(
+                    node=node,
+                    node_inputs=node_inputs,
+                )
+                self._inject_remediation_verification_baseline(
                     node=node,
                     node_inputs=node_inputs,
                 )

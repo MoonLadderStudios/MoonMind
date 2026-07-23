@@ -1744,6 +1744,28 @@ const RunSummaryArtifactSchema = z
         baseRef: z.string().nullable().optional(),
         commitCount: z.union([z.number(), z.string()]).nullable().optional(),
         pullRequestUrl: z.string().nullable().optional(),
+        remediationLoop: z
+          .object({
+            loopId: z.string(),
+            status: z.string(),
+            attemptOrdinal: z.number().int().nonnegative(),
+            hardMaxAttempts: z.number().int().positive(),
+            workspaceHeadRef: z.string().nullable().optional(),
+            latestVerdict: z.string().nullable().optional(),
+            continuationReason: z.string().nullable().optional(),
+            continueAsNewCount: z.number().int().nonnegative().optional(),
+            sourceRunId: z.string().nullable().optional(),
+            consumedBudgets: z.record(z.string(), z.unknown()).optional(),
+            materializedAttempts: z.array(z.object({
+              attempt: z.number().int().positive(),
+              remediationStepExecutionId: z.string().nullable().optional(),
+              remediationStatus: z.string().nullable().optional(),
+              verificationStepExecutionId: z.string().nullable().optional(),
+              verificationStatus: z.string().nullable().optional(),
+            }).passthrough()).optional(),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .optional(),
@@ -9336,6 +9358,26 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     <Fact label="Commit Count">{String(runSummary.publishContext.commitCount)}</Fact>
                   ) : null}
                 </FlatFactGrid>
+              ) : null}
+              {runSummary.publishContext?.remediationLoop ? (
+                <FactGroup title="Remediation Loop">
+                  <Fact label="Loop Status">{formatStatusLabel(runSummary.publishContext.remediationLoop.status)}</Fact>
+                  <Fact label="Attempts Materialized">
+                    {runSummary.publishContext.remediationLoop.materializedAttempts?.length ?? 0} of {runSummary.publishContext.remediationLoop.hardMaxAttempts}
+                  </Fact>
+                  <Fact label="Latest Verdict">{runSummary.publishContext.remediationLoop.latestVerdict || '—'}</Fact>
+                  <Fact label="Decision Reason">{runSummary.publishContext.remediationLoop.continuationReason || '—'}</Fact>
+                  <Fact label="Workspace Head">
+                    <code className="text-xs break-all">{runSummary.publishContext.remediationLoop.workspaceHeadRef || '—'}</code>
+                  </Fact>
+                  <Fact label="Continue-As-New Count">{runSummary.publishContext.remediationLoop.continueAsNewCount ?? 0}</Fact>
+                  {runSummary.publishContext.remediationLoop.materializedAttempts?.map((attempt) => (
+                    <Fact key={attempt.attempt} label={`Attempt ${attempt.attempt}`}>
+                      Attempt {attempt.attempt}: remediation {formatStatusLabel(attempt.remediationStatus || 'pending')};
+                      {' '}verification {formatStatusLabel(attempt.verificationStatus || 'pending')}
+                    </Fact>
+                  ))}
+                </FactGroup>
               ) : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>

@@ -3546,6 +3546,99 @@ async def test_dynamic_verifier_terminal_decision_does_not_append_attempt(
     )
 
 
+@pytest.mark.asyncio
+async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        side_effect=["artifact://decision/D0", "artifact://decision/D1"]
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+    await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+    remediation, verification = ordered_nodes
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+    remediation_inputs = dict(remediation["inputs"])
+    remediation_inputs["remediationWorkspaceHead"] = _remediation_head_payload()
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=remediation,
+        node_inputs=remediation_inputs,
+    )
+    mock_run_workflow._advance_remediation_workspace_head(
+        node=remediation,
+        node_inputs=remediation_inputs,
+        execution_result={
+            "outputs": {
+                "remediationAttemptOutput": {
+                    "attemptEvidenceRef": "artifact://attempt/1",
+                    "parentCheckpointRef": "artifact://workspace/C0",
+                    "parentWorkspaceDigest": "sha256:c0",
+                    "outputCheckpointRef": "artifact://workspace/C1",
+                    "outputWorkspaceDigest": "sha256:c1",
+                    "checkpointManifestRef": "artifact://manifest/C1",
+                    "outcome": "candidate_captured",
+                }
+            }
+        },
+        step_execution_id="wf:run:loop:remediation:1",
+    )
+    assert mock_run_workflow._publish_context["remediationLoop"]["status"] == (
+        "verification_pending"
+    )
+    verification_inputs = dict(verification["inputs"])
+    mock_run_workflow._inject_remediation_verification_baseline(
+        node=verification,
+        node_inputs=verification_inputs,
+    )
+    assert verification_inputs["remediationWorkspaceHeadRef"] == (
+        "artifact://workspace/C1"
+    )
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V1",
+        remaining_work_ref="artifact://remaining/R1",
+    )
+
+    assert admitted is True
+    assert len(ordered_nodes) == 4
+    assert ordered_nodes[2]["id"].endswith(":remediation:2")
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["attemptOrdinal"] == 2
+    assert projection["workspaceHeadRef"] == "artifact://workspace/C1"
+    assert len(projection["materializedAttempts"]) == 2
+
+
 def _remediation_head_payload(
     *, checkpoint: str = "C0", version: int = 1
 ) -> dict[str, object]:
