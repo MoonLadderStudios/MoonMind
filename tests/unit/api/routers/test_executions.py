@@ -14904,7 +14904,11 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
     for call_args in adapter.start_workflow.await_args_list:
         assert call_args.kwargs["workflow_id"] == destination_id
         assert call_args.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
-        assert call_args.kwargs["input_args"] == contract_payload
+        assert call_args.kwargs["input_args"] == (
+            PublicationRecoveryContract.model_validate(contract_payload).model_dump(
+                by_alias=True, mode="json"
+            )
+        )
         assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
         assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
         assert call_args.kwargs["memo"][
