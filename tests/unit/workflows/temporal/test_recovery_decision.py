@@ -6,11 +6,53 @@ from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeExecutionCapabilities,
     resolve_runtime_execution_capabilities,
 )
+
+
+def test_typed_recovery_admission_reports_all_dimensions() -> None:
+    payload = _payload("control_stop")
+    payload["continuation"]["newBudgetRef"] = "artifact://new-budget"
+
+    dimensions = admit_recovery_target(payload)
+
+    assert [item.dimension for item in dimensions] == [
+        "checkpoint",
+        "target",
+        "phase",
+        "capability",
+        "workspace",
+        "side_effect",
+        "budget",
+        "destination",
+    ]
+    assert all(item.admitted for item in dimensions)
+
+
+def test_typed_recovery_admission_fails_before_side_effects_with_stable_reasons() -> None:
+    payload = _payload("control_stop")
+    payload["sideEffectSafe"] = False
+
+    dimensions = admit_recovery_target(payload)
+
+    denied = {
+        item.reason_code for item in dimensions if not item.admitted
+    }
+    assert denied == {
+        "RECOVERY_SIDE_EFFECT_UNSAFE",
+        "RECOVERY_BUDGET_GRANT_REQUIRED",
+    }
+    with pytest.raises(
+        ValueError,
+        match="RECOVERY_SIDE_EFFECT_UNSAFE,RECOVERY_BUDGET_GRANT_REQUIRED",
+    ):
+        require_admitted_recovery_target(payload)
 from moonmind.workflows.temporal.recovery_decision import (
+    admit_recovery_target,
     decide_checkpoint_recovery,
     decide_same_session_recovery,
+    require_admitted_recovery_target,
     validate_recovery_contract,
 )
+from tests.unit.schemas.test_workflow_recovery_models import _payload
 
 
 def test_same_session_continuation_requires_live_capable_session() -> None:
