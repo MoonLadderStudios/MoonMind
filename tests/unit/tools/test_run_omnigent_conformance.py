@@ -53,6 +53,7 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
         "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/integration/services/temporal/workflows/test_agent_run_codex_session_rollout.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
+        "frontend/src/entrypoints/workflow-detail.test.tsx",
     )
     flattened_commands = {
         argument

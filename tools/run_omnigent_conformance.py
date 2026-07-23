@@ -52,6 +52,7 @@ EVIDENCE_GROUPS = {
         "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/integration/services/temporal/workflows/test_agent_run_codex_session_rollout.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
+        "frontend/src/entrypoints/workflow-detail.test.tsx",
     ),
 }
 COMMANDS = (
