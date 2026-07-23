@@ -31,9 +31,11 @@ from moonmind.schemas.temporal_models import StepExecutionManifestModel
 from moonmind.workflows.temporal.remediation_workspace_head import (
     REMEDIATION_HEAD_MISMATCH,
     REMEDIATION_HEAD_STALE_VERSION,
+    REMEDIATION_VERIFIER_CONTAMINATION,
     RemediationAttemptInput,
     RemediationAttemptOutput,
     RemediationHeadError,
+    VerificationEvidence,
 )
 
 
@@ -203,6 +205,89 @@ async def test_remediation_head_initialization_fails_without_root_digest(
             workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
         )
     assert exc_info.value.code == REMEDIATION_HEAD_MISMATCH
+
+
+@pytest.mark.asyncio
+async def test_remediation_verification_contamination_and_terminal_state_are_durable(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    head = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    contaminated = await service.record_remediation_verification(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        evidence=VerificationEvidence(
+            inputHeadRef=head.head_checkpoint_ref,
+            inputHeadDigest=head.head_workspace_digest,
+            inputHeadVersion=head.head_version,
+            preVerificationWorkspaceDigest=head.head_workspace_digest,
+            postVerificationWorkspaceDigest="sha256:mutated",
+            verifierArtifactRef="artifact://verification/v1",
+            verdict="FULLY_IMPLEMENTED",
+        ),
+    )
+    assert contaminated.status.value == "contaminated"
+    assert contaminated.latest_verification_verdict == REMEDIATION_VERIFIER_CONTAMINATION
+
+    terminal = await service.mark_remediation_terminal(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        remaining_work_ref="artifact://remaining/work-1",
+    )
+    assert terminal.status.value == "terminal_remaining_work"
+    assert terminal.head_checkpoint_ref == head.head_checkpoint_ref
+
+    await checkpoint_branch_session.refresh(
+        await checkpoint_branch_session.get(WorkflowCheckpointBranch, "cbr-1")
+    )
+    artifacts = (
+        await checkpoint_branch_session.execute(
+            select(WorkflowCheckpointBranchArtifact).where(
+                WorkflowCheckpointBranchArtifact.branch_id == "cbr-1"
+            )
+        )
+    ).scalars().all()
+    assert {artifact.artifact_ref for artifact in artifacts} == {
+        "artifact://verification/v1",
+        "artifact://remaining/work-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_remediation_rollback_is_atomic_and_rejects_stale_version(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    head = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    rolled_back = await service.rollback_remediation_head(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        expected_head_version=head.head_version,
+        checkpoint_ref="artifact://checkpoint/rollback",
+        workspace_digest="sha256:rollback",
+        evidence_ref="artifact://rollback/evidence-1",
+        transition_id="rollback-1",
+    )
+    assert rolled_back.head_checkpoint_ref == "artifact://checkpoint/rollback"
+    assert rolled_back.head_version == head.head_version + 1
+
+    with pytest.raises(RemediationHeadError) as exc_info:
+        await service.rollback_remediation_head(
+            workflow_id="wf-1",
+            branch_id="cbr-1",
+            expected_head_version=head.head_version,
+            checkpoint_ref="artifact://checkpoint/stale",
+            workspace_digest="sha256:stale",
+            evidence_ref="artifact://rollback/stale",
+            transition_id="rollback-stale",
+        )
+    assert exc_info.value.code == REMEDIATION_HEAD_STALE_VERSION
 
 
 def test_checkpoint_branch_requires_checkpoint_or_typed_source_state() -> None:

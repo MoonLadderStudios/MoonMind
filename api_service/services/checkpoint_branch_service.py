@@ -37,7 +37,11 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationHeadError,
     RemediationHeadStatus,
     RemediationWorkspaceHead,
+    VerificationEvidence,
     advance_head,
+    apply_verification,
+    mark_terminal,
+    rollback_head,
 )
 from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchState,
@@ -218,6 +222,110 @@ class CheckpointBranchService:
             artifact_ref=output.attempt_evidence_ref,
             artifact_kind=artifact_kind,
         )
+        return self._remediation_head(branch)
+
+    async def record_remediation_verification(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        evidence: VerificationEvidence,
+    ) -> RemediationWorkspaceHead:
+        """Persist the authoritative verifier result for the exact current head."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        updated = apply_verification(self._remediation_head(branch), evidence)
+        branch.remediation_head_status = updated.status.value
+        branch.latest_verification_ref = updated.latest_verification_ref
+        branch.latest_verification_verdict = updated.latest_verification_verdict
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=evidence.verifier_artifact_ref,
+            artifact_kind=f"remediation_verification_v{evidence.input_head_version}",
+        )
+        await self._session.flush()
+        return self._remediation_head(branch)
+
+    async def mark_remediation_terminal(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        remaining_work_ref: str,
+    ) -> RemediationWorkspaceHead:
+        """Preserve the last valid candidate while recording terminal remaining work."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        updated = mark_terminal(self._remediation_head(branch), remaining_work_ref)
+        branch.remediation_head_status = updated.status.value
+        branch.artifact_refs = {
+            **(branch.artifact_refs or {}),
+            "remediationRemainingWork": updated.remaining_work_ref,
+        }
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=remaining_work_ref,
+            artifact_kind=f"remediation_terminal_v{updated.head_version}",
+        )
+        await self._session.flush()
+        return updated
+
+    async def rollback_remediation_head(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        expected_head_version: int,
+        checkpoint_ref: str,
+        workspace_digest: str,
+        evidence_ref: str,
+        transition_id: str,
+    ) -> RemediationWorkspaceHead:
+        """Atomically roll back a head and retain append-only supersession evidence."""
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        if head.head_version != expected_head_version:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION, "remediation head was concurrently advanced"
+            )
+        updated, _transition = rollback_head(
+            head,
+            checkpoint_ref=checkpoint_ref,
+            workspace_digest=workspace_digest,
+            evidence_ref=evidence_ref,
+            transition_id=transition_id,
+        )
+        result = await self._session.execute(
+            update(WorkflowCheckpointBranch)
+            .where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+                WorkflowCheckpointBranch.current_head_version == expected_head_version,
+                WorkflowCheckpointBranch.current_head_checkpoint_ref
+                == head.head_checkpoint_ref,
+                WorkflowCheckpointBranch.current_head_checkpoint_digest
+                == head.head_workspace_digest,
+            )
+            .values(
+                current_head_checkpoint_ref=updated.head_checkpoint_ref,
+                current_head_checkpoint_digest=updated.head_workspace_digest,
+                current_head_version=updated.head_version,
+                remediation_head_status=updated.status.value,
+                latest_verification_ref=None,
+                latest_verification_verdict=None,
+            )
+        )
+        if result.rowcount != 1:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION, "remediation head was concurrently advanced"
+            )
+        await self.record_artifact(
+            branch_id=branch_id,
+            artifact_ref=evidence_ref,
+            artifact_kind=f"remediation_rollback_{transition_id}",
+        )
+        await self._session.refresh(branch)
         return self._remediation_head(branch)
 
     async def _get_branch(
