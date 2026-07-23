@@ -130,6 +130,7 @@ class RemediationProgressVector(_ContractModel):
         default=None, alias="candidateWorkspaceDigest"
     )
     relevant_diff_digest: str | None = Field(default=None, alias="relevantDiffDigest")
+    addressed_gap_ids: tuple[str, ...] = Field(default=(), alias="addressedGapIds")
     unresolved_gap_digest: str = Field(alias="unresolvedGapDigest")
     unresolved_gap_score: int = Field(alias="unresolvedGapScore", ge=0)
     required_checks_digest: str = Field(alias="requiredChecksDigest")
@@ -163,6 +164,7 @@ def build_remediation_progress_vector(
     base_workspace_digest: str | None = None,
     candidate_workspace_digest: str | None = None,
     relevant_diff_digest: str | None = None,
+    addressed_gap_ids: Sequence[str] = (),
     checks: Sequence[Mapping[str, Any]] = (),
     blocker_code: str | None = None,
     authoritative_evidence_digest: str | None = None,
@@ -194,6 +196,9 @@ def build_remediation_progress_vector(
         )
     )
     gap_score = sum(gap.score for gap in unresolved)
+    normalized_addressed_gap_ids = tuple(
+        sorted({_normalize_token(value) for value in addressed_gap_ids if _normalize_token(value)})
+    )
     classification: Literal["baseline", "meaningful_progress", "no_progress", "regression"] = "baseline"
     regressions: list[str] = []
     if prior is not None:
@@ -219,6 +224,11 @@ def build_remediation_progress_vector(
                 prior.candidate_disposition == "contaminated"
                 and candidate_disposition == "clean"
             )
+            or (
+                relevant_diff_digest
+                and relevant_diff_digest != prior.relevant_diff_digest
+                and bool(current_gap_ids & set(normalized_addressed_gap_ids))
+            )
         )
         classification = "regression" if regressions else ("meaningful_progress" if meaningful else "no_progress")
     return RemediationProgressVector(
@@ -227,6 +237,7 @@ def build_remediation_progress_vector(
         baseWorkspaceDigest=base_workspace_digest,
         candidateWorkspaceDigest=candidate_workspace_digest,
         relevantDiffDigest=relevant_diff_digest,
+        addressedGapIds=normalized_addressed_gap_ids,
         unresolvedGapDigest=_canonical_digest([gap.model_dump(by_alias=True) for gap in unresolved]),
         unresolvedGapScore=gap_score,
         requiredChecksDigest=_canonical_digest([check.model_dump(by_alias=True) for check in canonical_checks]),
@@ -698,6 +709,20 @@ def evaluate_attempt_continuation(
             diagnostics_ref=gate.diagnostics_ref,
         )
     if gate.verdict == "ADDITIONAL_WORK_NEEDED":
+        if (
+            attempt.attempt_ordinal >= 3
+            and (
+                gate.progress_vector is None
+                or gate.progress_vector.classification != "meaningful_progress"
+            )
+        ):
+            return _stop(
+                attempt,
+                state=LoopStopState.FAILED_WITH_REMAINING_WORK,
+                reason="required_progress_not_met",
+                remaining_work_ref=gate.remaining_work_ref,
+                diagnostics_ref=gate.diagnostics_ref,
+            )
         return LoopStopDecision(
             state=LoopStopState.FAILED_WITH_REMAINING_WORK,
             reason="verification_requested_remediation",
@@ -866,12 +891,12 @@ def _budget_exhaustion_reason(budget: LoopBudget) -> str | None:
                 "consecutive_no_progress_attempts",
             ),
             budget.max_consecutive_no_progress_attempts,
-            "no_progress_attempts_exhausted",
+            "semantic_no_progress_exhausted",
         ),
         (
             ("repeatedFailedCommands", "repeated_failed_commands"),
             budget.max_repeated_failed_commands,
-            "repeated_failed_commands_exhausted",
+            "repeated_failure_signature_exhausted",
         ),
     )
     for keys, limit, reason in checks:
@@ -890,7 +915,7 @@ def _budget_exhaustion_reason(budget: LoopBudget) -> str | None:
         )
         > 0
     ):
-        return "unsafe_policy_attempts_exhausted"
+        return "unsafe_or_policy_denied"
     optional = (
         (
             ("elapsedSeconds", "elapsed_seconds"),

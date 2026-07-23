@@ -14,6 +14,7 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from pydantic import ValidationError
     from collections.abc import Mapping as WorkflowMapping
 
     from moonmind.schemas.agent_runtime_models import (
@@ -6610,9 +6611,12 @@ class MoonMindRunWorkflow:
                     ).strip() or None
                     prior_vector_payload = prior_gate.get("progressVector")
                     if isinstance(prior_vector_payload, Mapping):
-                        prior_progress_vector = RemediationProgressVector.model_validate(
-                            prior_vector_payload
-                        )
+                        try:
+                            prior_progress_vector = RemediationProgressVector.model_validate(
+                                prior_vector_payload
+                            )
+                        except ValidationError:
+                            prior_progress_vector = None
                 prior_budget = prior_decision.get("budget")
                 if isinstance(prior_budget, Mapping):
                     prior_consumed = prior_budget.get("consumed")
@@ -6643,6 +6647,20 @@ class MoonMindRunWorkflow:
             if isinstance(gate_result.validated_refs, Mapping)
             else {}
         )
+        evidence_schema_version = structured_evidence.get("progressEvidenceSchemaVersion")
+        progress_evidence_invalid = evidence_schema_version not in {
+            None,
+            "remediation-progress-evidence/v1",
+        } or (
+            isinstance(loop_context, Mapping)
+            and isinstance(loop_context.get("continuationDecision"), Mapping)
+            and isinstance(
+                loop_context["continuationDecision"].get("gate"), Mapping
+            )
+            and loop_context["continuationDecision"]["gate"].get("progressVector")
+            is not None
+            and prior_progress_vector is None
+        )
         structured_checks: list[Mapping[str, Any]] = []
         raw_checks = structured_evidence.get("requiredChecks")
         if isinstance(raw_checks, Sequence) and not isinstance(raw_checks, (str, bytes)):
@@ -6663,6 +6681,14 @@ class MoonMindRunWorkflow:
             ),
             relevant_diff_digest=self._coerce_text(
                 structured_evidence.get("relevantDiffDigest"), max_chars=200
+            ),
+            addressed_gap_ids=(
+                structured_evidence.get("addressedGapIds")
+                if isinstance(structured_evidence.get("addressedGapIds"), Sequence)
+                and not isinstance(
+                    structured_evidence.get("addressedGapIds"), (str, bytes)
+                )
+                else ()
             ),
             blocker_code=(
                 "verification_blocked" if gate_result.verdict == "BLOCKED" else None
@@ -6787,6 +6813,15 @@ class MoonMindRunWorkflow:
             checkpoint_available=True,
             policy_allowed=True,
         )
+        if progress_evidence_invalid:
+            decision = decision.model_copy(
+                update={
+                    "continue_loop": False,
+                    "reason": "progress_evidence_invalid",
+                    "state": LoopStopState.FAILED_WITH_REMAINING_WORK,
+                    "next_attempt_kind": None,
+                }
+            )
         payload = decision.model_dump(by_alias=True, mode="json")
         payload["hasRemainingRemediationStep"] = has_remaining_remediation_step
         payload["remediationRoutingReason"] = successor_reason
@@ -11062,7 +11097,7 @@ class MoonMindRunWorkflow:
                                 or 1
                             )
                         ):
-                            transition_reason = "no_progress_attempts_exhausted"
+                            transition_reason = "semantic_no_progress_exhausted"
                         elif (
                             normalized_gate == "ADDITIONAL_WORK_NEEDED"
                             and plan_routed_moonspec_remediation_enabled
@@ -11106,7 +11141,7 @@ class MoonMindRunWorkflow:
                             "no_remediation_successor": (
                                 "Skipped because no explicit remediation successor exists."
                             ),
-                            "no_progress_attempts_exhausted": (
+                            "semantic_no_progress_exhausted": (
                                 "Skipped because consecutive remediation cycles "
                                 "produced no new progress."
                             ),

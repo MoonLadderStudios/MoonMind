@@ -385,7 +385,7 @@ def test_semantic_no_progress_budget_stops_before_hard_attempt_maximum(
 
     assert decisions[1]["continueLoop"] is True
     assert decisions[2]["continueLoop"] is False
-    assert decisions[2]["reason"] == "no_progress_attempts_exhausted"
+    assert decisions[2]["reason"] == "semantic_no_progress_exhausted"
     assert decisions[2]["remediationBudget"]["maxAttempts"] == 6
     assert decisions[2]["remediationBudget"]["currentAttempt"] == 2
 
@@ -420,7 +420,7 @@ def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
     )
 
     assert decision["continueLoop"] is False
-    assert decision["reason"] == "no_progress_attempts_exhausted"
+    assert decision["reason"] == "semantic_no_progress_exhausted"
     assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 1
     assert decision["remediationBudget"]["remainingAttempts"] == 6
 
@@ -728,7 +728,7 @@ def test_parent_loop_honors_configured_no_progress_budget(
 
     assert second["continueLoop"] is True
     assert third["continueLoop"] is False
-    assert third["reason"] == "no_progress_attempts_exhausted"
+    assert third["reason"] == "semantic_no_progress_exhausted"
 
 
 def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() -> None:

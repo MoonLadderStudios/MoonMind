@@ -123,6 +123,54 @@ def test_progress_vector_detects_gap_check_and_evidence_progress() -> None:
     assert progressed.required_checks == {"passed": 1, "failed": 0, "not_run": 0}
 
 
+def test_relevant_diff_only_counts_when_it_addresses_a_named_gap() -> None:
+    issue = {"requirementId": "AC-1", "status": "unresolved", "severity": "high"}
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[issue],
+        relevant_diff_digest="sha256:old",
+    )
+    unrelated = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[issue],
+        prior=baseline,
+        relevant_diff_digest="sha256:new",
+        addressed_gap_ids=["AC-OTHER"],
+    )
+    relevant = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[issue],
+        prior=baseline,
+        relevant_diff_digest="sha256:new",
+        addressed_gap_ids=["ac-1"],
+    )
+
+    assert unrelated.classification == "no_progress"
+    assert relevant.classification == "meaningful_progress"
+
+
+def test_third_attempt_requires_meaningful_progress() -> None:
+    progress = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=3,
+        issues=[{"requirementId": "AC-1", "status": "unresolved"}],
+    ).model_copy(update={"classification": "no_progress"})
+
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(attemptOrdinal=3, kind="remediation"),
+        gate=_gate(progressVector=progress),
+        budget=_budget(maxAttempts=6),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.reason == "required_progress_not_met"
+
+
 def test_progress_vector_records_regressions_separately() -> None:
     baseline = build_remediation_progress_vector(
         loop_id="loop-1",
@@ -384,17 +432,17 @@ def test_verification_workspace_snapshot_rejects_writable_projection() -> None:
         (
             {"maxConsecutiveNoProgressAttempts": 2},
             {"consecutive_no_progress_attempts": 2},
-            "no_progress_attempts_exhausted",
+            "semantic_no_progress_exhausted",
         ),
         (
             {"maxRepeatedFailedCommands": 2},
             {"repeated_failed_commands": 2},
-            "repeated_failed_commands_exhausted",
+            "repeated_failure_signature_exhausted",
         ),
         (
             {"maxUnsafeOrPolicyDeniedAttempts": 1},
             {"unsafe_or_policy_denied_attempts": 1},
-            "unsafe_policy_attempts_exhausted",
+            "unsafe_or_policy_denied",
         ),
         (
             {"maxElapsedSeconds": 300},
@@ -609,9 +657,9 @@ def test_publication_decision_requires_latest_accepted_step(action: PublicationA
     ("consumed", "expected_reason"),
     [
         ({"attempts": 3}, "max_attempts_exhausted"),
-        ({"consecutiveNoProgressAttempts": 2}, "no_progress_attempts_exhausted"),
-        ({"repeatedFailedCommands": 3}, "repeated_failed_commands_exhausted"),
-        ({"unsafeOrPolicyDeniedAttempts": 1}, "unsafe_policy_attempts_exhausted"),
+        ({"consecutiveNoProgressAttempts": 2}, "semantic_no_progress_exhausted"),
+        ({"repeatedFailedCommands": 3}, "repeated_failure_signature_exhausted"),
+        ({"unsafeOrPolicyDeniedAttempts": 1}, "unsafe_or_policy_denied"),
         ({"provider": 11}, "provider_budget_exhausted"),
         ({"tokens": 101}, "token_budget_exhausted"),
         ({"cost": 11}, "cost_budget_exhausted"),
