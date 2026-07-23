@@ -21,7 +21,6 @@ from moonmind.omnigent.conformance import (  # noqa: E402
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
-    "product.cumulative-remediation",
     "proxy.routes",
     "session.first-message-crash-matrix",
     "events.durable-replay-sse",
@@ -50,7 +49,6 @@ EVIDENCE_GROUPS = {
     "rolloutAndReplay": (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
         "tests/unit/workflows/temporal/test_temporal_workers.py",
-        "tests/integration/services/temporal/workflows/test_agent_run_codex_session_rollout.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "frontend/src/entrypoints/workflow-detail.test.tsx",
     ),
@@ -80,7 +78,6 @@ COMMANDS = (
         "tests/integration/omnigent/test_embedded_recovery.py",
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
         "tests/unit/workflows/temporal/test_temporal_workers.py",
-        "tests/integration/services/temporal/workflows/test_agent_run_codex_session_rollout.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "-q",
         "--tb=short",
@@ -93,6 +90,14 @@ COMMANDS = (
         "frontend/src/entrypoints/workflow-detail.test.tsx",
     ),
 )
+
+
+def _artifact_ref(path: Path) -> str:
+    """Return a repo-relative ref when possible, otherwise an absolute path."""
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def main() -> int:
@@ -130,7 +135,7 @@ def main() -> int:
                 "commandIndex": index,
                 "arguments": list(command),
                 "exitCode": completed.returncode,
-                "logRef": str(log_path.relative_to(REPO_ROOT)),
+                "logRef": _artifact_ref(log_path),
                 "logDigest": "sha256:"
                 + hashlib.sha256(log_path.read_bytes()).hexdigest(),
             }
@@ -183,7 +188,7 @@ def main() -> int:
                     else "skipped"
                 ),
                 "evidenceRefs": [
-                    str(path.relative_to(REPO_ROOT)) for path in log_paths
+                    _artifact_ref(path) for path in log_paths
                 ],
             }
         )

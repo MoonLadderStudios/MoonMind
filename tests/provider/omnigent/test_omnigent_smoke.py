@@ -43,6 +43,12 @@ _REQUIRED_STOCK_ROUTES = {
     "workspace.diff", "session.files", "session.content", "terminal.snapshot",
 }
 _REQUIRED_FAILURES = {
+    "create_invalid_selector", "create_duplicate_submit",
+    "create_persistence_failure", "compile_runtime_shape_mismatch",
+    "capability_authority_mismatch", "workspace_stale_version",
+    "workspace_wrong_parent", "workspace_concurrent_advance",
+    "checkpoint_capture_failure", "restore_missing", "restore_corrupt",
+    "restore_unauthorized", "restore_digest_mismatch",
     "stale_runtime_catalog", "no_eligible_profile", "disconnected_profile",
     "profile_lease_busy", "bounded_lease_timeout", "disabled_execution_profile",
     "incompatible_policy", "invalid_workspace", "escaped_workspace",

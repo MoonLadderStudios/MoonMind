@@ -255,7 +255,9 @@ class LiveRunner:
             key: value for key, value in payload.items()
             if key in {
                 "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
-                "runId", "stepId", "bridgeId",
+                "runId", "stepId", "bridgeId", "sourceWorkflowId",
+                "destinationWorkflowId", "continuationId", "profileRef",
+                "c0Ref", "c1Ref", "c2Ref",
             }
             and value
         }
@@ -265,7 +267,9 @@ class LiveRunner:
                 key: value for key, value in state.items()
                 if key in {
                     "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
-                    "runId", "stepId", "bridgeId",
+                    "runId", "stepId", "bridgeId", "sourceWorkflowId",
+                    "destinationWorkflowId", "continuationId", "profileRef",
+                    "c0Ref", "c1Ref", "c2Ref",
                 }
                 and value
             })

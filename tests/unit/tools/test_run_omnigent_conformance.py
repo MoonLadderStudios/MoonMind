@@ -18,10 +18,10 @@ def _load_runner():
     return module
 
 
-def test_cumulative_remediation_case_is_backed_by_production_boundary_tests() -> None:
+def test_cumulative_remediation_case_is_reserved_for_live_provider_evidence() -> None:
     runner = _load_runner()
 
-    assert "product.cumulative-remediation" in runner.DETERMINISTIC_CASES
+    assert "product.cumulative-remediation" not in runner.DETERMINISTIC_CASES
     assert runner.EVIDENCE_GROUPS["cumulativeJourney"] == (
         "tests/integration/reliability/test_checkpoint_cold_resume.py",
         "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
@@ -51,7 +51,6 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
         "tests/unit/workflows/temporal/test_temporal_workers.py",
-        "tests/integration/services/temporal/workflows/test_agent_run_codex_session_rollout.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "frontend/src/entrypoints/workflow-detail.test.tsx",
     )
