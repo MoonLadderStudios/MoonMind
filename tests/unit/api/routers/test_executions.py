@@ -1640,7 +1640,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
 def test_create_task_shaped_execution_keeps_integration_as_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
-    test_client, service, _user = client
+    test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -15090,10 +15090,11 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    test_client, service, _user = client
+    test_client, service, user = client
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     service.describe_execution.return_value = _build_execution_record(
-        state=MoonMindWorkflowState.FAILED
+        state=MoonMindWorkflowState.FAILED,
+        owner_id=str(user.id),
     )
     reservations = [
         ControlStopContinuationReservation(
