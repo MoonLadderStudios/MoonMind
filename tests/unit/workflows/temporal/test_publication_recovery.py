@@ -431,9 +431,7 @@ def test_terminal_evidence_rejects_candidate_identity_mismatch(
     }
     payload[field] = value
 
-    with pytest.raises(
-        PublicationRecoveryError, match="PUBLICATION_VERIFICATION_FAILED"
-    ):
+    with pytest.raises(ValidationError, match="PUBLICATION_VERIFICATION_FAILED"):
         PublicationRecoveryEvidence.model_validate(payload)
 
 
