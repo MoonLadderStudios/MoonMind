@@ -339,7 +339,6 @@ _DESCRIPTORS = (
         checkpointBoundarySupport={
             "after_execution": ("continue_to_gate",),
             "after_gate": ("continue_after_gate",),
-            "before_publication": ("resume_publication",),
             "before_execution": ("rerun_failed_step",),
         },
         workspaceState={
@@ -350,7 +349,7 @@ _DESCRIPTORS = (
             "artifactContractVersion": "workspace-checkpoint-v1", "digestRequired": True,
             "boundarySupport": {
                 "after_execution": ("continue_to_gate",), "after_gate": ("continue_after_gate",),
-                "before_publication": ("resume_publication",), "before_execution": ("rerun_failed_step",),
+                "before_execution": ("rerun_failed_step",),
             },
         },
         hostRealization={

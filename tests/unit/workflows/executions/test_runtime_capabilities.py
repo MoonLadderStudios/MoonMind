@@ -89,6 +89,18 @@ def test_codex_declares_managed_capture_and_restore() -> None:
     }
 
 
+def test_omnigent_does_not_promote_unimplemented_recovery_routes() -> None:
+    omnigent = resolve_runtime_execution_capabilities("omnigent")
+
+    assert "before_publication" not in omnigent.checkpoint_boundary_support
+    assert "before_recovery_restoration" not in omnigent.checkpoint_boundary_support
+    assert "before_publication" not in omnigent.workspace_state.boundary_support
+    assert (
+        "before_recovery_restoration"
+        not in omnigent.workspace_state.boundary_support
+    )
+
+
 def test_v1_restore_snapshot_does_not_require_v2_artifact_contract() -> None:
     snapshot = RuntimeExecutionCapabilities(
         capabilitySetVersion="runtime-execution-capabilities-v1",
