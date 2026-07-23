@@ -189,6 +189,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
     LoopAttempt,
     LoopBudget,
+    LoopStopState,
     PublicationAction,
     RemediationLoopState,
     RemediationProgressVector,

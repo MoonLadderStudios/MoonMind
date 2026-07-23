@@ -239,7 +239,7 @@ def test_semantic_third_attempt_requires_progress_for_plan_routed_gate() -> None
     ).model_copy(update={"classification": "no_progress"})
 
     decision = evaluate_attempt_continuation(
-        attempt=_attempt(attemptOrdinal=1, kind="verification"),
+        attempt=_attempt(attemptOrdinal=1, kind="remediation"),
         gate=_gate(progressVector=progress),
         budget=_budget(maxAttempts=6),
         checkpoint_available=True,
