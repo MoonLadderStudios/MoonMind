@@ -307,6 +307,11 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
+        "all_handlers_finished",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
         "upsert_search_attributes",
         lambda _attributes: None,
     )
