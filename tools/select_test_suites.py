@@ -134,11 +134,18 @@ RELIABILITY_JOURNEY_EXACT = {
 RELIABILITY_JOURNEY_PREFIXES = (
     ".agents/skills/",
     "api_service/docker/",
+    "api_service/api/routers/workflows",
+    "api_service/services/artifact",
     "api_service/services/checkpoint_",
+    "api_service/services/managed_agent_provider",
+    "api_service/services/omnigent",
+    "api_service/services/workspace",
     "docker/",
     "moonmind/agents/codex_worker/",
+    "moonmind/omnigent/",
     "moonmind/workflows/adapters/",
     "moonmind/workflows/temporal/",
+    "tests/integration/omnigent/",
     "tests/integration/reliability/",
 )
 
