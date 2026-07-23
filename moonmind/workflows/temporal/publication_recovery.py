@@ -99,6 +99,8 @@ class PublicationContinuation(BaseModel):
     expected_tree_digest: str = Field(..., alias="expectedTreeDigest")
     expected_diff_digest: str = Field(..., alias="expectedDiffDigest")
     prior_observations_ref: str = Field(..., alias="priorObservationsRef")
+    secret_scan_ref: str = Field(..., alias="secretScanRef")
+    diagnostics_ref: str = Field(..., alias="diagnosticsRef")
     remaining_work_ref: str | None = Field(None, alias="remainingWorkRef")
 
     @field_validator(
@@ -108,6 +110,8 @@ class PublicationContinuation(BaseModel):
         "expected_tree_digest",
         "expected_diff_digest",
         "prior_observations_ref",
+        "secret_scan_ref",
+        "diagnostics_ref",
     )
     @classmethod
     def _compact(cls, value: str, info: Any) -> str:
@@ -422,6 +426,9 @@ class PublicationRecoveryEvidence(BaseModel):
     reconciliation_outcome: PublicationReconciliation = Field(
         ..., alias="reconciliationOutcome"
     )
+    publication_outcome: Literal["new", "reconciled"] = Field(
+        ..., alias="publicationOutcome"
+    )
     expected_head_sha: str = Field(..., alias="expectedHeadSha")
     observed_head_sha: str = Field(..., alias="observedHeadSha")
     expected_tree_digest: str = Field(..., alias="expectedTreeDigest")
@@ -442,6 +449,11 @@ class PublicationRecoveryEvidence(BaseModel):
     implementation_rerun: Literal[False] = Field(False, alias="implementationRerun")
     verification_rerun: Literal[False] = Field(False, alias="verificationRerun")
     auxiliary_failure_class: str | None = Field(None, alias="auxiliaryFailureClass")
+    semantic_context: PublicationSemanticContext = Field(..., alias="semanticContext")
+    remaining_work_ref: str | None = Field(None, alias="remainingWorkRef")
+    restoration_evidence_ref: str | None = Field(
+        None, alias="restorationEvidenceRef"
+    )
 
     @model_validator(mode="after")
     def _verified_identity(self) -> "PublicationRecoveryEvidence":
@@ -467,6 +479,8 @@ class PublicationRecoveryEvidence(BaseModel):
             "publication_observations_ref",
         ):
             _required_text(getattr(self, name), name)
+        if self.semantic_context == "incomplete_draft_handoff":
+            _required_text(self.remaining_work_ref, "remaining_work_ref")
         return self
 
 

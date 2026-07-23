@@ -1,10 +1,15 @@
 """Publication-only recovery coverage for MoonLadderStudios/MoonMind#3481."""
 
 from copy import deepcopy
+import json
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
+)
 from moonmind.workflows.temporal.publication_recovery import (
     PUBLICATION_ONLY_PHASES,
     PublicationObservation,
@@ -52,6 +57,8 @@ def _contract_payload(*, semantic_context: str = "accepted") -> dict:
             "expectedTreeDigest": "sha256:" + "b" * 64,
             "expectedDiffDigest": "sha256:" + "c" * 64,
             "priorObservationsRef": "artifact://github/observations",
+            "secretScanRef": "artifact://scan/clean",
+            "diagnosticsRef": "artifact://diagnostics/publication",
             **(
                 {"remainingWorkRef": "artifact://remaining-work"}
                 if semantic_context == "incomplete_draft_handoff"
@@ -206,6 +213,80 @@ def test_destroyed_source_workspace_restores_exact_candidate_to_destination() ->
     assert exc.value.code == "PUBLICATION_CANDIDATE_MISMATCH"
 
 
+@pytest.mark.asyncio
+async def test_restore_activity_translates_checkpoint_to_typed_managed_request() -> None:
+    contract = _contract_payload()
+    checkpoint = {
+        "contentType": (
+            "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+        ),
+        "boundary": "before_publication",
+        "source": {
+            "workflowId": "mm:source",
+            "runId": "run-source",
+            "logicalStepId": "publish",
+            "executionOrdinal": 1,
+        },
+        "workspace": {
+            "kind": "worktree_archive",
+            "baseCommit": "a" * 40,
+            "archiveRef": "artifact://archive",
+            "archiveDigest": "sha256:" + "d" * 64,
+            "manifestRef": "artifact://manifest",
+            "manifestDigest": "sha256:" + "e" * 64,
+        },
+        "publicationCandidateIdentity": {
+            "headSha": contract["continuation"]["expectedHeadSha"],
+            "treeDigest": contract["continuation"]["expectedTreeDigest"],
+            "diffDigest": contract["continuation"]["expectedDiffDigest"],
+        },
+    }
+    restore_service = AsyncMock()
+    restore_service._read.return_value = json.dumps(checkpoint).encode()
+    restore_service.restore.return_value = {
+        "destinationWorkspaceLocator": {
+            "kind": "managed",
+            "agentRunId": "publication-recovery-deterministic",
+        },
+        "restorationEvidenceRef": "artifact://restore/evidence",
+    }
+    activities = object.__new__(TemporalAgentRuntimeActivities)
+    activities._checkpoint_restore = restore_service
+
+    first = await activities.publication_recovery_restore_candidate(
+        {
+            "contract": contract,
+            "idempotencyKey": contract["continuation"][
+                "publicationIdempotencyKey"
+            ],
+            "destinationWorkflowId": "mm:publication",
+            "destinationRunId": "run-publication",
+        }
+    )
+    second = await activities.publication_recovery_restore_candidate(
+        {
+            "contract": contract,
+            "idempotencyKey": contract["continuation"][
+                "publicationIdempotencyKey"
+            ],
+            "destinationWorkflowId": "mm:publication",
+            "destinationRunId": "run-publication",
+        }
+    )
+
+    request = restore_service.restore.await_args_list[0].args[0]
+    assert request["workspacePolicy"] == "restore_publication_candidate"
+    assert request["resumePhase"] == "resume_publication"
+    assert request["destination"]["agentRunId"] == (
+        restore_service.restore.await_args_list[1].args[0]["destination"][
+            "agentRunId"
+        ]
+    )
+    assert "sourceWorkspacePath" not in request
+    assert first["treeDigest"] == contract["continuation"]["expectedTreeDigest"]
+    assert second["restorationEvidenceRef"] == "artifact://restore/evidence"
+
+
 def test_matching_existing_pull_request_is_reconciled_without_mutation() -> None:
     contract = PublicationRecoveryContract.model_validate(_contract_payload())
     decision = reconcile_publication_state(
@@ -286,6 +367,7 @@ def test_verified_evidence_proves_lineage_and_no_implementation_rerun() -> None:
         destinationWorkflowId="mm:publication-recovery",
         publicationIdempotencyKey=contract.continuation.publication_idempotency_key,
         reconciliationOutcome="already_completed",
+        publicationOutcome="reconciled",
         expectedHeadSha="a" * 40,
         observedHeadSha="a" * 40,
         expectedTreeDigest=contract.continuation.expected_tree_digest,
@@ -302,6 +384,7 @@ def test_verified_evidence_proves_lineage_and_no_implementation_rerun() -> None:
         diagnosticsRef="artifact://diagnostics/publication",
         publicationObservationsRef="artifact://github/observations",
         sourceSemanticOutcome=contract.source_semantic_outcome,
+        semanticContext=contract.target.semantic_context,
     )
     assert evidence.implementation_rerun is False
     assert evidence.verification_rerun is False
@@ -327,6 +410,7 @@ def test_terminal_evidence_rejects_candidate_identity_mismatch(
             contract.continuation.publication_idempotency_key
         ),
         "reconciliationOutcome": "already_completed",
+        "publicationOutcome": "reconciled",
         "expectedHeadSha": contract.continuation.expected_head_sha,
         "observedHeadSha": contract.continuation.expected_head_sha,
         "expectedTreeDigest": contract.continuation.expected_tree_digest,
@@ -343,6 +427,7 @@ def test_terminal_evidence_rejects_candidate_identity_mismatch(
         "diagnosticsRef": "artifact://diagnostics/publication",
         "publicationObservationsRef": "artifact://github/observations",
         "sourceSemanticOutcome": contract.source_semantic_outcome,
+        "semanticContext": contract.target.semantic_context,
     }
     payload[field] = value
 

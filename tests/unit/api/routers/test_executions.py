@@ -14767,6 +14767,8 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
                             "expectedTreeDigest": "sha256:" + "b" * 64,
                             "expectedDiffDigest": "sha256:" + "c" * 64,
                             "priorObservationsRef": "artifact://github/observations",
+                            "secretScanRef": "artifact://scan/clean",
+                            "diagnosticsRef": "artifact://diagnostics/publication",
                             "remainingWorkRef": "artifact://remaining/final",
                         },
                         "intent": {
@@ -14833,6 +14835,8 @@ def _publication_recovery_record() -> SimpleNamespace:
                             "expectedTreeDigest": "sha256:" + "b" * 64,
                             "expectedDiffDigest": "sha256:" + "c" * 64,
                             "priorObservationsRef": "artifact://github/observations",
+                            "secretScanRef": "artifact://scan/clean",
+                            "diagnosticsRef": "artifact://diagnostics/publication",
                         },
                         "intent": {
                             "repository": "MoonLadderStudios/MoonMind",
@@ -14898,6 +14902,11 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
         assert call_args.kwargs["workflow_id"] == destination_id
         assert call_args.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
         assert call_args.kwargs["input_args"] == contract_payload
+        assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
+        assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
+        assert call_args.kwargs["memo"][
+            "publication_no_implementation_rerun"
+        ] is True
 
 
 def test_retry_publication_stops_before_temporal_when_rollout_disables_admission(

@@ -90,7 +90,12 @@ class MoonMindPublicationRecoveryWorkflow:
             self._phase = "optional_workspace_restoration"
             restoration = await self._activity(
                 "publication_recovery.restore_candidate",
-                {"contract": frozen, "idempotencyKey": operation_key},
+                {
+                    "contract": frozen,
+                    "idempotencyKey": operation_key,
+                    "destinationWorkflowId": workflow.info().workflow_id,
+                    "destinationRunId": workflow.info().run_id,
+                },
                 task_queue=AGENT_RUNTIME_TASK_QUEUE,
             )
             validate_restored_candidate(contract, restoration)
@@ -118,7 +123,12 @@ class MoonMindPublicationRecoveryWorkflow:
             {
                 "contract": frozen,
                 "publication": publication,
+                "reconciliation": decision.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "restoration": restoration,
                 "idempotencyKey": operation_key,
+                "destinationWorkflowId": workflow.info().workflow_id,
             },
             task_queue=INTEGRATIONS_TASK_QUEUE,
         )

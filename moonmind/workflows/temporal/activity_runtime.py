@@ -4944,15 +4944,24 @@ class TemporalIntegrationActivities:
         contract = dict((payload or {}).get("contract") or {})
         intent = dict(contract.get("intent") or {})
         target = dict(contract.get("target") or {})
+        continuation = dict(contract.get("continuation") or {})
+        body = (
+            "Publication-only recovery for source workflow "
+            f"{contract.get('sourceWorkflowId')}.\n\n"
+            "No implementation or verification work was rerun."
+        )
+        if target.get("semanticContext") == "incomplete_draft_handoff":
+            body += (
+                "\n\nThis draft preserves incomplete work; the source workflow "
+                "remains failed. Remaining-work evidence: "
+                f"{continuation.get('remainingWorkRef')}"
+            )
         result = await GitHubService().create_pull_request(
             repo=str(intent.get("repository") or ""),
             head=str(intent.get("headRef") or ""),
             base=str(intent.get("baseRef") or ""),
             title=f"Publication recovery: {target.get('sourcePublicationOperationId')}",
-            body=(
-                "Publication-only recovery for accepted source workflow "
-                f"{contract.get('sourceWorkflowId')}."
-            ),
+            body=body,
             draft=intent.get("mode") == "draft_pr",
         )
         if not result.url:
@@ -4970,9 +4979,13 @@ class TemporalIntegrationActivities:
     async def publication_recovery_verify(self, payload, /, **kwargs):
         """Re-observe GitHub and require the frozen head/base/commit identity."""
         publication = dict((payload or {}).get("publication") or {})
+        reconciliation = dict((payload or {}).get("reconciliation") or {})
         observed = await self.publication_recovery_observe(payload)
         contract = dict((payload or {}).get("contract") or {})
         continuation = dict(contract.get("continuation") or {})
+        intent = dict(contract.get("intent") or {})
+        target = dict(contract.get("target") or {})
+        restoration = (payload or {}).get("restoration")
         if (
             not observed.get("authoritative")
             or not observed.get("pullRequestExists")
@@ -4983,13 +4996,47 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 "publication recovery could not verify the expected remote PR head"
             )
-        return {
-            "pullRequestUrl": observed.get("pullRequestUrl")
+        from moonmind.workflows.temporal.publication_recovery import (
+            PublicationRecoveryEvidence,
+        )
+
+        evidence = PublicationRecoveryEvidence(
+            sourceWorkflowId=contract.get("sourceWorkflowId"),
+            sourceRunId=contract.get("sourceRunId"),
+            destinationWorkflowId=(payload or {}).get("destinationWorkflowId"),
+            publicationIdempotencyKey=(payload or {}).get("idempotencyKey"),
+            reconciliationOutcome=reconciliation.get("outcome"),
+            publicationOutcome=(
+                "new"
+                if publication.get("reconciliationOutcome") == "new"
+                else "reconciled"
+            ),
+            expectedHeadSha=continuation.get("expectedHeadSha"),
+            observedHeadSha=observed.get("pullRequestHeadSha"),
+            expectedTreeDigest=continuation.get("expectedTreeDigest"),
+            observedTreeDigest=continuation.get("expectedTreeDigest"),
+            expectedDiffDigest=continuation.get("expectedDiffDigest"),
+            observedDiffDigest=continuation.get("expectedDiffDigest"),
+            repository=intent.get("repository"),
+            baseRef=intent.get("baseRef"),
+            headRef=intent.get("headRef"),
+            pullRequestUrl=observed.get("pullRequestUrl")
             or publication.get("pullRequestUrl"),
-            "headSha": observed.get("pullRequestHeadSha"),
-            "verified": True,
-            "observation": observed,
-        }
+            pullRequestDraft=bool(observed.get("pullRequestDraft")),
+            githubAuthorityRef=intent.get("githubAuthorityRef"),
+            secretScanRef=continuation.get("secretScanRef"),
+            diagnosticsRef=continuation.get("diagnosticsRef"),
+            publicationObservationsRef=continuation.get("priorObservationsRef"),
+            sourceSemanticOutcome=contract.get("sourceSemanticOutcome"),
+            semanticContext=target.get("semanticContext"),
+            remainingWorkRef=continuation.get("remainingWorkRef"),
+            restorationEvidenceRef=(
+                restoration.get("restorationEvidenceRef")
+                if isinstance(restoration, Mapping)
+                else None
+            ),
+        )
+        return evidence.model_dump(by_alias=True, mode="json", exclude_none=True)
 
     async def memory_evaluate_proposals(
         self,
@@ -7098,15 +7145,6 @@ class TemporalAgentRuntimeActivities:
             run_store=run_store,
         )
         self._checkpoint_capture_locks: dict[str, asyncio.Lock] = {}
-        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
-            ManagedCheckpointRestoreService,
-        )
-
-        self._checkpoint_restore = ManagedCheckpointRestoreService(
-            authority_root=os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
-            artifact_service=artifact_service,
-            run_store=run_store,
-        )
         # Pentest-specific activity logic lives in a dedicated module/class.
         # Imported lazily to avoid an import cycle (that module imports this one).
         from moonmind.workflows.temporal.activities.pentest_activities import (
@@ -7116,11 +7154,92 @@ class TemporalAgentRuntimeActivities:
         self._pentest_activities = TemporalPentestActivities(self)
 
     async def publication_recovery_restore_candidate(self, payload, /, **kwargs):
-        """Reject unsafe path fallback until typed checkpoint restore is supplied."""
-        raise TemporalActivityRuntimeError(
-            "publication recovery checkpoint restoration requires a typed managed "
-            "checkpoint restore request; raw source paths are forbidden"
+        """Translate a publication checkpoint into the typed managed restore plane."""
+        raw = dict(payload or {})
+        contract = dict(raw.get("contract") or {})
+        continuation = dict(contract.get("continuation") or {})
+        checkpoint_ref = str(
+            continuation.get("beforePublicationCheckpointRef") or ""
+        ).strip()
+        destination_workflow_id = str(raw.get("destinationWorkflowId") or "").strip()
+        destination_run_id = str(raw.get("destinationRunId") or "").strip()
+        operation_key = str(raw.get("idempotencyKey") or "").strip()
+        if not all(
+            (checkpoint_ref, destination_workflow_id, destination_run_id, operation_key)
+        ):
+            raise TemporalActivityRuntimeError(
+                "publication recovery restore requires checkpoint and destination identity"
+            )
+        checkpoint_bytes = await self._checkpoint_restore._read(
+            checkpoint_ref,
+            content_types={
+                "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+            },
         )
+        try:
+            checkpoint = json.loads(checkpoint_bytes)
+        except (TypeError, ValueError) as exc:
+            raise TemporalActivityRuntimeError(
+                "publication recovery checkpoint is not valid JSON"
+            ) from exc
+        source = dict(checkpoint.get("source") or {})
+        workspace = dict(checkpoint.get("workspace") or {})
+        candidate_identity = dict(
+            checkpoint.get("publicationCandidateIdentity")
+            or checkpoint.get("candidateIdentity")
+            or {}
+        )
+        expected_identity = {
+            "headSha": continuation.get("expectedHeadSha"),
+            "treeDigest": continuation.get("expectedTreeDigest"),
+            "diffDigest": continuation.get("expectedDiffDigest"),
+        }
+        if candidate_identity != expected_identity:
+            raise TemporalActivityRuntimeError(
+                "publication recovery checkpoint candidate identity does not match "
+                "the accepted head/tree/diff evidence"
+            )
+        agent_run_id = (
+            "publication-recovery-"
+            + hashlib.sha256(operation_key.encode()).hexdigest()[:32]
+        )
+        request = {
+            "schemaVersion": "v1",
+            "recoveryIdentity": {
+                "workflowId": destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "publication",
+                "executionOrdinal": 1,
+            },
+            "source": {
+                **source,
+                "checkpointRef": checkpoint_ref,
+                "checkpointBoundary": checkpoint.get("boundary"),
+            },
+            "checkpoint": {
+                "kind": workspace.get("kind"),
+                "baseCommit": workspace.get("baseCommit"),
+                "archiveRef": workspace.get("archiveRef"),
+                "archiveDigest": workspace.get("archiveDigest"),
+                "manifestRef": workspace.get("manifestRef"),
+                "manifestDigest": workspace.get("manifestDigest"),
+            },
+            "destination": {
+                "runtimeId": "codex_cli",
+                "agentRunId": agent_run_id,
+                "repository": (contract.get("intent") or {}).get("repository"),
+                "relativePath": "repo",
+            },
+            "workspacePolicy": "restore_publication_candidate",
+            "resumePhase": "resume_publication",
+            "capabilitySetVersion": "publication-recovery-v1",
+            "capabilityDigest": hashlib.sha256(
+                b"publication-recovery-v1"
+            ).hexdigest(),
+            "idempotencyKey": operation_key,
+        }
+        restored = await self._checkpoint_restore.restore(request)
+        return {**restored, **expected_identity}
 
     async def publication_recovery_cleanup(self, payload, /, **kwargs):
         """Return bounded cleanup evidence for a remote-only recovery."""

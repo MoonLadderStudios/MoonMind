@@ -7081,6 +7081,53 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 )
             continue
         disabled_reasons[alias] = "state_not_eligible"
+    action_evidence = {
+        **{
+            action: {
+                "candidateRef": control_stop.get("workspaceHeadRef"),
+                "remainingWorkRef": control_stop.get("remainingWorkRef"),
+            }
+            for action in (
+                "editForRerun",
+                "fullRetry",
+                "continueRemediation",
+            )
+            if control_stop
+        },
+        **(
+            {
+                "retryPublication": {
+                    "candidateRef": (
+                        git_publication.get("recoveryContract", {})
+                        .get("continuation", {})
+                        .get("candidateRef")
+                    ),
+                    "publicationIntent": git_publication.get(
+                        "recoveryContract", {}
+                    ).get("intent"),
+                    "publicationRecoveryWorkflowId": git_publication.get(
+                        "recoveryWorkflowId"
+                    ),
+                    "publicationResult": git_publication.get(
+                        "recoveryResult"
+                    ),
+                }
+            }
+            if isinstance(git_publication, Mapping)
+            else {}
+        ),
+    }
+    if workflow_type_value == "MoonMind.PublicationRecoveryV1":
+        action_evidence["publicationRecovery"] = {
+            "sourceWorkflowId": memo.get("source_workflow_id"),
+            "sourceRunId": memo.get("source_run_id"),
+            "semanticContext": memo.get("publication_semantic_context"),
+            "phase": memo.get("publication_recovery_phase", "contract_validation"),
+            "result": memo.get("publication_recovery_result"),
+            "publicationOutcome": memo.get("publication_outcome"),
+            "implementationRerun": False,
+            "verificationRerun": False,
+        }
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
         can_update_inputs="can_update_inputs" in enabled,
@@ -7093,42 +7140,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_continue_remediation="can_continue_remediation" in enabled,
         can_retry_publication="can_retry_publication" in enabled,
         can_full_retry="can_full_retry" in enabled,
-        action_evidence={
-            **{
-                action: {
-                    "candidateRef": control_stop.get("workspaceHeadRef"),
-                    "remainingWorkRef": control_stop.get("remainingWorkRef"),
-                }
-                for action in (
-                    "editForRerun",
-                    "fullRetry",
-                    "continueRemediation",
-                )
-                if control_stop
-            },
-            **(
-                {
-                    "retryPublication": {
-                        "candidateRef": (
-                            git_publication.get("recoveryContract", {})
-                            .get("continuation", {})
-                            .get("candidateRef")
-                        ),
-                        "publicationIntent": git_publication.get(
-                            "recoveryContract", {}
-                        ).get("intent"),
-                        "publicationRecoveryWorkflowId": git_publication.get(
-                            "recoveryWorkflowId"
-                        ),
-                        "publicationResult": git_publication.get(
-                            "recoveryResult"
-                        ),
-                    }
-                }
-                if isinstance(git_publication, Mapping)
-                else {}
-            ),
-        },
+        action_evidence=action_evidence,
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
@@ -15032,6 +15044,10 @@ async def retry_execution_publication(
                 contract.continuation.publication_idempotency_key
             ),
             "publication_recovery_generation": policy.generation,
+            "publication_semantic_context": contract.target.semantic_context,
+            "publication_recovery_phase": "contract_validation",
+            "publication_no_implementation_rerun": True,
+            "publication_no_verification_rerun": True,
         },
     )
     return PublicationRecoveryResponse(

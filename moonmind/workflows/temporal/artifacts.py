@@ -2641,6 +2641,20 @@ class TemporalArtifactActivities:
                 "contract, verifiedEvidence, reconciliation, idempotencyKey, "
                 "destinationWorkflowId, and destinationRunId are required"
             )
+        from moonmind.workflows.temporal.publication_recovery import (
+            PublicationRecoveryEvidence,
+        )
+
+        evidence = PublicationRecoveryEvidence.model_validate(verified)
+        if (
+            evidence.destination_workflow_id != workflow_id
+            or evidence.publication_idempotency_key != operation_key
+            or evidence.source_workflow_id != contract.get("sourceWorkflowId")
+            or evidence.source_run_id != contract.get("sourceRunId")
+        ):
+            raise TemporalArtifactValidationError(
+                "verified publication evidence lineage does not match persistence request"
+            )
         payload = {
             "schemaVersion": "publication-recovery-result-v1",
             "sourceWorkflowId": contract.get("sourceWorkflowId"),
@@ -2649,7 +2663,9 @@ class TemporalArtifactActivities:
             "semanticContext": (contract.get("target") or {}).get("semanticContext"),
             "reconciliation": dict(reconciliation),
             "publication": dict(request.get("publication") or {}),
-            "verifiedEvidence": dict(verified),
+            "verifiedEvidence": evidence.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
             "destinationWorkflowId": workflow_id,
             "destinationRunId": run_id,
         }

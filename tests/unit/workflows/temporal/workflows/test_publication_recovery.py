@@ -46,6 +46,8 @@ def _contract(*, remote: bool = False) -> dict[str, Any]:
             "expectedTreeDigest": "sha256:" + "b" * 64,
             "expectedDiffDigest": "sha256:" + "c" * 64,
             "priorObservationsRef": "artifact://observations",
+            "secretScanRef": "artifact://scan/clean",
+            "diagnosticsRef": "artifact://diagnostics/publication",
         },
         "intent": {
             "repository": "org/repo",
