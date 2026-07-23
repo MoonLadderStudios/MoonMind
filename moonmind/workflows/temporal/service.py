@@ -38,6 +38,7 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
+    WorkflowCheckpointBranch,
     WorkflowCheckpointBranchOperation,
 )
 from moonmind.config.settings import settings
@@ -930,6 +931,14 @@ class TemporalExecutionService:
                 WorkflowCheckpointBranchOperation.operation == "checkpoint_branch.create",
             )
         )
+        branch_result = await self._session.execute(
+            select(WorkflowCheckpointBranch).where(
+                WorkflowCheckpointBranch.workflow_id.in_(target_ids)
+            )
+        )
+        branches_by_id = {
+            branch.branch_id: branch for branch in branch_result.scalars()
+        }
         branch_links_by_remediation: dict[str, list[dict[str, Any]]] = {
             remediation_id: [] for remediation_id in remediation_ids
         }
@@ -958,6 +967,37 @@ class TemporalExecutionService:
                 or remediation.get("checkpointRef"),
                 "contextArtifactRef": remediation.get("contextArtifactRef"),
             }
+            branch = branches_by_id.get(operation.branch_id)
+            if branch is not None and branch.remediation_loop_id:
+                remaining_work_ref = (branch.artifact_refs or {}).get(
+                    "remediationRemainingWork"
+                )
+                branch_link.update(
+                    {
+                        "loopId": branch.remediation_loop_id,
+                        "rootCheckpointRef": branch.source_checkpoint_ref,
+                        "rootWorkspaceDigest": branch.source_checkpoint_digest,
+                        "headCheckpointRef": branch.current_head_checkpoint_ref,
+                        "headWorkspaceDigest": branch.current_head_checkpoint_digest,
+                        "headStepExecutionId": branch.current_head_step_execution_id,
+                        "headAttemptOrdinal": branch.current_head_attempt_ordinal,
+                        "headVersion": branch.current_head_version,
+                        "headStatus": branch.remediation_head_status,
+                        "latestVerificationRef": branch.latest_verification_ref,
+                        "latestVerificationVerdict": branch.latest_verification_verdict,
+                        "remainingWorkRef": remaining_work_ref,
+                    }
+                )
+                if (
+                    branch.current_head_checkpoint_ref
+                    and branch.current_head_checkpoint_digest
+                    and branch.current_head_version is not None
+                ):
+                    branch_link["nextActionBaseline"] = {
+                        "checkpointRef": branch.current_head_checkpoint_ref,
+                        "workspaceDigest": branch.current_head_checkpoint_digest,
+                        "headVersion": branch.current_head_version,
+                    }
             branch_links_by_remediation[remediation_workflow_id].append(
                 {key: value for key, value in branch_link.items() if value is not None}
             )
