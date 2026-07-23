@@ -206,6 +206,9 @@ def test_workflow_payload_records_compiled_bounded_story_loop_context() -> None:
             "maxConsecutiveNoProgressAttempts": 2,
             "maxRepeatedFailedCommands": 2,
             "maxUnsafeOrPolicyDeniedAttempts": 0,
+            "maxEvidenceRetries": 2,
+            "maxInfrastructureRetries": 2,
+            "maxContractRepairAttempts": 1,
             "providerBudget": None,
             "tokenBudget": None,
             "costBudget": None,
@@ -1008,7 +1011,7 @@ def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted(
 
     assert decision["continueLoop"] is False
     assert decision["state"] == "failed_with_remaining_work"
-    assert decision["reason"] == "max_attempts_exhausted"
+    assert decision["reason"] == "no_remediation_successor"
     assert decision["remainingWorkRef"] == "artifact://remaining-work/final"
     assert decision["hasRemainingRemediationStep"] is False
 

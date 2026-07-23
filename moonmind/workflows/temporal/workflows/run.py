@@ -6691,10 +6691,19 @@ class MoonMindRunWorkflow:
             structured_checks = [
                 check for check in raw_checks if isinstance(check, Mapping)
             ]
+        progress_issues: Sequence[Mapping[str, Any]] = gate_result.issues
+        if (
+            self._patched_or_false_outside_workflow(
+                RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH
+            )
+            and not progress_issues
+            and gate_result.feedback
+        ):
+            progress_issues = ({"feedback": gate_result.feedback},)
         progress_vector = build_remediation_progress_vector(
             loop_id=workflow_id,
             attempt_ordinal=remediation_attempt or attempt.attempt_ordinal,
-            issues=gate_result.issues,
+            issues=progress_issues,
             checks=structured_checks,
             prior=prior_progress_vector,
             base_workspace_digest=self._coerce_text(
