@@ -303,13 +303,18 @@ def advance_head(
     if output.outcome == "capture_incomplete":
         raise RemediationHeadError(REMEDIATION_HEAD_RESTORE_INVALID, "checkpoint capture is incomplete")
     if output.outcome == "no_candidate_change":
+        updated = head.model_copy(update={
+            "head_step_execution_id": step_execution_id,
+            "head_attempt_ordinal": attempt.attempt_ordinal,
+            "transition_evidence_ref": output.attempt_evidence_ref,
+        })
         transition = RemediationHeadTransition(
             transitionId=transition_id, kind="no_change", fromVersion=head.head_version,
             toVersion=head.head_version, fromCheckpointRef=head.head_checkpoint_ref,
             toCheckpointRef=head.head_checkpoint_ref, attemptOrdinal=attempt.attempt_ordinal,
             stepExecutionId=step_execution_id, evidenceRef=output.attempt_evidence_ref,
         )
-        return head, transition
+        return updated, transition
     updated = head.model_copy(update={
         "head_checkpoint_ref": output.output_checkpoint_ref,
         "head_workspace_digest": output.output_workspace_digest,

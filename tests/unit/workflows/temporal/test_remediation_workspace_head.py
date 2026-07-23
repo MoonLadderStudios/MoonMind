@@ -157,7 +157,7 @@ def test_read_only_verification_detects_contamination_without_advancing() -> Non
     assert contaminated.head_version == head.head_version
 
 
-def test_no_change_does_not_manufacture_progress() -> None:
+def test_no_change_consumes_attempt_without_manufacturing_checkpoint_progress() -> None:
     head = _head()
     attempt = freeze_attempt_input(head, 1)
     output = RemediationAttemptOutput.model_validate({
@@ -165,7 +165,10 @@ def test_no_change_does_not_manufacture_progress() -> None:
         "parentWorkspaceDigest": head.head_workspace_digest, "outcome": "no_candidate_change",
     })
     unchanged, transition = advance_head(head, attempt, output, step_execution_id="step:1", transition_id="t1")
-    assert unchanged == head
+    assert unchanged.head_checkpoint_ref == head.head_checkpoint_ref
+    assert unchanged.head_version == head.head_version
+    assert unchanged.head_attempt_ordinal == 1
+    assert freeze_attempt_input(unchanged, 2).attempt_ordinal == 2
     assert transition.kind == "no_change" and transition.to_version == transition.from_version
 
 

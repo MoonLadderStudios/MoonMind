@@ -218,7 +218,7 @@ class CheckpointBranchService:
             step_execution_id=step_execution_id,
             transition_id=transition_id,
         )
-        if updated.head_version != head.head_version:
+        if updated != head:
             result = await self._session.execute(
                 update(WorkflowCheckpointBranch)
                 .where(
@@ -267,6 +267,22 @@ class CheckpointBranchService:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         head = self._remediation_head(branch)
         updated = apply_verification(head, evidence)
+        artifact_kind = f"remediation_verification_v{evidence.input_head_version}"
+        existing = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.artifact_ref != evidence.verifier_artifact_ref:
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_STALE_VERSION,
+                    "verification version was reused with different evidence",
+                )
+            return head
         result = await self._session.execute(
             update(WorkflowCheckpointBranch)
             .where(
@@ -293,7 +309,7 @@ class CheckpointBranchService:
         await self.record_artifact(
             branch_id=branch_id,
             artifact_ref=evidence.verifier_artifact_ref,
-            artifact_kind=f"remediation_verification_v{evidence.input_head_version}",
+            artifact_kind=artifact_kind,
         )
         await self._session.refresh(branch)
         return self._remediation_head(branch)
@@ -304,16 +320,46 @@ class CheckpointBranchService:
         workflow_id: str,
         branch_id: str,
         remaining_work_ref: str,
+        expected_head_ref: str,
+        expected_head_digest: str,
+        expected_head_version: int,
     ) -> RemediationWorkspaceHead:
         """Preserve the last valid candidate while recording terminal remaining work."""
 
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        updated = mark_terminal(self._remediation_head(branch), remaining_work_ref)
-        branch.remediation_head_status = updated.status.value
-        branch.artifact_refs = {
-            **(branch.artifact_refs or {}),
-            "remediationRemainingWork": updated.remaining_work_ref,
-        }
+        head = self._remediation_head(branch)
+        if (
+            head.head_checkpoint_ref,
+            head.head_workspace_digest,
+            head.head_version,
+        ) != (expected_head_ref, expected_head_digest, expected_head_version):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION,
+                "remediation head advanced before terminal remaining work was recorded",
+            )
+        updated = mark_terminal(head, remaining_work_ref)
+        result = await self._session.execute(
+            update(WorkflowCheckpointBranch)
+            .where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+                WorkflowCheckpointBranch.current_head_version == expected_head_version,
+                WorkflowCheckpointBranch.current_head_checkpoint_ref == expected_head_ref,
+                WorkflowCheckpointBranch.current_head_checkpoint_digest == expected_head_digest,
+            )
+            .values(
+                remediation_head_status=updated.status.value,
+                artifact_refs={
+                    **(branch.artifact_refs or {}),
+                    "remediationRemainingWork": updated.remaining_work_ref,
+                },
+            )
+        )
+        if result.rowcount != 1:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION,
+                "remediation head advanced before terminal remaining work was recorded",
+            )
         await self.record_artifact(
             branch_id=branch_id,
             artifact_ref=remaining_work_ref,
@@ -337,6 +383,27 @@ class CheckpointBranchService:
 
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         head = self._remediation_head(branch)
+        artifact_kind = f"remediation_rollback_{transition_id}"
+        existing = (
+            await self._session.execute(
+                select(WorkflowCheckpointBranchArtifact).where(
+                    WorkflowCheckpointBranchArtifact.branch_id == branch_id,
+                    WorkflowCheckpointBranchArtifact.artifact_kind == artifact_kind,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if (
+                existing.artifact_ref != evidence_ref
+                or head.head_checkpoint_ref != checkpoint_ref
+                or head.head_workspace_digest != workspace_digest
+                or head.head_version != expected_head_version + 1
+            ):
+                raise RemediationHeadError(
+                    REMEDIATION_HEAD_STALE_VERSION,
+                    "rollback transition identity was reused with different evidence or target",
+                )
+            return head
         if head.head_version != expected_head_version:
             raise RemediationHeadError(
                 REMEDIATION_HEAD_STALE_VERSION, "remediation head was concurrently advanced"
@@ -375,7 +442,7 @@ class CheckpointBranchService:
         await self.record_artifact(
             branch_id=branch_id,
             artifact_ref=evidence_ref,
-            artifact_kind=f"remediation_rollback_{transition_id}",
+            artifact_kind=artifact_kind,
         )
         await self._session.refresh(branch)
         return self._remediation_head(branch)

@@ -125,8 +125,11 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.remediation_workspace_head import (
         REMEDIATION_HEAD_MISMATCH,
+        RemediationAttemptInput,
+        RemediationAttemptOutput,
         RemediationHeadError,
         RemediationWorkspaceHead,
+        advance_head,
         freeze_attempt_input,
         project_head,
     )
@@ -5833,6 +5836,47 @@ class MoonMindRunWorkflow:
             self._remediation_workspace_head
         )
 
+    def _advance_remediation_workspace_head(
+        self,
+        *,
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+        execution_result: Any,
+        step_execution_id: str,
+    ) -> None:
+        """Consume captured attempt evidence before the next attempt is frozen."""
+        if not self._is_moonspec_remediation_step(node):
+            return
+        if self._remediation_workspace_head is None:
+            return
+        attempt_payload = node_inputs.get("remediationAttemptInput")
+        if not isinstance(attempt_payload, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "completed remediation step has no frozen attempt input",
+            )
+        outputs = self._effective_result_outputs(execution_result)
+        output_payload = (
+            outputs.get("remediationAttemptOutput")
+            if isinstance(outputs, Mapping)
+            else None
+        )
+        if not isinstance(output_payload, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "completed remediation step has no captured attempt output",
+            )
+        attempt = RemediationAttemptInput.model_validate(attempt_payload)
+        output = RemediationAttemptOutput.model_validate(output_payload)
+        updated, _ = advance_head(
+            self._remediation_workspace_head,
+            attempt,
+            output,
+            step_execution_id=step_execution_id,
+            transition_id=f"{self._remediation_workspace_head.loop_id}:{attempt.attempt_ordinal}",
+        )
+        self._remediation_workspace_head = updated
+
     def _has_remaining_moonspec_remediation_step(
         self,
         *,
@@ -10669,6 +10713,15 @@ class MoonMindRunWorkflow:
                     continue
                 continue
 
+            self._advance_remediation_workspace_head(
+                node=node,
+                node_inputs=node_inputs,
+                execution_result=execution_result,
+                step_execution_id=(
+                    f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                    f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                ),
+            )
             self._mark_step_terminal(
                 node_id,
                 status="completed",

@@ -193,6 +193,42 @@ async def test_remediation_head_reconciles_duplicate_and_rejects_stale_writer(
 
 
 @pytest.mark.asyncio
+async def test_no_change_attempt_advances_persisted_ordinal(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    root = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    attempt = RemediationAttemptInput(
+        loopId="loop-1",
+        attemptOrdinal=1,
+        baseCheckpointRef=root.head_checkpoint_ref,
+        expectedBaseDigest=root.head_workspace_digest,
+        expectedHeadVersion=root.head_version,
+    )
+    output = RemediationAttemptOutput(
+        attemptEvidenceRef="artifact://remediation/no-change-1",
+        parentCheckpointRef=root.head_checkpoint_ref,
+        parentWorkspaceDigest=root.head_workspace_digest,
+        outcome="no_candidate_change",
+    )
+    updated = await service.advance_remediation_head(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        attempt=attempt,
+        output=output,
+        step_execution_id="wf-1:run-1:remediate:execution:1",
+        transition_id="no-change-1",
+    )
+
+    assert updated.head_version == root.head_version
+    assert updated.head_checkpoint_ref == root.head_checkpoint_ref
+    assert updated.head_attempt_ordinal == 1
+
+
+@pytest.mark.asyncio
 async def test_remediation_head_initialization_fails_without_root_digest(
     checkpoint_branch_session: AsyncSession,
 ) -> None:
@@ -282,11 +318,28 @@ async def test_remediation_verification_contamination_and_terminal_state_are_dur
     )
     assert contaminated.status.value == "contaminated"
     assert contaminated.latest_verification_verdict == REMEDIATION_VERIFIER_CONTAMINATION
+    replayed = await service.record_remediation_verification(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        evidence=VerificationEvidence(
+            inputHeadRef=head.head_checkpoint_ref,
+            inputHeadDigest=head.head_workspace_digest,
+            inputHeadVersion=head.head_version,
+            preVerificationWorkspaceDigest=head.head_workspace_digest,
+            postVerificationWorkspaceDigest="sha256:mutated",
+            verifierArtifactRef="artifact://verification/v1",
+            verdict="FULLY_IMPLEMENTED",
+        ),
+    )
+    assert replayed == contaminated
 
     terminal = await service.mark_remediation_terminal(
         workflow_id="wf-1",
         branch_id="cbr-1",
         remaining_work_ref="artifact://remaining/work-1",
+        expected_head_ref=contaminated.head_checkpoint_ref,
+        expected_head_digest=contaminated.head_workspace_digest,
+        expected_head_version=contaminated.head_version,
     )
     assert terminal.status.value == "terminal_remaining_work"
     assert terminal.head_checkpoint_ref == head.head_checkpoint_ref
@@ -327,6 +380,16 @@ async def test_remediation_rollback_is_atomic_and_rejects_stale_version(
     )
     assert rolled_back.head_checkpoint_ref == "artifact://checkpoint/rollback"
     assert rolled_back.head_version == head.head_version + 1
+    replayed = await service.rollback_remediation_head(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        expected_head_version=head.head_version,
+        checkpoint_ref="artifact://checkpoint/rollback",
+        workspace_digest="sha256:rollback",
+        evidence_ref="artifact://rollback/evidence-1",
+        transition_id="rollback-1",
+    )
+    assert replayed == rolled_back
 
     with pytest.raises(RemediationHeadError) as exc_info:
         await service.rollback_remediation_head(

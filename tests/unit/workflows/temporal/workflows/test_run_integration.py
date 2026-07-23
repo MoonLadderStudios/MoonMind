@@ -3447,6 +3447,62 @@ def test_remediation_step_receives_frozen_workflow_owned_candidate_baseline(
     ] == "artifact://workspace/C1"
 
 
+def test_completed_remediation_advances_baseline_before_next_attempt(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    node = {
+        "id": "remediation-1",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {},
+    }
+    inputs = {"remediationWorkspaceHead": _remediation_head_payload()}
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node, node_inputs=inputs
+    )
+
+    mock_run_workflow._advance_remediation_workspace_head(
+        node=node,
+        node_inputs=inputs,
+        execution_result={
+            "outputs": {
+                "remediationAttemptOutput": {
+                    "attemptEvidenceRef": "artifact://attempt/1",
+                    "parentCheckpointRef": "artifact://workspace/C0",
+                    "parentWorkspaceDigest": "sha256:c0",
+                    "outputCheckpointRef": "artifact://workspace/C1",
+                    "outputWorkspaceDigest": "sha256:c1",
+                    "checkpointManifestRef": "artifact://manifest/C1",
+                    "candidateDiffRef": "artifact://diff/C1",
+                    "changedFilesRef": "artifact://changed/C1",
+                    "targetedChecksRef": "artifact://checks/C1",
+                    "outcome": "candidate_captured",
+                }
+            }
+        },
+        step_execution_id="wf:run:remediation-1:execution:1",
+    )
+
+    next_node = {
+        "id": "remediation-2",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 2,
+        },
+        "inputs": {},
+    }
+    next_inputs: dict[str, object] = {}
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=next_node, node_inputs=next_inputs
+    )
+    assert next_inputs["remediationAttemptInput"]["baseCheckpointRef"] == (
+        "artifact://workspace/C1"
+    )
+    assert next_inputs["remediationAttemptInput"]["expectedHeadVersion"] == 2
+
+
 def test_remediation_step_rejects_root_fallback_after_workflow_head_is_owned(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
