@@ -3388,39 +3388,27 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][5][
         "instructions"
     ]
-    assert expanded["steps"][6]["skill"]["id"] == "auto"
-    assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][6]["instructions"]
-    assert expanded["steps"][6]["annotations"] == {
-        "issueImplementRole": "moonspec-remediation",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 6,
-    }
-    assert expanded["steps"][7]["skill"]["id"] == "moonspec-verify"
-    assert expanded["steps"][7]["skill"]["args"]["verify_artifact_path"] == (
-        "artifacts/github-issue-implement-verify.json"
+    loop_step = expanded["steps"][6]
+    assert loop_step["skill"]["id"] == "auto"
+    assert loop_step["annotations"]["issueImplementRole"] == (
+        "moonspec-remediation-loop"
     )
-    assert expanded["steps"][7]["annotations"] == {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 1,
-        "moonSpecRemediationMaxAttempts": 6,
-        "moonSpecFinalRemediationGate": False,
-    }
-    assert "remediation verification attempt 1 of 6" in expanded["steps"][7][
-        "instructions"
-    ]
-    assert expanded["steps"][17]["annotations"] == {
-        "issueImplementRole": "moonspec-verification-gate",
-        "moonSpecRemediationAttempt": 6,
-        "moonSpecRemediationMaxAttempts": 6,
-        "moonSpecFinalRemediationGate": True,
-    }
-    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][18][
+    loop = loop_step["annotations"]["remediationLoop"]
+    assert loop["kind"] == "remediation_loop"
+    assert loop["budgets"]["hardMaxAttempts"] == 6
+    assert loop["remediationTool"]["name"] == "auto"
+    assert loop["verificationTool"]["name"] == "moonspec-verify"
+    assert not any(
+        step.get("annotations", {}).get("moonSpecRemediationAttempt")
+        for step in expanded["steps"]
+    )
+    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][7][
         "instructions"
     ]
     assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
-        expanded["steps"][18]["instructions"]
+        expanded["steps"][7]["instructions"]
     )
-    assert "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][18][
+    assert "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][7][
         "instructions"
     ]
     assert (
@@ -3433,17 +3421,10 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     ]
     assert "Verification scope rules" in expanded["steps"][5]["instructions"]
     assert "embedding_provider_not_configured" in expanded["steps"][5]["instructions"]
-    assert "recovering a truncated issue brief" in expanded["steps"][6]["instructions"]
-    assert (
-        "update artifacts/github-issue-implement-brief.json with the recovered content"
-        in expanded["steps"][6]["instructions"]
-    )
-    assert "Verification scope rules" in expanded["steps"][7]["instructions"]
-    assert "Verification scope rules" in expanded["steps"][17]["instructions"]
-    assert expanded["steps"][19]["tool"]["inputs"]["verificationArtifactPath"] == (
+    assert expanded["steps"][8]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )
-    assert expanded["steps"][19]["tool"]["inputs"]["requireVerification"] is True
+    assert expanded["steps"][8]["tool"]["inputs"]["requireVerification"] is True
     no_verify_titles = [step["title"] for step in no_verify["steps"]]
     assert no_verify_titles == [
         "Load GitHub issue brief",
@@ -3515,98 +3496,27 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
                 context={},
             )
 
-    remediation_nodes = [
+    loop_nodes = [
         step
         for step in expanded["steps"]
         if step.get("annotations", {}).get("issueImplementRole")
-        in {"moonspec-remediation", "moonspec-verification-gate"}
+        == "moonspec-remediation-loop"
     ]
-    active_nodes = [
+    assert len(loop_nodes) == 1
+    assert loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
+        "hardMaxAttempts"
+    ] == 2
+    six_loop_nodes = [
         step
-        for step in remediation_nodes
-        if step["annotations"]["moonSpecRemediationAttempt"] <= 2
-    ]
-    assert len(remediation_nodes) == 12
-    assert len(active_nodes) == 4
-    assert [
-        step["annotations"].get("moonSpecFinalRemediationGate", False)
-        for step in active_nodes
-        if step["annotations"]["issueImplementRole"]
-        == "moonspec-verification-gate"
-    ] == [False, True]
-    assert all(
-        not step["annotations"].get("moonSpecFinalRemediationGate", False)
-        for step in remediation_nodes
-        if step["annotations"]["moonSpecRemediationAttempt"] > 2
-    )
-    workflow = MoonMindRunWorkflow()
-    verify_one_index = next(
-        index
-        for index, step in enumerate(expanded["steps"])
+        for step in expanded_six["steps"]
         if step.get("annotations", {}).get("issueImplementRole")
-        == "moonspec-verification-gate"
-        and step["annotations"]["moonSpecRemediationAttempt"] == 1
-    )
-    transition = workflow._resolve_gate_transition(
-        verdict=SimpleNamespace(
-            verdict="ADDITIONAL_WORK_NEEDED",
-            recoverable_in_current_runtime=True,
-        ),
-        ordered_nodes=expanded["steps"],
-        current_index=verify_one_index,
-    )
-    assert transition.routing_disposition == "advance_to_next_remediation"
-    assert transition.successor is not None
-    assert transition.successor.logical_step_id == expanded["steps"][
-        verify_one_index + 1
-    ]["id"]
-    assert transition.successor.attempt == 2
-
-    verifier_indices = [
-        index
-        for index, step in enumerate(expanded_six["steps"])
-        if step.get("annotations", {}).get("issueImplementRole")
-        == "moonspec-verification-gate"
+        == "moonspec-remediation-loop"
     ]
-    routed_commands = [expanded_six["steps"][verifier_indices[0] - 1]["id"]]
-    additional_work = SimpleNamespace(
-        verdict="ADDITIONAL_WORK_NEEDED",
-        recoverable_in_current_runtime=True,
-    )
-    for expected_attempt, verifier_index in enumerate(verifier_indices[:-1], 2):
-        decision = workflow._resolve_gate_transition(
-            verdict=additional_work,
-            ordered_nodes=expanded_six["steps"],
-            current_index=verifier_index,
-        )
-        assert decision.successor is not None
-        assert decision.successor.attempt == expected_attempt
-        routed_commands.extend(
-            [
-                expanded_six["steps"][verifier_index]["id"],
-                decision.successor.logical_step_id,
-            ]
-        )
-    final = workflow._resolve_gate_transition(
-        verdict=additional_work,
-        ordered_nodes=expanded_six["steps"],
-        current_index=verifier_indices[-1],
-    )
-    assert final.routing_disposition == "stop_at_control_gate"
-    assert final.reason_code == "remediation_budget_exhausted"
-    routed_commands.append(expanded_six["steps"][verifier_indices[-1]]["id"])
-    assert len(routed_commands) == 12
-    assert len(set(routed_commands)) == 12
-
-    passing = workflow._resolve_gate_transition(
-        verdict=SimpleNamespace(
-            verdict="FULLY_IMPLEMENTED",
-            recoverable_in_current_runtime=False,
-        ),
-        ordered_nodes=expanded_six["steps"],
-        current_index=verifier_indices[1],
-    )
-    assert passing.routing_disposition == "exit_remediation_loop"
+    assert len(six_loop_nodes) == 1
+    assert six_loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
+        "hardMaxAttempts"
+    ] == 6
+    assert len(expanded["steps"]) == len(expanded_six["steps"])
 
 
 async def test_remediation_topology_rejects_partial_active_pair() -> None:

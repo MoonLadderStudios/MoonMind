@@ -4071,7 +4071,7 @@ function StepMetadataList({
 }
 
 type RemediationCadenceInfo = {
-  role: 'remediation' | 'verification';
+  role: 'controller' | 'remediation' | 'verification';
   attempt: number | null;
   maxAttempts: number | null;
 };
@@ -4097,21 +4097,33 @@ function remediationCadenceInfo(row: z.infer<typeof StepLedgerRowSchema>): Remed
     || title.startsWith('remediate remaining gaps');
   const isVerification = role === 'moonspec-verification-gate'
     || title.startsWith('verify remediation');
-  if (!isRemediation && !isVerification) return null;
+  const isController = role === 'moonspec-remediation-loop';
+  if (!isController && !isRemediation && !isVerification) return null;
+  const loop = annotations.remediationLoop;
+  const loopBudgets = loop && typeof loop === 'object' && !Array.isArray(loop)
+    ? (loop as Record<string, unknown>).budgets
+    : null;
+  const hardMaxAttempts = loopBudgets && typeof loopBudgets === 'object' && !Array.isArray(loopBudgets)
+    ? (loopBudgets as Record<string, unknown>).hardMaxAttempts
+    : null;
   const titleMatch = rowTitle
     ? (rowTitle.match(/\battempt\s+(\d+)\s+of\s+(\d+)\b/i) ?? rowTitle.match(/\b(\d+)\s+of\s+(\d+)\b/i))
     : null;
   return {
-    role: isRemediation ? 'remediation' : 'verification',
+    role: isController ? 'controller' : (isRemediation ? 'remediation' : 'verification'),
     attempt: positiveInt(annotations.moonSpecRemediationAttempt) ?? positiveInt(titleMatch?.[1]),
-    maxAttempts: positiveInt(annotations.moonSpecRemediationMaxAttempts) ?? positiveInt(titleMatch?.[2]),
+    maxAttempts: positiveInt(annotations.moonSpecRemediationMaxAttempts)
+      ?? positiveInt(titleMatch?.[2])
+      ?? positiveInt(hardMaxAttempts),
   };
 }
 
 function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
   const cadence = remediationCadenceInfo(row);
   if (!cadence) return null;
-  const attemptLabel = cadence.attempt && cadence.maxAttempts
+  const attemptLabel = cadence.role === 'controller' && cadence.maxAttempts
+    ? `Up to ${cadence.maxAttempts} attempts`
+    : cadence.attempt && cadence.maxAttempts
     ? `Attempt ${cadence.attempt} of ${cadence.maxAttempts}`
     : 'Attempt scoped';
   return (
@@ -4121,7 +4133,7 @@ function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSche
         ? 'Full verification for the remediation attempt.'
         : 'Attempt-scoped remediation; gap details and targeted checks belong inside this attempt.'}
     >
-      {cadence.role === 'verification' ? 'Full verification' : 'Remediation'} · {attemptLabel}
+      {cadence.role === 'controller' ? 'Remediation loop' : cadence.role === 'verification' ? 'Full verification' : 'Remediation'} · {attemptLabel}
     </span>
   );
 }
@@ -4129,7 +4141,9 @@ function RemediationCadenceChip({ row }: { row: z.infer<typeof StepLedgerRowSche
 function RemediationCadenceDetails({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
   const cadence = remediationCadenceInfo(row);
   if (!cadence) return null;
-  const attemptLabel = cadence.attempt && cadence.maxAttempts
+  const attemptLabel = cadence.role === 'controller' && cadence.maxAttempts
+    ? `0 of ${cadence.maxAttempts} attempts materialized initially`
+    : cadence.attempt && cadence.maxAttempts
     ? `Attempt ${cadence.attempt} of ${cadence.maxAttempts}`
     : 'Attempt scoped';
   return (
@@ -4137,7 +4151,7 @@ function RemediationCadenceDetails({ row }: { row: z.infer<typeof StepLedgerRowS
       <h4>Remediation cadence</h4>
       <ul className="step-detail-list">
         <li><strong>Attempt progress:</strong> {attemptLabel}</li>
-        <li><strong>Cadence role:</strong> {cadence.role === 'verification' ? 'Full attempt verification' : 'Remediation attempt'}</li>
+        <li><strong>Cadence role:</strong> {cadence.role === 'controller' ? 'Workflow-owned loop controller' : cadence.role === 'verification' ? 'Full attempt verification' : 'Remediation attempt'}</li>
         <li><strong>Gap progress:</strong> Recorded inside the remediation attempt artifact.</li>
         <li><strong>Targeted checks:</strong> Recorded inside the remediation attempt, not as sibling full-verifier steps.</li>
       </ul>
