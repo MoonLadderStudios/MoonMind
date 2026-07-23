@@ -692,6 +692,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_environment["MOONMIND_STEP_EXECUTION_ID"] = (
                 request.step_execution.step_execution_id
             )
+        turn_environment = {
+            key: session_environment[key]
+            for key in (
+                "MOONMIND_ACTIVE_SKILLS_DIR",
+                "MOONMIND_STEP_EXECUTION_ID",
+            )
+            if key in session_environment
+        }
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -781,6 +789,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             instructions=instructions,
                             requestId=f"{request.idempotency_key}:initial",
                             bridgePublication=bridge_publication,
+                            environment=turn_environment,
                         )
                     )
                 )

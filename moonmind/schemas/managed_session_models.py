@@ -40,6 +40,12 @@ def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
     return normalized
 
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+_PER_TURN_SESSION_ENV_KEYS = frozenset(
+    {
+        "MOONMIND_ACTIVE_SKILLS_DIR",
+        "MOONMIND_STEP_EXECUTION_ID",
+    }
+)
 
 ManagedSessionControlAction = Literal[
     "start_session",
@@ -1273,6 +1279,30 @@ class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     bridge_publication: dict[str, Any] | None = Field(
         None, alias="bridgePublication"
     )
+    environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+
+    @field_validator("environment")
+    @classmethod
+    def _normalize_per_turn_environment(
+        cls,
+        value: dict[str, str],
+    ) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            key = require_non_blank(str(raw_key), field_name="environment key")
+            if key not in _PER_TURN_SESSION_ENV_KEYS:
+                raise ValueError(f"environment key is not allowed: {key}")
+            normalized_value = require_non_blank(
+                str(raw_value),
+                field_name=f"environment.{key}",
+            )
+            if key == "MOONMIND_ACTIVE_SKILLS_DIR":
+                normalized_value = _validate_absolute_posix_path(
+                    normalized_value,
+                    field_name=f"environment.{key}",
+                )
+            normalized[key] = normalized_value
+        return normalized
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Provide follow-up steering to an in-flight turn."""

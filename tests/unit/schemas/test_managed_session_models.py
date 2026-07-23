@@ -516,6 +516,46 @@ def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() 
     assert request.instructions == "Investigate the failing test"
     assert request.reason == "Operator follow-up"
 
+def test_send_codex_managed_session_turn_request_defaults_environment_for_old_payloads() -> None:
+    request = SendCodexManagedSessionTurnRequest.model_validate(
+        {
+            "sessionId": "sess-123",
+            "sessionEpoch": 1,
+            "containerId": "ctr-123",
+            "threadId": "thread-1",
+            "instructions": "Continue the workflow",
+        }
+    )
+
+    assert request.environment == {}
+
+def test_send_codex_managed_session_turn_request_limits_per_turn_environment() -> None:
+    request = SendCodexManagedSessionTurnRequest(
+        sessionId="sess-123",
+        sessionEpoch=1,
+        containerId="ctr-123",
+        threadId="thread-1",
+        instructions="Continue the workflow",
+        environment={
+            "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-2",
+            "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+        },
+    )
+
+    assert request.environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-2",
+        "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+    }
+    with pytest.raises(ValidationError, match="environment key is not allowed"):
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-123",
+            sessionEpoch=1,
+            containerId="ctr-123",
+            threadId="thread-1",
+            instructions="Continue the workflow",
+            environment={"GITHUB_TOKEN": "not-allowed"},
+        )
+
 def test_attach_runtime_handles_signal_is_explicit_typed_contract() -> None:
     signal = CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(
         {

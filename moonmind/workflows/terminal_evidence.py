@@ -286,10 +286,25 @@ def evaluate_terminal_evidence(
             )
         return _failure("BATCH_FANOUT_INPUT_INVALID", metadata=metadata)
 
-    targets_relative = str(contract.get("targetsRelativePath") or "artifacts/batch-workflows-targets.json").replace("\\", "/")
-    targets_path = (workspace / targets_relative).resolve()
+    targets_relative = str(
+        contract.get("targetsRelativePath")
+        or "artifacts/batch-workflows-targets.json"
+    ).replace("\\", "/")
+    targets_relative_path = Path(targets_relative)
+    if (
+        not targets_relative
+        or targets_relative_path.is_absolute()
+        or ".." in targets_relative_path.parts
+    ):
+        return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
+    targets_root = workspace
+    targets_evidence_relative = targets_relative_path
+    if artifact_spool_path and targets_relative_path.parts[:1] == ("artifacts",):
+        targets_root = Path(artifact_spool_path).resolve()
+        targets_evidence_relative = Path(*targets_relative_path.parts[1:])
+    targets_path = (targets_root / targets_evidence_relative).resolve()
     try:
-        targets_path.relative_to(workspace)
+        targets_path.relative_to(targets_root)
         expected_digest = hashlib.sha256(targets_path.read_bytes()).hexdigest()
     except (ValueError, OSError):
         return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")

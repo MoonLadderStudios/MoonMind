@@ -73,13 +73,18 @@ def test_batch_terminal_rejects_missing_stale_and_traversal(tmp_path: Path) -> N
     assert evaluate_terminal_evidence(backslash_unsafe, workspace_path=str(tmp_path)).failure_code == "INVALID_TERMINAL_EVIDENCE_PATH"
 
 
-def test_batch_terminal_reads_result_from_artifact_spool(tmp_path: Path) -> None:
+def test_batch_terminal_reads_result_and_targets_from_artifact_spool(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "repo"
     spool = tmp_path / "spool"
     _write(workspace, status="queued", requested=1, queued=[{"executionId": "child-1"}])
     spool.mkdir()
     (workspace / "artifacts/batch-workflows-result.json").replace(
         spool / "batch-workflows-result.json"
+    )
+    (workspace / "artifacts/batch-workflows-targets.json").replace(
+        spool / "batch-workflows-targets.json"
     )
     result = evaluate_terminal_evidence(
         _contract(),
