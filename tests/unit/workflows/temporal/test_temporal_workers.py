@@ -140,6 +140,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.OmnigentOAuthHostJanitor",
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",
+        "MoonMind.PublicationRecoveryV1",
     )
 
 
@@ -174,6 +175,9 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
     assert first.registry_fingerprint == second.registry_fingerprint
     assert first.workflow_types == list_registered_workflow_types()
     assert "MoonMind.PRResolver" in first.readiness_payload()["workflowTypes"]
+    assert "MoonMind.PublicationRecoveryV1" in first.readiness_payload()[
+        "workflowTypes"
+    ]
     assert first.versioning_enabled is True
     assert first.build_id == "abc123"
 
