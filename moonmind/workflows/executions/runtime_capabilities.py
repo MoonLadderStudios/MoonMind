@@ -24,7 +24,7 @@ CheckpointCriticality = Literal["required", "recoverability_only", "unsupported"
 CAPABILITY_SET_VERSION = "runtime-execution-capabilities-v3"
 CheckpointResumePhase = Literal[
     "rerun_failed_step", "continue_to_gate", "continue_after_gate",
-    "resume_publication", "retry_restoration",
+    "continue_to_remediation", "resume_publication", "retry_restoration",
 ]
 
 

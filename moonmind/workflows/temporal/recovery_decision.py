@@ -6,6 +6,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from moonmind.schemas.temporal_models import RecoveryEligibilityDiagnosticModel
+from moonmind.schemas.workflow_recovery_models import (
+    RecoveryAdmissionDimensionModel,
+    WorkflowRecoveryTargetModel,
+)
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeExecutionCapabilities,
 )
@@ -17,6 +21,38 @@ BOUNDARY_RESUME_PHASE = {
     "before_publication": "resume_publication",
     "before_recovery_restoration": "retry_restoration",
 }
+
+
+def admit_recovery_target(
+    contract: Mapping[str, Any] | WorkflowRecoveryTargetModel,
+) -> tuple[RecoveryAdmissionDimensionModel, ...]:
+    """Parse and independently evaluate the canonical typed recovery target.
+
+    This function is the side-effect-free admission boundary shared by API and
+    workflow callers.  Destination reservation and restoration must only occur
+    after every returned dimension is admitted.
+    """
+
+    recovery_target = (
+        contract
+        if isinstance(contract, WorkflowRecoveryTargetModel)
+        else WorkflowRecoveryTargetModel.model_validate(contract)
+    )
+    return recovery_target.admission()
+
+
+def require_admitted_recovery_target(
+    contract: Mapping[str, Any] | WorkflowRecoveryTargetModel,
+) -> WorkflowRecoveryTargetModel:
+    """Return the frozen contract or fail with all stable denial reasons."""
+
+    recovery_target = (
+        contract
+        if isinstance(contract, WorkflowRecoveryTargetModel)
+        else WorkflowRecoveryTargetModel.model_validate(contract)
+    )
+    recovery_target.require_admitted()
+    return recovery_target
 
 
 def decide_same_session_recovery(

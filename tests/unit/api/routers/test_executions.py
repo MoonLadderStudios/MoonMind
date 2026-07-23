@@ -916,7 +916,7 @@ async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -
     finally:
         await engine.dispose()
 
-    assert len(task_payload["steps"]) == 20
+    assert len(task_payload["steps"]) == 9
     assert task_payload["steps"][0]["tool"]["id"] == (
         "github.load_issue_preset_brief"
     )
