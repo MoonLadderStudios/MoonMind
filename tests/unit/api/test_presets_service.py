@@ -3384,9 +3384,10 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     )
     loop = loop_step["annotations"]["remediationLoop"]
     assert loop["kind"] == "remediation_loop"
-    assert loop["budgets"]["hardMaxAttempts"] == 6
+    assert loop["budgets"]["hardMaxAttempts"] == "6"
     assert loop["remediationTool"]["name"] == "auto"
-    assert loop["verificationTool"]["name"] == "moonspec-verify"
+    assert loop["verificationTool"]["name"] == "auto"
+    assert loop["verificationTool"]["inputs"]["selectedSkill"] == "moonspec-verify"
     assert not any(
         step.get("annotations", {}).get("moonSpecRemediationAttempt")
         for step in expanded["steps"]
