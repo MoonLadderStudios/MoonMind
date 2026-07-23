@@ -129,6 +129,13 @@ def test_all_typed_targets_are_admitted(kind: str) -> None:
 def test_control_stop_remediation_requires_explicit_new_budget() -> None:
     payload = _payload("control_stop")
     payload["continuation"]["phase"] = "continue_to_remediation"
+    payload["destination"]["creationKey"] = deterministic_recovery_creation_key(
+        payload["source"]["workflowId"],
+        payload["source"]["runId"],
+        "control_stop",
+        payload["checkpoint"]["digest"],
+        "continue_to_remediation",
+    )
     payload["capabilitySnapshot"]["checkpointBoundarySupport"]["after_gate"] = [
         "continue_to_remediation"
     ]

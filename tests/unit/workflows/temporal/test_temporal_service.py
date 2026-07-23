@@ -3780,7 +3780,10 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
             "artifact://checkpoint/source"
         )
         assert "agentRunId" not in destination.parameters
-        refreshed_source = await service.describe_execution(source.workflow_id)
+        refreshed_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert refreshed_source is not None
         assert refreshed_source.state is MoonMindWorkflowState.FAILED
         assert "recoveryTarget" not in refreshed_source.parameters
 

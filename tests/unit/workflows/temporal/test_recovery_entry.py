@@ -7,6 +7,9 @@ import pytest
 from moonmind.schemas.workflow_recovery_models import (
     deterministic_recovery_creation_key,
 )
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeExecutionCapabilities,
+)
 from moonmind.workflows.temporal.recovery_entry import (
     compile_recovery_entry_policy,
 )
@@ -75,6 +78,23 @@ def test_entry_compiles_one_explicit_route_for_every_canonical_phase(
         payload["checkpoint"]["digest"],
         phase,
     )
+    boundary_by_phase = {
+        "rerun_failed_step": "before_execution",
+        "continue_to_gate": "after_execution",
+        "continue_after_gate": "after_gate",
+        "continue_to_remediation": "after_gate",
+        "resume_publication": "before_publication",
+        "retry_restoration": "before_recovery_restoration",
+    }
+    boundary = boundary_by_phase[phase]
+    payload["checkpoint"]["boundary"] = boundary
+    capability = payload["capabilitySnapshot"]
+    capability["checkpointBoundarySupport"][boundary] = [phase]
+    capability["workspaceState"]["boundarySupport"][boundary] = [phase]
+    capability["capabilityDigest"] = ""
+    payload["capabilitySnapshot"] = RuntimeExecutionCapabilities.model_validate(
+        capability
+    ).with_digest().model_dump(by_alias=True, mode="json")
     if kind == "control_stop":
         payload["continuation"]["newBudgetRef"] = "artifact://new-budget"
 
