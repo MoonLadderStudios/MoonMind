@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -20,6 +20,8 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     resolve_sandbox_workspace_locator,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RemediationWorkspaceError(RuntimeError):
@@ -199,12 +201,11 @@ async def _await_restore_with_activity_heartbeats(awaitable: Any) -> Any:
             try:
                 activity.heartbeat({"phase": "remediation_workspace_restore"})
             except asyncio.QueueFull:
-                pass
+                logger.debug("remediation_restore_heartbeat_coalesced_queue_full")
     finally:
         if not task.done():
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            await asyncio.gather(task, return_exceptions=True)
 
 
 class RemediationWorkspaceOwner(Protocol):
