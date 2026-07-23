@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        mode: [product, stock, static, ondemand, failures]
+        mode: [product, cumulative, stock, static, ondemand, failures]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -128,8 +128,8 @@ jobs:
           from pathlib import Path
           root = Path("artifacts/omnigent-conformance/published")
           reports = sorted(root.glob("*/report.json"))
-          if len(reports) != 5:
-              raise SystemExit(f"expected five passing reports, found {len(reports)}")
+          if len(reports) != 6:
+              raise SystemExit(f"expected six passing reports, found {len(reports)}")
           report_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
           for path, report in zip(reports, report_payloads):
               if report.get("schemaVersion") != "moonmind.omnigent.conformance-report/v1":
@@ -142,6 +142,33 @@ jobs:
           if len(product_paths) != 1:
               raise SystemExit(f"expected one product evidence document, found {len(product_paths)}")
           product = json.loads(product_paths[0].read_text(encoding="utf-8"))
+          cumulative_paths = list(root.glob("*/cumulative-evidence.json"))
+          if len(cumulative_paths) != 1:
+              raise SystemExit(
+                  f"expected one cumulative evidence document, found {len(cumulative_paths)}"
+              )
+          cumulative = json.loads(cumulative_paths[0].read_text(encoding="utf-8"))
+          if cumulative.get("issue") != "MoonLadderStudios/MoonMind#3480":
+              raise SystemExit("cumulative evidence is not bound to issue #3480")
+          required_cumulative = {
+              "normal_create_api", "authored_state_persisted",
+              "external_omnigent_compilation", "c0_c1_c2_head_transitions",
+              "source_destroyed_before_restore", "marker_a_restored_before_marker_b",
+              "verification_read_only", "continuation_idempotent",
+              "prior_side_effects_not_replayed", "workflow_detail_after_removal",
+              "profile_released_last", "no_fallback",
+          }
+          if any(cumulative.get("assertions", {}).get(key) is not True
+                 for key in required_cumulative):
+              raise SystemExit("cumulative evidence lacks a controlling assertion")
+          rollout = cumulative.get("rollout", {})
+          if any(rollout.get(key) is not True for key in (
+              "canary", "disableNewSelection", "rollback", "historicalReads",
+              "workerVersionReplay",
+          )):
+              raise SystemExit("cumulative evidence lacks rollout and replay gates")
+          if not cumulative.get("failureMatrix"):
+              raise SystemExit("cumulative evidence lacks the integrated failure matrix")
           required_assertions = {
               "normal_create_api", "authored_intent_and_snapshot",
               "external_omnigent_compilation", "selected_profile_policy_workspace",
@@ -213,6 +240,8 @@ jobs:
               "schemaVersion": "moonmind.omnigent.product-acceptance/v1",
               "issue": "MoonLadderStudios/MoonMind#3456",
               "parentIssue": "MoonLadderStudios/MoonMind#3448",
+              "cumulativeRemediationIssue": "MoonLadderStudios/MoonMind#3480",
+              "cumulativeRemediationParent": "MoonLadderStudios/MoonMind#3471",
               "runId": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "commit": os.environ["GITHUB_SHA"],
@@ -226,6 +255,7 @@ jobs:
               ),
               "reports": [str(path) for path in reports],
               "productEvidence": str(product_paths[0]),
+              "cumulativeRemediationEvidence": str(cumulative_paths[0]),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,
               "executionProfileRef": acceptance["executionProfileRef"],
@@ -246,7 +276,7 @@ jobs:
               "cleanupAndRelease": acceptance["cleanupAndRelease"],
               "replayAfterHostRemoval": product["assertions"]["replay_after_host_removal"],
               "noFallback": product["assertions"]["no_fallback"],
-              "modes": ["product", "stock", "static", "ondemand", "failures"],
+              "modes": ["product", "cumulative", "stock", "static", "ondemand", "failures"],
               "status": "passed",
               "generatedAt": os.environ.get("GITHUB_RUN_STARTED_AT"),
               "producer": {"workflow": os.environ["GITHUB_WORKFLOW"], "runId": os.environ["GITHUB_RUN_ID"]},
@@ -269,11 +299,11 @@ jobs:
           {
             echo "### Omnigent credentialed conformance matrix"
             echo ""
-            echo "- Issue: \`MoonLadderStudios/MoonMind#3456\` (parent \`#3448\`)"
-            echo "- Result: product-create, stock, static, on-demand, and failure cases passed"
+            echo "- Issues: \`MoonLadderStudios/MoonMind#3456\`, cumulative remediation \`#3480\` (parent \`#3471\`)"
+            echo "- Result: product-create, cumulative remediation, stock, static, on-demand, and failure cases passed"
             echo "- Durable evidence: \`omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Link passing acceptance report from issues 3456 and 3448
+      - name: Link passing acceptance report from issues 3480, 3471, 3456, and 3448
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -286,9 +316,11 @@ jobs:
             echo
             echo "- Run: ${run_url} (attempt ${{ github.run_attempt }})"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Modes: \`product\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
+            echo "- Modes: \`product\`, \`cumulative\`, \`stock\`, \`static\`, \`ondemand\`, \`failures\`"
             echo "- Durable artifact: \`${artifact}\`"
-            echo "- Evidence refs and immutable image digests: the five \`report.json\` trees in \`${artifact}\`"
+            echo "- Evidence refs and immutable image digests: the six \`report.json\` trees in \`${artifact}\`"
           } > "$comment_file"
+          gh issue comment 3480 --repo "${{ github.repository }}" --body-file "$comment_file"
+          gh issue comment 3471 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3456 --repo "${{ github.repository }}" --body-file "$comment_file"
           gh issue comment 3448 --repo "${{ github.repository }}" --body-file "$comment_file"

@@ -43,6 +43,12 @@ _REQUIRED_STOCK_ROUTES = {
     "workspace.diff", "session.files", "session.content", "terminal.snapshot",
 }
 _REQUIRED_FAILURES = {
+    "create_invalid_selector", "create_duplicate_submit",
+    "create_persistence_failure", "compile_runtime_shape_mismatch",
+    "capability_authority_mismatch", "workspace_stale_version",
+    "workspace_wrong_parent", "workspace_concurrent_advance",
+    "checkpoint_capture_failure", "restore_missing", "restore_corrupt",
+    "restore_unauthorized", "restore_digest_mismatch",
     "stale_runtime_catalog", "no_eligible_profile", "disconnected_profile",
     "profile_lease_busy", "bounded_lease_timeout", "disabled_execution_profile",
     "incompatible_policy", "invalid_workspace", "escaped_workspace",
@@ -233,6 +239,33 @@ async def test_live_product_create_api_journey(bridge_store) -> None:
     assert selection.get("agentId") == "omnigent"
     assert selection.get("hostMode") == "on_demand_docker"
     assert evidence.get("schemaVersions")
+
+
+async def test_live_cumulative_remediation_journey(bridge_store) -> None:
+    _require_mode("cumulative")
+    evidence = _scenario_evidence("MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE")
+    assert evidence.get("issue") == "MoonLadderStudios/MoonMind#3480"
+    assert evidence.get("parentIssue") == "MoonLadderStudios/MoonMind#3471"
+    assert evidence.get("acceptanceIssue") == "MoonLadderStudios/MoonMind#3456"
+    _assert_passed(evidence, {
+        "normal_create_api", "authored_state_persisted",
+        "external_omnigent_compilation", "c0_c1_c2_head_transitions",
+        "source_destroyed_before_restore", "marker_a_restored_before_marker_b",
+        "verification_read_only", "continuation_idempotent",
+        "prior_side_effects_not_replayed", "workflow_detail_after_removal",
+        "profile_released_last", "no_fallback",
+    })
+    attempts = evidence.get("attempts")
+    assert isinstance(attempts, list) and len(attempts) >= 2
+    assert attempts[0]["baseCheckpointRef"] == evidence["identifiers"]["c0Ref"]
+    assert attempts[1]["baseCheckpointRef"] == evidence["identifiers"]["c1Ref"]
+    assert evidence.get("failureMatrix")
+    rollout = evidence.get("rollout")
+    assert isinstance(rollout, dict)
+    assert all(rollout.get(key) is True for key in (
+        "canary", "disableNewSelection", "rollback", "historicalReads",
+        "workerVersionReplay",
+    ))
 
 
 async def test_live_static_workflow_detail_restart_replay(bridge_store) -> None:

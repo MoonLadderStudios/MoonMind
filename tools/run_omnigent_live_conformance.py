@@ -40,6 +40,7 @@ PROJECT = "moonmind-test-omnigent-live"
 PROVIDER_TEST = "tests/provider/omnigent/test_omnigent_smoke.py"
 LIVE_CASES = {
     "product": {"product.normal-create-api"},
+    "cumulative": {"product.cumulative-remediation"},
     "stock": {
         "stock-images.proxy",
         "proxy.routes",
@@ -58,6 +59,11 @@ STOCK_ROUTES = (
     "session.files", "session.content", "terminal.snapshot",
 )
 FAILURE_CASES = (
+    "create_invalid_selector", "create_duplicate_submit", "create_persistence_failure",
+    "compile_runtime_shape_mismatch", "capability_authority_mismatch",
+    "workspace_stale_version", "workspace_wrong_parent", "workspace_concurrent_advance",
+    "checkpoint_capture_failure", "restore_missing", "restore_corrupt",
+    "restore_unauthorized", "restore_digest_mismatch",
     "stale_runtime_catalog", "no_eligible_profile", "disconnected_profile",
     "profile_lease_busy", "bounded_lease_timeout", "disabled_execution_profile",
     "incompatible_policy", "invalid_workspace", "escaped_workspace",
@@ -69,6 +75,17 @@ FAILURE_CASES = (
     "ambiguous_first_message_reconciliation", "active_session_disconnect",
     "resource_route_unavailable", "operator_cancelled",
     "artifact_persistence_failure", "cleanup_failure", "profile_release_failure",
+)
+CUMULATIVE_ACTIONS = (
+    "workflow_created", "authored_state_persisted", "request_compiled",
+    "initial_implementation_completed", "initial_verification_incomplete",
+    "attempt_1_started", "attempt_1_checkpoint_captured",
+    "attempt_1_source_destroyed", "attempt_2_started", "checkpoint_c1_restored",
+    "attempt_2_checkpoint_captured", "final_verification_passed",
+    "candidate_published", "workflow_detail_reloaded",
+    "control_stop_created", "continuation_submitted", "continuation_replayed",
+    "continuation_head_restored", "continuation_remediation_completed",
+    "run_resources_removed", "profile_released",
 )
 PRODUCT_ACTIONS = (
     "runtime_catalog_loaded", "workflow_created", "authored_intent_persisted",
@@ -100,6 +117,7 @@ ONDEMAND_ACTIONS = (
 )
 SCENARIOS = {
     "product": f"{PROVIDER_TEST}::test_live_product_create_api_journey",
+    "cumulative": f"{PROVIDER_TEST}::test_live_cumulative_remediation_journey",
     "stock": f"{PROVIDER_TEST}::test_live_stock_proxy_compatibility_profile",
     "static": f"{PROVIDER_TEST}::test_live_static_workflow_detail_restart_replay",
     "ondemand": f"{PROVIDER_TEST}::test_live_ondemand_oauth_lifecycle_and_cleanup",
@@ -113,6 +131,7 @@ EVIDENCE_ENV = {
 }
 SCENARIO_EVIDENCE_ENV = {
     "product": "MOONMIND_OMNIGENT_PRODUCT_EVIDENCE",
+    "cumulative": "MOONMIND_OMNIGENT_CUMULATIVE_EVIDENCE",
     "stock": "MOONMIND_OMNIGENT_STOCK_EVIDENCE",
     "static": "MOONMIND_OMNIGENT_STATIC_EVIDENCE",
     "ondemand": "MOONMIND_OMNIGENT_ONDEMAND_EVIDENCE",
@@ -198,7 +217,7 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
-        if scenario in {"product", "failures"}:
+        if scenario in {"product", "cumulative", "failures"}:
             records = [
                 record
                 for item in observations
@@ -208,6 +227,8 @@ class LiveRunner:
             required_types = (
                 PRODUCT_RECORD_TYPES[action]
                 if scenario == "product"
+                else {"cumulativeRunState", "sideEffectAudit"}
+                if scenario == "cumulative"
                 else {"injectionControl", "terminalProjection", "sideEffectAudit"}
             )
             observed_types = {record.get("type") for record in records}
@@ -234,7 +255,9 @@ class LiveRunner:
             key: value for key, value in payload.items()
             if key in {
                 "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
-                "runId", "stepId", "bridgeId",
+                "runId", "stepId", "bridgeId", "sourceWorkflowId",
+                "destinationWorkflowId", "continuationId", "profileRef",
+                "c0Ref", "c1Ref", "c2Ref",
             }
             and value
         }
@@ -244,7 +267,9 @@ class LiveRunner:
                 key: value for key, value in state.items()
                 if key in {
                     "leaseId", "hostId", "workflowId", "agentRunId", "sessionId",
-                    "runId", "stepId", "bridgeId",
+                    "runId", "stepId", "bridgeId", "sourceWorkflowId",
+                    "destinationWorkflowId", "continuationId", "profileRef",
+                    "c0Ref", "c1Ref", "c2Ref",
                 }
                 and value
             })
@@ -368,6 +393,99 @@ class LiveRunner:
             }),
         })
         self.scenario("product")
+
+    def cumulative(self) -> None:
+        """Prove cumulative remediation through the production action boundary."""
+        state: dict[str, object] = {}
+        results: dict[str, dict[str, object]] = {}
+        for action in CUMULATIVE_ACTIONS:
+            result = self.action("cumulative", action, **state)
+            next_state = result.get("state")
+            if not isinstance(next_state, dict):
+                raise ConformanceContractError(
+                    f"cumulative/{action} did not return lifecycle state"
+                )
+            state.update(next_state)
+            results[action] = result
+
+        required = (
+            "sourceWorkflowId", "destinationWorkflowId", "continuationId",
+            "profileRef", "c0Ref", "c1Ref", "c2Ref",
+        )
+        if not all(state.get(key) for key in required):
+            raise ConformanceContractError(
+                "cumulative journey lacks durable lineage or checkpoint identifiers"
+            )
+        attempts = state.get("attempts")
+        if not isinstance(attempts, list) or len(attempts) < 2:
+            raise ConformanceContractError("cumulative journey lacks two attempt records")
+        first, second = attempts[0], attempts[1]
+        if not isinstance(first, dict) or not isinstance(second, dict):
+            raise ConformanceContractError("cumulative attempt records are malformed")
+        distinct_keys = ("workspaceId", "leaseId", "hostId", "sessionId", "firstMessageId")
+        if any(first.get(key) == second.get(key) or not first.get(key) or not second.get(key)
+               for key in distinct_keys):
+            raise ConformanceContractError(
+                "cumulative attempts did not use distinct destination identities"
+            )
+        if first.get("baseCheckpointRef") != state["c0Ref"]:
+            raise ConformanceContractError("attempt 1 did not start from C0")
+        if second.get("baseCheckpointRef") != state["c1Ref"]:
+            raise ConformanceContractError("attempt 2 did not restore C1")
+        failure_matrix = state.get("failureMatrix")
+        if not isinstance(failure_matrix, dict) or set(failure_matrix) != set(FAILURE_CASES):
+            raise ConformanceContractError(
+                "cumulative journey lacks the complete integrated failure matrix"
+            )
+        if any(outcome != "passed" for outcome in failure_matrix.values()):
+            raise ConformanceContractError(
+                "cumulative journey contains a non-passing failure-matrix outcome"
+            )
+        rollout = state.get("rollout")
+        rollout_keys = (
+            "canary", "disableNewSelection", "rollback", "historicalReads",
+            "workerVersionReplay",
+        )
+        if not isinstance(rollout, dict) or any(
+            rollout.get(key) is not True for key in rollout_keys
+        ):
+            raise ConformanceContractError(
+                "cumulative journey lacks rollout and replay evidence"
+            )
+
+        assertions = {
+            "normal_create_api": bool(results["workflow_created"].get("normalCreateApi")),
+            "authored_state_persisted": bool(results["authored_state_persisted"].get("complete")),
+            "external_omnigent_compilation": bool(results["request_compiled"].get("exactSelection")),
+            "c0_c1_c2_head_transitions": bool(results["attempt_2_checkpoint_captured"].get("cumulative")),
+            "source_destroyed_before_restore": bool(results["attempt_1_source_destroyed"].get("destroyed")),
+            "marker_a_restored_before_marker_b": bool(results["checkpoint_c1_restored"].get("markerA")),
+            "verification_read_only": bool(results["final_verification_passed"].get("readOnly")),
+            "continuation_idempotent": bool(results["continuation_replayed"].get("sameDestination")),
+            "prior_side_effects_not_replayed": bool(results["continuation_head_restored"].get("noSideEffectReplay")),
+            "workflow_detail_after_removal": bool(results["workflow_detail_reloaded"].get("available")),
+            "profile_released_last": bool(results["profile_released"].get("releaseLast")),
+            "no_fallback": all(bool(result.get("noFallback")) for result in results.values()),
+        }
+        if not all(assertions.values()):
+            raise ConformanceContractError(
+                "cumulative journey did not prove every controlling assertion"
+            )
+        self.write_evidence("cumulative", {
+            "issue": "MoonLadderStudios/MoonMind#3480",
+            "parentIssue": "MoonLadderStudios/MoonMind#3471",
+            "acceptanceIssue": "MoonLadderStudios/MoonMind#3456",
+            "actions": list(CUMULATIVE_ACTIONS),
+            "identifiers": {key: state[key] for key in required},
+            "attempts": attempts,
+            "assertions": assertions,
+            "failureMatrix": failure_matrix,
+            "rollout": rollout,
+            "evidenceRefs": [
+                ref for result in results.values() for ref in result["evidenceRefs"]
+            ],
+        })
+        self.scenario("cumulative")
 
     @staticmethod
     def compose(*args: str) -> list[str]:
@@ -521,6 +639,8 @@ def main() -> int:
             try:
                 if mode == "product":
                     runner.product()
+                elif mode == "cumulative":
+                    runner.cumulative()
                 elif mode == "stock":
                     runner.stock(images)
                 elif mode == "static":

@@ -149,6 +149,56 @@ def test_product_rejects_incomplete_acceptance_report_fields(tmp_path, monkeypat
         raise AssertionError("incomplete product acceptance evidence was accepted")
 
 
+def test_cumulative_journey_requires_destroyed_source_and_distinct_attempts(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    runner = module.LiveRunner(output_dir=tmp_path, env={})
+    attempts = [
+        {"workspaceId": "w1", "leaseId": "l1", "hostId": "h1",
+         "sessionId": "s1", "firstMessageId": "m1",
+         "baseCheckpointRef": "artifact://workspace/C0"},
+        {"workspaceId": "w2", "leaseId": "l2", "hostId": "h2",
+         "sessionId": "s2", "firstMessageId": "m2",
+         "baseCheckpointRef": "artifact://workspace/C1"},
+    ]
+    state = {
+        "sourceWorkflowId": "source", "destinationWorkflowId": "destination",
+        "continuationId": "continue-1", "profileRef": "profile-safe",
+        "c0Ref": "artifact://workspace/C0", "c1Ref": "artifact://workspace/C1",
+        "c2Ref": "artifact://workspace/C2", "attempts": attempts,
+        "failureMatrix": {case: "passed" for case in module.FAILURE_CASES},
+        "rollout": {
+            "canary": True, "disableNewSelection": True, "rollback": True,
+            "historicalReads": True, "workerVersionReplay": True,
+        },
+    }
+    def action(scenario, name, **inputs):
+        flags = {"noFallback": True, "state": state,
+                 "evidenceRefs": [f"artifact://{name}"]}
+        flags.update({
+            "normalCreateApi": name == "workflow_created",
+            "complete": name == "authored_state_persisted",
+            "exactSelection": name == "request_compiled",
+            "cumulative": name == "attempt_2_checkpoint_captured",
+            "destroyed": name == "attempt_1_source_destroyed",
+            "markerA": name == "checkpoint_c1_restored",
+            "readOnly": name == "final_verification_passed",
+            "sameDestination": name == "continuation_replayed",
+            "noSideEffectReplay": name == "continuation_head_restored",
+            "available": name == "workflow_detail_reloaded",
+            "releaseLast": name == "profile_released",
+        })
+        return flags
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
+    runner.cumulative()
+    evidence = json.loads((tmp_path / "cumulative-evidence.json").read_text())
+    assert evidence["identifiers"]["c2Ref"] == "artifact://workspace/C2"
+    assert evidence["attempts"][0]["hostId"] != evidence["attempts"][1]["hostId"]
+    assert all(evidence["assertions"].values())
+
+
 def test_failure_matrix_executes_exact_issue_cases(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})

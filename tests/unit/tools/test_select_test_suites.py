@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tools import select_test_suites
 from tools.select_test_suites import select_suites
 
@@ -265,3 +267,25 @@ def test_main_rejects_interactive_stdin(monkeypatch, capsys) -> None:
 
     assert select_test_suites.main() == 1
     assert "expects a list of changed files via stdin" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/api/routers/workflows.py",
+        "api_service/services/artifact_service.py",
+        "api_service/services/managed_agent_provider_profiles.py",
+        "api_service/services/omnigent_hosts.py",
+        "api_service/services/workspace_checkpoints.py",
+        "moonmind/omnigent/bridge_store.py",
+        "moonmind/workflows/temporal/workflows/run_bounded_story_loop.py",
+        "tests/integration/omnigent/test_embedded_recovery.py",
+    ],
+)
+def test_cumulative_remediation_boundaries_select_reliability_journey(
+    changed_path: str,
+) -> None:
+    outputs = _outputs([changed_path])
+
+    assert outputs["unit_fast"] == "true"
+    assert outputs["reliability_journey"] == "true"

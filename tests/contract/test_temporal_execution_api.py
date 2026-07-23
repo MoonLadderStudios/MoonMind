@@ -1690,6 +1690,29 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
         db_base.async_session_maker = original_session_maker
 
 
+def test_typed_recover_route_contract_is_registered() -> None:
+    schema = app.openapi()
+    route = schema["paths"]["/api/executions/{workflow_id}/recover"]["post"]
+    assert route["responses"]["201"]["description"]
+    request_schema = route["requestBody"]["content"]["application/json"]["schema"]
+    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
+    request_contract = schema["components"]["schemas"][ref]
+    properties = request_contract["properties"]
+    assert request_contract["additionalProperties"] is False
+    assert {
+        "schemaVersion",
+        "recoveryAction",
+        "target",
+        "source",
+        "checkpoint",
+        "continuation",
+        "capabilitySnapshot",
+        "preservedStepRefs",
+        "sideEffectDispositionRef",
+        "destination",
+    }.issubset(properties)
+
+
 def test_recover_from_failed_step_route_contract_is_registered() -> None:
     schema = app.openapi()
     route = schema["paths"]["/api/executions/{workflow_id}/recover-from-failed-step"]["post"]

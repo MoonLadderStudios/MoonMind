@@ -131,6 +131,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.UserWorkflow",
         "MoonMind.ContainerJob",
         "MoonMind.ManifestIngest",
+        "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
         "MoonMind.ManagedSessionReconcile",
@@ -232,6 +233,39 @@ def test_production_worker_spec_requires_temporal_worker_versioning() -> None:
                 "MOONMIND_BUILD_SHA": "abc123",
             },
         )
+
+
+def test_recorded_worker_versions_keep_distinct_builds_during_replay_window() -> None:
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    workflows = workflow_fleet_workflow_classes()
+    activities = workflow_fleet_activity_handlers()
+    common = {
+        "MOONMIND_DEPLOYMENT_MODE": "production",
+        "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
+        "TEMPORAL_WORKER_DEPLOYMENT_NAME": "moonmind-workflow-fleet",
+    }
+
+    recorded = build_worker_spec(
+        topology=topology,
+        workflows=workflows,
+        activities=activities,
+        environ={**common, "MOONMIND_BUILD_SHA": "recorded-build"},
+    )
+    replacement = build_worker_spec(
+        topology=topology,
+        workflows=workflows,
+        activities=activities,
+        environ={**common, "MOONMIND_BUILD_SHA": "replacement-build"},
+    )
+
+    assert recorded.deployment_id == replacement.deployment_id
+    assert recorded.build_id == "recorded-build"
+    assert replacement.build_id == "replacement-build"
+    assert recorded.versioning_enabled is True
+    assert replacement.versioning_enabled is True
+    assert recorded.readiness_payload()["workflowTypes"] == (
+        replacement.readiness_payload()["workflowTypes"]
+    )
 
 
 def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):

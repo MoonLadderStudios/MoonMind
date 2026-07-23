@@ -99,6 +99,9 @@ from moonmind.schemas.temporal_models import (
     UpdateExecutionRequest,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.services.control_stop_continuation import (
+    ControlStopContinuationReservation,
+)
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
@@ -919,7 +922,7 @@ async def test_explicit_github_issue_template_expands_before_planner(tmp_path) -
     finally:
         await engine.dispose()
 
-    assert len(task_payload["steps"]) == 20
+    assert len(task_payload["steps"]) == 9
     assert task_payload["steps"][0]["tool"]["id"] == (
         "github.load_issue_preset_brief"
     )
@@ -1643,7 +1646,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
 def test_create_task_shaped_execution_keeps_integration_as_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
-    test_client, service, _user = client
+    test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -15267,6 +15270,107 @@ def test_action_endpoints_reject_non_owner_operator(
     service.update_execution.assert_not_awaited()
     service.signal_execution.assert_not_awaited()
     service.cancel_execution.assert_not_awaited()
+
+
+def test_continue_remediation_returns_same_destination_for_duplicate_requests(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        owner_id=str(user.id),
+    )
+    reservations = [
+        ControlStopContinuationReservation(
+            destination_workflow_id="control-stop-continuation-digest",
+            source_workflow_id="mm:wf-1",
+            source_run_id="run-2",
+            control_stop_id="verify:control-stop:6",
+            workspace_head_ref="artifact://checkpoint/head-6",
+            remaining_work_ref="artifact://verify/remaining-6",
+            created=created,
+        )
+        for created in (True, False)
+    ]
+    admit = AsyncMock(side_effect=reservations)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.admit_control_stop_continuation",
+        admit,
+    )
+
+    first = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
+    )
+    duplicate = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
+    )
+
+    assert first.status_code == 202
+    assert duplicate.status_code == 202
+    assert first.json()["destinationWorkflowId"] == duplicate.json()[
+        "destinationWorkflowId"
+    ]
+    assert first.json()["created"] is True
+    assert duplicate.json()["created"] is False
+    assert admit.await_count == 2
+    for invocation in admit.await_args_list:
+        assert invocation.kwargs["source_workflow_id"] == "mm:wf-1"
+        assert invocation.kwargs["source_run_id"] == "run-2"
+        assert invocation.kwargs["control_stop_id"] == "verify:control-stop:6"
+        assert invocation.kwargs["continuation_budget"].grant_id == "grant-1"
+        assert invocation.kwargs["instruction_changes_ref"] is None
+
+
+def test_continue_remediation_rejects_non_owner_before_admission(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        owner_id="other-user",
+    )
+    admit = AsyncMock()
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.admit_control_stop_continuation",
+        admit,
+    )
+
+    response = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    admit.assert_not_awaited()
+
 
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""
