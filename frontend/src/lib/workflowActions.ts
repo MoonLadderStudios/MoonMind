@@ -41,6 +41,45 @@ export const DEFAULT_REMEDIATION_MODE = 'snapshot_then_follow';
 export const DEFAULT_REMEDIATION_AUTHORITY = 'approval_gated';
 export const DEFAULT_REMEDIATION_ACTION_POLICY = 'admin_healer_default';
 
+export type ContinueRemediationBudget = {
+  maxAttempts: number;
+  maxConsecutiveNoProgressAttempts: number;
+};
+
+export function buildContinueRemediationRequest(
+  controlStopId: string,
+  budget: ContinueRemediationBudget,
+) {
+  const normalizedControlStopId = controlStopId.trim();
+  if (!normalizedControlStopId) {
+    throw new Error('A control-stop identity is required.');
+  }
+  if (!Number.isInteger(budget.maxAttempts) || budget.maxAttempts < 1 || budget.maxAttempts > 100) {
+    throw new Error('Remediation attempts must be between 1 and 100.');
+  }
+  if (
+    !Number.isInteger(budget.maxConsecutiveNoProgressAttempts)
+    || budget.maxConsecutiveNoProgressAttempts < 1
+    || budget.maxConsecutiveNoProgressAttempts > budget.maxAttempts
+  ) {
+    throw new Error('No-progress attempts must be between 1 and the remediation attempt limit.');
+  }
+  return {
+    controlStopId: normalizedControlStopId,
+    continuationBudget: {
+      grantId: `workflow-detail:${normalizedControlStopId}:${budget.maxAttempts}:${budget.maxConsecutiveNoProgressAttempts}`,
+      maxAttempts: budget.maxAttempts,
+      maxConsecutiveNoProgressAttempts: budget.maxConsecutiveNoProgressAttempts,
+      consumedAttempts: 0,
+      consecutiveNoProgressAttempts: 0,
+    },
+  };
+}
+
+export function continuedWorkflowHref(destinationWorkflowId: string): string {
+  return `/workflows/${encodeURIComponent(destinationWorkflowId)}`;
+}
+
 export type WorkflowActionMenuItem = {
   id: string;
   label: string;

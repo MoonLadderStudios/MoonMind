@@ -58,6 +58,8 @@ import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildWorkflowActionMenuItems,
+  buildContinueRemediationRequest,
+  continuedWorkflowHref,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
@@ -1801,6 +1803,8 @@ const RunSummaryArtifactSchema = z
       .optional(),
     controlStop: z
       .object({
+        controlStopId: z.string().nullable().optional(),
+        id: z.string().nullable().optional(),
         kind: z.string(),
         verdict: z.string().nullable().optional(),
         reasonCode: z.string().nullable().optional(),
@@ -8052,6 +8056,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const [remediationActionPolicy, setRemediationActionPolicy] = useState(
     DEFAULT_REMEDIATION_ACTION_POLICY,
   );
+  const [continuationMaxAttempts, setContinuationMaxAttempts] = useState('3');
+  const [continuationNoProgressAttempts, setContinuationNoProgressAttempts] = useState('2');
+  const [continuedWorkflowId, setContinuedWorkflowId] = useState<string | null>(null);
   const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [latestBranchCompare, setLatestBranchCompare] = useState<z.infer<typeof CheckpointBranchCompareSchema> | null>(null);
@@ -8548,6 +8555,42 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Publication-only recovery started.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const continueRemediationMutation = useMutation({
+    mutationFn: async () => {
+      const controlStop = runSummary?.controlStop;
+      const controlStopId = controlStop?.controlStopId || controlStop?.id || '';
+      const request = buildContinueRemediationRequest(controlStopId, {
+        maxAttempts: Number(continuationMaxAttempts),
+        maxConsecutiveNoProgressAttempts: Number(continuationNoProgressAttempts),
+      });
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(request),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return z.object({
+        destinationWorkflowId: z.string(),
+        created: z.boolean(),
+      }).passthrough().parse(await response.json());
+    },
+    onSuccess: (result) => {
+      setContinuedWorkflowId(result.destinationWorkflowId);
+      setActionNotice(result.created
+        ? 'Remediation continuation started.'
+        : 'Existing remediation continuation found.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -9413,6 +9456,57 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     when admitted, consumes the preserved candidate and remaining-work evidence.
                     Publication retry only retries the publication handoff; it does not accept the work.
                   </p>
+                  <section className="card stack" aria-label="Continue remediation">
+                    <h4>Continue remediation</h4>
+                    <p className="small">
+                      Continue from the preserved checkpoint and authoritative remaining work with
+                      an explicit new bounded budget. Completed source work is not rerun.
+                    </p>
+                    <div className="grid-2">
+                      <label>
+                        Remediation attempts
+                        <input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={continuationMaxAttempts}
+                          onChange={(event) => setContinuationMaxAttempts(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Consecutive no-progress attempts
+                        <input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={continuationNoProgressAttempts}
+                          onChange={(event) => setContinuationNoProgressAttempts(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    {actions?.canContinueRemediation ? (
+                      <button
+                        type="button"
+                        className="queue-action"
+                        disabled={busy || continueRemediationMutation.isPending}
+                        onClick={() => {
+                          setActionError(null);
+                          continueRemediationMutation.mutate();
+                        }}
+                      >
+                        Continue remediation
+                      </button>
+                    ) : (
+                      <p className="small" role="status">
+                        Unavailable: {actionDisabledReason('canContinueRemediation') || 'required recovery evidence is incomplete'}
+                      </p>
+                    )}
+                    {continuedWorkflowId ? (
+                      <a href={continuedWorkflowHref(continuedWorkflowId)}>
+                        View continued workflow
+                      </a>
+                    ) : null}
+                  </section>
                 </div>
               ) : null}
               <FlatFactGrid>
