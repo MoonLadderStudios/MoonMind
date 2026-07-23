@@ -144,4 +144,27 @@ async def test_two_cold_attempts_preserve_cumulative_markers_after_source_destru
     assert (second_path / "marker-a").read_text() == "A"
     (second_path / "marker-b").write_text("B")
     assert {path.name for path in second_path.iterdir()} == {"marker-a", "marker-b"}
-    assert restorer.calls[0][1] != restorer.calls[1][1]
+
+    # Faithfully model the checkpoint capture boundary: C2 is durable evidence,
+    # independent of the attempt-2 materialization and its now-defunct host.
+    snapshots["artifact://workspace/C2"] = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in second_path.iterdir()
+    }
+    for item in second_path.iterdir():
+        item.unlink()
+
+    owner.record_loop_head(_head("artifact://workspace/C2", 3))
+    third = await owner.admit_and_resolve(
+        binding=_binding("step-3", 3, "artifact://workspace/C2", 3),
+        workflow_id="workflow-1", step_execution_id="step-3",
+    )
+    third_path = Path(third["workspacePath"])
+    assert third["workspaceState"] == "cold_restored"
+    assert (third_path / "marker-a").read_text() == "A"
+    assert (third_path / "marker-b").read_text() == "B"
+    assert restorer.calls == [
+        ("artifact://workspace/C0", "workflow-1:step-1:restore"),
+        ("artifact://workspace/C1", "workflow-1:step-2:restore"),
+        ("artifact://workspace/C2", "workflow-1:step-3:restore"),
+    ]
