@@ -131,6 +131,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.UserWorkflow",
         "MoonMind.ContainerJob",
         "MoonMind.ManifestIngest",
+        "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
         "MoonMind.ManagedSessionReconcile",

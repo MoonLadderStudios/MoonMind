@@ -1906,6 +1906,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/actions/continue-remediation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Remediation
+         * @description Admit one deterministic continuation from authoritative frozen evidence.
+         */
+        post: operations["continue_remediation_api_executions__workflow_id__actions_continue_remediation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/update": {
         parameters: {
             query?: never;
@@ -6057,6 +6077,58 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
+        };
+        /** ContinuationBudgetGrant */
+        ContinuationBudgetGrant: {
+            /** Grantid */
+            grantId: string;
+            /** Maxattempts */
+            maxAttempts: number;
+            /** Maxconsecutivenoprogressattempts */
+            maxConsecutiveNoProgressAttempts: number;
+            /**
+             * Consumedattempts
+             * @default 0
+             */
+            consumedAttempts: number;
+            /**
+             * Consecutivenoprogressattempts
+             * @default 0
+             */
+            consecutiveNoProgressAttempts: number;
+        };
+        /**
+         * ContinueRemediationRequest
+         * @description Select the frozen control-stop evidence owned by the source execution.
+         */
+        ContinueRemediationRequest: {
+            /** Controlstopid */
+            controlStopId: string;
+            continuationBudget: components["schemas"]["ContinuationBudgetGrant"];
+            /** Instructionchangesref */
+            instructionChangesRef?: string | null;
+            /** Instructionchangesdigest */
+            instructionChangesDigest?: string | null;
+        };
+        /**
+         * ContinueRemediationResponse
+         * @description Stable linked destination returned for both first and duplicate submissions.
+         */
+        ContinueRemediationResponse: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Controlstopid */
+            controlStopId: string;
+            /** Destinationworkflowid */
+            destinationWorkflowId: string;
+            /** Workspaceheadref */
+            workspaceHeadRef: string;
+            /** Remainingworkref */
+            remainingWorkRef: string;
+            /** Created */
+            created: boolean;
         };
         /**
          * CreateArtifactRequest
@@ -16572,6 +16644,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_remediation_api_executions__workflow_id__actions_continue_remediation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueRemediationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinueRemediationResponse"];
                 };
             };
             /** @description Validation Error */
