@@ -1148,12 +1148,26 @@ class TestJiraAgentPublishHelpers(unittest.TestCase):
 
         self.assertTrue(
             wf._execution_result_has_publishable_changes(
-                {"outputs": {"push_status": "pushed", "push_branch": "jira-edits"}}
+                {
+                    "outputs": {
+                        "acceptedRepositoryEvidence": {
+                            "pushStatus": "pushed",
+                            "evidenceRef": "artifact://repository/published",
+                        }
+                    }
+                }
             )
         )
         self.assertFalse(
             wf._execution_result_has_publishable_changes(
-                {"outputs": {"push_status": "no_commits"}}
+                {
+                    "outputs": {
+                        "acceptedRepositoryEvidence": {
+                            "repositoryChanged": False,
+                            "evidenceRef": "artifact://repository/no-change",
+                        }
+                    }
+                }
             )
         )
 

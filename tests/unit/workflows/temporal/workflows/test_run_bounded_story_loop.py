@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import inspect
+import dis
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH,
-    RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH,
     MoonMindRunWorkflow,
     bounded_story_loop_resume_decision,
     bounded_story_loop_scope_guard,
@@ -59,7 +58,7 @@ async def test_terminal_remaining_work_is_persisted_redacted_and_linked(
 
     assert ref == "artifact://art_remaining_work_final"
     assert captured["payload"]["schemaVersion"] == "remaining-work/v1"
-    assert captured["payload"]["gaps"] == ["[REDACTED]"]
+    assert captured["payload"]["gaps"] == ["token=[REDACTED]"]
     assert captured["payload"]["sourceGateResultRef"] == "artifact://gate/final"
     assert captured["payload"]["sourceVerificationRef"] == (
         "artifact://verification/final"
@@ -77,6 +76,11 @@ async def test_terminal_remaining_work_persistence_failure_fails_closed(
         raise RuntimeError("artifact persistence unavailable")
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fail_write)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 23, tzinfo=timezone.utc),
+    )
 
     with pytest.raises(RuntimeError, match="artifact persistence unavailable"):
         await workflow._materialize_remaining_work_artifact(
@@ -92,15 +96,25 @@ async def test_terminal_remaining_work_persistence_failure_fails_closed(
 
 
 def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
-    source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+    instructions = tuple(dis.get_instructions(MoonMindRunWorkflow._run_execution_stage))
 
-    assert RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH in source
-    assert source.index(RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH) < source.index(
-        "await self._materialize_remaining_work_artifact"
+    patch_offset = next(
+        instruction.offset
+        for instruction in instructions
+        if instruction.argval == "RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH"
     )
-    assert source.index(RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH) < source.index(
-        "await self._persist_terminal_gate_handoff"
+    materialize_offset = next(
+        instruction.offset
+        for instruction in instructions
+        if instruction.argval == "_materialize_remaining_work_artifact"
     )
+    persist_offset = next(
+        instruction.offset
+        for instruction in instructions
+        if instruction.argval == "_persist_terminal_gate_handoff"
+    )
+    assert patch_offset < materialize_offset
+    assert patch_offset < persist_offset
 
 
 @pytest.mark.asyncio
@@ -125,7 +139,7 @@ async def test_artifact_backed_terminal_handoff_persists_all_fallback_cases(
 
     async def fake_write_json_artifact(**kwargs: Any) -> str:
         captured.update(kwargs)
-        return "terminal-handoff-final"
+        return "art_terminal_handoff_final"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
 
@@ -136,7 +150,7 @@ async def test_artifact_backed_terminal_handoff_persists_all_fallback_cases(
         workspace_head_ref="artifact://workspace/final",
     )
 
-    assert ref == "artifact://terminal-handoff-final"
+    assert ref == "artifact://art_terminal_handoff_final"
     assert captured["name"] == "reports/terminal_gate_handoff.json"
     assert captured["payload"]["publicationFeasible"] is feasible
     assert captured["payload"]["publicationAttempted"] is False

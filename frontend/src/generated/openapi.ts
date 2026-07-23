@@ -6839,13 +6839,25 @@ export interface components {
              * @default false
              */
             canResumeFromFailedStep: boolean;
+            /**
+             * Cancontinueremediation
+             * @default false
+             */
             canContinueRemediation: boolean;
+            /**
+             * Canretrypublication
+             * @default false
+             */
             canRetryPublication: boolean;
+            /**
+             * Canfullretry
+             * @default false
+             */
             canFullRetry: boolean;
-            actionEvidence: {
+            /** Actionevidence */
+            actionEvidence?: {
                 [key: string]: {
-                    candidateRef?: string | null;
-                    remainingWorkRef?: string | null;
+                    [key: string]: string | null;
                 };
             };
             /**

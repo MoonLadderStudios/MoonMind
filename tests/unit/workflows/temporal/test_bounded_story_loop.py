@@ -367,7 +367,10 @@ def test_remaining_work_v1_is_bounded_and_redacted() -> None:
     )
 
     assert artifact.schema_version == "remaining-work/v1"
-    assert artifact.gaps == ("implement result projection", "[REDACTED]")
+    assert artifact.gaps == (
+        "implement result projection",
+        "token=[REDACTED]",
+    )
 
 
 @pytest.mark.parametrize(
