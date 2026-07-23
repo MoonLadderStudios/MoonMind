@@ -359,6 +359,49 @@ class ControlStopContinuationContract(BaseModel):
                 effect.model_dump(by_alias=True, mode="json")
                 for effect in self.side_effects
             ],
+            "preservedExecutionEvidence": self.preserved_execution_evidence(),
+        }
+
+    def preserved_execution_evidence(self) -> dict[str, Any]:
+        """Build destination-owned evidence without fabricating source reruns.
+
+        This compact record is persisted in Temporal workflow state/history.  It
+        retains source execution identities and explicitly records that prior
+        side effects are imported dispositions rather than newly executed work.
+        """
+
+        return {
+            "schemaVersion": "control-stop-preserved-evidence/v1",
+            "source": {
+                "workflowId": self.source_workflow_id,
+                "runId": self.source_run_id,
+                "controlStopId": self.control_stop_id,
+            },
+            "destinationWorkflowId": self.destination_workflow_id,
+            "candidateState": "recovered_candidate",
+            "steps": [
+                {
+                    "sourceStepExecutionId": step.source_step_execution_id,
+                    "logicalStepId": step.logical_step_id,
+                    "executionOrdinal": step.execution_ordinal,
+                    "terminalDisposition": step.terminal_disposition,
+                    "outputRefs": dict(step.output_refs),
+                    "checkpointRef": step.checkpoint_ref,
+                    "dependencyOutputSignatures": dict(
+                        step.dependency_output_signatures
+                    ),
+                    "semanticVerdict": step.semantic_verdict,
+                    "executionManifestEmitted": False,
+                }
+                for step in self.preserved_steps
+            ],
+            "sideEffects": [
+                {
+                    **effect.model_dump(by_alias=True, mode="json"),
+                    "replayed": False,
+                }
+                for effect in self.side_effects
+            ],
         }
 
     def restore_request(self, *, destination_run_id: str) -> dict[str, Any]:

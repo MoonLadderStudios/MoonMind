@@ -125,6 +125,25 @@ def test_valid_control_stop_starts_with_remediation_on_recovered_candidate() -> 
     assert entry["runtime"] == "external/omnigent"
     assert entry["providerProfileId"] == "codex-oauth-primary"
     assert ":workspace" in entry["destinationWorkspaceId"]
+    preserved = entry["preservedExecutionEvidence"]
+    assert preserved["schemaVersion"] == "control-stop-preserved-evidence/v1"
+    assert preserved["candidateState"] == "recovered_candidate"
+    assert preserved["steps"][0]["sourceStepExecutionId"] == "source:implement:1"
+    assert preserved["steps"][0]["executionManifestEmitted"] is False
+    assert preserved["steps"][1]["terminalDisposition"] == (
+        "accepted_control_result"
+    )
+    assert preserved["steps"][1]["semanticVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert preserved["sideEffects"] == [
+        {
+            "operation": "github.issue.update",
+            "evidenceRef": "artifact://effect/github",
+            "disposition": "already_performed",
+            "idempotencyKey": None,
+            "authorizationRef": None,
+            "replayed": False,
+        }
+    ]
 
 
 def test_duplicate_contract_has_one_deterministic_destination() -> None:

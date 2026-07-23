@@ -137,10 +137,43 @@ class MoonMindControlStopContinuationWorkflow:
                 )
             )
             if remediation.failure_class:
+                # A failed AgentRun may still have modified the destination
+                # workspace. Capture that candidate under the same retry-stable
+                # attempt identity before returning the typed failure.
+                self._projection["status"] = "capturing_failed_remediation"
+                capture = ManagedWorkspaceCheckpointCaptureResult.model_validate(
+                    await _execute(
+                        _CAPTURE_ACTIVITY,
+                        contract.capture_request(
+                            destination_run_id=info.run_id,
+                            destination_workspace_locator=locator,
+                            attempt_ordinal=attempt_ordinal,
+                        ),
+                    )
+                )
+                expected_capture_key = (
+                    f"{contract.destination_workflow_id}:attempt:"
+                    f"{attempt_ordinal}:capture"
+                )
+                if (
+                    capture.status != "captured"
+                    or capture.workspace is None
+                    or not capture.workspace.archive_ref
+                    or capture.idempotency_key != expected_capture_key
+                    or capture.source_workspace_locator
+                    != restored.destination_workspace_locator
+                ):
+                    raise exceptions.ApplicationError(
+                        "failed remediation candidate could not be preserved",
+                        type="CONTROL_STOP_FAILURE_CAPTURE_EVIDENCE_MISMATCH",
+                        non_retryable=True,
+                    )
+                latest_candidate_ref = capture.workspace.archive_ref
                 self._projection.update(
                     status="failed",
                     failurePhase="remediation",
                     latestCandidateRef=latest_candidate_ref,
+                    candidateState="recovered_candidate",
                 )
                 return self._projection
 

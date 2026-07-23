@@ -152,3 +152,45 @@ async def test_workflow_preserves_latest_candidate_at_new_control_stop(
     assert result["latestCandidateRef"] == "artifact://workspace/C7"
     assert result["remainingWorkRef"] == "artifact://remaining/7"
     assert result["stopReason"] == "continuation_attempt_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_workflow_captures_candidate_after_remediation_failure(
+    monkeypatch,
+) -> None:
+    contract = ControlStopContinuationContract.model_validate(_payload())
+    info = type(
+        "Info",
+        (),
+        {"workflow_id": contract.destination_workflow_id, "run_id": "destination-run"},
+    )()
+    execute = AsyncMock(
+        side_effect=[
+            _restore(contract),
+            {
+                "failureClass": "execution_error",
+                "outputRefs": ["artifact://remediation/failure"],
+            },
+            _capture(contract, 7),
+        ]
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.control_stop_continuation.workflow.info",
+        lambda: info,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.control_stop_continuation.workflow.execute_activity",
+        execute,
+    )
+
+    result = await MoonMindControlStopContinuationWorkflow().run(_payload())
+
+    assert result["status"] == "failed"
+    assert result["failurePhase"] == "remediation"
+    assert result["candidateState"] == "recovered_candidate"
+    assert result["latestCandidateRef"] == "artifact://workspace/C7"
+    assert [call.args[0] for call in execute.await_args_list] == [
+        "agent_runtime.restore_workspace_checkpoint",
+        "integration.omnigent.profile_bound_execute",
+        "agent_runtime.capture_workspace_checkpoint",
+    ]
