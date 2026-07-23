@@ -133,6 +133,9 @@ with workflow.unsafe.imports_passed_through():
         freeze_attempt_input,
         project_head,
     )
+    from moonmind.workflows.temporal.recovery_entry import (
+        compile_recovery_entry_policy,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -229,6 +232,7 @@ JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
+RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 
 
 def bounded_story_loop_step_effects(
@@ -8275,6 +8279,28 @@ class MoonMindRunWorkflow:
             workflow_type, parameters, input_ref, plan_ref, scheduled_for = (
                 self._initialize_from_payload(input_payload)
             )
+            recovery_target = parameters.get("recoveryTarget")
+            if (
+                recovery_target is not None
+                and workflow.patched(RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH)
+            ):
+                if not isinstance(recovery_target, Mapping):
+                    raise ValueError("RECOVERY_TARGET_MISSING")
+                recovery_policy = compile_recovery_entry_policy(
+                    recovery_target,
+                    destination_workflow_id=workflow.info().workflow_id,
+                )
+                parameters["recoveryExecutionPolicy"] = dataclasses.asdict(
+                    recovery_policy
+                )
+                # Publication and restoration targets must never fall through
+                # to the ordinary semantic-work path. Their dedicated activity
+                # routes are promoted separately after replay evidence exists.
+                if (
+                    recovery_policy.publication_only
+                    or recovery_policy.restoration_only
+                ):
+                    raise ValueError("RECOVERY_PHASE_UNSUPPORTED")
         except ValueError as exc:
             raise exceptions.ApplicationError(
                 str(exc),
