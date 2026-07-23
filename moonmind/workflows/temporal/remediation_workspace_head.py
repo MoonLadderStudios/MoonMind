@@ -206,11 +206,44 @@ class WorkspaceMaterializationEvidence(_Contract):
     checkpoint_ref: str = Field(alias="checkpointRef")
     workspace_digest: str = Field(alias="workspaceDigest")
     head_version: int = Field(alias="headVersion", ge=1)
-    owner_step_execution_id: str | None = Field(None, alias="ownerStepExecutionId")
+    owner_step_execution_id: str = Field(alias="ownerStepExecutionId", min_length=1)
     mode: Literal["live", "restored"]
 
     _checkpoint_ref = field_validator("checkpoint_ref")(_artifact_ref)
     _workspace_digest = field_validator("workspace_digest")(_digest)
+
+
+class RemediationGitEvidence(_Contract):
+    """Path-free repository identity captured beside an attempt checkpoint."""
+
+    base_commit: str = Field(alias="baseCommit", min_length=7)
+    worktree_state_ref: str = Field(alias="worktreeStateRef")
+    worktree_digest: str = Field(alias="worktreeDigest")
+    candidate_ref: str | None = Field(None, alias="candidateRef")
+    candidate_diff_digest: str = Field(alias="candidateDiffDigest")
+
+    _state_ref = field_validator("worktree_state_ref")(_artifact_ref)
+    _digests = field_validator("worktree_digest", "candidate_diff_digest")(_digest)
+
+    @field_validator("base_commit")
+    @classmethod
+    def _commit_is_hex(cls, value: str) -> str:
+        candidate = value.strip().lower()
+        if len(candidate) > 64 or any(ch not in "0123456789abcdef" for ch in candidate):
+            raise ValueError("baseCommit must be a git object id")
+        return candidate
+
+    @field_validator("candidate_ref")
+    @classmethod
+    def _candidate_ref_is_symbolic(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate.startswith(("refs/heads/", "refs/tags/")) or any(
+            token in candidate.lower() for token in ("..", "token=", "password=")
+        ):
+            raise ValueError("candidateRef must be a safe symbolic git ref")
+        return candidate
 
 
 def freeze_attempt_input(head: RemediationWorkspaceHead, attempt_ordinal: int) -> RemediationAttemptInput:
@@ -229,6 +262,8 @@ def authorize_materialization(
     head: RemediationWorkspaceHead,
     attempt: RemediationAttemptInput,
     evidence: WorkspaceMaterializationEvidence,
+    *,
+    expected_owner_step_execution_id: str,
 ) -> None:
     expected = (head.loop_id, head.head_checkpoint_ref, head.head_workspace_digest, head.head_version)
     actual = (evidence.loop_id, evidence.checkpoint_ref, evidence.workspace_digest, evidence.head_version)
@@ -238,6 +273,11 @@ def authorize_materialization(
     if actual != expected:
         code = REMEDIATION_HEAD_RESTORE_INVALID if evidence.mode == "restored" else REMEDIATION_HEAD_MISMATCH
         raise RemediationHeadError(code, "materialized workspace does not match the current head")
+    if evidence.owner_step_execution_id != expected_owner_step_execution_id:
+        raise RemediationHeadError(
+            REMEDIATION_HEAD_MISMATCH,
+            "materialized workspace is owned by another Step Execution",
+        )
 
 
 def advance_head(
@@ -346,4 +386,3 @@ def project_head(head: RemediationWorkspaceHead) -> dict[str, Any]:
         "headVersion": head.head_version,
     }
     return payload
-

@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     REMEDIATION_VERIFIER_CONTAMINATION,
     RemediationAttemptOutput,
     RemediationHeadError,
+    RemediationGitEvidence,
     RemediationWorkspaceHead,
     VerificationEvidence,
     WorkspaceMaterializationEvidence,
@@ -92,11 +93,30 @@ def test_live_or_cold_workspace_requires_exact_owner_head_evidence(mode: str) ->
         "workspaceDigest": head.head_workspace_digest, "headVersion": head.head_version,
         "ownerStepExecutionId": "step:1", "mode": mode,
     })
-    authorize_materialization(head, attempt, evidence)
+    authorize_materialization(
+        head, attempt, evidence, expected_owner_step_execution_id="step:1"
+    )
     bad = evidence.model_copy(update={"workspace_digest": "sha256:wrong"})
     with pytest.raises(RemediationHeadError) as exc:
-        authorize_materialization(head, attempt, bad)
+        authorize_materialization(
+            head, attempt, bad, expected_owner_step_execution_id="step:1"
+        )
     assert exc.value.code == (REMEDIATION_HEAD_RESTORE_INVALID if mode == "restored" else REMEDIATION_HEAD_MISMATCH)
+
+
+def test_live_workspace_owned_by_another_step_is_rejected() -> None:
+    head = _head()
+    attempt = freeze_attempt_input(head, 1)
+    evidence = WorkspaceMaterializationEvidence.model_validate({
+        "loopId": head.loop_id, "checkpointRef": head.head_checkpoint_ref,
+        "workspaceDigest": head.head_workspace_digest, "headVersion": head.head_version,
+        "ownerStepExecutionId": "step:other", "mode": "live",
+    })
+    with pytest.raises(RemediationHeadError) as exc:
+        authorize_materialization(
+            head, attempt, evidence, expected_owner_step_execution_id="step:1"
+        )
+    assert exc.value.code == REMEDIATION_HEAD_MISMATCH
 
 
 def test_capture_failure_keeps_prior_head_and_capture_must_precede_advance() -> None:
@@ -185,3 +205,23 @@ def test_contracts_reject_raw_payload_fields() -> None:
     payload["providerPayload"] = {"token": "secret"}
     with pytest.raises(ValidationError):
         RemediationWorkspaceHead.model_validate(payload)
+
+
+def test_git_evidence_is_path_free_and_digest_bound() -> None:
+    evidence = RemediationGitEvidence.model_validate({
+        "baseCommit": "0123456789abcdef",
+        "worktreeStateRef": "artifact://git/worktree-state/1",
+        "worktreeDigest": "sha256:worktree",
+        "candidateRef": "refs/heads/remediation/loop-01",
+        "candidateDiffDigest": "sha256:diff",
+    })
+    assert evidence.base_commit == "0123456789abcdef"
+    for field, value in (
+        ("worktreeStateRef", "/tmp/worktree"),
+        ("candidateRef", "/tmp/branch"),
+        ("baseCommit", "not-a-commit"),
+    ):
+        payload = evidence.model_dump(by_alias=True)
+        payload[field] = value
+        with pytest.raises(ValidationError):
+            RemediationGitEvidence.model_validate(payload)
