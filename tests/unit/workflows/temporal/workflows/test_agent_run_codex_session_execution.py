@@ -9,6 +9,7 @@ from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRuntimeStepExecutionLaunch,
     AgentTerminalContract,
     AgentRunHandle,
     AgentRunResult,
@@ -105,6 +106,17 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     request = AgentExecutionRequest.model_validate(
         _request_with_terminal_contract().model_dump(by_alias=True)
     )
+    request.parameters["_moonmindActiveSkillsDir"] = (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
+    request.step_execution = AgentRuntimeStepExecutionLaunch(
+        workflowId="wf-task-1",
+        runId="run-1",
+        logicalStepId="batch-workflows",
+        executionOrdinal=2,
+        stepExecutionId="wf-task-1:run-1:batch-workflows:execution:2",
+        runtimeContextPolicy="reuse_session_same_epoch",
+    )
     calls: list[tuple[str, Any]] = []
     evaluations = 0
 
@@ -149,6 +161,12 @@ async def test_terminal_contract_continuation_is_agent_run_owned_and_bounded(
     turn = calls[2][1]
     assert turn.request_id == "idem-managed-1:terminal-contract:1"
     assert turn.session_epoch == 0
+    assert turn.environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
+        "MOONMIND_STEP_EXECUTION_ID": (
+            "wf-task-1:run-1:batch-workflows:execution:2"
+        ),
+    }
 
 
 async def test_terminal_contract_fails_immediately_when_runtime_cannot_continue(

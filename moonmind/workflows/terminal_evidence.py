@@ -300,8 +300,16 @@ def evaluate_terminal_evidence(
     targets_root = workspace
     targets_evidence_relative = targets_relative_path
     if artifact_spool_path and targets_relative_path.parts[:1] == ("artifacts",):
-        targets_root = Path(artifact_spool_path).resolve()
-        targets_evidence_relative = Path(*targets_relative_path.parts[1:])
+        spool_root = Path(artifact_spool_path).resolve()
+        spool_relative = Path(*targets_relative_path.parts[1:])
+        spool_targets_path = (spool_root / spool_relative).resolve()
+        try:
+            spool_targets_path.relative_to(spool_root)
+        except ValueError:
+            return TerminalEvidenceEvaluation(False, "INVALID_TERMINAL_EVIDENCE")
+        if spool_targets_path.is_file():
+            targets_root = spool_root
+            targets_evidence_relative = spool_relative
     targets_path = (targets_root / targets_evidence_relative).resolve()
     try:
         targets_path.relative_to(targets_root)

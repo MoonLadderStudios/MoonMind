@@ -3911,6 +3911,9 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
             "wf-user-1:run-user-1:queue-github-issues:execution:2"
         ),
     }
+    assert request.parameters["_moonmindActiveSkillsDir"] == (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
     assert control_calls[0] == {
         "action": "resume_session",
         "containerId": "container-existing",

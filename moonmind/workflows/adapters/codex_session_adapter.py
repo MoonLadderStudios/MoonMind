@@ -46,6 +46,7 @@ from moonmind.schemas.managed_session_models import (
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
+    build_codex_managed_session_turn_environment,
     canonical_managed_session_runtime_id,
     managed_session_runtime_family_for_runtime_id,
 )
@@ -684,7 +685,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             )
         session_environment = dict(launch_context.delta_env_overrides)
         active_skills_dir = str(
-            request.parameters.pop("_moonmindActiveSkillsDir", "")
+            request.parameters.get("_moonmindActiveSkillsDir", "")
         ).strip()
         if active_skills_dir:
             session_environment["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir
@@ -692,14 +693,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             session_environment["MOONMIND_STEP_EXECUTION_ID"] = (
                 request.step_execution.step_execution_id
             )
-        turn_environment = {
-            key: session_environment[key]
-            for key in (
-                "MOONMIND_ACTIVE_SKILLS_DIR",
-                "MOONMIND_STEP_EXECUTION_ID",
-            )
-            if key in session_environment
-        }
+        turn_environment = build_codex_managed_session_turn_environment(
+            active_skills_dir=active_skills_dir or None,
+            step_execution_id=(
+                request.step_execution.step_execution_id
+                if request.step_execution is not None
+                else None
+            ),
+        )
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,

@@ -25,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionBinding,
         CodexManagedSessionWorkflowInput,
         SendCodexManagedSessionTurnRequest,
+        build_codex_managed_session_turn_environment,
         canonical_managed_session_runtime_id,
     )
     from moonmind.schemas.temporal_activity_models import (
@@ -2327,6 +2328,16 @@ class MoonMindAgentRun:
                 reason="incomplete_terminal_contract",
                 requestId=(
                     f"{request.idempotency_key}:terminal-contract:{continuation}"
+                ),
+                environment=build_codex_managed_session_turn_environment(
+                    active_skills_dir=str(
+                        request.parameters.get("_moonmindActiveSkillsDir") or ""
+                    ),
+                    step_execution_id=(
+                        request.step_execution.step_execution_id
+                        if request.step_execution is not None
+                        else None
+                    ),
                 ),
             )
             history.append(

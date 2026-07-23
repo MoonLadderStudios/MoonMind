@@ -95,6 +95,27 @@ def test_batch_terminal_reads_result_and_targets_from_artifact_spool(
     assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]
 
 
+def test_batch_terminal_reads_spooled_result_with_workspace_targets(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    _write(workspace, status="queued", requested=1, queued=[{"executionId": "child-1"}])
+    spool.mkdir()
+    (workspace / "artifacts/batch-workflows-result.json").replace(
+        spool / "batch-workflows-result.json"
+    )
+
+    result = evaluate_terminal_evidence(
+        _contract(),
+        workspace_path=str(workspace),
+        artifact_spool_path=str(spool),
+    )
+
+    assert result.satisfied is True
+    assert result.metadata["queuedChildren"] == [{"executionId": "child-1"}]
+
+
 def test_batch_terminal_accepts_preflight_failure_without_target_list(
     tmp_path: Path,
 ) -> None:

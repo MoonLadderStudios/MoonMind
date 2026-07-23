@@ -47,6 +47,20 @@ _PER_TURN_SESSION_ENV_KEYS = frozenset(
     }
 )
 
+def build_codex_managed_session_turn_environment(
+    *,
+    active_skills_dir: str | None,
+    step_execution_id: str | None,
+) -> dict[str, str]:
+    """Build the bounded environment refreshed for each managed Codex turn."""
+
+    environment: dict[str, str] = {}
+    if active_skills_dir and active_skills_dir.strip():
+        environment["MOONMIND_ACTIVE_SKILLS_DIR"] = active_skills_dir.strip()
+    if step_execution_id and step_execution_id.strip():
+        environment["MOONMIND_STEP_EXECUTION_ID"] = step_execution_id.strip()
+    return environment
+
 ManagedSessionControlAction = Literal[
     "start_session",
     "resume_session",
@@ -4901,6 +4915,7 @@ __all__ = [
     "PublishCodexManagedSessionArtifactsRequest",
     "PublishManagedSessionArtifactsRequest",
     "build_claude_child_work_fixture_flow",
+    "build_codex_managed_session_turn_environment",
     "build_claude_governance_telemetry_fixture_flow",
     "build_claude_surface_handoff_fixture_flow",
     "claude_checkpoint_capture_decision",
