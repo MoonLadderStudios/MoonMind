@@ -379,7 +379,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_implement_steps[2] == "jira.check_blockers"
         assert jira_implement_steps[3] == "jira.update_issue_status"
         assert jira_implement_steps[-1] == "jira-issue-updater"
-        assert len(jira_implement_steps) == 20
+        assert len(jira_implement_steps) == 9
         implement_step_titles = [step["title"] for step in expanded_steps]
         assert implement_step_titles[0] == "Load Jira preset brief"
         assert implement_step_titles[1] == "Assess existing implementation state"
@@ -387,8 +387,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_step_titles[3] == "Move Jira issue to In Progress"
         assert "Implement the issue" in implement_step_titles
         assert "Verify implementation" in implement_step_titles
-        assert "Remediate verification gaps — attempt 1 of 6" in implement_step_titles
-        assert "Verify remediation attempt 6 of 6" in implement_step_titles
+        assert "Remediation loop controller" in implement_step_titles
         assert "Create pull request" in implement_step_titles
         assert implement_step_titles[-1] == "Finalize Jira status"
         implement_brief_step = expanded_steps[0]
@@ -487,27 +486,18 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         remediation_step = next(
             step
             for step in expanded_steps
-            if step["title"] == "Remediate verification gaps — attempt 1 of 6"
+            if step["title"] == "Remediation loop controller"
         )
-        assert remediation_step["annotations"] == {
-            "issueImplementRole": "moonspec-remediation",
-            "moonSpecRemediationAttempt": 1,
-            "moonSpecRemediationMaxAttempts": 6,
-        }
-        verify_remediation_step = next(
-            step
-            for step in expanded_steps
-            if step["title"] == "Verify remediation attempt 6 of 6"
+        assert remediation_step["annotations"]["issueImplementRole"] == (
+            "moonspec-remediation-loop"
         )
-        assert verify_remediation_step["skill"]["args"]["verify_artifact_path"] == (
-            "artifacts/jira-implement-verify.json"
-        )
-        assert verify_remediation_step["annotations"] == {
-            "issueImplementRole": "moonspec-verification-gate",
-            "moonSpecRemediationAttempt": 6,
-            "moonSpecRemediationMaxAttempts": 6,
-            "moonSpecFinalRemediationGate": True,
-        }
+        remediation_loop = remediation_step["annotations"]["remediationLoop"]
+        assert remediation_loop["kind"] == "remediation_loop"
+        assert remediation_loop["budgets"]["hardMaxAttempts"] == "6"
+        assert remediation_loop["workspacePolicy"] == "continue_from_loop_head"
+        assert remediation_loop["verificationTool"]["inputs"][
+            "verify_artifact_path"
+        ] == "artifacts/jira-implement-verify.json"
         assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
             implement_pr_step["instructions"]
         )
