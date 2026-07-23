@@ -102,7 +102,7 @@ def _payload(kind: str = "failed_step") -> dict:
         "capabilitySnapshot": capability,
         "preservedStepRefs": ["artifact://preserved-step"],
         "sideEffectDispositionRef": "artifact://side-effects",
-        "sideEffectSafe": True,
+        "sideEffectDisposition": "preserved_idempotent",
         "destination": {
             "workflowId": "recovery-workflow",
             "creationKey": creation_key,
@@ -213,6 +213,39 @@ def test_failed_first_step_does_not_require_preserved_refs() -> None:
     payload["preservedStepRefs"] = []
 
     WorkflowRecoveryTargetModel.model_validate(payload).require_admitted()
+
+
+@pytest.mark.parametrize(
+    ("disposition", "reconciliation_ref", "admitted"),
+    [
+        ("preserved_idempotent", None, True),
+        ("accepted_not_replayed", None, True),
+        ("compensated", None, True),
+        ("requires_reconciliation", "artifact://side-effect-reconciliation", True),
+        ("requires_reconciliation", None, False),
+        ("blocked", "artifact://side-effect-reconciliation", False),
+        ("unsafe", None, False),
+    ],
+)
+def test_side_effect_disposition_is_admitted_by_typed_classification(
+    disposition: str,
+    reconciliation_ref: str | None,
+    admitted: bool,
+) -> None:
+    payload = _payload()
+    payload["sideEffectDisposition"] = disposition
+    if reconciliation_ref:
+        payload["sideEffectReconciliationRef"] = reconciliation_ref
+    contract = WorkflowRecoveryTargetModel.model_validate(payload)
+
+    dimension = next(
+        item for item in contract.admission() if item.dimension == "side_effect"
+    )
+
+    assert dimension.admitted is admitted
+    assert dimension.reason_code == (
+        None if admitted else "RECOVERY_SIDE_EFFECT_UNSAFE"
+    )
 
 
 def test_creation_key_includes_continuation_phase() -> None:

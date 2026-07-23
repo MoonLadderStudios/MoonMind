@@ -20,6 +20,8 @@ class RecoveryEntryPolicy:
     publication_idempotency_key: str | None
     publication_observation_ref: str | None
     side_effect_disposition_ref: str
+    side_effect_disposition: str
+    side_effect_reconciliation_ref: str | None
     execution_route: str
     requires_budget_authority: bool
     requires_side_effect_authority: bool
@@ -63,6 +65,8 @@ def compile_recovery_entry_policy(
         publication_idempotency_key=contract.target.publication_idempotency_key,
         publication_observation_ref=contract.target.publication_observation_ref,
         side_effect_disposition_ref=contract.side_effect_disposition_ref,
+        side_effect_disposition=contract.side_effect_disposition,
+        side_effect_reconciliation_ref=contract.side_effect_reconciliation_ref,
         execution_route=execution_routes[phase],
         requires_budget_authority=phase == "continue_to_remediation",
         requires_side_effect_authority=True,

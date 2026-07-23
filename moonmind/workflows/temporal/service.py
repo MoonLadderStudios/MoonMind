@@ -3420,14 +3420,6 @@ class TemporalExecutionService:
             raise TemporalExecutionRecoveryCheckpointError(
                 "RECOVERY_PHASE_UNSUPPORTED"
             )
-        if target.target.kind == "failed_step" and target.preserved_step_refs:
-            # The existing resume path materializes preserved steps from their
-            # expanded identities and output refs. Ref-only typed collections
-            # are not dereferenced by the workflow yet, so admitting them would
-            # repeat already completed work.
-            raise TemporalExecutionRecoveryCheckpointError(
-                "RECOVERY_PHASE_UNSUPPORTED"
-            )
         trusted_capabilities = resolve_runtime_execution_capabilities(
             target.destination.runtime_id
         )
@@ -3503,6 +3495,11 @@ class TemporalExecutionService:
             },
             "preservedSteps": [],
             "preservedStepRefs": list(target.preserved_step_refs),
+            "sideEffectDisposition": target.side_effect_disposition,
+            "sideEffectDispositionRef": target.side_effect_disposition_ref,
+            "sideEffectReconciliationRef": (
+                target.side_effect_reconciliation_ref
+            ),
             "selectedStartStepId": target.target.logical_step_id,
             "selectedStartStepExecution": target.target.source_step_execution_id,
             "recoveryMode": "selected_step",
@@ -3513,6 +3510,10 @@ class TemporalExecutionService:
             "checkpointDigest": target.checkpoint.digest,
             "preservedStepRefs": list(target.preserved_step_refs),
             "sideEffectDispositionRef": target.side_effect_disposition_ref,
+            "sideEffectDisposition": target.side_effect_disposition,
+            "sideEffectReconciliationRef": (
+                target.side_effect_reconciliation_ref
+            ),
             "destinationWorkflowId": target.destination.workflow_id,
             "destinationRunId": destination_run_id,
             "destinationWorkspaceReservationId": (

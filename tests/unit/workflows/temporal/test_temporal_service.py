@@ -3700,7 +3700,7 @@ def _typed_failed_step_recovery_target(
             "capabilitySnapshot": capability,
             "preservedStepRefs": [],
             "sideEffectDispositionRef": "artifact://side-effects",
-            "sideEffectSafe": True,
+            "sideEffectDisposition": "preserved_idempotent",
             "destination": {
                 "workflowId": destination_workflow_id,
                 "creationKey": deterministic_recovery_creation_key(
@@ -3782,6 +3782,12 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
         )
         assert destination.parameters["recoverySource"]["recoveryCheckpointRef"] == (
             "artifact://checkpoint/source"
+        )
+        assert destination.parameters["recoverySource"]["preservedStepRefs"] == [
+            "artifact://preserved-step"
+        ]
+        assert destination.parameters["recoveryLineage"]["sideEffectDisposition"] == (
+            "preserved_idempotent"
         )
         assert "agentRunId" not in destination.parameters
         refreshed_source = await session.get(

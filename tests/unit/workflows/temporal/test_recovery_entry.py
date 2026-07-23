@@ -29,6 +29,8 @@ def test_failed_step_entry_compiles_before_semantic_work() -> None:
     assert policy.publication_only is False
     assert policy.restoration_only is False
     assert policy.side_effect_disposition_ref == "artifact://side-effects"
+    assert policy.side_effect_disposition == "preserved_idempotent"
+    assert policy.side_effect_reconciliation_ref is None
     assert policy.execution_route == "failed_step"
     assert policy.requires_budget_authority is False
     assert policy.requires_side_effect_authority is True
@@ -43,7 +45,7 @@ def test_entry_rejects_destination_identity_mismatch() -> None:
 
 def test_entry_independently_readmits_frozen_contract() -> None:
     payload = copy.deepcopy(_payload())
-    payload["sideEffectSafe"] = False
+    payload["sideEffectDisposition"] = "unsafe"
 
     with pytest.raises(ValueError, match="RECOVERY_SIDE_EFFECT_UNSAFE"):
         compile_recovery_entry_policy(

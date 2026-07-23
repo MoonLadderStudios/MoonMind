@@ -24,6 +24,14 @@ RecoveryContinuationPhase = Literal[
     "resume_publication",
     "retry_restoration",
 ]
+RecoverySideEffectDisposition = Literal[
+    "preserved_idempotent",
+    "accepted_not_replayed",
+    "requires_reconciliation",
+    "compensated",
+    "blocked",
+    "unsafe",
+]
 
 RECOVERY_ADMISSION_REASONS = (
     "RECOVERY_TARGET_MISSING",
@@ -161,7 +169,9 @@ class WorkflowRecoveryTargetModel(BaseModel):
     side_effect_disposition_ref: str = Field(
         ..., alias="sideEffectDispositionRef", min_length=1
     )
-    side_effect_safe: bool = Field(..., alias="sideEffectSafe")
+    side_effect_disposition: RecoverySideEffectDisposition = Field(
+        ..., alias="sideEffectDisposition"
+    )
     side_effect_reconciliation_ref: str | None = Field(
         None, alias="sideEffectReconciliationRef"
     )
@@ -216,7 +226,14 @@ class WorkflowRecoveryTargetModel(BaseModel):
             in tuple(capability.get("checkpointRestoreKinds", ()))
             and capability.get("checkpointRestoreActivity")
         )
-        side_effect_ok = self.side_effect_safe
+        side_effect_ok = self.side_effect_disposition in {
+            "preserved_idempotent",
+            "accepted_not_replayed",
+            "compensated",
+        } or (
+            self.side_effect_disposition == "requires_reconciliation"
+            and bool(self.side_effect_reconciliation_ref)
+        )
         budget_ok = not (
             target.kind == "control_stop"
             and not self.continuation.new_budget_ref
@@ -358,6 +375,7 @@ __all__ = [
     "RecoveryContinuationModel",
     "RecoveryDestinationModel",
     "RecoverySourceIdentityModel",
+    "RecoverySideEffectDisposition",
     "RecoveryTargetModel",
     "WorkflowRecoveryTargetModel",
     "deterministic_recovery_creation_key",
