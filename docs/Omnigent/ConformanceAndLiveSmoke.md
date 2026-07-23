@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-07-22
-**Authority:** MoonLadderStudios/MoonMind#3456 product acceptance and conformance evidence contract
+**Updated:** 2026-07-23
+**Authority:** MoonLadderStudios/MoonMind#3456 product acceptance and MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -102,8 +102,23 @@ removes that project's containers and networks only; it intentionally never
 passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
 runner always attempts cleanup and evidence scanning, including after a failed
 startup or journey. `--mode static` covers restart and replay; `stock`,
-`product`, `ondemand`, and `failures` can be gated independently in provider
+`product`, `cumulative`, `ondemand`, and `failures` can be gated independently in provider
 environments.
+
+The cumulative mode is the controlling gate for #3480. It begins at the same
+normal create boundary as the product mode and records authored state,
+`external/omnigent` compilation, and the exact selected profile. It then proves
+C0 → C1 → C2 across distinct workspaces, leases, hosts, sessions, and first
+messages. The attempt-one source workspace, process, session, host, and
+host-local state are removed after C1 is durable and before attempt two
+restores it. Verification is read-only, Workflow Detail remains available
+after cleanup, and Provider Profile release is the final owned side effect.
+
+The same evidence records idempotent terminal control-stop continuation,
+preservation of prior side effects, the integrated failure matrix, and canary,
+disable-new-selection, rollback, historical-read, and worker-version replay
+outcomes. A missing or false assertion fails publication; there is no
+fresh-root, alternate-profile, direct-Codex, or lower-level fallback.
 
 ## Credentialed CI publication
 
@@ -116,13 +131,14 @@ the digest-pinned server and host images plus the four bounded evidence-channel
 paths. Manual dispatch may override the two image references, but the workflow
 rejects mutable references before provider execution.
 
-Normal-create product journey, stock proxy, static restart/replay, on-demand
-lifecycle, and failure/redaction run as independent matrix jobs. Each job
-uploads evidence even on failure. The publication job runs only after all five
+Normal-create product journey, cumulative remediation, stock proxy, static
+restart/replay, on-demand lifecycle, and failure/redaction run as independent
+matrix jobs. Each job uploads evidence even on failure. The publication job
+runs only after all six
 jobs pass, combines their reports, and uploads a
-`moonmind.omnigent.product-acceptance/v1` manifest with the five report trees as
-the durable GitHub Actions artifact. It links that passing report from #3456
-and parent #3448. A configured workflow, fixture-generated success, or an
+`moonmind.omnigent.product-acceptance/v1` manifest with the six report trees as
+the durable GitHub Actions artifact. It links that passing report from #3480,
+parent #3471, #3456, and parent #3448. A configured workflow, fixture-generated success, or an
 individual passing case is not published acceptance evidence.
 
 Omnigent selection remains evidence-gated and must not become a general default

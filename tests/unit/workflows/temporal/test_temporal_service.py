@@ -55,6 +55,13 @@ from moonmind.schemas.temporal_models import (
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.schemas.workflow_recovery_models import (
+    WorkflowRecoveryTargetModel,
+    deterministic_recovery_creation_key,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     canonicalize_workflow_state_alias,
@@ -3658,6 +3665,131 @@ def test_recovery_checkpoint_model_allows_checkpoint_payload_ref_keys() -> None:
         "checkpoint_payload_ref": "artifact://checkpoint/payload",
         "inline_checkpoint_metadata": "artifact://checkpoint/metadata",
     }
+
+
+def _typed_failed_step_recovery_target(
+    *, source_workflow_id: str, source_run_id: str, destination_workflow_id: str
+) -> WorkflowRecoveryTargetModel:
+    capability = resolve_runtime_execution_capabilities("omnigent").model_dump(
+        by_alias=True, mode="json"
+    )
+    checkpoint_digest = "sha256:typed-checkpoint"
+    return WorkflowRecoveryTargetModel.model_validate(
+        {
+            "target": {
+                "kind": "failed_step",
+                "logicalStepId": "implement",
+                "sourceStepExecutionId": "step-execution-1",
+            },
+            "source": {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "planRef": "artifact://plan/source",
+                "planDigest": "sha256:plan",
+                "taskInputSnapshotRef": "artifact://snapshot/source",
+            },
+            "checkpoint": {
+                "ref": "artifact://checkpoint/source",
+                "boundary": "before_execution",
+                "kind": "worktree_archive",
+                "digest": checkpoint_digest,
+                "validationRef": "artifact://checkpoint-validation",
+                "sourceWorkspaceRef": "workspace://source",
+            },
+            "continuation": {"phase": "rerun_failed_step"},
+            "capabilitySnapshot": capability,
+            "preservedStepRefs": [],
+            "sideEffectDispositionRef": "artifact://side-effects",
+            "sideEffectSafe": True,
+            "destination": {
+                "workflowId": destination_workflow_id,
+                "creationKey": deterministic_recovery_creation_key(
+                    source_workflow_id,
+                    source_run_id,
+                    "failed_step",
+                    checkpoint_digest,
+                    "rerun_failed_step",
+                ),
+                "runtimeId": "omnigent",
+                "executionProfileRef": "provider-profile:primary",
+                "workspaceReservationId": "workspace-reservation:destination",
+            },
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="typed recovery source",
+            input_artifact_ref="artifact://snapshot/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "agentRunId": "source-agent-run",
+                "workflow": {"title": "source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        canonical_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert canonical_source is not None
+        canonical_source.state = MoonMindWorkflowState.FAILED
+        canonical_source.close_status = TemporalExecutionCloseStatus.FAILED
+        canonical_source.artifact_refs = list(canonical_source.artifact_refs or []) + [
+            "artifact://checkpoint/source",
+            "artifact://checkpoint-validation",
+        ]
+        await session.commit()
+        target = _typed_failed_step_recovery_target(
+            source_workflow_id=canonical_source.workflow_id,
+            source_run_id=canonical_source.run_id,
+            destination_workflow_id="mm:typed-recovery-destination",
+        )
+
+        first = await service.create_typed_recovery_execution(
+            canonical_source, recovery_target=target
+        )
+        second = await service.create_typed_recovery_execution(
+            canonical_source, recovery_target=target
+        )
+
+        assert first["execution"] == second["execution"]
+        assert first["execution"]["workflowId"] == "mm:typed-recovery-destination"
+        destination = await service.describe_execution(
+            first["execution"]["workflowId"]
+        )
+        assert destination.parameters["recoveryTarget"] == target.model_dump(
+            by_alias=True, mode="json"
+        )
+        assert destination.parameters["recoveryLineage"]["source"] == {
+            "workflowId": canonical_source.workflow_id,
+            "runId": canonical_source.run_id,
+            "planRef": "artifact://plan/source",
+            "planDigest": "sha256:plan",
+            "taskInputSnapshotRef": "artifact://snapshot/source",
+        }
+        assert destination.parameters["recoveryLineage"]["destinationRunId"] == (
+            destination.run_id
+        )
+        assert destination.parameters["recoverySource"]["recoveryCheckpointRef"] == (
+            "artifact://checkpoint/source"
+        )
+        assert "agentRunId" not in destination.parameters
+        refreshed_source = await session.get(
+            TemporalExecutionCanonicalRecord, source.workflow_id
+        )
+        assert refreshed_source is not None
+        assert refreshed_source.state is MoonMindWorkflowState.FAILED
+        assert "recoveryTarget" not in refreshed_source.parameters
 
 
 @pytest.mark.asyncio

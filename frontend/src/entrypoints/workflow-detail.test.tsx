@@ -7097,6 +7097,21 @@ describe('Workflow Detail Entrypoint', () => {
                 baseRef: 'origin/main',
                 commitCount: 0,
                 pullRequestUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/456',
+                remediationLoop: {
+                  loopId: 'issue-implementation-remediation',
+                  status: 'verification_pending',
+                  attemptOrdinal: 1,
+                  hardMaxAttempts: 6,
+                  workspaceHeadRef: 'artifact://workspace/C1',
+                  latestVerdict: 'ADDITIONAL_WORK_NEEDED',
+                  continuationReason: 'remaining_work_admitted',
+                  continueAsNewCount: 0,
+                  materializedAttempts: [{
+                    attempt: 1,
+                    remediationStatus: 'completed',
+                    verificationStatus: 'ready',
+                  }],
+                },
               },
               lastStep: {
                 summary: 'Files edited in this run: none',
@@ -7127,6 +7142,10 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Run Summary')).toBeTruthy();
       expect(screen.getByText('feature/no-op')).toBeTruthy();
       expect(screen.getByText('origin/main')).toBeTruthy();
+      expect(screen.getByText('Remediation Loop')).toBeTruthy();
+      expect(screen.getByText('1 of 6')).toBeTruthy();
+      expect(screen.getByText('artifact://workspace/C1')).toBeTruthy();
+      expect(screen.getByText(/Attempt 1: remediation completed; verification ready/)).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/456' })).toBeTruthy();
       expect(screen.getAllByText(/no publishable diff was produced/).length).toBeGreaterThan(0);
     });

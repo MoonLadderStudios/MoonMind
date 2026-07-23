@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
+    RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
@@ -303,6 +304,11 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
         run_workflow_module.workflow,
         "wait_condition",
         _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "all_handlers_finished",
+        lambda: True,
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -3393,6 +3399,769 @@ def test_moonspec_verify_gate_skips_loop_steps_after_passing_verdict(
     assert reason == (
         "Skipped MoonSpec remediation loop step because verification already "
         "passed with verdict FULLY_IMPLEMENTED."
+    )
+
+
+def test_user_workflow_initializes_one_dynamic_loop_and_materializes_one_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {
+            "hardMaxAttempts": 6,
+            "maxConsecutiveSemanticNoProgress": 2,
+            "maxRepeatedFailureSignature": 2,
+        },
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+        "continueAsNewAttemptThreshold": 3,
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {
+                "id": "controller",
+                "annotations": {"remediationLoop": loop},
+            }
+        ]
+    )
+
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["status"] == "initial_verification_pending"
+    assert projection["attemptOrdinal"] == 0
+    remediation, verification = (
+        mock_run_workflow._materialize_remediation_attempt(ordinal=1)
+    )
+    assert remediation["annotations"]["moonSpecRemediationAttempt"] == 1
+    assert verification["dependsOn"] == [remediation["id"]]
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await (
+        mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=ordered_nodes,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V0",
+            remaining_work_ref="artifact://remaining/R0",
+        )
+    )
+
+    assert admitted is True
+    assert len(ordered_nodes) == 2
+    remediation, verification = ordered_nodes
+    assert remediation["id"].endswith(":remediation:1")
+    assert verification["dependsOn"] == [remediation["id"]]
+    assert [row["status"] for row in mock_run_workflow._step_ledger_rows] == [
+        "ready",
+        "pending",
+    ]
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["attemptOrdinal"] == 1
+    assert projection["status"] == "remediation_running"
+    assert projection["latestVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert projection["continuationDecisionRef"] == "artifact://decision/D0"
+    mock_run_workflow._write_json_artifact.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_inserts_attempt_before_handoff_nodes(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "verificationTool": {"type": "agent_runtime", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 2},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[{"id": "controller", "annotations": {"remediationLoop": loop}}]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    ordered_nodes = [
+        {"id": "initial-verifier"},
+        {"id": "controller"},
+        {"id": "create-pr"},
+    ]
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        current_index=1,
+    )
+
+    assert admitted is True
+    assert ordered_nodes[1]["id"].endswith(":remediation:1")
+    assert ordered_nodes[2]["id"].endswith(":verification:1")
+    assert [node["id"] for node in ordered_nodes[3:]] == [
+        "controller",
+        "create-pr",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_terminal_decision_does_not_append_attempt(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 1},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/pass"
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await (
+        mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=ordered_nodes,
+            verdict="FULLY_IMPLEMENTED",
+            gate_result_ref="artifact://verification/pass",
+            remaining_work_ref=None,
+        )
+    )
+
+    assert admitted is False
+    assert ordered_nodes == []
+    assert (
+        mock_run_workflow._publish_context["remediationLoop"]["status"]
+        == "accepted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        side_effect=["artifact://decision/D0", "artifact://decision/D1"]
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+    await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+    remediation, verification = ordered_nodes
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+    remediation_inputs = dict(remediation["inputs"])
+    remediation_inputs["remediationWorkspaceHead"] = _remediation_head_payload()
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=remediation,
+        node_inputs=remediation_inputs,
+    )
+    mock_run_workflow._advance_remediation_workspace_head(
+        node=remediation,
+        node_inputs=remediation_inputs,
+        execution_result={
+            "outputs": {
+                "remediationAttemptOutput": {
+                    "attemptEvidenceRef": "artifact://attempt/1",
+                    "parentCheckpointRef": "artifact://workspace/C0",
+                    "parentWorkspaceDigest": "sha256:c0",
+                    "outputCheckpointRef": "artifact://workspace/C1",
+                    "outputWorkspaceDigest": "sha256:c1",
+                    "checkpointManifestRef": "artifact://manifest/C1",
+                    "outcome": "candidate_captured",
+                }
+            }
+        },
+        step_execution_id="wf:run:loop:remediation:1",
+    )
+    assert mock_run_workflow._publish_context["remediationLoop"]["status"] == (
+        "verification_pending"
+    )
+    verification_inputs = dict(verification["inputs"])
+    mock_run_workflow._inject_remediation_verification_baseline(
+        node=verification,
+        node_inputs=verification_inputs,
+    )
+    assert verification_inputs["remediationWorkspaceHeadRef"] == (
+        "artifact://workspace/C1"
+    )
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V1",
+        remaining_work_ref="artifact://remaining/R1",
+    )
+
+    assert admitted is True
+    assert len(ordered_nodes) == 4
+    assert ordered_nodes[2]["id"].endswith(":remediation:2")
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["attemptOrdinal"] == 2
+    assert projection["workspaceHeadRef"] == "artifact://workspace/C1"
+    assert len(projection["materializedAttempts"]) == 2
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "initial_verification_pending",
+        "initial_verification_running",
+        "initial_verification_evaluating",
+        "remediation_pending",
+        "remediation_running",
+        "candidate_capturing",
+        "verification_pending",
+        "verification_running",
+        "verification_evaluating",
+        "continuation_deciding",
+    ],
+)
+def test_dynamic_loop_restart_at_each_nonterminal_phase_preserves_identity_and_evidence(
+    mock_run_workflow: MoonMindRunWorkflow,
+    phase: str,
+) -> None:
+    """A worker restart restores state; it never admits or duplicates a pair."""
+    from moonmind.workflows.temporal.remediation_loop import RemediationLoopSpec
+
+    mock_run_workflow._remediation_loop_spec = RemediationLoopSpec.model_validate(
+        {
+            "loopId": "loop",
+            "remediationTool": {"type": "skill", "name": "auto"},
+            "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+            "workspacePolicy": "continue_from_loop_head",
+            "budgets": {"hardMaxAttempts": 6},
+            "terminalPolicy": {
+                "fullyImplemented": "advance",
+                "additionalWorkNeeded": "continue_when_allowed",
+                "blocked": "stop",
+                "noDetermination": "retry_evidence_or_stop",
+                "failedUnrecoverable": "stop",
+            },
+            "sideEffectPolicy": "workflow_owned",
+            "publicationPolicy": "evaluate_after_terminal",
+        }
+    )
+    carried_nodes = [
+        {"id": "wf:old-run:loop:remediation:1"},
+        {
+            "id": "wf:old-run:loop:verification:1",
+            "dependsOn": ["wf:old-run:loop:remediation:1"],
+        },
+    ]
+    carried_rows = [
+        {
+            "logicalStepId": node["id"],
+            "status": "executing" if index == 0 else "pending",
+            "annotations": {
+                "remediationLoopId": "loop",
+                "moonSpecRemediationAttempt": 1,
+                "issueImplementRole": (
+                    "moonspec-remediation"
+                    if index == 0
+                    else "moonspec-verification-gate"
+                ),
+            },
+        }
+        for index, node in enumerate(carried_nodes)
+    ]
+    mock_run_workflow._remediation_loop_continuation = {
+        "schemaVersion": 1,
+        "state": {
+            "loopId": "loop",
+            "attemptOrdinal": 1,
+            "phase": phase,
+            "workspaceHeadRef": "artifact://workspace/C1",
+            "latestVerificationRef": "artifact://verification/V0",
+            "continuationDecisionRef": "artifact://decision/D0",
+            "consumedBudgets": {"attempts": 1},
+            "sourceRunId": "old-run",
+        },
+        "orderedNodes": carried_nodes,
+        "stepLedgerRows": carried_rows,
+    }
+    restored_nodes: list[dict[str, Any]] = []
+
+    mock_run_workflow._restore_remediation_loop_continuation(
+        ordered_nodes=restored_nodes
+    )
+
+    state = mock_run_workflow._remediation_loop_state
+    assert state is not None
+    assert state.phase.value == phase
+    assert state.attempt_ordinal == 1
+    assert state.consumed_budgets.attempts == 1
+    assert state.workspace_head_ref == "artifact://workspace/C1"
+    assert state.latest_verification_ref == "artifact://verification/V0"
+    assert state.continuation_decision_ref == "artifact://decision/D0"
+    assert restored_nodes == carried_nodes
+    assert [row["logicalStepId"] for row in mock_run_workflow._step_ledger_rows] == [
+        node["id"] for node in carried_nodes
+    ]
+    assert len(
+        mock_run_workflow._publish_context["remediationLoop"][
+            "materializedAttempts"
+        ]
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_dynamic_loop_pause_before_next_attempt_preserves_loop_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        phase="remediation_pending",
+        attemptOrdinal=1,
+        workspaceHeadRef="artifact://workspace/C1",
+        latestVerificationRef="artifact://verification/V1",
+        continuationDecisionRef="artifact://decision/D1",
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    mock_run_workflow._paused = True
+    waits = 0
+
+    async def resume_at_boundary(predicate: Callable[[], bool]) -> None:
+        nonlocal waits
+        waits += 1
+        assert predicate() is False
+        mock_run_workflow._paused = False
+        assert predicate() is True
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", resume_at_boundary
+    )
+
+    await mock_run_workflow._wait_if_paused_at_safe_boundary()
+
+    state = mock_run_workflow._remediation_loop_state
+    assert waits == 1
+    assert state is not None
+    assert state.phase.value == "remediation_pending"
+    assert state.attempt_ordinal == 1
+    assert state.workspace_head_ref == "artifact://workspace/C1"
+    assert state.continuation_decision_ref == "artifact://decision/D1"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_loop_active_cancellation_keeps_terminal_evidence_and_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        phase="verification_running",
+        attemptOrdinal=1,
+        workspaceHeadRef="artifact://workspace/C1",
+        latestVerificationRef="artifact://verification/V0",
+        continuationDecisionRef="artifact://decision/D0",
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {"logicalStepId": "wf:run:loop:remediation:1", "status": "completed"},
+        {"logicalStepId": "wf:run:loop:verification:1", "status": "executing"},
+    ]
+    mock_run_workflow._paused = True
+
+    async def cancel_at_boundary(predicate: Callable[[], bool]) -> None:
+        assert predicate() is False
+        mock_run_workflow._cancel_requested = True
+        assert predicate() is True
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", cancel_at_boundary
+    )
+
+    await mock_run_workflow._wait_if_paused_at_safe_boundary()
+
+    state = mock_run_workflow._remediation_loop_state
+    assert mock_run_workflow._cancel_requested is True
+    assert state is not None
+    assert state.phase.value == "verification_running"
+    assert state.attempt_ordinal == 1
+    assert state.workspace_head_ref == "artifact://workspace/C1"
+    assert state.latest_verification_ref == "artifact://verification/V0"
+    assert state.continuation_decision_ref == "artifact://decision/D0"
+    assert [row["logicalStepId"] for row in mock_run_workflow._step_ledger_rows] == [
+        "wf:run:loop:remediation:1",
+        "wf:run:loop:verification:1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+        "continueAsNewAttemptThreshold": 1,
+    }
+    mock_run_workflow._original_input_payload = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "initial_parameters": {"repo": "org/repo"},
+        "plan_artifact_ref": "artifact://plan/1",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        side_effect=["artifact://decision/D0", "artifact://decision/D1"]
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+    await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+    mock_run_workflow._remediation_loop_state = (
+        mock_run_workflow._remediation_loop_state.model_copy(
+            update={"phase": "verification_pending"}
+        )
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    )
+    carried: list[dict[str, Any]] = []
+
+    def capture_continue(payload: dict[str, Any]) -> None:
+        carried.append(payload)
+        raise RuntimeError("continued")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "continue_as_new", capture_continue
+    )
+
+    with pytest.raises(RuntimeError, match="continued"):
+        await mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=ordered_nodes,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V1",
+            remaining_work_ref="artifact://remaining/R1",
+        )
+
+    continuation = carried[0]["remediation_loop_continuation"]
+    assert continuation["schemaVersion"] == 1
+    assert continuation["state"]["attemptOrdinal"] == 2
+    assert continuation["state"]["consumedBudgets"]["attempts"] == 2
+    assert continuation["state"]["continuationDecisionRef"] == (
+        "artifact://decision/D1"
+    )
+    assert len(continuation["orderedNodes"]) == 4
+
+
+def test_persisted_loop_decision_is_authority_for_publication_projection(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        phase="stopped_remaining_work",
+        consumedBudgets=ConsumedRemediationBudgets(),
+        latestVerdict="ADDITIONAL_WORK_NEEDED",
+        continuationDecisionRef="artifact://decision/terminal",
+    )
+
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert "ADDITIONAL_WORK_NEEDED" in mock_run_workflow._publish_reason
+
+
+@pytest.mark.asyncio
+async def test_duplicate_verifier_delivery_cannot_admit_an_attempt_twice(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopSpec,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._remediation_loop_spec = RemediationLoopSpec.model_validate(
+        {
+            "loopId": "loop",
+            "remediationTool": {"type": "skill", "name": "auto"},
+            "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+            "workspacePolicy": "continue_from_loop_head",
+            "budgets": {"hardMaxAttempts": 6},
+            "terminalPolicy": {
+                "fullyImplemented": "advance",
+                "additionalWorkNeeded": "continue_when_allowed",
+                "blocked": "stop",
+                "noDetermination": "retry_evidence_or_stop",
+                "failedUnrecoverable": "stop",
+            },
+            "sideEffectPolicy": "workflow_owned",
+            "publicationPolicy": "evaluate_after_terminal",
+        }
+    )
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        phase="remediation_running",
+        attemptOrdinal=1,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+        latestVerdict="ADDITIONAL_WORK_NEEDED",
+        latestVerificationRef="artifact://verification/V0",
+        continuationDecisionRef="artifact://decision/D0",
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "wf:run:loop:remediation:1",
+            "status": "ready",
+            "annotations": {
+                "remediationLoopId": "loop",
+                "moonSpecRemediationAttempt": 1,
+                "issueImplementRole": "moonspec-remediation",
+            },
+        },
+        {
+            "logicalStepId": "wf:run:loop:verification:1",
+            "status": "pending",
+            "annotations": {
+                "remediationLoopId": "loop",
+                "moonSpecRemediationAttempt": 1,
+                "issueImplementRole": "moonspec-verification-gate",
+            },
+        },
+    ]
+    ordered_nodes = [{"id": "remediation:1"}, {"id": "verification:1"}]
+
+    with pytest.raises(ValueError):
+        await mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=ordered_nodes,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V0",
+            remaining_work_ref="artifact://remaining/R0",
+        )
+
+    assert len(ordered_nodes) == 2
+    assert mock_run_workflow._remediation_loop_state.consumed_budgets.attempts == 1
+
+
+def test_contract_repair_and_evidence_retry_do_not_consume_semantic_attempt_budget(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        phase="verification_running",
+        attemptOrdinal=2,
+        consumedBudgets=ConsumedRemediationBudgets(
+            attempts=2,
+            evidenceRetries=1,
+            contractRepairs=1,
+        ),
+    )
+    before = mock_run_workflow._remediation_loop_state.consumed_budgets.attempts
+    mock_run_workflow._prepare_moonspec_contract_repair_attempt("verify-2")
+
+    assert mock_run_workflow._step_execution_uses_fresh_source(
+        "verify-2", attempt=1
+    )
+    assert mock_run_workflow._remediation_loop_state.consumed_budgets.attempts == before
+
+
+@pytest.mark.asyncio
+async def test_finish_summary_reuses_persisted_loop_decision_projection(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop",
+        phase="stopped_remaining_work",
+        attemptOrdinal=2,
+        consumedBudgets=ConsumedRemediationBudgets(attempts=2),
+        latestVerdict="ADDITIONAL_WORK_NEEDED",
+        continuationDecisionRef="artifact://decision/terminal",
+    )
+    mock_run_workflow._sync_remediation_loop_projection = (
+        MoonMindRunWorkflow._sync_remediation_loop_projection.__get__(
+            mock_run_workflow
+        )
+    )
+    # The persisted projection is the durable input consumed by finish detail.
+    mock_run_workflow._publish_context["remediationLoop"] = {
+        "latestVerdict": "ADDITIONAL_WORK_NEEDED",
+        "continuationDecisionRef": "artifact://decision/terminal",
+        "continuationReason": "hard_attempt_limit_reached",
+    }
+
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        mock_run_workflow,
+        parameters={"runtime": {"mode": "managed"}},
+        status="failed",
+        error="remaining work",
+    )
+
+    assert summary["publishContext"]["remediationLoop"] == {
+        "latestVerdict": "ADDITIONAL_WORK_NEEDED",
+        "continuationDecisionRef": "artifact://decision/terminal",
+        "continuationReason": "hard_attempt_limit_reached",
+    }
+
+
+def test_incident_control_stop_reuses_persisted_loop_decision_ref(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._workflow_control_stop = {
+        "kind": "workflow_gate",
+        "reasonCode": "hard_attempt_limit_reached",
+        "logicalStepId": "verify-2",
+        "verdict": "ADDITIONAL_WORK_NEEDED",
+        "continuationDecisionRef": "artifact://decision/terminal",
+    }
+
+    assert mock_run_workflow._workflow_control_stop["continuationDecisionRef"] == (
+        "artifact://decision/terminal"
     )
 
 

@@ -2615,6 +2615,113 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
+    async def publication_recovery_persist_result(
+        self, request: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Persist compact terminal evidence without changing source semantics."""
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "publication_recovery.persist_result requires an object"
+            )
+        contract = request.get("contract")
+        verified = request.get("verifiedEvidence")
+        reconciliation = request.get("reconciliation")
+        operation_key = str(request.get("idempotencyKey") or "").strip()
+        workflow_id = str(request.get("destinationWorkflowId") or "").strip()
+        run_id = str(request.get("destinationRunId") or "").strip()
+        if (
+            not isinstance(contract, Mapping)
+            or not isinstance(verified, Mapping)
+            or not isinstance(reconciliation, Mapping)
+            or not operation_key
+            or not workflow_id
+            or not run_id
+        ):
+            raise TemporalArtifactValidationError(
+                "contract, verifiedEvidence, reconciliation, idempotencyKey, "
+                "destinationWorkflowId, and destinationRunId are required"
+            )
+        from moonmind.workflows.temporal.publication_recovery import (
+            PublicationRecoveryEvidence,
+        )
+
+        evidence = PublicationRecoveryEvidence.model_validate(verified)
+        if (
+            evidence.destination_workflow_id != workflow_id
+            or evidence.publication_idempotency_key != operation_key
+            or evidence.source_workflow_id != contract.get("sourceWorkflowId")
+            or evidence.source_run_id != contract.get("sourceRunId")
+        ):
+            raise TemporalArtifactValidationError(
+                "verified publication evidence lineage does not match persistence request"
+            )
+        payload = {
+            "schemaVersion": "publication-recovery-result-v1",
+            "sourceWorkflowId": contract.get("sourceWorkflowId"),
+            "sourceRunId": contract.get("sourceRunId"),
+            "sourceSemanticOutcome": contract.get("sourceSemanticOutcome"),
+            "semanticContext": (contract.get("target") or {}).get("semanticContext"),
+            "reconciliation": dict(reconciliation),
+            "publication": dict(request.get("publication") or {}),
+            "verifiedEvidence": evidence.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            ),
+            "destinationWorkflowId": workflow_id,
+            "destinationRunId": run_id,
+        }
+        principal = f"workflow:{workflow_id}"
+        key_hash = hashlib.sha256(operation_key.encode()).hexdigest()
+        existing = await self._service.list_for_execution(
+            namespace=self._service._default_namespace,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            principal=principal,
+            link_type="result",
+        )
+        for artifact in existing:
+            metadata = dict(artifact.metadata_json or {})
+            if (
+                metadata.get("name") == "publication-recovery-result.json"
+                and metadata.get("idempotencyKeyHash") == key_hash
+                and artifact.status is db_models.TemporalArtifactStatus.COMPLETE
+            ):
+                return {
+                    **payload,
+                    "resultArtifactRef": build_artifact_ref(artifact).model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                }
+        encoded = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
+        artifact, _upload = await self._service.create(
+            principal=principal,
+            content_type="application/json",
+            size_bytes=len(encoded),
+            link=ExecutionRef(
+                namespace=self._service._default_namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="result",
+            ),
+            metadata_json={
+                "name": "publication-recovery-result.json",
+                "producer": "activity:publication_recovery.persist_result",
+                "labels": ["publication-recovery", "terminal"],
+                "idempotencyKeyHash": key_hash,
+            },
+        )
+        completed = await self._service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=encoded,
+            content_type="application/json",
+        )
+        return {
+            **payload,
+            "resultArtifactRef": build_artifact_ref(completed).model_dump(
+                by_alias=True, mode="json"
+            ),
+        }
+
     async def pr_resolver_write_terminal_result(
         self, request: Mapping[str, Any] | None = None
     ) -> dict[str, str]:
