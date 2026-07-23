@@ -3439,6 +3439,112 @@ def test_user_workflow_initializes_one_dynamic_loop_and_materializes_one_pair(
     assert remediation["annotations"]["moonSpecRemediationAttempt"] == 1
     assert verification["dependsOn"] == [remediation["id"]]
 
+@pytest.mark.asyncio
+async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await (
+        mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=ordered_nodes,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref="artifact://verification/V0",
+            remaining_work_ref="artifact://remaining/R0",
+        )
+    )
+
+    assert admitted is True
+    assert len(ordered_nodes) == 2
+    remediation, verification = ordered_nodes
+    assert remediation["id"].endswith(":remediation:1")
+    assert verification["dependsOn"] == [remediation["id"]]
+    assert [row["status"] for row in mock_run_workflow._step_ledger_rows] == [
+        "ready",
+        "pending",
+    ]
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["attemptOrdinal"] == 1
+    assert projection["status"] == "remediation_running"
+    assert projection["latestVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert projection["continuationDecisionRef"] == "artifact://decision/D0"
+    mock_run_workflow._write_json_artifact.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_terminal_decision_does_not_append_attempt(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 1},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/pass"
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await (
+        mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=ordered_nodes,
+            verdict="FULLY_IMPLEMENTED",
+            gate_result_ref="artifact://verification/pass",
+            remaining_work_ref=None,
+        )
+    )
+
+    assert admitted is False
+    assert ordered_nodes == []
+    assert (
+        mock_run_workflow._publish_context["remediationLoop"]["status"]
+        == "accepted"
+    )
+
 
 def _remediation_head_payload(
     *, checkpoint: str = "C0", version: int = 1

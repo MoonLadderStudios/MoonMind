@@ -134,12 +134,17 @@ with workflow.unsafe.imports_passed_through():
         project_head,
     )
     from moonmind.workflows.temporal.remediation_loop import (
+        apply_continuation_decision,
+        decide_remediation_continuation,
         ConsumedRemediationBudgets,
         RemediationLoopPhase,
         RemediationLoopSpec,
         RemediationLoopState,
         materialize_attempt_nodes,
         project_remediation_loop,
+        record_verification_evidence,
+        start_remediation_attempt,
+        start_verification,
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -3747,6 +3752,93 @@ class MoonMindRunWorkflow:
             workspace_head_ref=state.workspace_head_ref,
             verification_inputs=verification_inputs,
         )
+
+    async def _evaluate_dynamic_remediation_verification(
+        self,
+        *,
+        ordered_nodes: list[dict[str, Any]],
+        verdict: str,
+        gate_result_ref: str | None,
+        remaining_work_ref: str | None,
+    ) -> bool:
+        """Apply verifier evidence and append exactly one admitted pair.
+
+        Returns whether a new semantic remediation attempt was admitted.  The
+        persisted decision is the sole routing authority; agent advisory text
+        is deliberately not accepted by this boundary.
+        """
+
+        spec = self._remediation_loop_spec
+        state = self._remediation_loop_state
+        if spec is None or state is None:
+            return False
+        if not gate_result_ref or not gate_result_ref.startswith("artifact://"):
+            raise ValueError(
+                "dynamic remediation verification requires an artifact gate result"
+            )
+        if state.phase in {
+            RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
+            RemediationLoopPhase.VERIFICATION_PENDING,
+        }:
+            state = start_verification(state)
+        state = record_verification_evidence(
+            state,
+            verification_ref=gate_result_ref,
+        )
+        decision = decide_remediation_continuation(
+            spec=spec,
+            state=state,
+            verdict=verdict,
+            gate_result_ref=gate_result_ref,
+            remaining_work_ref=remaining_work_ref,
+        )
+        decision_ref = await self._write_json_artifact(
+            name=(
+                "reports/remediation_decision_"
+                f"{spec.loop_id}_attempt_{state.attempt_ordinal}.json"
+            ),
+            payload=decision.model_dump(by_alias=True, mode="json"),
+        )
+        state = apply_continuation_decision(
+            state,
+            decision=decision,
+            decision_ref=decision_ref,
+        )
+        admitted = False
+        if state.phase == RemediationLoopPhase.REMEDIATION_PENDING:
+            state = start_remediation_attempt(state)
+            remediation, verification = materialize_attempt_nodes(
+                spec=spec,
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                ordinal=state.attempt_ordinal,
+                workspace_head_ref=state.workspace_head_ref,
+            )
+            pair = [remediation, verification]
+            ordered_nodes.extend(pair)
+            pair_dependencies = {
+                str(node["id"]): [
+                    str(dependency)
+                    for dependency in node.get("dependsOn", [])
+                ]
+                for node in pair
+            }
+            self._step_ledger_rows.extend(
+                build_initial_step_rows(
+                    ordered_nodes=pair,
+                    dependency_map=pair_dependencies,
+                    updated_at=workflow.now(),
+                )
+            )
+            for order, row in enumerate(self._step_ledger_rows, start=1):
+                row["order"] = order
+            self._rebuild_step_ledger_index()
+            refresh_ready_steps(self._step_ledger_rows, updated_at=workflow.now())
+            admitted = True
+        self._remediation_loop_state = state
+        self._sync_remediation_loop_projection()
+        self._sync_progress_snapshot(updated_at=workflow.now())
+        return admitted
 
     def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
@@ -10996,6 +11088,26 @@ class MoonMindRunWorkflow:
                         self._moonspec_gate_verdict
                     )
                     blocking_gate_reason = self._blocking_moonspec_gate_reason()
+                    dynamic_attempt_admitted = False
+                    if (
+                        workflow.patched(
+                            RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH
+                        )
+                        and self._remediation_loop_spec is not None
+                        and gate_verdict is not None
+                    ):
+                        dynamic_attempt_admitted = (
+                            await self._evaluate_dynamic_remediation_verification(
+                                ordered_nodes=ordered_nodes,
+                                verdict=gate_verdict,
+                                gate_result_ref=step_gate_result_ref,
+                                remaining_work_ref=(
+                                    step_gate_result.remaining_work_ref
+                                ),
+                            )
+                        )
+                        if dynamic_attempt_admitted:
+                            blocking_gate_reason = None
                     remaining_remediation_index = (
                         index - 1
                         if workflow.patched(
