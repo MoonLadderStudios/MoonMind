@@ -51,8 +51,18 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
         "tests/unit/workflows/temporal/test_temporal_workers.py",
+        "tests/integration/services/temporal/workflows/test_agent_run_codex_session_rollout.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
     )
+    flattened_commands = {
+        argument
+        for command in runner.COMMANDS
+        for argument in command
+        if isinstance(argument, str)
+    }
+    for group in ("failureAndRestartMatrix", "rolloutAndReplay"):
+        for path in runner.EVIDENCE_GROUPS[group]:
+            assert path in flattened_commands
 
 
 def test_runner_derives_group_results_from_executed_commands(
