@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -53,6 +54,16 @@ def _input(*, timeout: int = 60) -> ContainerJobWorkflowInput:
     )
 
 
+def _source_input(*, timeout: int = 3600) -> ContainerJobWorkflowInput:
+    raw = _input(timeout=timeout).model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    spec = raw["request"]["spec"]
+    spec.pop("image")
+    spec["imageSourceRef"] = "moonmind-python-tests"
+    return ContainerJobWorkflowInput.model_validate(raw)
+
+
 def test_workflow_identity_registration_and_activity_routes() -> None:
     assert container_job_workflow_id(JOB_ID) == f"container-job-workflow:{JOB_ID}"
     assert "MoonMind.ContainerJob" in workflow_fleet_workflow_types(settings.temporal)
@@ -89,6 +100,35 @@ async def test_start_container_job_is_asynchronous_start_or_attach() -> None:
         adapter.start_workflow.await_args.kwargs["workflow_type"]
         == "MoonMind.ContainerJob"
     )
+
+
+@pytest.mark.asyncio
+async def test_local_source_gets_build_budget_without_changing_direct_image_history(
+    monkeypatch,
+) -> None:
+    calls: list[dict] = []
+
+    async def execute_activity(_name, _payload, **kwargs):
+        calls.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.container_job.workflow.execute_activity",
+        execute_activity,
+    )
+    workflow_instance = MoonMindContainerJobWorkflow()
+    for inp in (_input(timeout=3600), _source_input(timeout=3600)):
+        request = ContainerJobActivityRequest(
+            jobId=inp.job_id,
+            ownershipToken=inp.ownership_token,
+            request=inp.request,
+        )
+        await workflow_instance._activity("container_job.acquire_image", request)
+
+    assert calls[0]["start_to_close_timeout"] == timedelta(seconds=300)
+    assert calls[0]["schedule_to_close_timeout"] == timedelta(seconds=300)
+    assert calls[1]["start_to_close_timeout"] == timedelta(seconds=1800)
+    assert calls[1]["schedule_to_close_timeout"] == timedelta(seconds=2100)
 
 
 @pytest.mark.asyncio

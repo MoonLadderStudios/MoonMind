@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 
 from moonmind.config.container_backend_settings import (
+    PYTHON_TEST_FINGERPRINT_INPUTS,
+    PYTHON_TEST_IMAGE_SOURCE_REF,
+    LocalImageRecipe,
+    RegistryImageSource,
     SUPPORTED_CONTAINER_BACKEND_KINDS,
     ContainerBackendConfigError,
     ContainerBackendReadinessError,
@@ -21,6 +25,13 @@ def test_defaults_are_deployment_safe() -> None:
     assert settings.endpoint == "tcp://docker-proxy:2375"
     # The raw Docker CLI escape hatch is disabled unless explicitly enabled.
     assert settings.raw_cli_enabled is False
+    source = settings.image_source(PYTHON_TEST_IMAGE_SOURCE_REF)
+    assert isinstance(source, LocalImageRecipe)
+    assert source.image == "moonmind-python-tests:local"
+    assert source.target == "test-runtime"
+    assert source.fingerprint_inputs == PYTHON_TEST_FINGERPRINT_INPUTS
+    for pattern in source.fingerprint_inputs:
+        assert any(path.is_file() for path in source.context_root.glob(pattern))
 
 
 def test_endpoint_is_sourced_from_deployment_config_only() -> None:
@@ -75,3 +86,30 @@ def test_invalid_boolean_and_integer_fail_fast() -> None:
         resolve_container_backend_settings(
             {"MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS": "not-an-int"}
         )
+
+
+def test_prebuilt_python_test_image_replaces_local_recipe() -> None:
+    settings = resolve_container_backend_settings(
+        {"MOONMIND_PYTHON_TEST_IMAGE": "registry.example/tests:v2"}
+    )
+
+    source = settings.image_source(PYTHON_TEST_IMAGE_SOURCE_REF)
+    assert isinstance(source, RegistryImageSource)
+    assert source.image == "registry.example/tests:v2"
+    assert source.pull_policy == "if-missing"
+
+
+def test_python_test_recipe_uses_deployment_root_and_optional_max_age(
+    tmp_path,
+) -> None:
+    settings = resolve_container_backend_settings(
+        {
+            "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR": str(tmp_path),
+            "MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS": "3600",
+        }
+    )
+
+    source = settings.image_source(PYTHON_TEST_IMAGE_SOURCE_REF)
+    assert isinstance(source, LocalImageRecipe)
+    assert source.context_root == tmp_path.resolve()
+    assert source.max_age_seconds == 3600

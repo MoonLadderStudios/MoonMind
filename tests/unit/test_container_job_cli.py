@@ -25,7 +25,7 @@ def test_python_test_cli_accepts_optional_variadic_targets() -> None:
     result = CliRunner().invoke(app, ["container", "python-tests", "--help"])
 
     assert result.exit_code == 0
-    assert "[targets]..." in result.stdout
+    assert "[TARGETS]..." in result.stdout
 
 
 class _FakeClient:
@@ -71,7 +71,9 @@ def test_python_test_submission_uses_canonical_managed_workspace_and_safe_argv(
         "agentRunId": "mm:run-1",
         "relativePath": "repo",
     }
-    assert payload["spec"]["pullPolicy"] == "never"
+    assert payload["spec"]["imageSourceRef"] == "moonmind-python-tests"
+    assert "image" not in payload["spec"]
+    assert "pullPolicy" not in payload["spec"]
     assert payload["spec"]["environment"] == [
         {"name": "MOONMIND_FORCE_LOCAL_TESTS", "value": "1"},
         {

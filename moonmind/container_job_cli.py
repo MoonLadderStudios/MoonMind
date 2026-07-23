@@ -148,9 +148,6 @@ def python_test_submission(
     source = os.environ if env is None else env
     agent_run_id = _required_env(source, "MOONMIND_AGENT_RUN_ID")
     runtime_id = _required_env(source, "MOONMIND_RUNTIME_ID")
-    image = str(
-        source.get("MOONMIND_PYTHON_TEST_IMAGE") or "moonmind-python-tests:local"
-    ).strip()
     workflow_id = str(source.get("MOONMIND_TASK_WORKFLOW_ID") or agent_run_id).strip()
     test_targets = [str(target).strip() for target in targets if str(target).strip()]
     command = [
@@ -173,7 +170,7 @@ def python_test_submission(
             "agentRunId": agent_run_id,
         },
         "spec": {
-            "image": image,
+            "imageSourceRef": "moonmind-python-tests",
             "workspaceRef": {
                 "kind": "managed_runtime",
                 "runtimeId": runtime_id,
@@ -193,7 +190,6 @@ def python_test_submission(
             ],
             "resources": {"cpuMillis": 4000, "memoryMiB": 4096, "pids": 512},
             "timeoutSeconds": timeout_seconds,
-            "pullPolicy": "never",
             "outputs": [
                 {
                     "name": "pytest-junit",

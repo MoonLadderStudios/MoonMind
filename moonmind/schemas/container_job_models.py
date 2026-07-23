@@ -82,6 +82,7 @@ class ContainerJobState(StrEnum):
     RESOLVING_WORKSPACE = "resolving_workspace"
     WORKSPACE_NOT_VISIBLE = "workspace_not_visible"
     ACQUIRING_IMAGE = "acquiring_image"
+    BUILDING_IMAGE = "building_image"
     STARTING = "starting"
     RUNNING = "running"
     CANCELING = "canceling"
@@ -102,6 +103,11 @@ class ContainerJobFailureClass(StrEnum):
     IMAGE_NOT_FOUND = "image_not_found"
     IMAGE_PULL_TIMEOUT = "image_pull_timeout"
     IMAGE_PULL_AUTH_FAILED = "image_pull_auth_failed"
+    IMAGE_BUILD_NOT_CONFIGURED = "image_build_not_configured"
+    IMAGE_BUILD_INPUTS_UNAVAILABLE = "image_build_inputs_unavailable"
+    IMAGE_BUILD_TIMEOUT = "image_build_timeout"
+    IMAGE_BUILD_FAILED = "image_build_failed"
+    IMAGE_VALIDATION_FAILED = "image_validation_failed"
     IMAGE_PLATFORM_MISMATCH = "image_platform_mismatch"
     IMAGE_BACKEND_UNAVAILABLE = "image_backend_unavailable"
     LAUNCH = "launch"
@@ -188,7 +194,13 @@ class OutputDeclaration(ContractModel):
 
 
 class ContainerJobSpec(ContractModel):
-    image: str = Field(min_length=1, max_length=512)
+    image: str | None = Field(None, min_length=1, max_length=512)
+    image_source_ref: str | None = Field(
+        None,
+        alias="imageSourceRef",
+        pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$",
+        max_length=128,
+    )
     workspace_ref: WorkspaceLocator = Field(alias="workspaceRef")
     command: list[str] = Field(default_factory=list, max_length=128)
     entrypoint: list[str] = Field(default_factory=list, max_length=32)
@@ -203,6 +215,20 @@ class ContainerJobSpec(ContractModel):
     outputs: list[OutputDeclaration] = Field(default_factory=list, max_length=64)
 
     _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
+
+    @model_validator(mode="after")
+    def exactly_one_image_authority(self) -> "ContainerJobSpec":
+        if (self.image is None) == (self.image_source_ref is None):
+            raise ValueError("exactly one of image or imageSourceRef is required")
+        if self.image_source_ref is not None and self.registry_credential_ref is not None:
+            raise ValueError(
+                "registryCredentialRef cannot override a deployment-owned image source"
+            )
+        if self.image_source_ref is not None and self.pull_policy != "if-missing":
+            raise ValueError(
+                "pullPolicy cannot override a deployment-owned image source"
+            )
+        return self
 
     @field_validator("workdir")
     @classmethod
@@ -400,11 +426,28 @@ def failure_class_from_exception(
 
 class ImageObservation(ContractModel):
     requested_reference: str = Field(alias="requestedReference", max_length=512)
+    source_kind: Literal["registry", "local-build"] | None = Field(
+        None, alias="sourceKind"
+    )
+    image_source_ref: str | None = Field(
+        None, alias="imageSourceRef", max_length=128
+    )
     resolved_digest: str | None = Field(None, alias="resolvedDigest", pattern=r"^sha256:[0-9a-f]{64}$")
     cache_present: bool = Field(False, alias="cachePresent")
     cache_hit: bool = Field(False, alias="cacheHit")
+    build_key: str | None = Field(
+        None, alias="buildKey", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    fresh_at_start: bool | None = Field(None, alias="freshAtStart")
+    provision_action: Literal["reuse", "pull", "build", "none"] = Field(
+        "none", alias="provisionAction"
+    )
+    provision_waited_on_lock: bool = Field(
+        False, alias="provisionWaitedOnLock"
+    )
     pull_lock_wait_ms: int = Field(0, alias="pullLockWaitMs", ge=0)
     pull_duration_ms: int | None = Field(None, alias="pullDurationMs", ge=0)
+    build_duration_ms: int | None = Field(None, alias="buildDurationMs", ge=0)
 
 
 class TerminalOutcome(ContractModel):

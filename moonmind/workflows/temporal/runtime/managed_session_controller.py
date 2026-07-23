@@ -3009,12 +3009,6 @@ class DockerCodexManagedSessionController:
                 f"unsupported managed-session runtime family: {request.runtime_family}"
             )
         session_environment["MOONMIND_RUNTIME_ID"] = runtime_id
-        session_environment.setdefault(
-            "MOONMIND_PYTHON_TEST_IMAGE",
-            os.environ.get(
-                "MOONMIND_PYTHON_TEST_IMAGE", "moonmind-python-tests:local"
-            ),
-        )
         if self._moonmind_url:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():

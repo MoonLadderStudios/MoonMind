@@ -36,6 +36,11 @@ _IMAGE_FAILURE_TYPES = frozenset(
         ContainerJobFailureClass.IMAGE_NOT_FOUND.value,
         ContainerJobFailureClass.IMAGE_PULL_TIMEOUT.value,
         ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED.value,
+        ContainerJobFailureClass.IMAGE_BUILD_NOT_CONFIGURED.value,
+        ContainerJobFailureClass.IMAGE_BUILD_INPUTS_UNAVAILABLE.value,
+        ContainerJobFailureClass.IMAGE_BUILD_TIMEOUT.value,
+        ContainerJobFailureClass.IMAGE_BUILD_FAILED.value,
+        ContainerJobFailureClass.IMAGE_VALIDATION_FAILED.value,
         ContainerJobFailureClass.IMAGE_PLATFORM_MISMATCH.value,
         ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE.value,
         ContainerJobFailureClass.WORKSPACE.value,
@@ -83,15 +88,30 @@ class MoonMindContainerJobWorkflow:
         self, name: str, request: ContainerJobActivityRequest
     ) -> ContainerJobActivityResult:
         route = CATALOG.resolve_activity(name)
+        start_to_close_seconds = route.timeouts.start_to_close_seconds
+        schedule_to_close_seconds = route.timeouts.schedule_to_close_seconds
+        if (
+            name == "container_job.acquire_image"
+            and request.request.spec.image_source_ref is not None
+        ):
+            # Existing direct-image histories retain the original five-minute
+            # command shape. New deployment-owned local recipes receive a
+            # bounded build budget without changing replay for in-flight jobs.
+            start_to_close_seconds = min(
+                1800, request.request.spec.timeout_seconds
+            )
+            schedule_to_close_seconds = min(
+                2100, request.request.spec.timeout_seconds + 300
+            )
         raw = await workflow.execute_activity(
             name,
             request.model_dump(mode="json", by_alias=True, exclude_none=True),
             task_queue=route.task_queue,
             start_to_close_timeout=timedelta(
-                seconds=route.timeouts.start_to_close_seconds
+                seconds=start_to_close_seconds
             ),
             schedule_to_close_timeout=timedelta(
-                seconds=route.timeouts.schedule_to_close_seconds
+                seconds=schedule_to_close_seconds
             ),
             retry_policy=RetryPolicy(
                 maximum_attempts=route.retries.max_attempts,

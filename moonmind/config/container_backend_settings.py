@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Mapping
 
 #: The only backend kind this deployment supports. A second backend kind
@@ -29,6 +30,21 @@ _DEFAULT_DOCKER_ENDPOINT: Final[str] = "tcp://docker-proxy:2375"
 
 _TRUTHY: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSEY: Final[frozenset[str]] = frozenset({"0", "false", "no", "off", ""})
+
+PYTHON_TEST_IMAGE_SOURCE_REF: Final[str] = "moonmind-python-tests"
+PYTHON_TEST_LOCAL_IMAGE: Final[str] = "moonmind-python-tests:local"
+PYTHON_TEST_RECIPE_VERSION: Final[str] = "v1"
+PYTHON_TEST_FINGERPRINT_INPUTS: Final[tuple[str, ...]] = (
+    ".dockerignore",
+    "api_service/Dockerfile",
+    "api_service/docker/**",
+    "api_service/config.template.toml",
+    "pyproject.toml",
+    "poetry.lock",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+)
 
 
 class ContainerBackendConfigError(RuntimeError):
@@ -68,6 +84,41 @@ def _coerce_int(value: object, *, default: int, minimum: int) -> int:
     return parsed
 
 
+def _coerce_optional_int(value: object, *, minimum: int) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    return _coerce_int(value, default=minimum, minimum=minimum)
+
+
+@dataclass(frozen=True)
+class RegistryImageSource:
+    """Deployment-owned registry image selected through an opaque source name."""
+
+    source_ref: str
+    image: str
+    pull_policy: str = "if-missing"
+
+
+@dataclass(frozen=True)
+class LocalImageRecipe:
+    """Deployment-owned local build recipe; none of its fields are caller input."""
+
+    source_ref: str
+    image: str
+    context_root: Path
+    dockerfile: str
+    target: str
+    build_args: tuple[tuple[str, str], ...]
+    fingerprint_inputs: tuple[str, ...]
+    recipe_version: str
+    max_age_seconds: int | None
+    validation_command: tuple[str, ...]
+    validation_network_mode: str = "none"
+
+
+ImageSource = RegistryImageSource | LocalImageRecipe
+
+
 @dataclass(frozen=True)
 class ContainerBackendSettings:
     """Resolved, deployment-owned container-job backend configuration.
@@ -90,6 +141,7 @@ class ContainerBackendSettings:
     max_output_bytes: int
     max_output_files: int
     max_output_total_bytes: int
+    image_sources: tuple[ImageSource, ...]
 
     def require_endpoint(self) -> str:
         """Return the configured endpoint or fail readiness with a bounded error."""
@@ -100,6 +152,16 @@ class ContainerBackendSettings:
                 "SYSTEM_DOCKER_HOST (or DOCKER_HOST) on the trusted worker"
             )
         return self.endpoint
+
+    def image_source(self, source_ref: str) -> ImageSource:
+        """Resolve one deployment-approved image source or fail closed."""
+
+        for source in self.image_sources:
+            if source.source_ref == source_ref:
+                return source
+        raise ContainerBackendConfigError(
+            f"container image source {source_ref!r} is not configured"
+        )
 
 
 def resolve_container_backend_settings(
@@ -135,6 +197,40 @@ def resolve_container_backend_settings(
         or (source.get("DOCKER_HOST") or "").strip()
         or _DEFAULT_DOCKER_ENDPOINT
     ) or None
+
+    prebuilt_python_test_image = str(
+        source.get("MOONMIND_PYTHON_TEST_IMAGE") or ""
+    ).strip()
+    if prebuilt_python_test_image:
+        python_test_source: ImageSource = RegistryImageSource(
+            source_ref=PYTHON_TEST_IMAGE_SOURCE_REF,
+            image=prebuilt_python_test_image,
+        )
+    else:
+        project_root = Path(
+            str(
+                source.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
+                or Path(__file__).resolve().parents[2]
+            )
+        ).resolve()
+        python_test_source = LocalImageRecipe(
+            source_ref=PYTHON_TEST_IMAGE_SOURCE_REF,
+            image=PYTHON_TEST_LOCAL_IMAGE,
+            context_root=project_root,
+            dockerfile="api_service/Dockerfile",
+            target="test-runtime",
+            build_args=(
+                ("INSTALL_CODEX_CLI", "false"),
+                ("INSTALL_TEST_DEPS", "true"),
+            ),
+            fingerprint_inputs=PYTHON_TEST_FINGERPRINT_INPUTS,
+            recipe_version=PYTHON_TEST_RECIPE_VERSION,
+            max_age_seconds=_coerce_optional_int(
+                source.get("MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS"),
+                minimum=1,
+            ),
+            validation_command=("python", "-c", "import pytest"),
+        )
 
     return ContainerBackendSettings(
         enabled=_coerce_bool(
@@ -189,4 +285,5 @@ def resolve_container_backend_settings(
             default=256 * 1024 * 1024,
             minimum=1024,
         ),
+        image_sources=(python_test_source,),
     )

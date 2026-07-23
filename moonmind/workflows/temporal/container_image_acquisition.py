@@ -41,6 +41,9 @@ _TERMINAL_IMAGE_FAILURES: frozenset[ContainerJobFailureClass] = frozenset(
         ContainerJobFailureClass.IMAGE_NOT_FOUND,
         ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED,
         ContainerJobFailureClass.IMAGE_PLATFORM_MISMATCH,
+        ContainerJobFailureClass.IMAGE_BUILD_NOT_CONFIGURED,
+        ContainerJobFailureClass.IMAGE_BUILD_INPUTS_UNAVAILABLE,
+        ContainerJobFailureClass.IMAGE_VALIDATION_FAILED,
     }
 )
 

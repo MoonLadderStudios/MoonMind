@@ -265,6 +265,7 @@ dockerBackendService:
       fingerprint:
         mode: declared-effective-inputs
         inputs:
+          - .dockerignore
           - api_service/Dockerfile
           - api_service/docker/**
           - api_service/config.template.toml
