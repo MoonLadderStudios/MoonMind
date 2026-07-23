@@ -96,8 +96,20 @@ def _payload() -> dict:
         },
         "deploymentGeneration": "control-stop-2026-07",
         "deploymentPromoted": True,
+        "rollout": {
+            "mode": "canary",
+            "canaryOwnerIds": ["user-123"],
+            "allowedRuntime": "external/omnigent",
+            "allowedProduct": "codex-native",
+            "allowedHostProfile": "omnigent-host-codex",
+            "allowedProviderProfileIds": ["codex-oauth-primary"],
+        },
         "restoreCapabilitySetVersion": "managed-runtime/v1",
         "restoreCapabilityDigest": "capability-digest",
+        "captureCapabilitySetVersion": "runtime-execution-capabilities-v3",
+        "captureCapabilityDigest": "capture-capability-digest",
+        "verificationInstructionRef": "artifact://instructions/verify",
+        "verificationInstructionDigest": "verification-instruction-digest",
         "idempotencyKey": "operator-request-1",
     }
 
@@ -143,6 +155,37 @@ def test_restore_request_uses_distinct_deterministic_destination() -> None:
     assert request["idempotencyKey"] == f"{contract.destination_workflow_id}:restore"
 
 
+def test_attempt_requests_are_profile_bound_and_retry_stable() -> None:
+    contract = ControlStopContinuationContract.model_validate(_payload())
+    locator = {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": contract.destination_workspace_id,
+        "relativePath": "repo",
+    }
+
+    capture = contract.capture_request(
+        destination_run_id="destination-run",
+        destination_workspace_locator=locator,
+        attempt_ordinal=7,
+    )
+    verify = contract.verification_request(
+        destination_run_id="destination-run",
+        destination_workspace_locator=locator,
+        attempt_ordinal=7,
+        candidate_ref="artifact://workspace/C7",
+        remaining_work_ref="artifact://remaining/6",
+    )
+
+    assert capture["idempotencyKey"].endswith(":attempt:7:capture")
+    assert capture["workspaceLocator"] == locator
+    assert verify["agentKind"] == "external"
+    assert verify["agentId"] == "omnigent"
+    assert verify["executionProfileRef"] == "codex-oauth-primary"
+    assert verify["parameters"]["providerProfileGeneration"] == "generation-4"
+    assert verify["instructionRef"] == "artifact://instructions/verify"
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [
@@ -171,6 +214,25 @@ def test_blocked_side_effect_denies_admission() -> None:
     payload["sideEffects"][0]["disposition"] = "blocked"
     with pytest.raises(ValidationError, match="side effects block"):
         ControlStopContinuationContract.model_validate(payload)
+
+
+@pytest.mark.parametrize("mode", ["shadow", "canary"])
+def test_rollout_denies_shadow_and_unselected_canary(mode: str) -> None:
+    payload = _payload()
+    payload["rollout"]["mode"] = mode
+    if mode == "canary":
+        payload["rollout"]["canaryOwnerIds"] = ["someone-else"]
+    with pytest.raises(ValidationError):
+        ControlStopContinuationContract.model_validate(payload)
+
+
+def test_rollback_denies_new_contract_without_changing_frozen_identity() -> None:
+    payload = _payload()
+    admitted = ControlStopContinuationContract.model_validate(payload)
+    payload["deploymentPromoted"] = False
+    with pytest.raises(ValidationError, match="not promoted"):
+        ControlStopContinuationContract.model_validate(payload)
+    assert admitted.destination_workflow_id.startswith("control-stop-continuation-")
 
 
 def test_negative_verifier_is_preserved_without_failed_step() -> None:

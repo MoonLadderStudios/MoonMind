@@ -142,6 +142,50 @@ class PreservedSideEffect(BaseModel):
         return self
 
 
+class ContinuationVerificationResult(BaseModel):
+    """Compact semantic evidence returned by the continuation verifier."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    verdict: Literal[
+        "FULLY_IMPLEMENTED",
+        "ADDITIONAL_WORK_NEEDED",
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+        "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+    ]
+    verification_ref: str = Field(alias="verificationRef", min_length=1)
+    remaining_work_ref: str | None = Field(None, alias="remainingWorkRef")
+    progress: bool
+
+    @model_validator(mode="after")
+    def _remaining_work_is_authoritative(self) -> "ContinuationVerificationResult":
+        if self.verdict == "ADDITIONAL_WORK_NEEDED" and not self.remaining_work_ref:
+            raise ValueError("ADDITIONAL_WORK_NEEDED requires remainingWorkRef")
+        return self
+
+
+class ControlStopRolloutPolicy(BaseModel):
+    """Frozen admission policy; it is never re-read during workflow replay."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    mode: Literal["shadow", "canary", "enabled"]
+    canary_owner_ids: list[str] = Field(default_factory=list, alias="canaryOwnerIds")
+    allowed_runtime: Literal["external/omnigent"] = Field(
+        "external/omnigent", alias="allowedRuntime"
+    )
+    allowed_product: Literal["codex-native"] = Field(
+        "codex-native", alias="allowedProduct"
+    )
+    allowed_host_profile: Literal["omnigent-host-codex"] = Field(
+        "omnigent-host-codex", alias="allowedHostProfile"
+    )
+    allowed_provider_profile_ids: list[str] = Field(
+        alias="allowedProviderProfileIds", min_length=1
+    )
+
+
 class ControlStopContinuationContract(BaseModel):
     """Immutable workflow input for one linked remediation continuation."""
 
@@ -198,11 +242,28 @@ class ControlStopContinuationContract(BaseModel):
     continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
     deployment_generation: str = Field(alias="deploymentGeneration", min_length=1)
     deployment_promoted: bool = Field(alias="deploymentPromoted")
+    rollout: ControlStopRolloutPolicy
     restore_capability_set_version: str = Field(
         alias="restoreCapabilitySetVersion", min_length=1
     )
     restore_capability_digest: str = Field(
         alias="restoreCapabilityDigest", min_length=1
+    )
+    capture_capability_set_version: Literal[
+        "runtime-execution-capabilities-v1",
+        "runtime-execution-capabilities-v2",
+        "runtime-execution-capabilities-v3",
+    ] = Field(
+        "runtime-execution-capabilities-v3", alias="captureCapabilitySetVersion"
+    )
+    capture_capability_digest: str = Field(
+        alias="captureCapabilityDigest", min_length=1
+    )
+    verification_instruction_ref: str = Field(
+        alias="verificationInstructionRef", min_length=1
+    )
+    verification_instruction_digest: str = Field(
+        alias="verificationInstructionDigest", min_length=1
     )
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=200)
     instruction_changes_ref: str | None = Field(None, alias="instructionChangesRef")
@@ -216,6 +277,18 @@ class ControlStopContinuationContract(BaseModel):
             raise ValueError("selected checkpoint is not the source terminal head")
         if not self.deployment_promoted:
             raise ValueError("control-stop continuation deployment is not promoted")
+        if self.rollout.mode == "shadow":
+            raise ValueError("control-stop continuation is shadow diagnostics only")
+        if (
+            self.rollout.mode == "canary"
+            and self.owner_id not in self.rollout.canary_owner_ids
+        ):
+            raise ValueError("owner is not selected for the control-stop canary")
+        if (
+            self.lane.provider_profile_id
+            not in self.rollout.allowed_provider_profile_ids
+        ):
+            raise ValueError("selected Provider Profile is not rollout-allowlisted")
         if any(effect.disposition == "blocked" for effect in self.side_effects):
             raise ValueError("source side effects block continuation")
         if bool(self.instruction_changes_ref) != bool(self.instruction_changes_digest):
@@ -277,6 +350,15 @@ class ControlStopContinuationContract(BaseModel):
             "product": "codex-native",
             "providerProfileId": self.lane.provider_profile_id,
             "hostProfile": "omnigent-host-codex",
+            "sourceBudget": self.source_budget.model_dump(by_alias=True, mode="json"),
+            "preservedSteps": [
+                step.model_dump(by_alias=True, mode="json")
+                for step in self.preserved_steps
+            ],
+            "sideEffects": [
+                effect.model_dump(by_alias=True, mode="json")
+                for effect in self.side_effects
+            ],
         }
 
     def restore_request(self, *, destination_run_id: str) -> dict[str, Any]:
@@ -337,7 +419,11 @@ class ControlStopContinuationContract(BaseModel):
     ) -> dict[str, Any]:
         """Build the first profile-bound semantic operation after restore."""
 
-        attempt = self.source_budget.consumed_attempts + 1
+        attempt = (
+            self.source_budget.consumed_attempts
+            + self.continuation_budget.consumed_attempts
+            + 1
+        )
         step_execution_id = (
             f"{self.destination_workflow_id}:remediation:execution:{attempt}"
         )
@@ -376,3 +462,74 @@ class ControlStopContinuationContract(BaseModel):
                 ),
             },
         }
+
+    def capture_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+        attempt_ordinal: int,
+    ) -> dict[str, Any]:
+        """Capture Cn+1 under one retry-stable identity."""
+
+        return {
+            "schemaVersion": "v1",
+            "identity": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "remediation",
+                "executionOrdinal": attempt_ordinal,
+            },
+            "boundary": "after_execution",
+            "checkpointKind": "worktree_archive",
+            "workspaceLocator": destination_workspace_locator,
+            "expectedRuntimeId": "codex_cli",
+            "capabilitySetVersion": self.capture_capability_set_version,
+            "capabilityDigest": self.capture_capability_digest,
+            "artifactNamespace": (
+                f"control-stop-continuations/{self.destination_workflow_id}"
+            ),
+            "idempotencyKey": (
+                f"{self.destination_workflow_id}:attempt:{attempt_ordinal}:capture"
+            ),
+        }
+
+    def verification_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+        attempt_ordinal: int,
+        candidate_ref: str,
+        remaining_work_ref: str,
+    ) -> dict[str, Any]:
+        """Build the verifier operation following capture of the new candidate."""
+
+        step_execution_id = (
+            f"{self.destination_workflow_id}:verification:execution:{attempt_ordinal}"
+        )
+        request = self.remediation_request(
+            destination_run_id=destination_run_id,
+            destination_workspace_locator=destination_workspace_locator,
+        )
+        request.update(
+            {
+                "idempotencyKey": step_execution_id,
+                "instructionRef": self.verification_instruction_ref,
+                "inputRefs": [
+                    candidate_ref,
+                    remaining_work_ref,
+                    self.plan_ref,
+                    self.task_input_snapshot_ref,
+                ],
+            }
+        )
+        request["parameters"].update(
+            {
+                "logicalStepId": "verification",
+                "stepExecutionId": step_execution_id,
+                "attemptOrdinal": attempt_ordinal,
+                "requiredResultMetadata": "controlStopVerification",
+            }
+        )
+        return request

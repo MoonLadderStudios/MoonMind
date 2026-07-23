@@ -74,6 +74,7 @@ def _assert_authoritative_evidence(
         contract.lane.effective_launch_snapshot_ref: (
             contract.lane.effective_launch_snapshot_digest
         ),
+        contract.verification_instruction_ref: contract.verification_instruction_digest,
     }
     stale = [
         ref

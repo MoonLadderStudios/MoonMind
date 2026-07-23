@@ -29,6 +29,9 @@ def _evidence(payload: dict) -> ControlStopSourceEvidence:
         payload["lane"]["effectiveLaunchSnapshotRef"]: payload["lane"][
             "effectiveLaunchSnapshotDigest"
         ],
+        payload["verificationInstructionRef"]: payload[
+            "verificationInstructionDigest"
+        ],
     }
     return ControlStopSourceEvidence(
         contract_payload=payload,
