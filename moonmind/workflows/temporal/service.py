@@ -66,6 +66,7 @@ from moonmind.schemas.temporal_models import (
     RecoverySourceModel,
     has_user_workflow_plan_source,
 )
+from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -1246,6 +1247,8 @@ class TemporalExecutionService:
         start_delay: timedelta | None = None,
         scheduled_for: datetime | None = None,
         _skip_pause_guard: bool = False,
+        _workflow_id: str | None = None,
+        _run_id: str | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -1302,8 +1305,12 @@ class TemporalExecutionService:
         )
 
         now = _utc_now()
-        workflow_id = f"mm:{uuid4()}"
-        run_id = str(uuid4())
+        workflow_id = _workflow_id or f"mm:{uuid4()}"
+        if not workflow_id.startswith("mm:"):
+            raise TemporalExecutionValidationError(
+                "Explicit workflow identity must use the canonical mm: prefix."
+            )
+        run_id = _run_id or str(uuid4())
         normalized_depends_on: list[str] = []
         remediation_link: TemporalExecutionRemediationLink | None = None
         task_mapping: Mapping[str, Any] = {}
@@ -3357,6 +3364,137 @@ class TemporalExecutionService:
         recovery_provenance["sourceWorkflowId"] = canonical_workflow_id
         recovery_provenance["sourceRunId"] = canonical_run_id
         return recovery_provenance
+
+    async def create_typed_recovery_execution(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        recovery_target: WorkflowRecoveryTargetModel | Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create exactly one linked destination from an admitted recovery target."""
+
+        try:
+            target = (
+                recovery_target
+                if isinstance(recovery_target, WorkflowRecoveryTargetModel)
+                else WorkflowRecoveryTargetModel.model_validate(recovery_target)
+            )
+            target.require_admitted()
+        except ValidationError as exc:
+            raise TemporalExecutionValidationError(
+                "Typed recovery target is invalid."
+            ) from exc
+        except ValueError as exc:
+            raise TemporalExecutionRecoveryCheckpointError(str(exc)) from exc
+
+        source_run_id = str(record.run_id or "").strip()
+        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
+            raise TemporalExecutionValidationError(
+                "Typed recovery is only available for MoonMind.UserWorkflow executions."
+            )
+        if record.state not in TERMINAL_WORKFLOW_STATES:
+            raise TemporalExecutionValidationError(
+                "Typed recovery requires an immutable terminal source execution."
+            )
+        if (
+            target.source.workflow_id != record.workflow_id
+            or target.source.run_id != source_run_id
+        ):
+            raise TemporalExecutionValidationError(
+                "Typed recovery source identity does not match the source execution."
+            )
+        if (
+            record.input_ref
+            and target.source.task_input_snapshot_ref != record.input_ref
+            and target.source.task_input_snapshot_ref
+            != str((record.memo or {}).get("task_input_snapshot_ref") or "")
+        ):
+            raise TemporalExecutionValidationError(
+                "Typed recovery task input snapshot does not match the source execution."
+            )
+        if record.plan_ref and target.source.plan_ref not in {None, record.plan_ref}:
+            raise TemporalExecutionValidationError(
+                "Typed recovery plan ref does not match the source execution."
+            )
+        existing_destination = await self._session.get(
+            TemporalExecutionCanonicalRecord,
+            target.destination.workflow_id,
+        )
+        if (
+            existing_destination is not None
+            and existing_destination.create_idempotency_key
+            != target.destination.creation_key
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_DESTINATION_IDENTITY_MISMATCH"
+            )
+
+        params = dict(record.parameters or {})
+        for key in AGENT_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        frozen_target = target.model_dump(by_alias=True, mode="json")
+        destination_run_id = str(uuid4())
+        workflow_params = dict(_workflow_payload(params))
+        workflow_params["recovery"] = {
+            "schemaVersion": target.schema_version,
+            "kind": target.target.kind,
+            "phase": target.continuation.phase,
+            "sourceWorkflowId": target.source.workflow_id,
+            "sourceRunId": target.source.run_id,
+            "creationKey": target.destination.creation_key,
+        }
+        params.pop("task", None)
+        params["workflow"] = workflow_params
+        params["recoveryTarget"] = frozen_target
+        params["recoveryLineage"] = {
+            "source": target.source.model_dump(by_alias=True, mode="json"),
+            "checkpointRef": target.checkpoint.ref,
+            "checkpointDigest": target.checkpoint.digest,
+            "preservedStepRefs": list(target.preserved_step_refs),
+            "sideEffectDispositionRef": target.side_effect_disposition_ref,
+            "destinationWorkflowId": target.destination.workflow_id,
+            "destinationRunId": destination_run_id,
+            "destinationWorkspaceReservationId": (
+                target.destination.workspace_reservation_id
+            ),
+        }
+
+        created = await self.create_execution(
+            workflow_type=record.workflow_type.value,
+            owner_id=record.owner_id,
+            owner_type=record.owner_type.value if record.owner_type else "user",
+            title=str((record.memo or {}).get("title") or "").strip() or None,
+            input_artifact_ref=record.input_ref,
+            plan_artifact_ref=record.plan_ref,
+            manifest_artifact_ref=record.manifest_ref,
+            failure_policy=None,
+            initial_parameters=params,
+            idempotency_key=target.destination.creation_key,
+            repository=str(params.get("repository") or "").strip() or None,
+            integration=None,
+            summary=(
+                f"Typed {target.target.kind} recovery from {record.workflow_id}."
+            ),
+            _workflow_id=target.destination.workflow_id,
+            _run_id=destination_run_id,
+        )
+        return {
+            "accepted": True,
+            "applied": "created_recovery_execution",
+            "targetKind": target.target.kind,
+            "continuationPhase": target.continuation.phase,
+            "source": {
+                "workflowId": record.workflow_id,
+                "runId": source_run_id,
+            },
+            "execution": {
+                "workflowId": created.workflow_id,
+                "runId": created.run_id,
+                "detailHref": f"/workflows/{created.workflow_id}",
+            },
+            "recoveryCheckpointRef": target.checkpoint.ref,
+            "creationKey": target.destination.creation_key,
+        }
 
     async def create_failed_step_recovery_execution(
         self,

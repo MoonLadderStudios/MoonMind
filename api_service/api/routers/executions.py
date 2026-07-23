@@ -116,6 +116,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
     FailedRunRecoveryManifestModel,
+    RecoverExecutionResponse,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
     RecoverFromSelectedStepRequest,
@@ -138,6 +139,7 @@ from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     normalize_dependency_ids,
 )
+from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchArchiveRequest,
     CheckpointBranchApiSourceModel,
@@ -14802,6 +14804,60 @@ def _canonical_execution_repository(
     value = params.get("repository") or task.get("repository")
     candidate = str(value or "").strip()
     return candidate or None
+
+
+@router.post(
+    "/{workflow_id}/recover",
+    response_model=RecoverExecutionResponse,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def recover_execution(
+    workflow_id: str,
+    request: WorkflowRecoveryTargetModel = Body(...),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> RecoverExecutionResponse:
+    """Create a typed recovery destination without mutating its terminal source."""
+
+    canonical = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    if request.source.workflow_id != canonical.workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recovery_not_available",
+                "message": "Typed recovery source workflow does not match.",
+                "reasons": ["RECOVERY_TARGET_IDENTITY_MISMATCH"],
+            },
+        )
+    try:
+        result = await service.create_typed_recovery_execution(
+            canonical,
+            recovery_target=request,
+        )
+    except TemporalExecutionRecoveryCheckpointError as exc:
+        reasons = [reason for reason in str(exc).split(",") if reason]
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recovery_not_available",
+                "message": "Typed recovery admission failed.",
+                "reasons": reasons,
+            },
+        ) from exc
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "recovery_not_available",
+                "message": str(exc),
+                "reasons": ["RECOVERY_TARGET_IDENTITY_MISMATCH"],
+            },
+        ) from exc
+    return RecoverExecutionResponse.model_validate(result)
 
 
 @router.post(

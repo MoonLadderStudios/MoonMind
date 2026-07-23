@@ -2730,6 +2730,33 @@ class RecoverFromFailedStepResponse(BaseModel):
     ] = Field("Recovered from failed step", alias="relationship")
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
 
+
+class RecoverExecutionResponse(BaseModel):
+    """Response from the canonical typed recovery command."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: Literal[True] = Field(True, alias="accepted")
+    applied: Literal["created_recovery_execution"] = Field(
+        "created_recovery_execution", alias="applied"
+    )
+    target_kind: Literal[
+        "failed_step", "control_stop", "publication", "restoration_failure"
+    ] = Field(..., alias="targetKind")
+    continuation_phase: Literal[
+        "rerun_failed_step",
+        "continue_to_gate",
+        "continue_after_gate",
+        "continue_to_remediation",
+        "resume_publication",
+        "retry_restoration",
+    ] = Field(..., alias="continuationPhase")
+    source: ResumeExecutionRefModel
+    execution: ResumeExecutionRefModel
+    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
+    creation_key: str = Field(..., alias="creationKey")
+
+
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
 
