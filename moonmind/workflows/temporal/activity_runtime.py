@@ -76,6 +76,7 @@ from moonmind.schemas.managed_checkpoint_models import (
     ManagedWorkspaceCheckpointCaptureResult,
 )
 from moonmind.schemas.temporal_activity_models import (
+    AcceptedRepositoryEvidence,
     AgentRuntimeCancelInput,
     AgentRuntimeFetchResultInput,
     AgentRuntimeStatusInput,
@@ -12019,6 +12020,34 @@ class TemporalAgentRuntimeActivities:
         await self._cleanup_run_support_best_effort(run_id)
         self._cleanup_deferred_run_files_best_effort(run_id)
 
+    @staticmethod
+    def _accepted_repository_evidence(
+        push_info: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Promote a successful managed push into the workflow gate contract."""
+
+        push_status = str(push_info.get("push_status") or "").strip()
+        if push_status not in {"pushed", "no_commits"}:
+            return None
+        try:
+            evidence = AcceptedRepositoryEvidence(
+                pushStatus=push_status,
+                branch=push_info.get("push_branch"),
+                baseBranch=push_info.get("push_base_branch"),
+                headSha=push_info.get("push_head_sha"),
+                commitsAheadOfBase=push_info.get("push_commit_count"),
+                repositoryChanged=push_status == "pushed",
+            )
+        except ValidationError:
+            logger.warning(
+                "Managed git push completed with status %s but lacked the "
+                "bounded identity/count fields required for accepted "
+                "repository evidence.",
+                push_status,
+            )
+            return None
+        return evidence.model_dump(mode="json", by_alias=True)
+
     async def agent_runtime_status(
         self,
         request: Any = None,
@@ -12348,6 +12377,11 @@ class TemporalAgentRuntimeActivities:
             # Build merged metadata from the typed result, then enrich with
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
+            # Provider/agent metadata is untrusted at this authority handoff.
+            # Only the managed git-push boundary below may emit accepted
+            # repository evidence.
+            meta.pop("acceptedRepositoryEvidence", None)
+            meta.pop("accepted_repository_evidence", None)
             if record is not None:
                 meta.setdefault("agentRunId", record.run_id)
                 if record.stdout_artifact_ref:
@@ -12477,6 +12511,13 @@ class TemporalAgentRuntimeActivities:
                     )
                 except Exception:
                     raise
+                accepted_repository_evidence = self._accepted_repository_evidence(
+                    push_info
+                )
+                if accepted_repository_evidence is not None:
+                    meta["acceptedRepositoryEvidence"] = (
+                        accepted_repository_evidence
+                    )
                 meta.update(push_info)
 
             # Enrich result with pull_request_url detected from workspace git

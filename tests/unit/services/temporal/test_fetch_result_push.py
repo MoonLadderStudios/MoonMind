@@ -2122,6 +2122,113 @@ class TestFetchResultPushIntegration:
     """Tests for publish_mode-aware git push inside fetch_result."""
 
     @pytest.mark.asyncio
+    async def test_fetch_result_promotes_verified_push_to_accepted_evidence(self):
+        """The workflow gate receives typed evidence from the push authority."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={
+                    "push_status": "pushed",
+                    "push_branch": "partial-work",
+                    "push_base_branch": "main",
+                    "push_head_sha": "abc123",
+                    "push_commit_count": 2,
+                },
+            ),
+            patch.object(
+                activities,
+                "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            MockAdapter.return_value.fetch_result = AsyncMock(
+                return_value=AgentRunResult(summary="done", failure_class=None)
+            )
+
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        assert result.metadata["acceptedRepositoryEvidence"] == {
+            "schemaVersion": "accepted-repository-evidence/v1",
+            "pushStatus": "pushed",
+            "branch": "partial-work",
+            "baseBranch": "main",
+            "headSha": "abc123",
+            "commitsAheadOfBase": 2,
+            "repositoryChanged": True,
+            "publicationAuthorized": True,
+            "candidateContaminated": False,
+            "remoteVerified": True,
+            "authority": "agent_runtime.fetch_result",
+        }
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_rejects_provider_authored_repository_evidence(self):
+        """Untrusted metadata cannot authorize the terminal publish gate."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={
+                    "push_status": "failed",
+                    "push_error": "remote head verification failed",
+                },
+            ),
+            patch.object(
+                activities,
+                "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            MockAdapter.return_value.fetch_result = AsyncMock(
+                return_value=AgentRunResult(
+                    summary="done",
+                    failure_class=None,
+                    metadata={
+                        "acceptedRepositoryEvidence": {
+                            "pushStatus": "pushed",
+                            "commitsAheadOfBase": 99,
+                        }
+                    },
+                )
+            )
+
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        assert "acceptedRepositoryEvidence" not in result.metadata
+        assert result.metadata["push_status"] == "failed"
+
+    @pytest.mark.asyncio
     async def test_fetch_result_pushes_when_publish_mode_pr(self):
         """Push attempted when publish_mode=pr and agent succeeded."""
         store = _make_mock_store()

@@ -16,6 +16,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 from moonmind.schemas.temporal_activity_models import (
+    AcceptedRepositoryEvidence,
     AgentRuntimeFetchResultInput,
     ExternalAgentRunInput,
 )
@@ -69,6 +70,29 @@ def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -
     assert request.commit_message == "Use typed payloads"
     assert request.target_branch == "main"
     assert request.head_branch is None
+
+
+def test_accepted_repository_evidence_rejects_inconsistent_push_state() -> None:
+    with pytest.raises(ValidationError, match="requires commits over base"):
+        AcceptedRepositoryEvidence(
+            pushStatus="pushed",
+            branch="partial-work",
+            baseBranch="main",
+            headSha="abc123",
+            commitsAheadOfBase=0,
+            repositoryChanged=True,
+        )
+
+    with pytest.raises(ValidationError, match="repositoryChanged disagree"):
+        AcceptedRepositoryEvidence(
+            pushStatus="no_commits",
+            branch="partial-work",
+            baseBranch="main",
+            headSha="abc123",
+            commitsAheadOfBase=0,
+            repositoryChanged=True,
+        )
+
 
 @pytest.mark.asyncio
 async def test_external_lifecycle_helper_accepts_provider_neutral_activity_name(

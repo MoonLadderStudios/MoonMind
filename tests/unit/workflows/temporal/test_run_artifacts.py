@@ -13,6 +13,9 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityRoute,
     TemporalActivityTimeouts,
 )
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -5335,6 +5338,18 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
         _request: object,
         **_kwargs: object,
     ) -> object:
+        push_info = {
+            "push_status": "pushed",
+            "push_branch": "partial-work",
+            "push_base_branch": "main",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 2,
+            "push_head_sha": "abc123",
+        }
+        accepted_repository_evidence = (
+            TemporalAgentRuntimeActivities._accepted_repository_evidence(push_info)
+        )
+        assert accepted_repository_evidence is not None
         return {
             "summary": "Verdict: ADDITIONAL_WORK_NEEDED",
             "metadata": {
@@ -5342,15 +5357,8 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
                 "recommendedNextAction": "reattempt_current_step",
                 "operator_summary": "One retry-stability gap remains.",
                 "diagnostics_ref": "art_verify_remaining_work",
-                "push_status": "pushed",
-                "push_branch": "partial-work",
-                "push_base_ref": "origin/main",
-                "push_commit_count": 2,
-                "push_head_sha": "abc123",
-                "acceptedRepositoryEvidence": {
-                    "pushStatus": "pushed",
-                    "evidenceRef": "artifact://repository/published",
-                },
+                **push_info,
+                "acceptedRepositoryEvidence": accepted_repository_evidence,
             },
             "output_refs": [],
         }

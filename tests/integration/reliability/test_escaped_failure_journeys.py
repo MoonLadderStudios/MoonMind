@@ -166,6 +166,42 @@ async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
     assert expected["parentState"] == "failed"
 
 
+async def test_verified_remediation_push_reaches_draft_publication_handoff() -> None:
+    """Replay the two orphaned branches through the production authority seam."""
+    replay_id = "draft-publication-authority-gap"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    for case in manifest["cases"]:
+        workflow_run = MoonMindRunWorkflow()
+        raw_result = {"outputs": case["pushResult"]}
+        assert workflow_run._publication_feasibility(raw_result)["reason"] == (
+            "publication_state_ambiguous"
+        )
+
+        accepted = TemporalAgentRuntimeActivities._accepted_repository_evidence(
+            case["pushResult"]
+        )
+        assert accepted is not None
+        assert accepted["schemaVersion"] == expected[
+            "acceptedEvidenceSchemaVersion"
+        ]
+        assert accepted["authority"] == expected["acceptedEvidenceAuthority"]
+
+        feasibility = workflow_run._publication_feasibility(
+            {"outputs": {"acceptedRepositoryEvidence": accepted}}
+        )
+        assert feasibility["feasible"] is expected["publicationFeasible"]
+        assert feasibility["reason"] == expected[
+            "publicationFeasibilityReason"
+        ]
+        assert workflow_run._terminal_gate_handoff_kind(
+            publish_mode=manifest["publishMode"],
+            draft_publication_policy=manifest["draftPublicationPolicy"],
+            publication_feasible=feasibility["feasible"],
+        ) == expected["terminalHandoff"]
+
+
 async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
