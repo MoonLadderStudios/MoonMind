@@ -1,0 +1,6 @@
+{
+  "parentState": "completed",
+  "failureClass": null,
+  "queuedChildCount": 2,
+  "executionRef": "workflow:run:batch-workflows:execution:4"
+}

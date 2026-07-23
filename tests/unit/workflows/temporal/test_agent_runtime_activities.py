@@ -2449,11 +2449,22 @@ async def test_send_turn_delegates_to_remote_session_controller() -> None:
             "containerId": "ctr-1",
             "threadId": "thread-1",
             "instructions": "Inspect the workspace",
+            "environment": {
+                "MOONMIND_ACTIVE_SKILLS_DIR": (
+                    "/work/runtime/skills_active/snapshot-retry"
+                ),
+                "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+            },
         }
     )
 
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.turn_id == "turn-1"
+    validated_request = controller.send_turn.await_args.args[0]
+    assert validated_request.environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
+        "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+    }
 
 async def test_send_turn_transient_failure_preserves_diagnostic_metadata() -> None:
     failure_metadata = {
@@ -3900,6 +3911,14 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
                     "containerId": "ctr-boundary",
                     "threadId": "thread-1",
                     "instructions": "Inspect the repo state",
+                    "environment": {
+                        "MOONMIND_ACTIVE_SKILLS_DIR": (
+                            "/work/runtime/skills_active/snapshot-retry"
+                        ),
+                        "MOONMIND_STEP_EXECUTION_ID": (
+                            "workflow:step:execution:2"
+                        ),
+                    },
                 },
                 id="boundary-test-send-turn",
                 task_queue="boundary-test-queue-send-turn",
@@ -3907,6 +3926,13 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
 
             assert isinstance(result, CodexManagedSessionTurnResponse)
             assert result.turn_id == "turn-1"
+            validated_request = controller.send_turn.await_args.args[0]
+            assert validated_request.environment == {
+                "MOONMIND_ACTIVE_SKILLS_DIR": (
+                    "/work/runtime/skills_active/snapshot-retry"
+                ),
+                "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+            }
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_injects_context(
