@@ -3807,7 +3807,11 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
-        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+        lambda patch_id: patch_id in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
     )
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
