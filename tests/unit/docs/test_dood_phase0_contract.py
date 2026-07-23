@@ -23,7 +23,7 @@ def test_docker_backend_service_is_api_owned_and_temporal_backed() -> None:
 
     assert "Docker Backend Service" in text
     assert "part of the MoonMind API subsystem" in text
-    assert "Temporal owns the execution interval" in text
+    assert "Temporal owns long-running execution" in text
     assert "existing system Docker daemon" in text
     assert "No dedicated MoonMind Docker daemon is required today" in text
 
@@ -44,14 +44,15 @@ def test_docker_backend_service_exposes_asynchronous_agent_tools() -> None:
     assert "rawDockerCliExposedToAgents: false" in text
 
 
-def test_docker_backend_service_reuses_arbitrary_images_across_workflows() -> None:
+def test_docker_backend_service_reuses_provisioned_images_across_workflows() -> None:
     text = _read(BACKEND_DOC)
 
-    assert "Images are arbitrary within policy and acquired on demand" in text
+    assert "Optional images are acquired on demand" in text
+    assert "Deployment-owned local image recipes are provisioned on demand" in text
     assert "cross-workflow image cache" in text
     assert "reusableAcrossWorkflows: true" in text
     assert "removeOnJobEnd: false" in text
-    assert "Per-image pull lock" in text
+    assert "per-source, per-build-key lock" in text
     assert "Job cleanup never removes shared images" in text
 
 
@@ -60,15 +61,16 @@ def test_docker_backend_service_uses_logical_workspace_references() -> None:
 
     assert "Workspaces are logical references" in text
     assert "callerProvidesHostPath: false" in text
-    assert "visibilityProbeBeforeLargePull: true" in text
-    assert "A failed probe stops the job before expensive image acquisition" in text
+    assert "visibilityProbeBeforeProvisioning: true" in text
+    assert "A failed probe stops the job before expensive image provisioning" in text
 
 
 def test_omnigent_uses_mcp_without_receiving_docker_authority() -> None:
     text = _read(BACKEND_DOC)
 
-    assert "Omnigent connects to MoonMind's authenticated MCP endpoint" in text
-    assert "do not receive a Docker socket or `DOCKER_HOST`" in text
+    assert "Omnigent and MoonMind managed sessions use the same tools" in text
+    assert "does not need a Docker CLI" in text
+    assert "session-local `DOCKER_HOST`" in text
     assert "omnigent-session" in text
 
 
@@ -118,6 +120,7 @@ def test_related_architecture_docs_do_not_reinstate_sidecar_as_default() -> None
 def test_backend_doc_remains_domain_agnostic() -> None:
     text = _read(BACKEND_DOC)
 
-    assert "The core is workload-agnostic" in text
-    assert "No backend branch exists for Unreal" in text
-    assert "No dedicated toolchain pool" in text
+    assert "The core remains workload-agnostic" in text
+    assert "not backend" in text
+    assert "branches for Python, .NET, Unreal, Unity, or Node" in text
+    assert "specialized worker pool" in text

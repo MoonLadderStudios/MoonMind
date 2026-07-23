@@ -37,7 +37,7 @@ PYTHON_TEST_RECIPE_VERSION: Final[str] = "v1"
 PYTHON_TEST_FINGERPRINT_INPUTS: Final[tuple[str, ...]] = (
     ".dockerignore",
     "api_service/Dockerfile",
-    "api_service/docker/**",
+    "api_service/docker/**/*",
     "api_service/config.template.toml",
     "pyproject.toml",
     "poetry.lock",

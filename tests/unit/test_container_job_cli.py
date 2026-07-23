@@ -25,7 +25,7 @@ def test_python_test_cli_accepts_optional_variadic_targets() -> None:
     result = CliRunner().invoke(app, ["container", "python-tests", "--help"])
 
     assert result.exit_code == 0
-    assert "[TARGETS]..." in result.stdout
+    assert "[targets]..." in result.stdout.lower()
 
 
 class _FakeClient:
