@@ -1464,15 +1464,17 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 node_inputs={
                     "runtime": {
                         "mode": "omnigent", "executionProfileRef": "codex-profile",
-                        "metadata": {"moonmind": {"remediationWorkspaceAuthority": authority}},
                     }
                 },
                 node_id="remediate", tool_name="omnigent", step_execution=3,
+                trusted_remediation_authority=authority,
             )
         binding = request.remediation_workspace
         assert binding is not None
         self.assertNotIn("currentHeadCheckpointRef", binding)
         self.assertEqual(binding["workflowId"], "test-wf-id")
+        self.assertEqual(binding["runId"], "test-run-id")
+        self.assertEqual(binding["logicalStepId"], "remediate")
         self.assertEqual(binding["stepExecutionId"], request.step_execution.step_execution_id)
         self.assertEqual(
             binding["destinationWorkspaceLocator"], request.workspace_spec["workspaceLocator"]
@@ -1497,6 +1499,54 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                     "remediationWorkspace": {"loopId": "caller-authored"},
                 },
                 node_id="remediate", tool_name="omnigent",
+            )
+
+    def test_build_agent_execution_request_rejects_authored_runtime_authority(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), self.assertRaisesRegex(ValueError, "workflow-owned controller state"):
+            wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "metadata": {
+                            "moonmind": {
+                                "remediationWorkspaceAuthority": {"loopId": "forged"}
+                            }
+                        },
+                    }
+                },
+                node_id="remediate",
+                tool_name="omnigent",
+            )
+
+    def test_build_agent_execution_request_rejects_malformed_controller_authority(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), self.assertRaisesRegex(ValueError, "authority is malformed"):
+            wf._build_agent_execution_request(
+                node_inputs={"runtime": {"mode": "omnigent"}},
+                node_id="remediate",
+                tool_name="omnigent",
+                trusted_remediation_authority="corrupt",
             )
 
     def test_build_agent_execution_request_launches_checkpoint_branch_turn_context(self) -> None:

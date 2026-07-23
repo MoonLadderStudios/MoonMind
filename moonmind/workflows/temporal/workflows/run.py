@@ -16196,6 +16196,7 @@ class MoonMindRunWorkflow:
         step_execution: int | None = None,
         queue_order: int | None = None,
         attempt_reason: str = "initial_execution",
+        trusted_remediation_authority: Mapping[str, Any] | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
@@ -17082,10 +17083,19 @@ class MoonMindRunWorkflow:
             if isinstance(moonmind_metadata, Mapping)
             else None
         )
+        if remediation_workspace is not None:
+            raise ValueError(
+                "remediationWorkspaceAuthority must come from workflow-owned controller state"
+            )
+        remediation_workspace = trusted_remediation_authority
         if node_inputs.get("remediationWorkspace") is not None:
             raise ValueError(
                 "remediationWorkspace must come from trusted runtime controller metadata"
             )
+        if remediation_workspace is not None and not isinstance(
+            remediation_workspace, Mapping
+        ):
+            raise ValueError("remediation workspace authority is malformed")
         if isinstance(remediation_workspace, Mapping):
             if not (
                 agent_kind == "external"
@@ -17112,6 +17122,8 @@ class MoonMindRunWorkflow:
             remediation_workspace = {
                 **{key: remediation_workspace[key] for key in required_authority},
                 "workflowId": wf_info.workflow_id,
+                "runId": wf_info.run_id,
+                "logicalStepId": node_id,
                 "stepExecutionId": step_execution_payload["stepExecutionId"],
                 "workspacePolicy": "continue_from_loop_head",
             }

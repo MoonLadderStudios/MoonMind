@@ -202,6 +202,8 @@ async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
             "branchRef": "checkpoint-branch:loop-1",
             "attemptOrdinal": 2,
             "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "remediate",
             "stepExecutionId": step_id,
             "baseCheckpointRef": "artifact://workspace/C1",
             "baseWorkspaceDigest": "sha256:" + "a" * 64,

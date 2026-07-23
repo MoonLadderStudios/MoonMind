@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.remediation_workspace import (
+    ArtifactRemediationHeadLoader,
+    ManagedServiceRemediationRestorer,
     RemediationLiveWorkspace,
     RemediationLoopHead,
     RemediationWorkspaceBinding,
@@ -22,6 +24,7 @@ def _binding(step="step-2", ordinal=2, checkpoint="artifact://workspace/C1", ver
     return RemediationWorkspaceBinding.model_validate({
         "loopId": "loop-01", "branchRef": "checkpoint-branch:loop-01",
         "attemptOrdinal": ordinal, "workflowId": "workflow-1",
+        "runId": "run-1", "logicalStepId": "remediate",
         "stepExecutionId": step, "baseCheckpointRef": checkpoint,
         "baseWorkspaceDigest": _DIGEST, "expectedHeadVersion": version,
         "headAuthorityRef": f"artifact://loop-head/{version}",
@@ -50,7 +53,7 @@ class _Restorer:
         self.snapshots = snapshots
         self.calls = []
 
-    async def restore(self, *, head, destination: Path, idempotency_key):
+    async def restore(self, *, head, destination: Path, idempotency_key, binding):
         self.calls.append((head.checkpoint_ref, idempotency_key))
         destination.mkdir(parents=True, exist_ok=True)
         for name, value in self.snapshots[head.checkpoint_ref].items():
@@ -71,6 +74,63 @@ async def test_owner_rejects_request_self_attestation_without_durable_head(tmp_p
         await owner.admit_and_resolve(
             binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2"
         )
+
+
+@pytest.mark.asyncio
+async def test_artifact_head_loader_normalizes_canonical_ref() -> None:
+    class Service:
+        async def read(self, *, artifact_id, **_kwargs):
+            assert artifact_id == "loop-head/2"
+            return object(), b'{"loopId":"loop-01"}'
+
+    value = await ArtifactRemediationHeadLoader(Service()).load(
+        "artifact://loop-head/2"
+    )
+    assert value["loopId"] == "loop-01"
+
+
+@pytest.mark.asyncio
+async def test_managed_restorer_rebinds_recovery_identity_to_attempt() -> None:
+    class Service:
+        def __init__(self):
+            self.request = None
+
+        async def restore(self, request):
+            self.request = request
+            return {
+                "checkpointRef": "artifact://workspace/C1",
+                "baseCommit": "abc123",
+                "restorationEvidenceRef": "artifact://restore/2",
+            }
+
+    service = Service()
+    head = _head()
+    head = RemediationLoopHead(
+        **{
+            **head.__dict__,
+            "restore_request": {
+                "destination": {"repository": "MoonLadderStudios/MoonMind"},
+                "recoveryIdentity": {
+                    "workflowId": "old",
+                    "runId": "old",
+                    "logicalStepId": "old",
+                    "executionOrdinal": 1,
+                },
+            },
+        }
+    )
+    await ManagedServiceRemediationRestorer(service).restore(
+        head=head,
+        destination=Path("/work/agent_jobs/attempt/repo"),
+        idempotency_key="restore-2",
+        binding=_binding(),
+    )
+    assert service.request["recoveryIdentity"] == {
+        "workflowId": "workflow-1",
+        "runId": "run-1",
+        "logicalStepId": "remediate",
+        "executionOrdinal": 2,
+    }
 
 
 @pytest.mark.asyncio

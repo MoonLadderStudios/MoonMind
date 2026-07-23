@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -36,6 +38,8 @@ class RemediationWorkspaceBinding(BaseModel):
     branch_ref: str = Field(alias="branchRef", min_length=1)
     attempt_ordinal: int = Field(alias="attemptOrdinal", ge=1)
     workflow_id: str = Field(alias="workflowId", min_length=1)
+    run_id: str = Field(alias="runId", min_length=1)
+    logical_step_id: str = Field(alias="logicalStepId", min_length=1)
     step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
     base_checkpoint_ref: str = Field(alias="baseCheckpointRef", min_length=1)
     base_workspace_digest: str = Field(alias="baseWorkspaceDigest", pattern=r"^sha256:[0-9a-f]{64}$")
@@ -93,7 +97,7 @@ class RemediationLiveWorkspace:
 class RemediationCheckpointRestorer(Protocol):
     async def restore(
         self, *, head: RemediationLoopHead, destination: Path,
-        idempotency_key: str,
+        idempotency_key: str, binding: RemediationWorkspaceBinding,
     ) -> Mapping[str, Any]:
         raise NotImplementedError
 
@@ -110,7 +114,7 @@ class ArtifactRemediationHeadLoader:
     async def load(self, ref: str) -> Mapping[str, Any]:
         try:
             _artifact, payload = await self.artifact_service.read(
-                artifact_id=ref,
+                artifact_id=ref.removeprefix("artifact://"),
                 principal="service:remediation_workspace",
                 allow_restricted_raw=True,
             )
@@ -140,6 +144,7 @@ class ManagedServiceRemediationRestorer:
         head: RemediationLoopHead,
         destination: Path,
         idempotency_key: str,
+        binding: RemediationWorkspaceBinding,
     ) -> Mapping[str, Any]:
         if not isinstance(head.restore_request, Mapping):
             raise RemediationWorkspaceError(
@@ -159,9 +164,17 @@ class ManagedServiceRemediationRestorer:
             {
                 "destination": destination_request,
                 "idempotencyKey": idempotency_key,
+                "recoveryIdentity": {
+                    "workflowId": binding.workflow_id,
+                    "runId": binding.run_id,
+                    "logicalStepId": binding.logical_step_id,
+                    "executionOrdinal": binding.attempt_ordinal,
+                },
             }
         )
-        result = await self.service.restore(request)
+        result = await _await_restore_with_activity_heartbeats(
+            self.service.restore(request)
+        )
         return {
             "checkpointRef": result.get("checkpointRef"),
             "workspaceDigest": head.workspace_digest,
@@ -169,6 +182,29 @@ class ManagedServiceRemediationRestorer:
             "manifestRef": head.manifest_ref,
             "restoreEvidenceRef": result.get("restorationEvidenceRef"),
         }
+
+
+async def _await_restore_with_activity_heartbeats(awaitable: Any) -> Any:
+    """Keep the owning Temporal activity alive during a cold restore."""
+    from temporalio import activity
+
+    task = asyncio.ensure_future(awaitable)
+    try:
+        if not activity.in_activity():
+            return await task
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=30.0)
+            if task in done:
+                return await task
+            try:
+                activity.heartbeat({"phase": "remediation_workspace_restore"})
+            except asyncio.QueueFull:
+                pass
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 class RemediationWorkspaceOwner(Protocol):
@@ -362,6 +398,7 @@ class SandboxRemediationWorkspaceOwner:
         result = await self.restorer.restore(
             head=head, destination=destination,
             idempotency_key=f"{workflow_id}:{step_execution_id}:restore",
+            binding=binding,
         )
         expected = {
             "checkpointRef": head.checkpoint_ref, "workspaceDigest": head.workspace_digest,
