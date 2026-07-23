@@ -1399,6 +1399,21 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
+    "publication_recovery.observe": ("integrations", "publication_recovery_observe"),
+    "publication_recovery.publish": ("integrations", "publication_recovery_publish"),
+    "publication_recovery.verify": ("integrations", "publication_recovery_verify"),
+    "publication_recovery.restore_candidate": (
+        "agent_runtime",
+        "publication_recovery_restore_candidate",
+    ),
+    "publication_recovery.cleanup": (
+        "agent_runtime",
+        "publication_recovery_cleanup",
+    ),
+    "publication_recovery.persist_result": (
+        "artifacts",
+        "publication_recovery_persist_result",
+    ),
     "merge_automation.evaluate_readiness": (
         "integrations",
         "merge_automation_evaluate_readiness",
@@ -4857,6 +4872,125 @@ class TemporalIntegrationActivities:
             )
         )
 
+    async def publication_recovery_observe(self, payload, /, **kwargs):
+        """Read branch and PR identity from GitHub before any mutation."""
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        contract = dict((payload or {}).get("contract") or {})
+        intent = dict(contract.get("intent") or {})
+        continuation = dict(contract.get("continuation") or {})
+        repository = str(intent.get("repository") or "").strip()
+        head = str(intent.get("headRef") or "").strip()
+        base = str(intent.get("baseRef") or "").strip()
+        token, error = await GitHubService.resolve_github_token(repo=repository)
+        if not token:
+            return {
+                "authoritative": True,
+                "authorityAvailable": False,
+            }
+        headers = GitHubService._github_headers(token)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                branch_response = await client.get(
+                    f"https://api.github.com/repos/{repository}/git/ref/heads/{head}",
+                    headers=headers,
+                )
+                if branch_response.status_code not in (200, 404):
+                    branch_response.raise_for_status()
+                branch_data = (
+                    branch_response.json() if branch_response.status_code == 200 else {}
+                )
+                pull_request = await GitHubService()._find_open_pull_request(
+                    client,
+                    repo=repository,
+                    head=head,
+                    base=base,
+                    headers=headers,
+                )
+        except (httpx.HTTPError, ValueError):
+            return {
+                "authoritative": False,
+                "authorityAvailable": True,
+                "transientAbsenceOnly": True,
+            }
+        branch_object = branch_data.get("object") or {}
+        pr_head = (pull_request or {}).get("head") or {}
+        pr_base = (pull_request or {}).get("base") or {}
+        return {
+            "authoritative": True,
+            "authorityAvailable": True,
+            "remoteBranchExists": branch_response.status_code == 200,
+            "remoteHeadSha": branch_object.get("sha"),
+            "pullRequestExists": pull_request is not None,
+            "pullRequestUrl": (pull_request or {}).get("html_url"),
+            "pullRequestHeadRef": pr_head.get("ref"),
+            "pullRequestBaseRef": pr_base.get("ref"),
+            "pullRequestHeadSha": pr_head.get("sha"),
+            "pullRequestDraft": (
+                (pull_request or {}).get("draft") if pull_request is not None else None
+            ),
+            "conflictingEvidence": (
+                branch_response.status_code == 200
+                and branch_object.get("sha")
+                != continuation.get("expectedHeadSha")
+            ),
+            "transientAbsenceOnly": False,
+        }
+
+    async def publication_recovery_publish(self, payload, /, **kwargs):
+        """Create or adopt exactly one PR using the frozen publication intent."""
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        contract = dict((payload or {}).get("contract") or {})
+        intent = dict(contract.get("intent") or {})
+        target = dict(contract.get("target") or {})
+        result = await GitHubService().create_pull_request(
+            repo=str(intent.get("repository") or ""),
+            head=str(intent.get("headRef") or ""),
+            base=str(intent.get("baseRef") or ""),
+            title=f"Publication recovery: {target.get('sourcePublicationOperationId')}",
+            body=(
+                "Publication-only recovery for accepted source workflow "
+                f"{contract.get('sourceWorkflowId')}."
+            ),
+            draft=intent.get("mode") == "draft_pr",
+        )
+        if not result.url:
+            raise TemporalActivityRuntimeError(
+                f"publication recovery failed before a PR was reconciled: {result.summary}"
+            )
+        return {
+            "pullRequestUrl": result.url,
+            "headSha": result.head_sha,
+            "created": result.created,
+            "adopted": result.adopted,
+            "reconciliationOutcome": "new" if result.created else "reconciled",
+        }
+
+    async def publication_recovery_verify(self, payload, /, **kwargs):
+        """Re-observe GitHub and require the frozen head/base/commit identity."""
+        publication = dict((payload or {}).get("publication") or {})
+        observed = await self.publication_recovery_observe(payload)
+        contract = dict((payload or {}).get("contract") or {})
+        continuation = dict(contract.get("continuation") or {})
+        if (
+            not observed.get("authoritative")
+            or not observed.get("pullRequestExists")
+            or observed.get("remoteHeadSha") != continuation.get("expectedHeadSha")
+            or observed.get("pullRequestHeadSha")
+            != continuation.get("expectedHeadSha")
+        ):
+            raise TemporalActivityRuntimeError(
+                "publication recovery could not verify the expected remote PR head"
+            )
+        return {
+            "pullRequestUrl": observed.get("pullRequestUrl")
+            or publication.get("pullRequestUrl"),
+            "headSha": observed.get("pullRequestHeadSha"),
+            "verified": True,
+            "observation": observed,
+        }
+
     async def memory_evaluate_proposals(
         self,
         *,
@@ -6980,6 +7114,21 @@ class TemporalAgentRuntimeActivities:
         )
 
         self._pentest_activities = TemporalPentestActivities(self)
+
+    async def publication_recovery_restore_candidate(self, payload, /, **kwargs):
+        """Reject unsafe path fallback until typed checkpoint restore is supplied."""
+        raise TemporalActivityRuntimeError(
+            "publication recovery checkpoint restoration requires a typed managed "
+            "checkpoint restore request; raw source paths are forbidden"
+        )
+
+    async def publication_recovery_cleanup(self, payload, /, **kwargs):
+        """Return bounded cleanup evidence for a remote-only recovery."""
+        restoration = (payload or {}).get("restoration")
+        return {
+            "cleaned": restoration is None,
+            "workspaceReserved": restoration is not None,
+        }
 
     async def agent_runtime_restore_workspace_checkpoint(
         self, request: Mapping[str, Any]

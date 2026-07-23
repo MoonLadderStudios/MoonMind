@@ -144,6 +144,25 @@ def test_registered_workflow_types_include_manifest_ingest():
     )
 
 
+def test_publication_recovery_activity_routes_are_registered_by_authority() -> None:
+    expected = {
+        "integrations": {
+            "publication_recovery.observe",
+            "publication_recovery.publish",
+            "publication_recovery.verify",
+        },
+        "agent_runtime": {
+            "publication_recovery.restore_candidate",
+            "publication_recovery.cleanup",
+        },
+        "artifacts": {"publication_recovery.persist_result"},
+    }
+
+    for fleet, activity_types in expected.items():
+        topology = build_worker_topology(fleet=fleet)
+        assert activity_types <= set(topology.activity_types)
+
+
 def test_advertised_workflow_types_match_production_worker_classes():
     registered_class_names = tuple(
         workflow._Definition.must_from_class(workflow_class).name
