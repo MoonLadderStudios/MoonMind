@@ -36,6 +36,7 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationAttemptOutput,
     RemediationHeadError,
     VerificationEvidence,
+    WorkspaceMaterializationEvidence,
 )
 
 
@@ -205,6 +206,56 @@ async def test_remediation_head_initialization_fails_without_root_digest(
             workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
         )
     assert exc_info.value.code == REMEDIATION_HEAD_MISMATCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["live", "restored"])
+async def test_persisted_head_authorizes_only_exact_materialization(
+    checkpoint_branch_session: AsyncSession,
+    mode: str,
+) -> None:
+    service = CheckpointBranchService(checkpoint_branch_session)
+    await service.create_branch(_branch_payload())
+    head = await service.initialize_remediation_head(
+        workflow_id="wf-1", branch_id="cbr-1", loop_id="loop-1"
+    )
+    attempt = RemediationAttemptInput(
+        loopId=head.loop_id,
+        attemptOrdinal=1,
+        baseCheckpointRef=head.head_checkpoint_ref,
+        expectedBaseDigest=head.head_workspace_digest,
+        expectedHeadVersion=head.head_version,
+    )
+    evidence = WorkspaceMaterializationEvidence(
+        loopId=head.loop_id,
+        checkpointRef=head.head_checkpoint_ref,
+        workspaceDigest=head.head_workspace_digest,
+        headVersion=head.head_version,
+        ownerStepExecutionId="wf-1:run-1:remediate:execution:1",
+        mode=mode,
+    )
+
+    authorized = await service.authorize_remediation_materialization(
+        workflow_id="wf-1",
+        branch_id="cbr-1",
+        attempt=attempt,
+        evidence=evidence,
+        expected_owner_step_execution_id=evidence.owner_step_execution_id,
+    )
+    assert authorized == head
+
+    with pytest.raises(RemediationHeadError) as exc_info:
+        await service.authorize_remediation_materialization(
+            workflow_id="wf-1",
+            branch_id="cbr-1",
+            attempt=attempt,
+            evidence=evidence.model_copy(update={"workspace_digest": "sha256:wrong"}),
+            expected_owner_step_execution_id=evidence.owner_step_execution_id,
+        )
+    assert exc_info.value.code in {
+        REMEDIATION_HEAD_MISMATCH,
+        "REMEDIATION_HEAD_RESTORE_INVALID",
+    }
 
 
 @pytest.mark.asyncio

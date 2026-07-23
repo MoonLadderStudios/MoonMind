@@ -38,8 +38,10 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationHeadStatus,
     RemediationWorkspaceHead,
     VerificationEvidence,
+    WorkspaceMaterializationEvidence,
     advance_head,
     apply_verification,
+    authorize_materialization,
     mark_terminal,
     rollback_head,
 )
@@ -121,7 +123,36 @@ class CheckpointBranchService:
             latestVerificationRef=branch.latest_verification_ref,
             latestVerificationVerdict=branch.latest_verification_verdict,
             status=branch.remediation_head_status,
+            remainingWorkRef=(branch.artifact_refs or {}).get(
+                "remediationRemainingWork"
+            ),
         )
+
+    async def authorize_remediation_materialization(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        attempt: RemediationAttemptInput,
+        evidence: WorkspaceMaterializationEvidence,
+        expected_owner_step_execution_id: str,
+    ) -> RemediationWorkspaceHead:
+        """Authorize one live reuse or cold restore from persisted head authority.
+
+        The destination path deliberately does not enter this boundary.  Runtime
+        code must first produce checkpoint, digest, version, loop, and owner
+        evidence; only an exact match may be handed to the AgentRun.
+        """
+
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        head = self._remediation_head(branch)
+        authorize_materialization(
+            head,
+            attempt,
+            evidence,
+            expected_owner_step_execution_id=expected_owner_step_execution_id,
+        )
+        return head
 
     async def initialize_remediation_head(
         self, *, workflow_id: str, branch_id: str, loop_id: str
@@ -234,16 +265,37 @@ class CheckpointBranchService:
         """Persist the authoritative verifier result for the exact current head."""
 
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        updated = apply_verification(self._remediation_head(branch), evidence)
-        branch.remediation_head_status = updated.status.value
-        branch.latest_verification_ref = updated.latest_verification_ref
-        branch.latest_verification_verdict = updated.latest_verification_verdict
+        head = self._remediation_head(branch)
+        updated = apply_verification(head, evidence)
+        result = await self._session.execute(
+            update(WorkflowCheckpointBranch)
+            .where(
+                WorkflowCheckpointBranch.workflow_id == workflow_id,
+                WorkflowCheckpointBranch.branch_id == branch_id,
+                WorkflowCheckpointBranch.current_head_version
+                == evidence.input_head_version,
+                WorkflowCheckpointBranch.current_head_checkpoint_ref
+                == evidence.input_head_ref,
+                WorkflowCheckpointBranch.current_head_checkpoint_digest
+                == evidence.input_head_digest,
+            )
+            .values(
+                remediation_head_status=updated.status.value,
+                latest_verification_ref=updated.latest_verification_ref,
+                latest_verification_verdict=updated.latest_verification_verdict,
+            )
+        )
+        if result.rowcount != 1:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_STALE_VERSION,
+                "remediation head advanced while verification was running",
+            )
         await self.record_artifact(
             branch_id=branch_id,
             artifact_ref=evidence.verifier_artifact_ref,
             artifact_kind=f"remediation_verification_v{evidence.input_head_version}",
         )
-        await self._session.flush()
+        await self._session.refresh(branch)
         return self._remediation_head(branch)
 
     async def mark_remediation_terminal(
