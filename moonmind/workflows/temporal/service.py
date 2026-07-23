@@ -3548,7 +3548,7 @@ class TemporalExecutionService:
             lineage["destinationRunId"] = created.run_id
             destination_params["recoveryLineage"] = lineage
             destination.parameters = destination_params
-            await self._session.commit()
+            await self._session.flush()
         return {
             "accepted": True,
             "applied": "created_recovery_execution",

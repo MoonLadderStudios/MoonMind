@@ -219,7 +219,6 @@ class WorkflowRecoveryTargetModel(BaseModel):
         side_effect_ok = self.side_effect_safe
         budget_ok = not (
             target.kind == "control_stop"
-            and phase == "continue_to_remediation"
             and not self.continuation.new_budget_ref
         )
         creation_key = deterministic_recovery_creation_key(

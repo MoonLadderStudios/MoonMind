@@ -4,6 +4,9 @@ import copy
 
 import pytest
 
+from moonmind.schemas.workflow_recovery_models import (
+    deterministic_recovery_creation_key,
+)
 from moonmind.workflows.temporal.recovery_entry import (
     compile_recovery_entry_policy,
 )
@@ -65,7 +68,14 @@ def test_entry_compiles_one_explicit_route_for_every_canonical_phase(
 ) -> None:
     payload = _payload(kind)
     payload["continuation"]["phase"] = phase
-    if phase == "continue_to_remediation":
+    payload["destination"]["creationKey"] = deterministic_recovery_creation_key(
+        payload["source"]["workflowId"],
+        payload["source"]["runId"],
+        kind,
+        payload["checkpoint"]["digest"],
+        phase,
+    )
+    if kind == "control_stop":
         payload["continuation"]["newBudgetRef"] = "artifact://new-budget"
 
     policy = compile_recovery_entry_policy(
