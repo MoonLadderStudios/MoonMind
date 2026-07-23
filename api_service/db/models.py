@@ -1537,6 +1537,63 @@ class TemporalExecutionRemediationLink(Base):
         onupdate=func.now(),
     )
 
+class ControlStopContinuationRecord(Base):
+    """Authoritative admission and idempotency record for a control stop."""
+
+    __tablename__ = "control_stop_continuations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_workflow_id",
+            "source_run_id",
+            "control_stop_id",
+            name="uq_control_stop_continuations_source_stop",
+        ),
+        UniqueConstraint(
+            "destination_workflow_id",
+            name="uq_control_stop_continuations_destination",
+        ),
+        Index(
+            "ix_control_stop_continuations_source_workflow",
+            "source_workflow_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    source_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    control_stop_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    contract_payload: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    artifact_digests: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False
+    )
+    deployment_generation: Mapped[str] = mapped_column(String(255), nullable=False)
+    deployment_promoted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    destination_workflow_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    workspace_head_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    remaining_work_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    reserved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 class WorkflowCheckpointBranchOperation(Base):
     """Idempotency ledger for branch side-effecting operations."""
 
