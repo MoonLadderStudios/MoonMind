@@ -208,6 +208,9 @@ from moonmind.workflows.executions.runtime_inheritance import (
     apply_inherited_runtime_to_payload,
     resolve_child_runtime_inheritance,
 )
+from moonmind.workflows.temporal.publication_recovery import (
+    publication_action_eligibility,
+)
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -6972,12 +6975,24 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         and resume_evidence_disabled_reason is None
     ):
         enabled = enabled | {"can_failed_step_resume"}
+    git_publication = auxiliary_outcomes.get("gitPublication")
     if raw_state == "failed":
         enabled = enabled | {"can_full_retry"}
         if bool(metrics.get("remediationAdmitted")):
             enabled = enabled | {"can_continue_remediation"}
-        git_publication = auxiliary_outcomes.get("gitPublication")
-        if isinstance(git_publication, Mapping) and git_publication.get("status") == "failed":
+        publication_contract = (
+            git_publication.get("recoveryContract")
+            if isinstance(git_publication, Mapping)
+            else None
+        )
+        publication_eligible, _ = publication_action_eligibility(
+            publication_contract
+        )
+        if (
+            isinstance(git_publication, Mapping)
+            and git_publication.get("status") == "failed"
+            and publication_eligible
+        ):
             enabled = enabled | {"can_retry_publication"}
     capability_values = {
         "can_set_title": "canSetTitle",
@@ -7041,11 +7056,17 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             continue
         if field_name == "can_retry_publication" and raw_state == "failed":
             git_publication = auxiliary_outcomes.get("gitPublication")
-            disabled_reasons[alias] = (
-                "publication_not_failed"
-                if isinstance(git_publication, Mapping)
-                else "publication_retry_not_applicable"
-            )
+            if not isinstance(git_publication, Mapping):
+                disabled_reasons[alias] = "publication_retry_not_applicable"
+            elif git_publication.get("status") != "failed":
+                disabled_reasons[alias] = "publication_not_failed"
+            else:
+                _, reason = publication_action_eligibility(
+                    git_publication.get("recoveryContract")
+                )
+                disabled_reasons[alias] = (
+                    reason or "publication_retry_not_eligible"
+                )
             continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
@@ -7061,17 +7082,40 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_retry_publication="can_retry_publication" in enabled,
         can_full_retry="can_full_retry" in enabled,
         action_evidence={
-            action: {
-                "candidateRef": control_stop.get("workspaceHeadRef"),
-                "remainingWorkRef": control_stop.get("remainingWorkRef"),
-            }
-            for action in (
-                "editForRerun",
-                "fullRetry",
-                "continueRemediation",
-                "retryPublication",
-            )
-            if control_stop
+            **{
+                action: {
+                    "candidateRef": control_stop.get("workspaceHeadRef"),
+                    "remainingWorkRef": control_stop.get("remainingWorkRef"),
+                }
+                for action in (
+                    "editForRerun",
+                    "fullRetry",
+                    "continueRemediation",
+                )
+                if control_stop
+            },
+            **(
+                {
+                    "retryPublication": {
+                        "candidateRef": (
+                            git_publication.get("recoveryContract", {})
+                            .get("continuation", {})
+                            .get("candidateRef")
+                        ),
+                        "publicationIntent": git_publication.get(
+                            "recoveryContract", {}
+                        ).get("intent"),
+                        "publicationRecoveryWorkflowId": git_publication.get(
+                            "recoveryWorkflowId"
+                        ),
+                        "publicationResult": git_publication.get(
+                            "recoveryResult"
+                        ),
+                    }
+                }
+                if isinstance(git_publication, Mapping)
+                else {}
+            ),
         },
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,

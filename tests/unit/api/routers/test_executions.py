@@ -75,6 +75,9 @@ from api_service.db.models import (
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import settings
+from moonmind.workflows.temporal.publication_recovery import (
+    publication_operation_key,
+)
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -14728,7 +14731,56 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
             "remainingWorkRef": "artifact://remaining/final",
             "workspaceHeadRef": "artifact://workspace/final",
             "metrics": {"remediationAdmitted": True},
-            "auxiliaryOutcomes": {"gitPublication": {"status": "failed"}},
+            "auxiliaryOutcomes": {
+                "gitPublication": {
+                    "status": "failed",
+                    "recoveryContract": {
+                        "sourceWorkflowId": record.workflow_id,
+                        "sourceRunId": record.run_id,
+                        "sourceSemanticOutcome": "failed",
+                        "target": {
+                            "kind": "publication",
+                            "publicationKind": "pull_request",
+                            "sourcePublicationOperationId": "publish-1",
+                            "semanticContext": "incomplete_draft_handoff",
+                        },
+                        "continuation": {
+                            "phase": "resume_publication",
+                            "publicationIdempotencyKey": (
+                                publication_operation_key(
+                                    source_workflow_id=record.workflow_id,
+                                    source_run_id=record.run_id,
+                                    publication_kind="pull_request",
+                                    repository="MoonLadderStudios/MoonMind",
+                                    head_ref="issue-3481",
+                                    base_ref="main",
+                                )
+                            ),
+                            "candidateRef": "artifact://workspace/final",
+                            "beforePublicationCheckpointRef": (
+                                "artifact://checkpoint/before-publication"
+                            ),
+                            "expectedHeadSha": "a" * 40,
+                            "expectedTreeDigest": "sha256:" + "b" * 64,
+                            "expectedDiffDigest": "sha256:" + "c" * 64,
+                            "priorObservationsRef": "artifact://github/observations",
+                            "remainingWorkRef": "artifact://remaining/final",
+                        },
+                        "intent": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "baseRef": "main",
+                            "headRef": "issue-3481",
+                            "mode": "draft_pr",
+                            "branchPolicy": "reuse_exact_head",
+                            "githubAuthorityRef": "managed-secret://github/source",
+                        },
+                        "candidateAccepted": False,
+                        "hasPublishableChange": True,
+                        "publicationAuthorityCurrent": True,
+                        "incompleteDraftAuthorized": True,
+                    },
+                }
+            },
         }
     }
 
