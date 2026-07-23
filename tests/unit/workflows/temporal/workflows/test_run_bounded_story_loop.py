@@ -1049,6 +1049,26 @@ def test_publication_feasibility_distinguishes_no_change_and_unsafe() -> None:
     )
 
 
+def test_terminal_gate_handoff_routes_changed_and_no_change_candidates() -> None:
+    policy = "draft_pr_on_additional_work_needed"
+
+    assert MoonMindRunWorkflow._terminal_gate_handoff_kind(
+        publish_mode="pr",
+        draft_publication_policy=policy,
+        publication_feasible=True,
+    ) == "draft_publication"
+    assert MoonMindRunWorkflow._terminal_gate_handoff_kind(
+        publish_mode="pr",
+        draft_publication_policy=policy,
+        publication_feasible=False,
+    ) == "artifact_backed"
+    assert MoonMindRunWorkflow._terminal_gate_handoff_kind(
+        publish_mode="none",
+        draft_publication_policy=policy,
+        publication_feasible=True,
+    ) == "artifact_backed"
+
+
 def test_parent_loop_preserves_legacy_remediation_scan_before_plan_routing_patch() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._step_ledger_rows = [

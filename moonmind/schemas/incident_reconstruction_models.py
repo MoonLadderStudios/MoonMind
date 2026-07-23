@@ -454,6 +454,7 @@ class IncidentControlStopModel(BaseModel):
     auxiliary_outcomes: dict[str, Any] = Field(
         default_factory=dict, alias="auxiliaryOutcomes"
     )
+    metrics: dict[str, Any] = Field(default_factory=dict)
     review_gate_budget: dict[str, Any] | None = Field(
         None, alias="reviewGateBudget"
     )

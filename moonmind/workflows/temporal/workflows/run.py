@@ -73,7 +73,11 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.agent_skills.selection import selected_agent_skill
     from moonmind.config.settings import settings
-    from moonmind.utils.logging import redact_sensitive_text, scrub_github_tokens
+    from moonmind.utils.logging import (
+        redact_sensitive_payload,
+        redact_sensitive_text,
+        scrub_github_tokens,
+    )
     from moonmind.workflows.temporal.jira_agent_skills import (
         JIRA_AGENT_SKILLS,
         JIRA_BACKED_AGENT_SKILLS,
@@ -11183,11 +11187,12 @@ class MoonMindRunWorkflow:
                                 ),
                             )
                         )
-                        if (
-                            publish_mode == "pr"
-                            and draft_publication_policy is not None
-                            and feasibility["feasible"]
-                        ):
+                        terminal_handoff_kind = self._terminal_gate_handoff_kind(
+                            publish_mode=publish_mode,
+                            draft_publication_policy=draft_publication_policy,
+                            publication_feasible=bool(feasibility["feasible"]),
+                        )
+                        if terminal_handoff_kind == "draft_publication":
                             self._workflow_control_stop["publicationAttempted"] = True
                             self._workflow_control_stop["auxiliaryOutcomes"][
                                 "gitPublication"
@@ -11236,7 +11241,8 @@ class MoonMindRunWorkflow:
                             self._update_memo()
                             break
                         if (
-                            draft_publication_policy is not None
+                            terminal_handoff_kind == "artifact_backed"
+                            and draft_publication_policy is not None
                             and not feasibility["feasible"]
                             and terminal_handoff_enabled
                         ):
@@ -14749,6 +14755,23 @@ class MoonMindRunWorkflow:
             reason="publication_state_ambiguous",
             evidenceRefs=evidence_refs,
         ).model_dump(by_alias=True)
+
+    @staticmethod
+    def _terminal_gate_handoff_kind(
+        *,
+        publish_mode: str,
+        draft_publication_policy: str | None,
+        publication_feasible: bool,
+    ) -> str:
+        """Select the recovery handoff before attempting publication."""
+
+        if (
+            publish_mode == "pr"
+            and draft_publication_policy is not None
+            and publication_feasible
+        ):
+            return "draft_publication"
+        return "artifact_backed"
 
     @staticmethod
     def _sanitize_operator_summary(summary: str | None) -> str | None:
@@ -19021,8 +19044,9 @@ class MoonMindRunWorkflow:
             summary["blockedReason"] = manifest.blocked_reason
         if manifest_ref:
             summary["manifestRef"] = manifest_ref
-        if self._workflow_control_stop:
-            summary["controlStop"] = dict(self._workflow_control_stop)
+        control_stop = self._sanitized_workflow_control_stop()
+        if control_stop:
+            summary["controlStop"] = control_stop
         self._recovery_manifest_ref = manifest_ref
         self._recovery_manifest_summary = summary
         return summary, manifest_ref
@@ -19115,6 +19139,14 @@ class MoonMindRunWorkflow:
             refs["diagnostics"] = self._last_diagnostics_ref
         return refs
 
+    def _sanitized_workflow_control_stop(self) -> dict[str, Any] | None:
+        """Return the bounded terminal gate projection safe for durable surfaces."""
+
+        if not self._workflow_control_stop:
+            return None
+        sanitized = redact_sensitive_payload(self._workflow_control_stop)
+        return dict(sanitized) if isinstance(sanitized, Mapping) else None
+
     async def _emit_incident_reconstruction_manifest(
         self,
     ) -> tuple[dict[str, Any] | None, str | None]:
@@ -19150,7 +19182,7 @@ class MoonMindRunWorkflow:
                 workspace_changes=self._incident_workspace_changes(),
                 logs_ref=self._logs_ref,
                 artifact_refs=self._incident_artifact_refs(),
-                control_stop=self._workflow_control_stop,
+                control_stop=self._sanitized_workflow_control_stop(),
             )
         except Exception as exc:
             self._get_logger().warning(
@@ -19208,6 +19240,15 @@ class MoonMindRunWorkflow:
         try:
             await self._terminate_workflow_scoped_sessions(reason=status)
         except Exception as exc:
+            if self._workflow_control_stop:
+                auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
+                if isinstance(auxiliary, dict):
+                    auxiliary["hostCleanup"] = {
+                        "status": "failed",
+                        "reason": self._sanitize_operator_summary(str(exc))
+                        or "session_cleanup_failed",
+                    }
+                    auxiliary["janitorRequired"] = True
             self._get_logger().warning(
                 "Failed to terminate workflow-scoped agent sessions: %s", exc
             )
@@ -19371,19 +19412,32 @@ class MoonMindRunWorkflow:
                         if self._publish_status == "published"
                         else "not_attempted"
                     )
-                    auxiliary["gitPublication"] = {"status": git_status}
-                    auxiliary["hostCleanup"] = {"status": "completed"}
-                    auxiliary["providerProfileRelease"] = {"status": "completed"}
-                    auxiliary["janitorRequired"] = False
+                    git_outcome = auxiliary.get("gitPublication")
+                    if not (
+                        isinstance(git_outcome, Mapping)
+                        and git_outcome.get("status") == "failed"
+                    ):
+                        auxiliary["gitPublication"] = {"status": git_status}
+                    for outcome_name in ("hostCleanup", "providerProfileRelease"):
+                        outcome = auxiliary.get(outcome_name)
+                        if not (
+                            isinstance(outcome, Mapping)
+                            and outcome.get("status") == "failed"
+                        ):
+                            auxiliary[outcome_name] = {"status": "completed"}
+                    auxiliary["janitorRequired"] = any(
+                        isinstance(auxiliary.get(outcome_name), Mapping)
+                        and auxiliary[outcome_name].get("status") == "failed"
+                        for outcome_name in ("hostCleanup", "providerProfileRelease")
+                    )
                 metrics = self._workflow_control_stop.get("metrics")
                 if isinstance(metrics, dict):
                     metrics["publicationCompleted"] = (
                         self._publish_status == "published"
                     )
-                finish_summary["primaryOutcome"] = dict(
-                    self._workflow_control_stop
-                )
-                finish_summary["controlStop"] = dict(self._workflow_control_stop)
+                control_stop = self._sanitized_workflow_control_stop() or {}
+                finish_summary["primaryOutcome"] = control_stop
+                finish_summary["controlStop"] = control_stop
                 finish_summary["runMetrics"] = dict(
                     self._workflow_control_stop.get("metrics") or {}
                 )
