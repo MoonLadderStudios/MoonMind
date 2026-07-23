@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -31,6 +32,27 @@ DETERMINISTIC_CASES = {
     "events.replay-overlap-schema-drift",
     "resources.bounds-and-secret-scan",
 }
+ISSUE_LINKS = (
+    "MoonLadderStudios/MoonMind#3480",
+    "MoonLadderStudios/MoonMind#3471",
+    "MoonLadderStudios/MoonMind#3456",
+)
+EVIDENCE_GROUPS = {
+    "cumulativeJourney": (
+        "tests/integration/reliability/test_checkpoint_cold_resume.py",
+        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
+        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+    ),
+    "failureAndRestartMatrix": (
+        "tests/integration/omnigent/test_embedded_recovery.py",
+    ),
+    "rolloutAndReplay": (
+        "tests/unit/workflows/adapters/test_external_adapter_registry.py",
+        "tests/unit/workflows/temporal/test_temporal_workers.py",
+        "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
+        "frontend/src/entrypoints/workflow-detail.test.tsx",
+    ),
+}
 COMMANDS = (
     (
         sys.executable,
@@ -38,10 +60,25 @@ COMMANDS = (
         "pytest",
         "tests/unit/omnigent",
         "tests/integration/omnigent",
+        "tests/unit/tools/test_run_omnigent_live_conformance.py",
         # This production-Postgres serialization check belongs to the
         # compose-backed integration-ci job; the deterministic runner does not
         # provision a database service.
         "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
+        "-q",
+        "--tb=short",
+    ),
+    (
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/integration/reliability/test_checkpoint_cold_resume.py",
+        "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
+        "tests/unit/workflows/temporal/workflows/test_run_integration.py",
+        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/unit/workflows/adapters/test_external_adapter_registry.py",
+        "tests/unit/workflows/temporal/test_temporal_workers.py",
+        "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "-q",
         "--tb=short",
     ),
@@ -53,6 +90,14 @@ COMMANDS = (
         "frontend/src/entrypoints/workflow-detail.test.tsx",
     ),
 )
+
+
+def _artifact_ref(path: Path) -> str:
+    """Return a repo-relative ref when possible, otherwise an absolute path."""
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def main() -> int:
@@ -72,6 +117,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     failed = False
     log_paths: list[Path] = []
+    command_results: list[dict[str, object]] = []
     for index, command in enumerate(COMMANDS, start=1):
         log_path = args.output_dir / f"deterministic-{index}.log"
         with log_path.open("w", encoding="utf-8") as log:
@@ -84,6 +130,16 @@ def main() -> int:
                 text=True,
             )
         log_paths.append(log_path)
+        command_results.append(
+            {
+                "commandIndex": index,
+                "arguments": list(command),
+                "exitCode": completed.returncode,
+                "logRef": _artifact_ref(log_path),
+                "logDigest": "sha256:"
+                + hashlib.sha256(log_path.read_bytes()).hexdigest(),
+            }
+        )
         failed |= completed.returncode != 0
 
     profile = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -91,6 +147,36 @@ def main() -> int:
     missing_deterministic = DETERMINISTIC_CASES - profile_case_ids
     if missing_deterministic:
         failed = True
+    evidence_group_results: dict[str, dict[str, object]] = {}
+    for name, paths in EVIDENCE_GROUPS.items():
+        path_results = []
+        for path in paths:
+            matching_commands = [
+                result
+                for result in command_results
+                if path in result["arguments"]
+            ]
+            passed = bool(matching_commands) and all(
+                result["exitCode"] == 0 for result in matching_commands
+            )
+            path_results.append(
+                {
+                    "path": path,
+                    "status": "passed" if passed else "failed",
+                    "commandIndexes": [
+                        result["commandIndex"] for result in matching_commands
+                    ],
+                }
+            )
+            failed |= not passed
+        evidence_group_results[name] = {
+            "status": (
+                "passed"
+                if all(result["status"] == "passed" for result in path_results)
+                else "failed"
+            ),
+            "paths": path_results,
+        }
     cases = []
     for case in profile["cases"]:
         cases.append(
@@ -102,7 +188,7 @@ def main() -> int:
                     else "skipped"
                 ),
                 "evidenceRefs": [
-                    str(path.relative_to(REPO_ROOT)) for path in log_paths
+                    _artifact_ref(path) for path in log_paths
                 ],
             }
         )
@@ -130,10 +216,16 @@ def main() -> int:
         "protocolVersion": "omnigent/v1",
         "capabilities": ["deterministic-fake", "bridge", "workflow-detail"],
         "evidenceScans": scans,
+        "commandResults": command_results,
         "cases": cases,
         "deterministicCoverage": {
             "requiredCaseIds": sorted(DETERMINISTIC_CASES),
             "missingCaseIds": sorted(missing_deterministic),
+            "issueLinks": list(ISSUE_LINKS),
+            "evidenceGroups": {
+                name: list(paths) for name, paths in EVIDENCE_GROUPS.items()
+            },
+            "evidenceGroupResults": evidence_group_results,
         },
     }
     evidence_path = args.output_dir / "runner-evidence.json"
