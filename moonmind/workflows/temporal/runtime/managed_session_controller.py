@@ -3424,8 +3424,10 @@ class DockerCodexManagedSessionController:
                 container_id=request.container_id,
                 action="send_turn",
                 payload=request.model_dump(
-                    by_alias=True, exclude={"bridge_publication"}
+                    by_alias=True,
+                    exclude={"bridge_publication", "environment"},
                 ),
+                extra_env=request.environment or None,
             )
             response = self._with_runtime_family(
                 CodexManagedSessionTurnResponse.model_validate(payload),

@@ -3808,6 +3808,7 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
 ) -> None:
     binding = _binding()
     session_status_calls: list[Any] = []
+    send_turn_calls: list[SendCodexManagedSessionTurnRequest] = []
     control_calls: list[dict[str, Any]] = []
 
     async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
@@ -3829,7 +3830,10 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
             thread_id="thread-existing",
         )
 
-    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
         return _turn_response(
             session_id=binding.session_id,
             session_epoch=binding.session_epoch,
@@ -3882,12 +3886,34 @@ async def test_start_reuses_existing_workflow_scoped_session_without_launching(
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
 
-    handle = await adapter.start(_request(binding))
+    request = _request(binding)
+    request.step_execution = AgentRuntimeStepExecutionLaunch(
+        workflowId="wf-user-1",
+        runId="run-user-1",
+        logicalStepId="queue-github-issues",
+        executionOrdinal=2,
+        stepExecutionId="wf-user-1:run-user-1:queue-github-issues:execution:2",
+        runtimeContextPolicy="reuse_session_same_epoch",
+    )
+    request.parameters["_moonmindActiveSkillsDir"] = (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
+
+    handle = await adapter.start(request)
 
     assert handle.metadata["containerId"] == "container-existing"
     assert len(session_status_calls) == 1
     assert session_status_calls[0].container_id == "container-existing"
     assert session_status_calls[0].thread_id == "thread-existing"
+    assert send_turn_calls[0].environment == {
+        "MOONMIND_ACTIVE_SKILLS_DIR": "/work/runtime/skills_active/snapshot-retry",
+        "MOONMIND_STEP_EXECUTION_ID": (
+            "wf-user-1:run-user-1:queue-github-issues:execution:2"
+        ),
+    }
+    assert request.parameters["_moonmindActiveSkillsDir"] == (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
     assert control_calls[0] == {
         "action": "resume_session",
         "containerId": "container-existing",

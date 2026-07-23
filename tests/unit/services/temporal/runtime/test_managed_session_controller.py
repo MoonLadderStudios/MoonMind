@@ -3230,6 +3230,7 @@ async def test_controller_launch_trusts_workspace_git_commands_for_container_own
 @pytest.mark.asyncio
 async def test_controller_send_turn_executes_inside_container(tmp_path: Path) -> None:
     commands: list[tuple[str, ...]] = []
+    environments: list[dict[str, str]] = []
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -3238,6 +3239,7 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
         commands.append(command)
+        environments.append(dict(env or {}))
         if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
             payload = {
                 "sessionState": {
@@ -3268,6 +3270,12 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
             containerId="ctr-1",
             threadId="logical-thread-1",
             instructions="Reply with exactly the word OK",
+            environment={
+                "MOONMIND_ACTIVE_SKILLS_DIR": (
+                    "/work/runtime/skills_active/snapshot-retry"
+                ),
+                "MOONMIND_STEP_EXECUTION_ID": "workflow:step:execution:2",
+            },
         )
     )
 
@@ -3276,8 +3284,22 @@ async def test_controller_send_turn_executes_inside_container(tmp_path: Path) ->
     assert len(commands) == 1
     exec_command = commands[0]
     assert exec_command[:3] == ("docker", "exec", "-i")
+    assert (
+        "-e",
+        "MOONMIND_ACTIVE_SKILLS_DIR=/work/runtime/skills_active/snapshot-retry",
+    ) == exec_command[3:5]
+    assert (
+        "-e",
+        "MOONMIND_STEP_EXECUTION_ID=workflow:step:execution:2",
+    ) == exec_command[5:7]
     assert "-c" not in exec_command
     assert exec_command[-2:] == ("invoke", "send_turn")
+    assert environments[0]["MOONMIND_ACTIVE_SKILLS_DIR"] == (
+        "/work/runtime/skills_active/snapshot-retry"
+    )
+    assert environments[0]["MOONMIND_STEP_EXECUTION_ID"] == (
+        "workflow:step:execution:2"
+    )
 
 @pytest.mark.asyncio
 async def test_controller_send_turn_polls_session_status_until_completed() -> None:
