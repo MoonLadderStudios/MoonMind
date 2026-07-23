@@ -47,6 +47,7 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
         "tests/integration/omnigent/test_embedded_recovery.py",
     )
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
-        "tests/unit/workflows/temporal/test_report_workflow_rollout.py",
+        "tests/unit/workflows/adapters/test_external_adapter_registry.py",
+        "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
     )

@@ -47,7 +47,8 @@ EVIDENCE_GROUPS = {
         "tests/integration/omnigent/test_embedded_recovery.py",
     ),
     "rolloutAndReplay": (
-        "tests/unit/workflows/temporal/test_report_workflow_rollout.py",
+        "tests/unit/workflows/adapters/test_external_adapter_registry.py",
+        "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
     ),
 }
@@ -73,7 +74,8 @@ COMMANDS = (
         "tests/integration/reliability/test_checkpoint_cold_resume.py",
         "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
         "tests/unit/workflows/temporal/workflows/test_run_integration.py",
-        "tests/unit/workflows/temporal/test_report_workflow_rollout.py",
+        "tests/unit/workflows/adapters/test_external_adapter_registry.py",
+        "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",
         "-q",
         "--tb=short",
