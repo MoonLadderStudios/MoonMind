@@ -326,6 +326,21 @@ class CheckpointBranchModel(BaseModel):
     current_head_checkpoint_ref: str | None = Field(
         None, alias="currentHeadCheckpointRef"
     )
+    current_head_checkpoint_digest: str | None = Field(
+        None, alias="currentHeadCheckpointDigest"
+    )
+    current_head_version: int | None = Field(None, alias="currentHeadVersion")
+    current_head_attempt_ordinal: int | None = Field(
+        None, alias="currentHeadAttemptOrdinal"
+    )
+    remediation_loop_id: str | None = Field(None, alias="remediationLoopId")
+    remediation_head_status: str | None = Field(None, alias="remediationHeadStatus")
+    latest_verification_ref: str | None = Field(
+        None, alias="latestVerificationRef"
+    )
+    latest_verification_verdict: str | None = Field(
+        None, alias="latestVerificationVerdict"
+    )
     artifact_refs: dict[str, Any] = Field(default_factory=dict, alias="artifactRefs")
     current_head_commit: str | None = Field(None, alias="currentHeadCommit")
     pull_request_url: str | None = Field(None, alias="pullRequestUrl")
@@ -629,6 +644,21 @@ class CheckpointBranchRecordModel(BaseModel):
     )
     current_head_checkpoint_ref: str | None = Field(
         None, alias="currentHeadCheckpointRef"
+    )
+    current_head_checkpoint_digest: str | None = Field(
+        None, alias="currentHeadCheckpointDigest"
+    )
+    current_head_version: int | None = Field(None, alias="currentHeadVersion")
+    current_head_attempt_ordinal: int | None = Field(
+        None, alias="currentHeadAttemptOrdinal"
+    )
+    remediation_loop_id: str | None = Field(None, alias="remediationLoopId")
+    remediation_head_status: str | None = Field(None, alias="remediationHeadStatus")
+    latest_verification_ref: str | None = Field(
+        None, alias="latestVerificationRef"
+    )
+    latest_verification_verdict: str | None = Field(
+        None, alias="latestVerificationVerdict"
     )
     current_head_commit: str | None = Field(None, alias="currentHeadCommit")
     pull_request_url: str | None = Field(None, alias="pullRequestUrl")
