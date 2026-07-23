@@ -656,6 +656,9 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH = (
+    "run-workflow-gate-terminal-handoff-v1"
+)
 RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
     "run-moonspec-draft-publish-recovery-handoff-v1"
 )
@@ -11060,7 +11063,13 @@ class MoonMindRunWorkflow:
                             attempt_payload.get("checkpointAfterRef")
                             or attempt_payload.get("checkpointBeforeRef")
                         )
-                        if normalized_gate == "ADDITIONAL_WORK_NEEDED":
+                        terminal_handoff_enabled = workflow.patched(
+                            RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH
+                        )
+                        if (
+                            normalized_gate == "ADDITIONAL_WORK_NEEDED"
+                            and terminal_handoff_enabled
+                        ):
                             remaining_work_ref = (
                                 await self._materialize_remaining_work_artifact(
                                     gate=step_gate_result,
@@ -11229,6 +11238,7 @@ class MoonMindRunWorkflow:
                         if (
                             draft_publication_policy is not None
                             and not feasibility["feasible"]
+                            and terminal_handoff_enabled
                         ):
                             self._publish_context["noChangeHandoff"] = {
                                 "status": "artifact_backed",

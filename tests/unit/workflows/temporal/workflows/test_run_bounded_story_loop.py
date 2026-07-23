@@ -1,18 +1,106 @@
 from __future__ import annotations
 
+import inspect
+from datetime import datetime, timezone
+from typing import Any
+
 import pytest
 
+from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
 from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH,
+    RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH,
     MoonMindRunWorkflow,
     bounded_story_loop_resume_decision,
     bounded_story_loop_scope_guard,
     bounded_story_loop_step_effects,
 )
+
+
+@pytest.mark.asyncio
+async def test_terminal_remaining_work_is_persisted_redacted_and_linked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    captured: dict[str, Any] = {}
+
+    async def fake_write_json_artifact(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "remaining-work-final"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 23, tzinfo=timezone.utc),
+    )
+
+    ref = await workflow._materialize_remaining_work_artifact(
+        gate=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="high",
+            blocking_evidence_refs=("artifact://verification/final",),
+            issues=(
+                {
+                    "remainingWork": "token=super-secret",
+                    "requiredCheck": "pytest tests/unit",
+                    "suggestedFile": "moonmind/workflows/run.py",
+                },
+            ),
+            remaining_work_ref="artifact://gate/final",
+        ),
+        gate_result_ref="artifact://gate/final",
+        workspace_head_ref="artifact://workspace/final",
+    )
+
+    assert ref == "artifact://remaining-work-final"
+    assert captured["payload"]["schemaVersion"] == "remaining-work/v1"
+    assert captured["payload"]["gaps"] == ["[REDACTED]"]
+    assert captured["payload"]["sourceGateResultRef"] == "artifact://gate/final"
+    assert captured["payload"]["sourceVerificationRef"] == (
+        "artifact://verification/final"
+    )
+    assert captured["payload"]["workspaceHeadRef"] == "artifact://workspace/final"
+
+
+@pytest.mark.asyncio
+async def test_terminal_remaining_work_persistence_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    async def fail_write(**_kwargs: Any) -> str:
+        raise RuntimeError("artifact persistence unavailable")
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fail_write)
+
+    with pytest.raises(RuntimeError, match="artifact persistence unavailable"):
+        await workflow._materialize_remaining_work_artifact(
+            gate=StepGateResult(
+                verdict="ADDITIONAL_WORK_NEEDED",
+                confidence="high",
+                issues=({"remainingWork": "finish tests"},),
+                remaining_work_ref="artifact://gate/final",
+            ),
+            gate_result_ref="artifact://gate/final",
+            workspace_head_ref="artifact://workspace/final",
+        )
+
+
+def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow.run)
+
+    assert RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH in source
+    assert source.index(RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH) < source.index(
+        "await self._materialize_remaining_work_artifact"
+    )
+    assert source.index(RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH) < source.index(
+        'name="reports/no_change_handoff.json"'
+    )
 
 
 def _explicit_remediation_chain(max_attempts: int) -> list[dict[str, object]]:
