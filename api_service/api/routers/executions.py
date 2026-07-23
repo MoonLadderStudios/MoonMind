@@ -7023,6 +7023,23 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         if field_name == "can_pause" and is_operator_paused:
             disabled_reasons[alias] = "already_paused"
             continue
+        if field_name == "can_continue_remediation" and raw_state == "failed":
+            disabled_reasons[alias] = (
+                "remediation_not_admitted"
+                if control_stop.get("kind") == "workflow_gate"
+                else "control_stop_not_available"
+            )
+            continue
+        if field_name == "can_retry_publication" and raw_state == "failed":
+            git_publication = (control_stop.get("auxiliaryOutcomes") or {}).get(
+                "gitPublication"
+            )
+            disabled_reasons[alias] = (
+                "publication_not_failed"
+                if isinstance(git_publication, Mapping)
+                else "publication_retry_not_applicable"
+            )
+            continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,

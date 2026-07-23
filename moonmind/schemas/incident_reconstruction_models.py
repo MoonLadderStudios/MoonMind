@@ -437,6 +437,9 @@ class IncidentControlStopModel(BaseModel):
     remaining_work_ref: str | None = Field(
         None, alias="remainingWorkRef", max_length=500
     )
+    terminal_handoff_ref: str | None = Field(
+        None, alias="terminalHandoffRef", max_length=500
+    )
     workspace_head_ref: str | None = Field(
         None, alias="workspaceHeadRef", max_length=500
     )
@@ -480,6 +483,7 @@ class IncidentControlStopModel(BaseModel):
         "gate_result_ref",
         "verification_ref",
         "remaining_work_ref",
+        "terminal_handoff_ref",
         "workspace_head_ref",
         mode="before",
     )

@@ -99,8 +99,52 @@ def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
         "await self._materialize_remaining_work_artifact"
     )
     assert source.index(RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH) < source.index(
-        'name="reports/no_change_handoff.json"'
+        "await self._persist_terminal_gate_handoff"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("publish_mode", "feasible", "reason"),
+    [
+        ("pr", False, "no_candidate_change"),
+        ("none", True, "commits_ahead_of_base"),
+        ("pr", False, "publication_unauthorized"),
+        ("pr", False, "candidate_contaminated"),
+        ("pr", False, "publication_state_ambiguous"),
+    ],
+)
+async def test_artifact_backed_terminal_handoff_persists_all_fallback_cases(
+    monkeypatch: pytest.MonkeyPatch,
+    publish_mode: str,
+    feasible: bool,
+    reason: str,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    captured: dict[str, Any] = {}
+
+    async def fake_write_json_artifact(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "terminal-handoff-final"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    ref = await workflow._persist_terminal_gate_handoff(
+        feasibility={"feasible": feasible, "reason": reason},
+        publish_mode=publish_mode,
+        remaining_work_ref="artifact://remaining/final",
+        workspace_head_ref="artifact://workspace/final",
+    )
+
+    assert ref == "artifact://terminal-handoff-final"
+    assert captured["name"] == "reports/terminal_gate_handoff.json"
+    assert captured["payload"]["publicationFeasible"] is feasible
+    assert captured["payload"]["publicationAttempted"] is False
+    assert captured["payload"]["reason"] == reason
+    assert captured["payload"]["remainingWorkRef"] == "artifact://remaining/final"
+    assert captured["payload"]["workspaceHeadRef"] == "artifact://workspace/final"
+    assert workflow._publish_context["terminalGateHandoff"]["artifactRef"] == ref
+    assert ("noChangeHandoff" in workflow._publish_context) is (not feasible)
 
 
 def _explicit_remediation_chain(max_attempts: int) -> list[dict[str, object]]:

@@ -291,6 +291,7 @@ async def test_workflow_gate_finalization_preserves_auxiliary_failures_and_redac
         "terminalDisposition": "failed_with_remaining_work",
         "gateResultRef": "artifact://gate/final",
         "remainingWorkRef": "artifact://remaining/final",
+        "terminalHandoffRef": "artifact://handoff/final",
         "workspaceHeadRef": "artifact://workspace/final",
         "publicationFeasible": True,
         "publicationAttempted": True,
@@ -350,6 +351,7 @@ async def test_workflow_gate_finalization_preserves_auxiliary_failures_and_redac
     assert auxiliary["providerProfileRelease"]["status"] == "failed"
     assert auxiliary["janitorRequired"] is True
     assert finish["controlStop"]["remainingWorkRef"] == "artifact://remaining/final"
+    assert finish["controlStop"]["terminalHandoffRef"] == "artifact://handoff/final"
     assert (
         finish["recoveryManifest"]["controlStop"]["remainingWorkRef"]
         == "artifact://remaining/final"

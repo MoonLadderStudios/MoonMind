@@ -14744,6 +14744,42 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
     }
 
 
+def test_workflow_gate_actions_expose_action_specific_disabled_reasons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.memo["finishSummary"] = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            "remainingWorkRef": "artifact://remaining/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "metrics": {"remediationAdmitted": False},
+            "auxiliaryOutcomes": {"gitPublication": {"status": "not_attempted"}},
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canContinueRemediation"] is False
+    assert (
+        actions["disabledReasons"]["canContinueRemediation"]
+        == "remediation_not_admitted"
+    )
+    assert actions["canRetryPublication"] is False
+    assert (
+        actions["disabledReasons"]["canRetryPublication"]
+        == "publication_not_failed"
+    )
+    assert actions["actionEvidence"]["continueRemediation"] == {
+        "candidateRef": "artifact://workspace/final",
+        "remainingWorkRef": "artifact://remaining/final",
+    }
+
+
 def test_mm644_rerun_snapshot_payload_records_source_lineage() -> None:
     payload = _build_original_workflow_input_snapshot_payload(
         source_kind="rerun",

@@ -11242,41 +11242,25 @@ class MoonMindRunWorkflow:
                             break
                         if (
                             terminal_handoff_kind == "artifact_backed"
-                            and draft_publication_policy is not None
-                            and not feasibility["feasible"]
                             and terminal_handoff_enabled
                         ):
-                            self._publish_context["noChangeHandoff"] = {
-                                "status": "artifact_backed",
-                                "publicationFeasible": False,
-                                "reason": feasibility["reason"],
-                                "remainingWorkRef": remaining_work_ref,
-                                "workspaceHeadRef": workspace_head_ref,
-                                "actions": [
-                                    "edit_for_rerun",
-                                    "full_retry",
-                                    "continue_remediation_not_yet_admitted",
-                                ],
-                            }
-                            no_change_ref = await self._write_json_artifact(
-                                name="reports/no_change_handoff.json",
-                                payload=dict(
-                                    self._publish_context["noChangeHandoff"]
-                                ),
-                                metadata_json={
-                                    "artifact_kind": "no_change_handoff",
-                                },
+                            handoff_ref = await self._persist_terminal_gate_handoff(
+                                feasibility=feasibility,
+                                publish_mode=publish_mode,
+                                remaining_work_ref=remaining_work_ref,
+                                workspace_head_ref=workspace_head_ref,
                             )
-                            self._publish_context["noChangeHandoff"][
-                                "artifactRef"
-                            ] = self._bounded_story_loop_artifact_ref(no_change_ref)
-                            control_stop_summary = (
-                                "Verification completed as an operation but the quality "
-                                f"gate returned {normalized_gate}. No pull request was "
-                                "attempted because no publishable candidate change existed; "
-                                "the remaining-work evidence is preserved for Edit for rerun "
-                                "or Full retry."
+                            self._workflow_control_stop["terminalHandoffRef"] = (
+                                handoff_ref
                             )
+                            if feasibility["reason"] == "no_candidate_change":
+                                control_stop_summary = (
+                                    "Verification completed as an operation but the quality "
+                                    f"gate returned {normalized_gate}. No pull request was "
+                                    "attempted because no publishable candidate change existed; "
+                                    "the remaining-work evidence is preserved for Edit for rerun "
+                                    "or Full retry."
+                                )
                         self._plan_blocked_message = control_stop_summary
                         self._publish_status = "not_required"
                         self._publish_reason = control_stop_summary
@@ -14772,6 +14756,44 @@ class MoonMindRunWorkflow:
         ):
             return "draft_publication"
         return "artifact_backed"
+
+    async def _persist_terminal_gate_handoff(
+        self,
+        *,
+        feasibility: Mapping[str, Any],
+        publish_mode: str,
+        remaining_work_ref: str | None,
+        workspace_head_ref: str | None,
+    ) -> str:
+        """Persist the explicit fallback handoff selected by the terminal gate."""
+
+        publication_feasible = bool(feasibility.get("feasible"))
+        handoff = {
+            "schemaVersion": "terminal-gate-handoff/v1",
+            "status": "artifact_backed",
+            "publicationFeasible": publication_feasible,
+            "publicationAttempted": False,
+            "publicationMode": publish_mode,
+            "reason": feasibility.get("reason") or "publication_state_ambiguous",
+            "remainingWorkRef": remaining_work_ref,
+            "workspaceHeadRef": workspace_head_ref,
+            "actions": [
+                "edit_for_rerun",
+                "full_retry",
+                "continue_remediation_not_yet_admitted",
+            ],
+        }
+        artifact_id = await self._write_json_artifact(
+            name="reports/terminal_gate_handoff.json",
+            payload=handoff,
+            metadata_json={"artifact_kind": "terminal_gate_handoff"},
+        )
+        artifact_ref = self._bounded_story_loop_artifact_ref(artifact_id)
+        handoff["artifactRef"] = artifact_ref
+        self._publish_context["terminalGateHandoff"] = handoff
+        if not publication_feasible:
+            self._publish_context["noChangeHandoff"] = handoff
+        return artifact_ref
 
     @staticmethod
     def _sanitize_operator_summary(summary: str | None) -> str | None:
