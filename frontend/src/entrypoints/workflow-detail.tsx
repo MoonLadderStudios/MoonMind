@@ -9384,7 +9384,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       <Fact label="Exact stop dimension">{continuation.continueLoop ? 'None' : formatStatusLabel(continuation.reason)}</Fact>
                     </FlatFactGrid>
                     {progress?.regressions?.length ? (
-                      <p className="small">Regressions: {progress.regressions.map(formatStatusLabel).join(', ')}</p>
+                      <p className="small">Regressions: {progress.regressions.map((regression) => formatStatusLabel(regression)).join(', ')}</p>
                     ) : null}
                   </section>
                 );

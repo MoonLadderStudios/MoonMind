@@ -818,6 +818,14 @@ class MoonMindRunWorkflow:
         if not hasattr(logger_to_use, "isEnabledFor"):
             logger_to_use = logging.getLogger(__name__)
 
+        try:
+            if not isinstance(logger_to_use.isEnabledFor(logging.INFO), bool):
+                logger_to_use = logging.getLogger(__name__)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Error checking logger capabilities in _get_logger"
+            )
+            logger_to_use = logging.getLogger(__name__)
         return logging.LoggerAdapter(logger_to_use, extra=extra)
 
     @staticmethod
