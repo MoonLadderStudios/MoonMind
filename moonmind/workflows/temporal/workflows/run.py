@@ -4031,7 +4031,7 @@ class MoonMindRunWorkflow:
         self._sync_remediation_loop_projection()
         self._sync_progress_snapshot(updated_at=workflow.now())
         if continue_after_admission:
-            await workflow.wait_condition(lambda: workflow.all_handlers_finished)
+            await workflow.wait_condition(workflow.all_handlers_finished)
             workflow.continue_as_new(
                 self._build_remediation_loop_continue_as_new_input(
                     ordered_nodes=ordered_nodes,
