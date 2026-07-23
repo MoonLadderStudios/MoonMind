@@ -201,6 +201,13 @@ class RuntimeExecutionCapabilities(BaseModel):
                 raise ValueError("checkpoint capture activity contradicts workspace state plane")
             if self.checkpoint_restore_activity != self.workspace_state.restore_activity:
                 raise ValueError("checkpoint restore activity contradicts workspace state plane")
+            if (
+                self.checkpoint_artifact_contract_version
+                != self.workspace_state.artifact_contract_version
+            ):
+                raise ValueError("checkpoint artifact contract contradicts workspace state plane")
+            if self.checkpoint_boundary_support != self.workspace_state.boundary_support:
+                raise ValueError("checkpoint boundary support contradicts workspace state plane")
         if bool(self.checkpoint_capture_kinds) != bool(self.checkpoint_capture_activity):
             raise ValueError("checkpoint capture kinds and activity must be declared together")
         if bool(self.checkpoint_restore_kinds) != bool(self.checkpoint_restore_activity):

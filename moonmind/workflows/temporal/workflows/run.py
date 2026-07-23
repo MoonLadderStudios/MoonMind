@@ -4982,6 +4982,29 @@ class MoonMindRunWorkflow:
                 capture_input["criticality"] = (
                     capabilities.post_execution_checkpoint_criticality
                 )
+                if capabilities.runtime_id == "omnigent":
+                    try:
+                        wf_info = workflow.info()
+                        identity = StepExecutionIdentityModel(
+                            workflowId=wf_info.workflow_id,
+                            runId=wf_info.run_id,
+                            logicalStepId=logical_step_id,
+                            executionOrdinal=(
+                                self._step_execution_for(logical_step_id) or 1
+                            ),
+                        )
+                        locator_identity = (
+                            f"{wf_info.workflow_id}:{build_step_execution_id(identity)}"
+                        )
+                        capture_input["workspaceLocator"] = {
+                            "kind": "sandbox",
+                            "workspaceId": hashlib.sha256(
+                                locator_identity.encode("utf-8")
+                            ).hexdigest()[:24],
+                            "relativePath": "repo",
+                        }
+                    except workflow._NotInWorkflowEventLoopError:
+                        pass
         elif (
             agent_kind == "managed"
             or previous_capture.get("captureAuthority") == "managed_runtime"

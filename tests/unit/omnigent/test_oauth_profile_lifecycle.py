@@ -115,8 +115,15 @@ def test_repository_mutation_requirement_is_explicit_or_implied_by_publish() -> 
         idempotencyKey="read-only",
         parameters={},
     )
+    branch_publish_without_gh = AgentExecutionRequest(
+        agentKind="external", agentId="omnigent", correlationId="corr-branch",
+        idempotencyKey="branch", parameters={"publishMode": "branch"},
+    )
 
     assert OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(explicit)
+    assert OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(
+        branch_publish_without_gh
+    )
     assert not OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(read_only)
 
 

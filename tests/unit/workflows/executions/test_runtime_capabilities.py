@@ -168,3 +168,21 @@ def test_v3_rejects_contradictory_flattened_workspace_claim() -> None:
     snapshot["workspaceAuthority"] = "external_provider"
     with pytest.raises(ValidationError, match="contradicts workspace state"):
         RuntimeExecutionCapabilities.model_validate(snapshot)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("checkpointArtifactContractVersion", "other-contract-v1"),
+        ("checkpointBoundarySupport", {"before_execution": ["continue_to_gate"]}),
+    ],
+)
+def test_v3_rejects_workspace_plane_contract_drift(
+    field: str, value: object
+) -> None:
+    snapshot = resolve_runtime_execution_capabilities("omnigent").model_dump(
+        by_alias=True
+    )
+    snapshot[field] = value
+    with pytest.raises(ValidationError, match="contradicts workspace state"):
+        RuntimeExecutionCapabilities.model_validate(snapshot)

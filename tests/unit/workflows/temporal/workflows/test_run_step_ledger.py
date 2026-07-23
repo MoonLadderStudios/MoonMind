@@ -3845,6 +3845,7 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
         captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
         if activity == "workspace.capture_checkpoint":
             assert payload["kind"] == "worktree_archive"
+            assert payload["workspaceLocator"]["kind"] == "sandbox"
             return _managed_checkpoint_capture_result(payload)
         assert activity == "step_checkpoint.create"
         return _checkpoint_create_result(payload)

@@ -964,9 +964,19 @@ class OmnigentProfileBoundExecutionCoordinator:
     @staticmethod
     def _repository_mutation_required(request: AgentExecutionRequest) -> bool:
         parameters = request.parameters or {}
-        return bool(parameters.get("repositoryMutationRequired")) or (
-            OmnigentProfileBoundExecutionCoordinator._github_mutation_required(request)
-        )
+        if bool(parameters.get("repositoryMutationRequired")):
+            return True
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"", "none"}:
+            return True
+        skill = parameters.get("skill")
+        if isinstance(skill, Mapping):
+            side_effect = skill.get("sideEffect")
+            if isinstance(side_effect, Mapping) and str(
+                side_effect.get("kind") or ""
+            ).strip():
+                return True
+        return False
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]
