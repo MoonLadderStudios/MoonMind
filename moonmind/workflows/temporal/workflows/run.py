@@ -16329,6 +16329,7 @@ class MoonMindRunWorkflow:
         step_execution: int | None = None,
         queue_order: int | None = None,
         attempt_reason: str = "initial_execution",
+        trusted_remediation_authority: Mapping[str, Any] | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
@@ -17201,6 +17202,74 @@ class MoonMindRunWorkflow:
                 "relativePath": "repo",
             }
 
+        # Remediation workspace authority is controller-produced runtime metadata.
+        # Never copy a plan/browser-authored top-level block into the canonical
+        # request: doing so would let one request attest its own loop head.
+        runtime_metadata = runtime_block.get("metadata")
+        moonmind_metadata = (
+            runtime_metadata.get("moonmind")
+            if isinstance(runtime_metadata, Mapping)
+            else None
+        )
+        remediation_workspace = (
+            moonmind_metadata.get("remediationWorkspaceAuthority")
+            if isinstance(moonmind_metadata, Mapping)
+            else None
+        )
+        if remediation_workspace is not None:
+            raise ValueError(
+                "remediationWorkspaceAuthority must come from workflow-owned controller state"
+            )
+        remediation_workspace = trusted_remediation_authority
+        if node_inputs.get("remediationWorkspace") is not None:
+            raise ValueError(
+                "remediationWorkspace must come from trusted runtime controller metadata"
+            )
+        if remediation_workspace is not None and not isinstance(
+            remediation_workspace, Mapping
+        ):
+            raise ValueError("remediation workspace authority is malformed")
+        if isinstance(remediation_workspace, Mapping):
+            if not (
+                agent_kind == "external"
+                and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            ):
+                raise ValueError(
+                    "remediationWorkspace is only supported by external/omnigent"
+                )
+            required_authority = {
+                "loopId", "branchRef", "attemptOrdinal", "baseCheckpointRef",
+                "baseWorkspaceDigest", "expectedHeadVersion", "headAuthorityRef",
+                "executionProfileRef",
+                "hostProfileRef", "launchPolicyRef", "workspaceCapabilitySnapshot",
+            }
+            missing = sorted(required_authority - set(remediation_workspace))
+            if missing:
+                raise ValueError(
+                    "remediation workspace authority is incomplete: " + ", ".join(missing)
+                )
+            if remediation_workspace.get("executionProfileRef") != execution_profile_ref:
+                raise ValueError(
+                    "remediation workspace profile does not match selected Provider Profile"
+                )
+            remediation_workspace = {
+                **{key: remediation_workspace[key] for key in required_authority},
+                "workflowId": wf_info.workflow_id,
+                "runId": wf_info.run_id,
+                "logicalStepId": node_id,
+                "stepExecutionId": step_execution_payload["stepExecutionId"],
+                "workspacePolicy": "continue_from_loop_head",
+            }
+            destination = {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    f"{wf_info.workflow_id}:{step_execution_payload['stepExecutionId']}".encode()
+                ).hexdigest()[:24],
+                "relativePath": "repo",
+            }
+            remediation_workspace["destinationWorkspaceLocator"] = destination
+            workspace_spec["workspaceLocator"] = dict(destination)
+
         terminal_contract_payload: dict[str, Any] | None = None
         resolved_terminal_contract = (
             self._resolved_skill_terminal_contract_by_step.get(node_id)
@@ -17264,6 +17333,11 @@ class MoonMindRunWorkflow:
             runtime_command=runtime_command_payload,
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
+            remediation_workspace=(
+                dict(remediation_workspace)
+                if isinstance(remediation_workspace, Mapping)
+                else None
+            ),
             terminal_contract=terminal_contract_payload,
             terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
