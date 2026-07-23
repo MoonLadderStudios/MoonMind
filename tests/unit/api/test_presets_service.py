@@ -3350,18 +3350,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Mark GitHub issue In Progress",
         "Implement the issue",
         "Verify implementation",
-        "Remediate verification gaps — attempt 1 of 6",
-        "Verify remediation attempt 1 of 6",
-        "Remediate remaining gaps — attempt 2 of 6",
-        "Verify remediation attempt 2 of 6",
-        "Remediate remaining gaps — attempt 3 of 6",
-        "Verify remediation attempt 3 of 6",
-        "Remediate remaining gaps — attempt 4 of 6",
-        "Verify remediation attempt 4 of 6",
-        "Remediate remaining gaps — attempt 5 of 6",
-        "Verify remediation attempt 5 of 6",
-        "Remediate remaining gaps — attempt 6 of 6",
-        "Verify remediation attempt 6 of 6",
+        "Remediation loop controller",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
@@ -3505,7 +3494,7 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
     assert len(loop_nodes) == 1
     assert loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
         "hardMaxAttempts"
-    ] == 2
+    ] == "2"
     six_loop_nodes = [
         step
         for step in expanded_six["steps"]
@@ -3515,7 +3504,7 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
     assert len(six_loop_nodes) == 1
     assert six_loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
         "hardMaxAttempts"
-    ] == 6
+    ] == "6"
     assert len(expanded["steps"]) == len(expanded_six["steps"])
 
 
