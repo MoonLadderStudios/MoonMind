@@ -42,6 +42,7 @@ from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
     _failure_evidence,
 )
+from moonmind.omnigent.remediation_workspace import RemediationWorkspaceError
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
@@ -125,6 +126,107 @@ def test_repository_mutation_requirement_is_explicit_or_implied_by_publish() -> 
         branch_publish_without_gh
     )
     assert not OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(read_only)
+
+
+@pytest.mark.asyncio
+async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
+    lease_client = SimpleNamespace(
+        acquire_execution_lease=AsyncMock(), release_lease=AsyncMock()
+    )
+    hosts = SimpleNamespace(
+        get_binding_for_profile=AsyncMock(
+            return_value=_binding().model_copy(
+                update={"static_host_id": None, "host_launch_profile_ref": "codex"}
+            )
+        ),
+        create_or_get_host_lease=AsyncMock(),
+    )
+    workspace_owner = SimpleNamespace(
+        admit_and_resolve=AsyncMock(
+            side_effect=RemediationWorkspaceError(
+                "REMEDIATION_WORKSPACE_RESTORE_MISMATCH", "stale head"
+            )
+        )
+    )
+    store = SimpleNamespace(
+        get_or_create=AsyncMock(
+            return_value=SimpleNamespace(bridge_session_id="bridge-1")
+        ),
+        record_lifecycle_event=AsyncMock(),
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=lease_client,
+        host_repository=hosts,
+        host_runtime=SimpleNamespace(prepare_host=AsyncMock()),
+        run_store=store,
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+        workspace_owner=workspace_owner,
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=_launch_ready_profile()
+    )
+    step_id = "workflow-1:run-1:remediate:execution:2"
+    workspace_id = hashlib.sha256(f"workflow-1:{step_id}".encode()).hexdigest()[:24]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="attempt-2",
+        stepExecution={
+            "schemaVersion": "v1",
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "remediate",
+            "executionOrdinal": 2,
+            "stepExecutionId": step_id,
+            "reason": "retry",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "contextBundleRef": "artifact://context/2",
+            "contextBundleDigest": "sha256:" + "c" * 64,
+            "preparedInputRefs": [],
+            "runtimeSelection": {},
+            "skillSourcePolicy": {},
+        },
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            }
+        },
+        remediationWorkspace={
+            "loopId": "loop-1",
+            "branchRef": "checkpoint-branch:loop-1",
+            "attemptOrdinal": 2,
+            "workflowId": "workflow-1",
+            "stepExecutionId": step_id,
+            "baseCheckpointRef": "artifact://workspace/C1",
+            "baseWorkspaceDigest": "sha256:" + "a" * 64,
+            "expectedHeadVersion": 2,
+            "currentHeadCheckpointRef": "artifact://workspace/C1",
+            "currentHeadWorkspaceDigest": "sha256:" + "a" * 64,
+            "currentHeadVersion": 2,
+            "destinationWorkspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "restoreEvidenceRef": "artifact://restore/R2",
+            "restoreManifestRef": "artifact://restore/M2",
+            "restoreBaseCommit": "abc123",
+        },
+        parameters={"repositoryMutationRequired": True},
+    )
+
+    with pytest.raises(RemediationWorkspaceError):
+        await coordinator.execute(request)
+
+    workspace_owner.admit_and_resolve.assert_awaited_once()
+    lease_client.acquire_execution_lease.assert_not_awaited()
+    hosts.create_or_get_host_lease.assert_not_awaited()
 
 
 def _binding() -> OmnigentOAuthHostBinding:

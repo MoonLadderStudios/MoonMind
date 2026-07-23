@@ -22,6 +22,11 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
 )
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.remediation_workspace import (
+    RemediationWorkspaceBinding,
+    RemediationWorkspaceOwner,
+    SandboxRemediationWorkspaceOwner,
+)
 from moonmind.omnigent.execution_profiles import (
     compile_effective_launch,
     selection_from_request,
@@ -181,6 +186,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         execution_runner: ExecutionRunner,
         artifact_gateway: Any,
         artifact_service: Any | None = None,
+        workspace_owner: RemediationWorkspaceOwner | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -190,6 +196,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._execute = execution_runner
         self._artifact_gateway = artifact_gateway
         self._artifact_service = artifact_service or artifact_gateway
+        self._workspace_owner = workspace_owner or SandboxRemediationWorkspaceOwner(
+            os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+        )
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         profile_id = str(request.execution_profile_ref or "").strip()
@@ -252,6 +261,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         host_lease = None
         binding = None
         effective_launch: dict[str, Any] | None = None
+        remediation_resolution: Mapping[str, Any] | None = None
         terminal_status = "completed"
         try:
             await emit("request_validated", "started")
@@ -360,6 +370,39 @@ class OmnigentProfileBoundExecutionCoordinator:
                 raise OmnigentOAuthHostError(
                     str(exc), code="OMNIGENT_HOST_MODE_CAPABILITY_UNSUPPORTED"
                 ) from exc
+            remediation = self._remediation_workspace(request)
+            if remediation is not None:
+                if request.agent_kind != "external" or request.agent_id != "omnigent":
+                    raise OmnigentOAuthHostError(
+                        "remediation workspace requires external/omnigent execution",
+                        code="REMEDIATION_WORKSPACE_RUNTIME_MISMATCH",
+                    )
+                if (
+                    str(effective_launch.get("harness") or "codex-native")
+                    != "codex-native"
+                ):
+                    raise OmnigentOAuthHostError(
+                        "remediation workspace requires codex-native",
+                        code="REMEDIATION_WORKSPACE_RUNTIME_MISMATCH",
+                    )
+                current_stage = "remediation_workspace_admission"
+                await emit(current_stage, "started")
+                remediation_resolution = await self._workspace_owner.admit_and_resolve(
+                    binding=remediation,
+                    workflow_id=workflow_id,
+                    step_execution_id=(step_execution_id or request.idempotency_key),
+                )
+                await emit(
+                    current_stage,
+                    "completed",
+                    metadata={
+                        "loopId": remediation.loop_id,
+                        "branchRef": remediation.branch_ref,
+                        "attemptOrdinal": remediation.attempt_ordinal,
+                        "restoreEvidenceRef": remediation.restore_evidence_ref,
+                        "workspaceState": remediation_resolution.get("workspaceState"),
+                    },
+                )
             await emit(
                 "effective_launch_compiled",
                 "completed",
@@ -906,6 +949,13 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @staticmethod
     def _workspace_locator(request: AgentExecutionRequest) -> Mapping[str, Any]:
+        if request.remediation_workspace is not None:
+            binding = RemediationWorkspaceBinding.model_validate(
+                request.remediation_workspace
+            )
+            return binding.destination_workspace_locator.model_dump(
+                by_alias=True, mode="json"
+            )
         locator = request.workspace_spec.get("workspaceLocator")
         if not isinstance(locator, Mapping):
             raise OmnigentOAuthHostError(
@@ -913,6 +963,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                 code="WORKSPACE_LOCATOR_REQUIRED",
             )
         return dict(locator)
+
+    @staticmethod
+    def _remediation_workspace(
+        request: AgentExecutionRequest,
+    ) -> RemediationWorkspaceBinding | None:
+        if request.remediation_workspace is None:
+            return None
+        return RemediationWorkspaceBinding.model_validate(
+            request.remediation_workspace
+        )
 
     @staticmethod
     def _required_capabilities(request: AgentExecutionRequest) -> tuple[str, ...]:

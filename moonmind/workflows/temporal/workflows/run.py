@@ -17068,6 +17068,27 @@ class MoonMindRunWorkflow:
                 "relativePath": "repo",
             }
 
+        remediation_workspace = node_inputs.get("remediationWorkspace")
+        if isinstance(remediation_workspace, Mapping):
+            if not (
+                agent_kind == "external"
+                and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            ):
+                raise ValueError(
+                    "remediationWorkspace is only supported by external/omnigent"
+                )
+            remediation_workspace = {
+                **dict(remediation_workspace),
+                "workflowId": wf_info.workflow_id,
+                "stepExecutionId": step_execution_payload["stepExecutionId"],
+            }
+            destination = remediation_workspace.get("destinationWorkspaceLocator")
+            if not isinstance(destination, Mapping):
+                raise ValueError(
+                    "remediationWorkspace requires destinationWorkspaceLocator"
+                )
+            workspace_spec["workspaceLocator"] = dict(destination)
+
         terminal_contract_payload: dict[str, Any] | None = None
         resolved_terminal_contract = (
             self._resolved_skill_terminal_contract_by_step.get(node_id)
@@ -17131,6 +17152,11 @@ class MoonMindRunWorkflow:
             runtime_command=runtime_command_payload,
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
+            remediation_workspace=(
+                dict(remediation_workspace)
+                if isinstance(remediation_workspace, Mapping)
+                else None
+            ),
             terminal_contract=terminal_contract_payload,
             terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
