@@ -1753,7 +1753,9 @@ const RunSummaryArtifactSchema = z
               progressVector: z.object({
                 classification: z.string(),
                 unresolvedGapScore: z.number().int().nonnegative(),
+                priorUnresolvedGapScore: z.number().int().nonnegative().nullable().optional(),
                 requiredChecks: z.record(z.string(), z.number().int().nonnegative()),
+                priorRequiredChecks: z.record(z.string(), z.number().int().nonnegative()).nullable().optional(),
                 regressions: z.array(z.string()).optional(),
                 repeatedFailureSignatures: z.array(z.string()).optional(),
                 newAuthoritativeEvidenceDigest: z.string().nullable().optional(),
@@ -9362,9 +9364,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     <h4>Remediation progress</h4>
                     <FlatFactGrid>
                       <Fact label="Classification">{formatStatusLabel(progress?.classification) || '—'}</Fact>
-                      <Fact label="Gap trend">{progress ? `${unresolvedGaps ?? '—'} unresolved · score ${progress.unresolvedGapScore}` : '—'}</Fact>
+                      <Fact label="Gap trend">{progress ? `${unresolvedGaps ?? '—'} unresolved · score ${progress.unresolvedGapScore}${progress.priorUnresolvedGapScore === undefined || progress.priorUnresolvedGapScore === null ? '' : ` (${progress.unresolvedGapScore - progress.priorUnresolvedGapScore >= 0 ? '+' : ''}${progress.unresolvedGapScore - progress.priorUnresolvedGapScore})`}` : '—'}</Fact>
                       <Fact label="Required checks">
-                        {progress ? `Passed ${progress.requiredChecks.passed ?? 0} · Failed ${progress.requiredChecks.failed ?? 0} · Not run ${progress.requiredChecks.not_run ?? 0}` : '—'}
+                        {progress ? `Passed ${progress.requiredChecks.passed ?? 0}${progress.priorRequiredChecks ? ` (${(progress.requiredChecks.passed ?? 0) - (progress.priorRequiredChecks.passed ?? 0) >= 0 ? '+' : ''}${(progress.requiredChecks.passed ?? 0) - (progress.priorRequiredChecks.passed ?? 0)})` : ''} · Failed ${progress.requiredChecks.failed ?? 0} · Not run ${progress.requiredChecks.not_run ?? 0}` : '—'}
                       </Fact>
                       <Fact label="Semantic no-progress cycles">{consumed.consecutiveNoProgressAttempts ?? 0}</Fact>
                       <Fact label="Hard attempts used / remaining">

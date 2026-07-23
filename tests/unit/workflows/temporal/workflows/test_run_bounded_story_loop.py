@@ -425,6 +425,58 @@ def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
     assert decision["remediationBudget"]["remainingAttempts"] == 6
 
 
+def test_continuation_decision_preserves_consumption_and_applies_explicit_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(run, "_patched_or_false_outside_workflow", lambda _: True)
+    run._publish_context["boundedStoryLoop"] = {
+        "budgets": {
+            "maxAttempts": 6,
+            "maxConsecutiveNoProgressAttempts": 2,
+            "maxRepeatedFailedCommands": 2,
+            "maxUnsafeOrPolicyDeniedAttempts": 0,
+            "maxEvidenceRetries": 2,
+        },
+        "durableLoopState": {
+            "schemaVersion": "remediation-loop-state/v1",
+            "policy": {
+                "maxAttempts": 6,
+                "maxConsecutiveNoProgressAttempts": 2,
+                "maxRepeatedFailedCommands": 2,
+                "maxUnsafeOrPolicyDeniedAttempts": 0,
+                "maxEvidenceRetries": 2,
+                "consumed": {"attempts": 4, "evidenceRetries": 2},
+            },
+            "consumed": {"attempts": 4, "evidenceRetries": 2},
+            "grants": {},
+            "priorExhaustionReason": "evidence_retry_budget_exhausted",
+        },
+        "budgetGrant": {"evidenceRetries": 1},
+        "retryAccounting": {"evidenceRetries": 2},
+    }
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        feedback="A bounded gap remains.",
+    )
+
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=_explicit_remediation_chain(max_attempts=6),
+        current_index=2,
+    )
+
+    state = decision["durableLoopState"]
+    assert state["consumed"]["attempts"] == 4
+    assert state["consumed"]["evidenceRetries"] == 2
+    assert state["policy"]["maxEvidenceRetries"] == 3
+    assert state["grants"] == {"evidenceRetries": 1}
+    assert state["priorExhaustionReason"] == "evidence_retry_budget_exhausted"
+    assert "budgetGrant" not in run._publish_context["boundedStoryLoop"]
+
+
 def test_default_no_progress_policy_is_independent_of_remediation_budget_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

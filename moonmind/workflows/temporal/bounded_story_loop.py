@@ -84,6 +84,13 @@ class LoopBudget(_ContractModel):
     max_unsafe_or_policy_denied_attempts: int = Field(
         alias="maxUnsafeOrPolicyDeniedAttempts", ge=0
     )
+    max_evidence_retries: int = Field(default=2, alias="maxEvidenceRetries", ge=0)
+    max_infrastructure_retries: int = Field(
+        default=2, alias="maxInfrastructureRetries", ge=0
+    )
+    max_contract_repair_attempts: int = Field(
+        default=1, alias="maxContractRepairAttempts", ge=0
+    )
     max_elapsed_seconds: int | None = Field(
         default=None, alias="maxElapsedSeconds", ge=1
     )
@@ -99,6 +106,78 @@ class LoopBudget(_ContractModel):
             if not isinstance(consumed, int) or consumed < 0:
                 raise ValueError(f"budget counter {key} must be a non-negative integer")
         return value
+
+
+class RemediationLoopState(_ContractModel):
+    """Versioned monotonic state carried by rollover and linked continuations."""
+
+    schema_version: Literal["remediation-loop-state/v1"] = Field(
+        "remediation-loop-state/v1", alias="schemaVersion"
+    )
+    policy: LoopBudget
+    progress_vector: "RemediationProgressVector | None" = Field(
+        default=None, alias="progressVector"
+    )
+    consumed: dict[str, int] = Field(default_factory=dict)
+    grants: dict[str, int] = Field(default_factory=dict)
+    prior_exhaustion_reason: str | None = Field(
+        default=None, alias="priorExhaustionReason"
+    )
+
+    @field_validator("consumed", "grants")
+    @classmethod
+    def _non_negative_counters(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(
+            not isinstance(amount, int) or isinstance(amount, bool) or amount < 0
+            for amount in value.values()
+        ):
+            raise ValueError("loop state counters must be non-negative integers")
+        return value
+
+
+def advance_remediation_loop_state(
+    *,
+    prior: RemediationLoopState | None,
+    policy: LoopBudget,
+    progress_vector: "RemediationProgressVector | None",
+    consumed: Mapping[str, int],
+    grant: Mapping[str, int] | None = None,
+    exhaustion_reason: str | None = None,
+) -> RemediationLoopState:
+    """Merge durable consumption monotonically; grants add capacity, never erase history."""
+
+    prior_consumed = prior.consumed if prior is not None else {}
+    merged_consumed = {
+        key: max(prior_consumed.get(key, 0), int(amount))
+        for key, amount in consumed.items()
+    }
+    for key, amount in prior_consumed.items():
+        merged_consumed.setdefault(key, amount)
+    merged_grants = dict(prior.grants if prior is not None else {})
+    for key, amount in (grant or {}).items():
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
+            raise ValueError("loop state grants must be non-negative integers")
+        merged_grants[key] = merged_grants.get(key, 0) + amount
+    granted_policy = policy.model_copy(
+        update={
+            "max_attempts": policy.max_attempts + merged_grants.get("attempts", 0),
+            "max_evidence_retries": policy.max_evidence_retries
+            + merged_grants.get("evidenceRetries", 0),
+            "max_infrastructure_retries": policy.max_infrastructure_retries
+            + merged_grants.get("infrastructureRetries", 0),
+            "max_contract_repair_attempts": policy.max_contract_repair_attempts
+            + merged_grants.get("contractRepairAttempts", 0),
+            "consumed": merged_consumed,
+        }
+    )
+    return RemediationLoopState(
+        policy=granted_policy,
+        progressVector=progress_vector or (prior.progress_vector if prior else None),
+        consumed=merged_consumed,
+        grants=merged_grants,
+        priorExhaustionReason=exhaustion_reason
+        or (prior.prior_exhaustion_reason if prior else None),
+    )
 
 
 class CanonicalGap(_ContractModel):
@@ -133,8 +212,14 @@ class RemediationProgressVector(_ContractModel):
     addressed_gap_ids: tuple[str, ...] = Field(default=(), alias="addressedGapIds")
     unresolved_gap_digest: str = Field(alias="unresolvedGapDigest")
     unresolved_gap_score: int = Field(alias="unresolvedGapScore", ge=0)
+    prior_unresolved_gap_score: int | None = Field(
+        default=None, alias="priorUnresolvedGapScore", ge=0
+    )
     required_checks_digest: str = Field(alias="requiredChecksDigest")
     required_checks: dict[str, int] = Field(alias="requiredChecks")
+    prior_required_checks: dict[str, int] | None = Field(
+        default=None, alias="priorRequiredChecks"
+    )
     blocker_code: str | None = Field(default=None, alias="blockerCode")
     new_authoritative_evidence_digest: str | None = Field(
         default=None, alias="newAuthoritativeEvidenceDigest"
@@ -240,8 +325,12 @@ def build_remediation_progress_vector(
         addressedGapIds=normalized_addressed_gap_ids,
         unresolvedGapDigest=_canonical_digest([gap.model_dump(by_alias=True) for gap in unresolved]),
         unresolvedGapScore=gap_score,
+        priorUnresolvedGapScore=(
+            prior.unresolved_gap_score if prior is not None else None
+        ),
         requiredChecksDigest=_canonical_digest([check.model_dump(by_alias=True) for check in canonical_checks]),
         requiredChecks=check_counts,
+        priorRequiredChecks=(dict(prior.required_checks) if prior is not None else None),
         blockerCode=_normalize_token(blocker_code),
         newAuthoritativeEvidenceDigest=authoritative_evidence_digest,
         repeatedFailureSignatures=failure_signatures,
@@ -262,6 +351,10 @@ class BoundedStoryLoopInput(_ContractModel):
     additional_item_refs: tuple[ArtifactRef, ...] = Field(
         default=(), alias="additionalItemRefs"
     )
+    prior_loop_state: RemediationLoopState | None = Field(
+        default=None, alias="priorLoopState"
+    )
+    budget_grant: dict[str, int] = Field(default_factory=dict, alias="budgetGrant")
 
     @field_validator("selected_item_ref")
     @classmethod
@@ -897,6 +990,21 @@ def _budget_exhaustion_reason(budget: LoopBudget) -> str | None:
             ("repeatedFailedCommands", "repeated_failed_commands"),
             budget.max_repeated_failed_commands,
             "repeated_failure_signature_exhausted",
+        ),
+        (
+            ("evidenceRetries", "evidence_retries"),
+            budget.max_evidence_retries,
+            "evidence_retry_budget_exhausted",
+        ),
+        (
+            ("infrastructureRetries", "infrastructure_retries"),
+            budget.max_infrastructure_retries,
+            "infrastructure_retry_budget_exhausted",
+        ),
+        (
+            ("contractRepairAttempts", "contract_repair_attempts"),
+            budget.max_contract_repair_attempts,
+            "contract_repair_budget_exhausted",
         ),
     )
     for keys, limit, reason in checks:

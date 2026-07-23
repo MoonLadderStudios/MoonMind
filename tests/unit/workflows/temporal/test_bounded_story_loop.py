@@ -17,6 +17,8 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     ProviderLeaseDecision,
     TypedGateResult,
     VerificationWorkspaceSnapshot,
+    RemediationLoopState,
+    advance_remediation_loop_state,
     advance_candidate_workspace_head,
     build_remediation_progress_vector,
     compile_bounded_story_loop,
@@ -49,6 +51,64 @@ def _gate(**overrides: object) -> TypedGateResult:
     }
     payload.update(overrides)
     return TypedGateResult.model_validate(payload)
+
+
+def test_loop_state_is_monotonic_and_linked_grants_add_capacity() -> None:
+    policy = _budget(
+        maxAttempts=6,
+        maxEvidenceRetries=2,
+        consumed={"attempts": 4, "evidenceRetries": 2},
+    )
+    prior = RemediationLoopState(
+        policy=policy,
+        consumed={"attempts": 4, "evidenceRetries": 2},
+        priorExhaustionReason="evidence_retry_budget_exhausted",
+    )
+
+    continued = advance_remediation_loop_state(
+        prior=prior,
+        policy=policy.model_copy(update={"consumed": {"attempts": 1}}),
+        progress_vector=None,
+        consumed={"attempts": 1},
+        grant={"attempts": 2, "evidenceRetries": 1},
+    )
+
+    assert continued.schema_version == "remediation-loop-state/v1"
+    assert continued.consumed == {"attempts": 4, "evidenceRetries": 2}
+    assert continued.policy.max_attempts == 8
+    assert continued.policy.max_evidence_retries == 3
+    assert continued.prior_exhaustion_reason == "evidence_retry_budget_exhausted"
+
+
+@pytest.mark.parametrize(
+    ("counter", "limit", "reason"),
+    [
+        ("evidenceRetries", "maxEvidenceRetries", "evidence_retry_budget_exhausted"),
+        (
+            "infrastructureRetries",
+            "maxInfrastructureRetries",
+            "infrastructure_retry_budget_exhausted",
+        ),
+        (
+            "contractRepairAttempts",
+            "maxContractRepairAttempts",
+            "contract_repair_budget_exhausted",
+        ),
+    ],
+)
+def test_non_semantic_retry_budgets_have_exact_stop_reasons(
+    counter: str, limit: str, reason: str
+) -> None:
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(),
+        budget=_budget(**{limit: 1, "consumed": {counter: 1}}),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.continue_loop is False
+    assert decision.reason == reason
 
 
 def _attempt(**overrides: object) -> LoopAttempt:
