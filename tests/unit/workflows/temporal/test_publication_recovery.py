@@ -288,6 +288,10 @@ def test_verified_evidence_proves_lineage_and_no_implementation_rerun() -> None:
         reconciliationOutcome="already_completed",
         expectedHeadSha="a" * 40,
         observedHeadSha="a" * 40,
+        expectedTreeDigest=contract.continuation.expected_tree_digest,
+        observedTreeDigest=contract.continuation.expected_tree_digest,
+        expectedDiffDigest=contract.continuation.expected_diff_digest,
+        observedDiffDigest=contract.continuation.expected_diff_digest,
         repository=contract.intent.repository,
         baseRef=contract.intent.base_ref,
         headRef=contract.intent.head_ref,
@@ -301,6 +305,51 @@ def test_verified_evidence_proves_lineage_and_no_implementation_rerun() -> None:
     )
     assert evidence.implementation_rerun is False
     assert evidence.verification_rerun is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("observedHeadSha", "b" * 40),
+        ("observedTreeDigest", "sha256:wrong-tree"),
+        ("observedDiffDigest", "sha256:wrong-diff"),
+    ],
+)
+def test_terminal_evidence_rejects_candidate_identity_mismatch(
+    field: str, value: str
+) -> None:
+    contract = PublicationRecoveryContract.model_validate(_contract_payload())
+    payload = {
+        "sourceWorkflowId": contract.source_workflow_id,
+        "sourceRunId": contract.source_run_id,
+        "destinationWorkflowId": "mm:publication-recovery",
+        "publicationIdempotencyKey": (
+            contract.continuation.publication_idempotency_key
+        ),
+        "reconciliationOutcome": "already_completed",
+        "expectedHeadSha": contract.continuation.expected_head_sha,
+        "observedHeadSha": contract.continuation.expected_head_sha,
+        "expectedTreeDigest": contract.continuation.expected_tree_digest,
+        "observedTreeDigest": contract.continuation.expected_tree_digest,
+        "expectedDiffDigest": contract.continuation.expected_diff_digest,
+        "observedDiffDigest": contract.continuation.expected_diff_digest,
+        "repository": contract.intent.repository,
+        "baseRef": contract.intent.base_ref,
+        "headRef": contract.intent.head_ref,
+        "pullRequestUrl": "https://github.com/org/repo/pull/1",
+        "pullRequestDraft": False,
+        "githubAuthorityRef": contract.intent.github_authority_ref,
+        "secretScanRef": "artifact://scan/clean",
+        "diagnosticsRef": "artifact://diagnostics/publication",
+        "publicationObservationsRef": "artifact://github/observations",
+        "sourceSemanticOutcome": contract.source_semantic_outcome,
+    }
+    payload[field] = value
+
+    with pytest.raises(
+        PublicationRecoveryError, match="PUBLICATION_VERIFICATION_FAILED"
+    ):
+        PublicationRecoveryEvidence.model_validate(payload)
 
 
 def test_rollout_supports_shadow_canary_disablement_and_inflight_freeze() -> None:

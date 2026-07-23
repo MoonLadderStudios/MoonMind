@@ -424,6 +424,10 @@ class PublicationRecoveryEvidence(BaseModel):
     )
     expected_head_sha: str = Field(..., alias="expectedHeadSha")
     observed_head_sha: str = Field(..., alias="observedHeadSha")
+    expected_tree_digest: str = Field(..., alias="expectedTreeDigest")
+    observed_tree_digest: str = Field(..., alias="observedTreeDigest")
+    expected_diff_digest: str = Field(..., alias="expectedDiffDigest")
+    observed_diff_digest: str = Field(..., alias="observedDiffDigest")
     repository: str
     base_ref: str = Field(..., alias="baseRef")
     head_ref: str = Field(..., alias="headRef")
@@ -441,10 +445,20 @@ class PublicationRecoveryEvidence(BaseModel):
 
     @model_validator(mode="after")
     def _verified_identity(self) -> "PublicationRecoveryEvidence":
-        if self.expected_head_sha != self.observed_head_sha:
+        mismatches = [
+            name
+            for name, expected, observed in (
+                ("head", self.expected_head_sha, self.observed_head_sha),
+                ("tree", self.expected_tree_digest, self.observed_tree_digest),
+                ("diff", self.expected_diff_digest, self.observed_diff_digest),
+            )
+            if expected != observed
+        ]
+        if mismatches:
             raise PublicationRecoveryError(
                 "PUBLICATION_VERIFICATION_FAILED",
-                "observed head does not match candidate",
+                "observed candidate identity does not match accepted "
+                f"{', '.join(mismatches)} evidence",
             )
         for name in (
             "pull_request_url",
