@@ -590,7 +590,11 @@ services:
       - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       - MOONMIND_AGENT_WORKSPACES_VOLUME_NAME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
-      - MOONMIND_PYTHON_TEST_IMAGE=${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}
+      # Optional prebuilt override. Empty selects the deployment-owned local
+      # recipe, which is built lazily by the first Python-test job.
+      - MOONMIND_PYTHON_TEST_IMAGE=${MOONMIND_PYTHON_TEST_IMAGE:-}
+      - MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS=${MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS:-604800}
+      - DOCKER_BUILDKIT=1
       - MOONMIND_DOCKER_PROXY_NETWORK=${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
       # Keep these values identical to the API service. This worker applies the
       # retention and deletion policy selected by the startup reconciler.
@@ -663,28 +667,12 @@ services:
         condition: service_completed_successfully
       claude-auth-init:
         condition: service_completed_successfully
-      python-test-runtime-ready:
-        condition: service_completed_successfully
       docker-proxy:
         condition: service_started
     networks:
       - local-network
       - docker-proxy-network
     restart: unless-stopped
-
-  python-test-runtime-ready:
-    image: ${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}
-    pull_policy: ${MOONMIND_PYTHON_TEST_IMAGE_PULL_POLICY:-build}
-    build:
-      context: .
-      dockerfile: api_service/Dockerfile
-      target: test-runtime
-      args:
-        INSTALL_CODEX_CLI: "false"
-        INSTALL_TEST_DEPS: "true"
-    command: ["python", "-c", "import pytest"]
-    network_mode: none
-    restart: "no"
 
   temporal-worker-deployment-control:
     image: ${MOONMIND_DEPLOYMENT_WORKER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
@@ -1159,6 +1147,8 @@ services:
       CONTAINERS: 1
       EXEC: 1
       IMAGES: 1
+      BUILD: 1
+      SESSION: 1
       NETWORKS: 1
       POST: 1
       VOLUMES: 1

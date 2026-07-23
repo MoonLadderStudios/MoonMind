@@ -227,6 +227,53 @@ def test_documented_container_job_wire_values_are_accepted() -> None:
     assert ContainerJobSubmitRequest.model_validate(data).spec.image == "ubuntu:24.04"
 
 
+def test_deployment_owned_image_source_is_an_alternative_to_direct_image() -> None:
+    data = payload()
+    data["spec"].pop("image")
+    data["spec"]["imageSourceRef"] = "moonmind-python-tests"
+
+    spec = ContainerJobSubmitRequest.model_validate(data).spec
+
+    assert spec.image is None
+    assert spec.image_source_ref == "moonmind-python-tests"
+
+
+@pytest.mark.parametrize(
+    "image,image_source_ref",
+    [
+        (None, None),
+        ("ubuntu:24.04", "moonmind-python-tests"),
+    ],
+)
+def test_exactly_one_image_authority_is_required(
+    image: str | None, image_source_ref: str | None
+) -> None:
+    data = payload()
+    if image is None:
+        data["spec"].pop("image")
+    else:
+        data["spec"]["image"] = image
+    if image_source_ref is not None:
+        data["spec"]["imageSourceRef"] = image_source_ref
+
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
+def test_deployment_image_source_rejects_caller_provisioning_overrides() -> None:
+    data = payload()
+    data["spec"].pop("image")
+    data["spec"].update(
+        {
+            "imageSourceRef": "moonmind-python-tests",
+            "pullPolicy": "always",
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        ContainerJobSubmitRequest.model_validate(data)
+
+
 def test_image_observation_and_async_identity_serialization() -> None:
     image = ImageObservation(
         requestedReference="ubuntu:24.04", resolvedDigest="sha256:" + "b" * 64,
@@ -261,6 +308,7 @@ def test_status_enum_covers_distinct_lifecycle_phases() -> None:
     for name in (
         "resolving_workspace",
         "workspace_not_visible",
+        "building_image",
         "starting",
         "publishing_artifacts",
         "cleaning_up",

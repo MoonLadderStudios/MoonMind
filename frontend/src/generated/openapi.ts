@@ -5872,7 +5872,7 @@ export interface components {
          * ContainerJobFailureClass
          * @enum {string}
          */
-        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed";
+        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed";
         /** ContainerJobLogEntry */
         ContainerJobLogEntry: {
             /** Sequence */
@@ -5902,7 +5902,9 @@ export interface components {
         /** ContainerJobSpec */
         ContainerJobSpec: {
             /** Image */
-            image: string;
+            image?: string | null;
+            /** Imagesourceref */
+            imageSourceRef?: string | null;
             /** Workspaceref */
             workspaceRef: components["schemas"]["SandboxWorkspaceLocator"] | components["schemas"]["ManagedWorkspaceLocator"] | components["schemas"]["ExternalStateLocator"];
             /** Command */
@@ -5945,7 +5947,7 @@ export interface components {
          * ContainerJobState
          * @enum {string}
          */
-        ContainerJobState: "queued" | "preparing" | "resolving_workspace" | "workspace_not_visible" | "acquiring_image" | "starting" | "running" | "canceling" | "publishing_artifacts" | "cleaning_up" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
+        ContainerJobState: "queued" | "preparing" | "resolving_workspace" | "workspace_not_visible" | "acquiring_image" | "building_image" | "starting" | "running" | "canceling" | "publishing_artifacts" | "cleaning_up" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
         /** ContainerJobStatus */
         ContainerJobStatus: {
             /**
@@ -8104,6 +8106,10 @@ export interface components {
         ImageObservation: {
             /** Requestedreference */
             requestedReference: string;
+            /** Sourcekind */
+            sourceKind?: ("registry" | "local-build") | null;
+            /** Imagesourceref */
+            imageSourceRef?: string | null;
             /** Resolveddigest */
             resolvedDigest?: string | null;
             /**
@@ -8116,6 +8122,21 @@ export interface components {
              * @default false
              */
             cacheHit: boolean;
+            /** Buildkey */
+            buildKey?: string | null;
+            /** Freshatstart */
+            freshAtStart?: boolean | null;
+            /**
+             * Provisionaction
+             * @default none
+             * @enum {string}
+             */
+            provisionAction: "reuse" | "pull" | "build" | "none";
+            /**
+             * Provisionwaitedonlock
+             * @default false
+             */
+            provisionWaitedOnLock: boolean;
             /**
              * Pulllockwaitms
              * @default 0
@@ -8123,6 +8144,8 @@ export interface components {
             pullLockWaitMs: number;
             /** Pulldurationms */
             pullDurationMs?: number | null;
+            /** Builddurationms */
+            buildDurationMs?: number | null;
         };
         /** ImageTargetModel */
         ImageTargetModel: {

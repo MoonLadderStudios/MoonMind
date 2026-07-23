@@ -245,7 +245,9 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert "MOONMIND_TASK_WORKFLOW_ID=wf-task-1" in run_command
     assert "MOONMIND_AGENT_RUN_ID=task-1" in run_command
     assert "MOONMIND_RUNTIME_ID=codex_cli" in run_command
-    assert "MOONMIND_PYTHON_TEST_IMAGE=moonmind-python-tests:local" in run_command
+    assert not any(
+        item.startswith("MOONMIND_PYTHON_TEST_IMAGE=") for item in run_command
+    )
     assert "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp" in run_command
     assert "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND=managed_runtime" in run_command
     assert "MOONMIND_CONTAINER_JOBS_RUNTIME_ID=codex_cli" in run_command

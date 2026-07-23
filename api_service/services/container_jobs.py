@@ -23,6 +23,11 @@ from api_service.services.registry_authorization import (
     PrivateImageAuthorizationService,
     load_default_authorization_policy,
 )
+from moonmind.config.container_backend_settings import (
+    ContainerBackendConfigError,
+    ContainerBackendSettings,
+    resolve_container_backend_settings,
+)
 from moonmind.schemas.container_job_models import (
     MAX_ARTIFACT_PAGE_ENTRIES,
     MAX_LOG_PAGE_ENTRIES,
@@ -211,6 +216,7 @@ class ContainerJobService:
         temporal: TemporalClientAdapter | None = None,
         authorizer: PrivateImageAuthorizationService | None = None,
         artifacts: ContainerJobArtifactReader | None = None,
+        backend_settings: ContainerBackendSettings | None = None,
     ) -> None:
         self.repository = ContainerJobRepository(session)
         self._temporal = temporal or TemporalClientAdapter()
@@ -218,14 +224,30 @@ class ContainerJobService:
         self._authorizer = authorizer or PrivateImageAuthorizationService(
             load_default_authorization_policy()
         )
+        self._backend_settings = (
+            backend_settings or resolve_container_backend_settings()
+        )
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
         # workflow and never persists a queued record.
-        authorization = self._authorizer.authorize(owner=owner, spec=request.spec)
-        if not authorization.authorized:
-            raise ContainerJobAuthorizationError(authorization)
+        authorization = None
+        if request.spec.image is not None:
+            authorization = self._authorizer.authorize(
+                owner=owner, spec=request.spec
+            )
+            if not authorization.authorized:
+                raise ContainerJobAuthorizationError(authorization)
+        else:
+            # Public requests select only an opaque deployment-approved alias.
+            # Recipe paths and registry references remain worker-side policy.
+            try:
+                self._backend_settings.image_source(
+                    request.spec.image_source_ref or ""
+                )
+            except ContainerBackendConfigError as exc:
+                raise ValueError("container image source is not configured") from exc
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
             created_at = existing.created_at or datetime.now(timezone.utc)

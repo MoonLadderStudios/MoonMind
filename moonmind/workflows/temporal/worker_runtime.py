@@ -2405,7 +2405,11 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
                 )
             elif request.resolved_image_ref:
                 record.image_observation_json = {
-                    "requestedReference": request.request.spec.image,
+                    "requestedReference": (
+                        request.request.spec.image
+                        or request.request.spec.image_source_ref
+                        or "unknown"
+                    ),
                     "resolvedDigest": request.resolved_image_ref
                     if request.resolved_image_ref.startswith("sha256:") else None,
                     "cachePresent": True,
@@ -2734,6 +2738,13 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 managed_run_store=run_store,
                 workspace_volume_name=os.environ.get(
                     "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"
+                ),
+                image_lock_root=os.environ.get(
+                    "MOONMIND_CONTAINER_IMAGE_LOCK_ROOT"
+                )
+                or str(
+                    Path(_container_job_store).resolve()
+                    / ".image-acquisition-locks"
                 ),
                 # Publish bounded live incremental logs to a MoonMind-controlled
                 # spool root that is never mounted into a job container.

@@ -31,6 +31,7 @@ import stat
 import tarfile
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -39,6 +40,8 @@ from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
     ContainerBackendSettings,
+    LocalImageRecipe,
+    RegistryImageSource,
     resolve_container_backend_settings,
 )
 from moonmind.observability.transport import SpoolLogPublisher
@@ -51,6 +54,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobArtifact,
     ContainerJobArtifactPage,
     ContainerJobBackendError,
+    ContainerJobState,
     ContainerJobLogEntry,
     MAX_LOG_PAGE_ENTRIES,
     RegistryAuthorization,
@@ -205,9 +209,28 @@ class ContainerJobBackend(Protocol):
 # Only the exact image id and registry repo digests are read; never the full
 # manifest, so unbounded inspect output cannot reach the observation payload.
 _INSPECT_FORMAT = "{{.Id}}\t{{join .RepoDigests \",\"}}"
+_LOCAL_INSPECT_FORMAT = (
+    '{"id":{{json .Id}},"repoDigests":{{json .RepoDigests}},'
+    '"created":{{json .Created}},"os":{{json .Os}},'
+    '"architecture":{{json .Architecture}},"labels":{{json .Config.Labels}}}'
+)
 # Bytes of bounded pull progress retained as diagnostics evidence. The full,
 # unbounded pull output never crosses the activity/Temporal boundary.
 _PULL_DIAGNOSTICS_MAX_BYTES = 8192
+_BUILD_DIAGNOSTICS_MAX_BYTES = 16_384
+
+LABEL_IMAGE_SOURCE = "io.moonmind.image-source"
+LABEL_IMAGE_BUILD_KEY = "io.moonmind.build-key"
+LABEL_IMAGE_BUILT_AT = "io.moonmind.built-at"
+LABEL_IMAGE_RECIPE_VERSION = "io.moonmind.recipe-version"
+
+
+@dataclass(frozen=True)
+class _LocalImageObservation:
+    present: bool
+    resolved_ref: str
+    digest: str | None
+    fresh: bool
 
 # Live incremental-log plane bounds (MoonLadderStudios/MoonMind#3258). Live
 # events are a bounded, best-effort projection published to the shared Live Logs
@@ -638,6 +661,368 @@ class DockerContainerJobBackend:
             )
         return duration_ms, diagnostics_ref
 
+    def _local_build_key(self, recipe: LocalImageRecipe, platform: str) -> str:
+        """Hash the normalized recipe and only its declared effective inputs."""
+
+        root = recipe.context_root.resolve()
+        digest = hashlib.sha256()
+        normalized_recipe = {
+            "sourceRef": recipe.source_ref,
+            "image": recipe.image,
+            "dockerfile": recipe.dockerfile,
+            "target": recipe.target,
+            "buildArgs": list(recipe.build_args),
+            "fingerprintInputs": list(recipe.fingerprint_inputs),
+            "recipeVersion": recipe.recipe_version,
+            "platform": platform,
+        }
+        digest.update(
+            json.dumps(
+                normalized_recipe, sort_keys=True, separators=(",", ":")
+            ).encode()
+        )
+        for pattern in recipe.fingerprint_inputs:
+            matches: list[Path] = []
+            for candidate in root.glob(pattern):
+                resolved = candidate.resolve()
+                if not resolved.is_relative_to(root):
+                    raise ImageAcquisitionError(
+                        "local image build input escapes the deployment root",
+                        failure_class=ContainerJobFailureClass.IMAGE_BUILD_INPUTS_UNAVAILABLE,
+                    )
+                if resolved.is_file():
+                    matches.append(resolved)
+            if not matches:
+                raise ImageAcquisitionError(
+                    f"local image build input is unavailable: {pattern}",
+                    failure_class=ContainerJobFailureClass.IMAGE_BUILD_INPUTS_UNAVAILABLE,
+                )
+            for path in sorted(set(matches)):
+                relative = path.relative_to(root).as_posix()
+                digest.update(b"\0path\0")
+                digest.update(relative.encode())
+                with path.open("rb") as handle:
+                    while chunk := handle.read(1024 * 1024):
+                        digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    async def _daemon_platform(self) -> str:
+        code, stdout, stderr = await self._runner(
+            ("version", "--format", "{{.Server.Os}}/{{.Server.Arch}}")
+        )
+        platform = stdout.decode(errors="replace").strip()
+        if code or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", platform):
+            detail = stderr.decode(errors="replace").strip()[:500]
+            raise ImageAcquisitionError(
+                f"container backend platform is unavailable: {detail}",
+                failure_class=ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE,
+            )
+        return platform.lower()
+
+    async def _inspect_local_image(
+        self,
+        recipe: LocalImageRecipe,
+        *,
+        build_key: str,
+        platform: str,
+    ) -> _LocalImageObservation:
+        code, stdout, stderr = await self._runner(
+            ("image", "inspect", "--format", _LOCAL_INSPECT_FORMAT, recipe.image)
+        )
+        if code:
+            detail = stderr.decode(errors="replace").lower()
+            if "no such image" in detail or "not found" in detail:
+                return _LocalImageObservation(False, recipe.image, None, False)
+            raise ImageAcquisitionError(
+                "docker image inspection failed",
+                failure_class=ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE,
+            )
+        try:
+            observed = json.loads(stdout.decode(errors="replace"))
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ImageAcquisitionError(
+                "docker returned an invalid local image observation",
+                failure_class=ContainerJobFailureClass.IMAGE_BACKEND_UNAVAILABLE,
+            ) from exc
+        image_id = str(observed.get("id") or "").strip()
+        repo_digests = ",".join(observed.get("repoDigests") or [])
+        digest = parse_resolved_digest(repo_digests, image_id)
+        labels = observed.get("labels") or {}
+        observed_platform = (
+            f"{str(observed.get('os') or '').lower()}/"
+            f"{str(observed.get('architecture') or '').lower()}"
+        )
+        fresh = (
+            isinstance(labels, dict)
+            and labels.get(LABEL_IMAGE_SOURCE) == recipe.source_ref
+            and labels.get(LABEL_IMAGE_BUILD_KEY) == build_key
+            and labels.get(LABEL_IMAGE_RECIPE_VERSION) == recipe.recipe_version
+            and observed_platform == platform
+        )
+        if fresh and recipe.max_age_seconds is not None:
+            built_at = _parse_rfc3339(str(labels.get(LABEL_IMAGE_BUILT_AT) or ""))
+            if built_at is None:
+                fresh = False
+            else:
+                age = datetime.now(timezone.utc) - built_at
+                fresh = timedelta(0) <= age <= timedelta(
+                    seconds=recipe.max_age_seconds
+                )
+        return _LocalImageObservation(
+            True, image_id or recipe.image, digest, fresh
+        )
+
+    async def _publish_build_diagnostics(
+        self,
+        request: ContainerJobActivityRequest,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> str | None:
+        if self._publish is None:
+            return None
+        combined = stdout + (b"\n[stderr]\n" + stderr if stderr else b"")
+        try:
+            return await self._publish(
+                request,
+                f"{request.job_id}-image-build.txt",
+                combined[-_BUILD_DIAGNOSTICS_MAX_BYTES:],
+            )
+        except Exception:
+            return None
+
+    async def _build_local_image(
+        self,
+        request: ContainerJobActivityRequest,
+        recipe: LocalImageRecipe,
+        *,
+        build_key: str,
+        platform: str,
+    ) -> tuple[int, str | None]:
+        root = recipe.context_root.resolve()
+        dockerfile = (root / recipe.dockerfile).resolve()
+        if not dockerfile.is_relative_to(root) or not dockerfile.is_file():
+            raise ImageAcquisitionError(
+                "configured local image Dockerfile is unavailable",
+                failure_class=ContainerJobFailureClass.IMAGE_BUILD_INPUTS_UNAVAILABLE,
+            )
+        if self._write_projection is not None:
+            request.state = ContainerJobState.BUILDING_IMAGE
+            try:
+                await self._write_projection(request)
+            except Exception:
+                # The durable workflow remains authoritative. A failed status
+                # projection must not turn a successful provision into failure.
+                pass
+        built_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        args: list[str] = [
+            "build",
+            "--file",
+            str(dockerfile),
+            "--target",
+            recipe.target,
+            "--tag",
+            recipe.image,
+            "--platform",
+            platform,
+            "--pull",
+            "--label",
+            f"{LABEL_IMAGE_SOURCE}={recipe.source_ref}",
+            "--label",
+            f"{LABEL_IMAGE_BUILD_KEY}={build_key}",
+            "--label",
+            f"{LABEL_IMAGE_BUILT_AT}={built_at}",
+            "--label",
+            f"{LABEL_IMAGE_RECIPE_VERSION}={recipe.recipe_version}",
+        ]
+        for name, value in recipe.build_args:
+            args.extend(("--build-arg", f"{name}={value}"))
+        args.append(str(root))
+        started = time.monotonic()
+        code, stdout, stderr = await self._runner(tuple(args))
+        duration_ms = int((time.monotonic() - started) * 1000)
+        diagnostics_ref = await self._publish_build_diagnostics(
+            request, stdout, stderr
+        )
+        if code:
+            detail = stderr.decode(errors="replace").lower()
+            failure = (
+                ContainerJobFailureClass.IMAGE_BUILD_TIMEOUT
+                if "timed out" in detail or "deadline exceeded" in detail
+                else ContainerJobFailureClass.IMAGE_BUILD_FAILED
+            )
+            raise ImageAcquisitionError(
+                f"local image build failed for source {recipe.source_ref!r}",
+                failure_class=failure,
+                diagnostics_ref=diagnostics_ref,
+            )
+        return duration_ms, diagnostics_ref
+
+    async def _validate_local_image(
+        self, recipe: LocalImageRecipe, resolved_ref: str
+    ) -> None:
+        args = (
+            "run",
+            "--rm",
+            "--network",
+            recipe.validation_network_mode,
+            resolved_ref,
+            *recipe.validation_command,
+        )
+        code, _, _ = await self._runner(args)
+        if code:
+            raise ImageAcquisitionError(
+                f"local image validation failed for source {recipe.source_ref!r}",
+                failure_class=ContainerJobFailureClass.IMAGE_VALIDATION_FAILED,
+            )
+
+    async def _acquire_local_image(
+        self, request: ContainerJobActivityRequest, recipe: LocalImageRecipe
+    ) -> ContainerJobActivityResult:
+        platform = await self._daemon_platform()
+        build_key = await asyncio.to_thread(
+            self._local_build_key, recipe, platform
+        )
+        observed = await self._inspect_local_image(
+            recipe, build_key=build_key, platform=platform
+        )
+        present_at_start = observed.present
+        fresh_at_start = observed.fresh
+        if observed.fresh:
+            await self._validate_local_image(recipe, observed.resolved_ref)
+            return self._local_image_result(
+                recipe,
+                observed,
+                build_key=build_key,
+                cache_present=True,
+                cache_hit=True,
+                fresh_at_start=True,
+                lock_wait_ms=0,
+                action="reuse",
+            )
+
+        key = hashlib.sha256(
+            f"{self._backend_ref}\n{recipe.source_ref}\n{platform}\n{build_key}".encode()
+        ).hexdigest()
+        owner_id = f"{os.getpid()}:{request.job_id}:{uuid.uuid4().hex}"
+        waited_started = time.monotonic()
+        lease_ttl = max(
+            self._pull_lease_ttl_seconds,
+            float(request.request.spec.timeout_seconds + 60),
+        )
+        max_wait = max(
+            self._pull_lock_max_wait_seconds,
+            float(request.request.spec.timeout_seconds + 60),
+        )
+        while True:
+            lock_wait_ms = int((time.monotonic() - waited_started) * 1000)
+            acquired = await self._image_lock.try_acquire(
+                key, ttl_seconds=lease_ttl, owner_id=owner_id
+            )
+            if acquired:
+                try:
+                    observed = await self._inspect_local_image(
+                        recipe, build_key=build_key, platform=platform
+                    )
+                    if observed.fresh:
+                        await self._validate_local_image(
+                            recipe, observed.resolved_ref
+                        )
+                        return self._local_image_result(
+                            recipe,
+                            observed,
+                            build_key=build_key,
+                            cache_present=present_at_start,
+                            cache_hit=True,
+                            fresh_at_start=fresh_at_start,
+                            lock_wait_ms=lock_wait_ms,
+                            action="reuse",
+                        )
+                    build_ms, diagnostics_ref = await self._build_local_image(
+                        request,
+                        recipe,
+                        build_key=build_key,
+                        platform=platform,
+                    )
+                    observed = await self._inspect_local_image(
+                        recipe, build_key=build_key, platform=platform
+                    )
+                    if not observed.fresh:
+                        raise ImageAcquisitionError(
+                            "local image is not fresh after a completed build",
+                            failure_class=ContainerJobFailureClass.IMAGE_BUILD_FAILED,
+                            diagnostics_ref=diagnostics_ref,
+                        )
+                    await self._validate_local_image(recipe, observed.resolved_ref)
+                    return self._local_image_result(
+                        recipe,
+                        observed,
+                        build_key=build_key,
+                        cache_present=present_at_start,
+                        cache_hit=False,
+                        fresh_at_start=fresh_at_start,
+                        lock_wait_ms=lock_wait_ms,
+                        action="build",
+                        build_duration_ms=build_ms,
+                        diagnostics_ref=diagnostics_ref,
+                    )
+                finally:
+                    await self._image_lock.release(key, owner_id)
+
+            await asyncio.sleep(self._pull_lock_poll_seconds)
+            observed = await self._inspect_local_image(
+                recipe, build_key=build_key, platform=platform
+            )
+            if observed.fresh:
+                await self._validate_local_image(recipe, observed.resolved_ref)
+                return self._local_image_result(
+                    recipe,
+                    observed,
+                    build_key=build_key,
+                    cache_present=present_at_start,
+                    cache_hit=True,
+                    fresh_at_start=fresh_at_start,
+                    lock_wait_ms=int((time.monotonic() - waited_started) * 1000),
+                    action="reuse",
+                )
+            if time.monotonic() - waited_started > max_wait:
+                raise ImageAcquisitionError(
+                    "timed out waiting for concurrent local image provisioning",
+                    failure_class=ContainerJobFailureClass.IMAGE_BUILD_TIMEOUT,
+                )
+
+    def _local_image_result(
+        self,
+        recipe: LocalImageRecipe,
+        observed: _LocalImageObservation,
+        *,
+        build_key: str,
+        cache_present: bool,
+        cache_hit: bool,
+        fresh_at_start: bool,
+        lock_wait_ms: int,
+        action: str,
+        build_duration_ms: int | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> ContainerJobActivityResult:
+        return ContainerJobActivityResult(
+            resolvedImageRef=observed.resolved_ref,
+            imageObservation=ImageObservation(
+                requestedReference=recipe.image,
+                sourceKind="local-build",
+                imageSourceRef=recipe.source_ref,
+                resolvedDigest=observed.digest,
+                cachePresent=cache_present,
+                cacheHit=cache_hit,
+                buildKey=build_key,
+                freshAtStart=fresh_at_start,
+                provisionAction=action,
+                provisionWaitedOnLock=lock_wait_ms > 0,
+                pullLockWaitMs=max(0, lock_wait_ms),
+                buildDurationMs=build_duration_ms,
+            ),
+            diagnosticsRef=diagnostics_ref,
+        )
+
     async def acquire_image(self, request: ContainerJobActivityRequest):
         spec = request.request.spec
         # Workspace visibility is authorized before any expensive acquisition,
@@ -648,14 +1033,40 @@ class DockerContainerJobBackend:
                 failure_class=ContainerJobFailureClass.WORKSPACE,
             )
 
+        if spec.image_source_ref is not None:
+            try:
+                source = self._settings.image_source(spec.image_source_ref)
+            except Exception as exc:
+                raise ImageAcquisitionError(
+                    "requested deployment image source is not configured",
+                    failure_class=ContainerJobFailureClass.IMAGE_BUILD_NOT_CONFIGURED,
+                ) from exc
+            if isinstance(source, LocalImageRecipe):
+                return await self._acquire_local_image(request, source)
+            if not isinstance(source, RegistryImageSource):
+                raise ImageAcquisitionError(
+                    "requested deployment image source kind is unsupported",
+                    failure_class=ContainerJobFailureClass.IMAGE_BUILD_NOT_CONFIGURED,
+                )
+            image = source.image
+            policy = source.pull_policy
+            image_source_ref = source.source_ref
+        else:
+            if spec.image is None:  # schema validation is the public guard
+                raise ImageAcquisitionError(
+                    "container image is not configured",
+                    failure_class=ContainerJobFailureClass.IMAGE_NOT_FOUND,
+                )
+            image = spec.image
+            policy = spec.pull_policy
+            image_source_ref = None
+
         credential_ref = spec.registry_credential_ref
         if credential_ref is not None:
             return await self._acquire_private_image(
-                request, spec.image, spec.pull_policy, credential_ref
+                request, image, policy, credential_ref
             )
 
-        image = spec.image
-        policy = spec.pull_policy
         normalized = normalize_image_reference(image)
         key = image_lock_key(self._backend_ref, normalized)
 
@@ -670,7 +1081,10 @@ class DockerContainerJobBackend:
                 digest=digest,
                 cache_present=True,
                 cache_hit=True,
+                fresh_at_start=True,
                 lock_wait_ms=0,
+                image_source_ref=image_source_ref,
+                action="reuse",
             )
 
         if policy == "never":
@@ -704,7 +1118,10 @@ class DockerContainerJobBackend:
                             digest=digest,
                             cache_present=present_at_start,
                             cache_hit=True,
+                            fresh_at_start=present_at_start,
                             lock_wait_ms=lock_wait_ms,
+                            image_source_ref=image_source_ref,
+                            action="reuse",
                         )
                     pull_ms, diagnostics_ref = await self._pull_image(request, image)
                     present, resolved_ref, digest = await self._inspect_image(image)
@@ -720,9 +1137,12 @@ class DockerContainerJobBackend:
                         digest=digest,
                         cache_present=present_at_start,
                         cache_hit=False,
+                        fresh_at_start=present_at_start,
                         lock_wait_ms=lock_wait_ms,
                         pull_duration_ms=pull_ms,
                         diagnostics_ref=diagnostics_ref,
+                        image_source_ref=image_source_ref,
+                        action="pull",
                     )
                 finally:
                     await self._image_lock.release(key, owner_id)
@@ -737,7 +1157,10 @@ class DockerContainerJobBackend:
                     digest=digest,
                     cache_present=False,
                     cache_hit=True,
+                    fresh_at_start=False,
                     lock_wait_ms=int((time.monotonic() - waited_started) * 1000),
+                    image_source_ref=image_source_ref,
+                    action="reuse",
                 )
             if time.monotonic() - waited_started > self._pull_lock_max_wait_seconds:
                 raise ImageAcquisitionError(
@@ -753,15 +1176,23 @@ class DockerContainerJobBackend:
         digest: str | None,
         cache_present: bool,
         cache_hit: bool,
+        fresh_at_start: bool,
         lock_wait_ms: int,
         pull_duration_ms: int | None = None,
         diagnostics_ref: str | None = None,
+        image_source_ref: str | None = None,
+        action: str = "none",
     ) -> ContainerJobActivityResult:
         observation = ImageObservation(
             requestedReference=requested,
+            sourceKind="registry",
+            imageSourceRef=image_source_ref,
             resolvedDigest=digest,
             cachePresent=cache_present,
             cacheHit=cache_hit,
+            freshAtStart=fresh_at_start,
+            provisionAction=action,
+            provisionWaitedOnLock=lock_wait_ms > 0,
             pullLockWaitMs=max(0, lock_wait_ms),
             pullDurationMs=pull_duration_ms,
         )

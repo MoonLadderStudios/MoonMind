@@ -102,6 +102,10 @@ class PrivateImageAuthorizationService:
     def authorize(
         self, *, owner: OwnerIdentity, spec: ContainerJobSpec
     ) -> RegistryAuthorization:
+        if spec.image is None:
+            raise ValueError(
+                "registry authorization applies only to direct image references"
+            )
         reference = normalize_image_reference(spec.image)
         credential_ref = spec.registry_credential_ref
 

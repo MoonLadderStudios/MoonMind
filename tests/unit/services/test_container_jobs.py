@@ -92,6 +92,20 @@ def submission(
     )
 
 
+def source_submission(
+    *, source_ref: str = "moonmind-python-tests"
+) -> ContainerJobSubmitRequest:
+    return ContainerJobSubmitRequest(
+        idempotencyKey="source-key",
+        source={"source": "mcp", "callerRequestId": "source-request"},
+        spec={
+            "imageSourceRef": source_ref,
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
+            "resources": {"cpuMillis": 100, "memoryMiB": 64},
+        },
+    )
+
+
 def private_authorizer() -> PrivateImageAuthorizationService:
     policy = PrivateImageAuthorizationPolicy.model_validate(
         {
@@ -138,6 +152,38 @@ async def test_owner_type_is_part_of_identity_and_idempotency_scope(session_fact
         assert user_job.job_id != system_job.job_id
         with pytest.raises(ContainerJobNotFoundError):
             await service.status(owner=system, job_id=user_job.job_id)
+
+
+@pytest.mark.asyncio
+async def test_deployment_image_source_bypasses_caller_registry_authorization(
+    session_factory, temporal
+) -> None:
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal)
+        owner = OwnerIdentity(principalId="user-1", principalType="user")
+
+        accepted = await service.submit(owner=owner, request=source_submission())
+
+        started = temporal.start_container_job.await_args.args[0]
+        assert started.job_id == accepted.job_id
+        assert started.request.spec.image_source_ref == "moonmind-python-tests"
+        assert started.registry_authorization is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_deployment_image_source_fails_before_durable_submission(
+    session_factory, temporal
+) -> None:
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal)
+
+        with pytest.raises(ValueError, match="not configured"):
+            await service.submit(
+                owner=OwnerIdentity(principalId="user-1", principalType="user"),
+                request=source_submission(source_ref="unknown-source"),
+            )
+
+        temporal.start_container_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio

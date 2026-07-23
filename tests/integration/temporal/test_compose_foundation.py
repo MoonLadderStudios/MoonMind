@@ -753,7 +753,7 @@ def test_runtime_image_includes_agent_skill_sources():
     assert "COPY pr_resolver_core /app/pr_resolver_core/" in dockerfile
 
 
-def test_python_test_runtime_is_submodule_free_and_shared_by_compose_paths():
+def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     dockerfile = (REPO_ROOT / "api_service" / "Dockerfile").read_text(
         encoding="utf-8"
     )
@@ -766,23 +766,13 @@ def test_python_test_runtime_is_submodule_free_and_shared_by_compose_paths():
 
     compose = _load_compose()
     services = compose["services"]
-    ready = services["python-test-runtime-ready"]
     worker = services["temporal-worker-agent-runtime"]
     worker_env = _env_map(worker["environment"])
     api_env = _env_map(services["api"]["environment"])
 
-    assert ready["image"] == (
-        "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
-    )
-    assert ready["pull_policy"] == (
-        "${MOONMIND_PYTHON_TEST_IMAGE_PULL_POLICY:-build}"
-    )
-    assert ready["build"]["target"] == "test-runtime"
-    assert ready["command"] == ["python", "-c", "import pytest"]
-    assert ready["network_mode"] == "none"
-    assert worker["depends_on"]["python-test-runtime-ready"]["condition"] == (
-        "service_completed_successfully"
-    )
+    assert all("build" not in service for service in services.values())
+    assert "python-test-runtime-ready" not in services
+    assert "python-test-runtime-ready" not in worker["depends_on"]
     assert worker_env["MOONMIND_CONTAINER_BACKEND_ENABLED"] == (
         "${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}"
     )
@@ -790,8 +780,12 @@ def test_python_test_runtime_is_submodule_free_and_shared_by_compose_paths():
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
     )
     assert worker_env["MOONMIND_PYTHON_TEST_IMAGE"] == (
-        "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
+        "${MOONMIND_PYTHON_TEST_IMAGE:-}"
     )
+    assert worker_env["MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE_MAX_AGE_SECONDS:-604800}"
+    )
+    assert worker_env["DOCKER_BUILDKIT"] == "1"
     assert api_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
         "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
     )
@@ -801,12 +795,16 @@ def test_python_test_runtime_is_submodule_free_and_shared_by_compose_paths():
     assert compose["volumes"]["agent_workspaces"]["name"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
     )
+    assert services["docker-proxy"]["environment"]["BUILD"] == 1
+    assert services["docker-proxy"]["environment"]["SESSION"] == 1
 
     test_compose = yaml.safe_load(
         (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
     )
     pytest_service = test_compose["services"]["pytest"]
-    assert pytest_service["image"] == ready["image"]
+    assert pytest_service["image"] == (
+        "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
+    )
     assert pytest_service["build"]["target"] == "test-runtime"
 
 
