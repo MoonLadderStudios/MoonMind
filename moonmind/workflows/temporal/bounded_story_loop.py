@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 import hashlib
-from typing import Any, Literal
+from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import (
     BaseModel,
@@ -101,6 +101,147 @@ class LoopBudget(_ContractModel):
         return value
 
 
+class CanonicalGap(_ContractModel):
+    identity: str
+    status: str
+    severity: str
+    score: int = Field(ge=0)
+    scope: str | None = None
+    required_check_id: str | None = Field(default=None, alias="requiredCheckId")
+
+
+class CanonicalCheck(_ContractModel):
+    identity: str
+    status: str
+    target: str | None = None
+    failure_signature: str | None = Field(default=None, alias="failureSignature")
+
+
+class RemediationProgressVector(_ContractModel):
+    """Compact semantic evidence used by the durable continuation policy."""
+
+    schema_version: Literal["remediation-progress/v1"] = Field(
+        "remediation-progress/v1", alias="schemaVersion"
+    )
+    loop_id: str = Field(alias="loopId", min_length=1)
+    attempt_ordinal: int = Field(alias="attemptOrdinal", ge=1)
+    base_workspace_digest: str | None = Field(default=None, alias="baseWorkspaceDigest")
+    candidate_workspace_digest: str | None = Field(
+        default=None, alias="candidateWorkspaceDigest"
+    )
+    relevant_diff_digest: str | None = Field(default=None, alias="relevantDiffDigest")
+    unresolved_gap_digest: str = Field(alias="unresolvedGapDigest")
+    unresolved_gap_score: int = Field(alias="unresolvedGapScore", ge=0)
+    required_checks_digest: str = Field(alias="requiredChecksDigest")
+    required_checks: dict[str, int] = Field(alias="requiredChecks")
+    blocker_code: str | None = Field(default=None, alias="blockerCode")
+    new_authoritative_evidence_digest: str | None = Field(
+        default=None, alias="newAuthoritativeEvidenceDigest"
+    )
+    repeated_failure_signatures: tuple[str, ...] = Field(
+        default=(), alias="repeatedFailureSignatures"
+    )
+    candidate_disposition: str | None = Field(
+        default=None, alias="candidateDisposition"
+    )
+    classification: Literal["baseline", "meaningful_progress", "no_progress", "regression"]
+    regressions: tuple[str, ...] = ()
+    gaps: tuple[CanonicalGap, ...] = ()
+    checks: tuple[CanonicalCheck, ...] = ()
+
+    @property
+    def digest(self) -> str:
+        return _canonical_digest(self.model_dump(by_alias=True, mode="json"))
+
+
+def build_remediation_progress_vector(
+    *,
+    loop_id: str,
+    attempt_ordinal: int,
+    issues: Sequence[Mapping[str, Any]],
+    prior: RemediationProgressVector | None = None,
+    base_workspace_digest: str | None = None,
+    candidate_workspace_digest: str | None = None,
+    relevant_diff_digest: str | None = None,
+    checks: Sequence[Mapping[str, Any]] = (),
+    blocker_code: str | None = None,
+    authoritative_evidence_digest: str | None = None,
+    candidate_disposition: str | None = None,
+) -> RemediationProgressVector:
+    """Normalize verifier evidence; refs, prose and runtime identity are excluded."""
+
+    canonical_gaps = tuple(
+        sorted((_canonical_gap(issue) for issue in issues), key=lambda gap: gap.identity)
+    )
+    canonical_checks = tuple(
+        sorted(
+            (_canonical_check(check) for check in checks),
+            key=lambda check: check.identity,
+        )
+    )
+    unresolved = tuple(gap for gap in canonical_gaps if gap.status not in {"passed", "resolved", "satisfied"})
+    check_counts = {
+        status: sum(check.status == status for check in canonical_checks)
+        for status in ("passed", "failed", "not_run")
+    }
+    failure_signatures = tuple(
+        sorted(
+            {
+                check.failure_signature
+                for check in canonical_checks
+                if check.status == "failed" and check.failure_signature
+            }
+        )
+    )
+    gap_score = sum(gap.score for gap in unresolved)
+    classification: Literal["baseline", "meaningful_progress", "no_progress", "regression"] = "baseline"
+    regressions: list[str] = []
+    if prior is not None:
+        previous_gap_ids = {gap.identity for gap in prior.gaps if gap.status not in {"passed", "resolved", "satisfied"}}
+        current_gap_ids = {gap.identity for gap in unresolved}
+        previous_checks = {check.identity: check.status for check in prior.checks}
+        current_checks = {check.identity: check.status for check in canonical_checks}
+        if current_gap_ids - previous_gap_ids:
+            regressions.append("new_gap_introduced")
+        if any(previous_checks.get(key) == "passed" and status == "failed" for key, status in current_checks.items()):
+            regressions.append("required_check_regressed")
+        if candidate_disposition in {"contaminated", "unsafe_side_effect", "scope_expanded"}:
+            regressions.append(candidate_disposition)
+        meaningful = bool(
+            previous_gap_ids - current_gap_ids
+            or gap_score < prior.unresolved_gap_score
+            or any(previous_checks.get(key) == "failed" and status == "passed" for key, status in current_checks.items())
+            or (
+                authoritative_evidence_digest
+                and authoritative_evidence_digest != prior.new_authoritative_evidence_digest
+            )
+            or (
+                prior.candidate_disposition == "contaminated"
+                and candidate_disposition == "clean"
+            )
+        )
+        classification = "regression" if regressions else ("meaningful_progress" if meaningful else "no_progress")
+    return RemediationProgressVector(
+        loopId=loop_id,
+        attemptOrdinal=attempt_ordinal,
+        baseWorkspaceDigest=base_workspace_digest,
+        candidateWorkspaceDigest=candidate_workspace_digest,
+        relevantDiffDigest=relevant_diff_digest,
+        unresolvedGapDigest=_canonical_digest([gap.model_dump(by_alias=True) for gap in unresolved]),
+        unresolvedGapScore=gap_score,
+        requiredChecksDigest=_canonical_digest([check.model_dump(by_alias=True) for check in canonical_checks]),
+        requiredChecks=check_counts,
+        blockerCode=_normalize_token(blocker_code),
+        newAuthoritativeEvidenceDigest=authoritative_evidence_digest,
+        repeatedFailureSignatures=failure_signatures,
+        candidateDisposition=_normalize_token(candidate_disposition),
+        classification=classification,
+        regressions=tuple(regressions),
+        gaps=canonical_gaps,
+        checks=canonical_checks,
+    )
+
+
 class BoundedStoryLoopInput(_ContractModel):
     selected_item_ref: ArtifactRef = Field(alias="selectedItemRef")
     selected_item_digest: str = Field(alias="selectedItemDigest")
@@ -157,6 +298,9 @@ class TypedGateResult(_ContractModel):
     remaining_work_ref: ArtifactRef | None = Field(default=None, alias="remainingWorkRef")
     diagnostics_ref: ArtifactRef | None = Field(default=None, alias="diagnosticsRef")
     progress_signature: str | None = Field(default=None, alias="progressSignature")
+    progress_vector: RemediationProgressVector | None = Field(
+        default=None, alias="progressVector"
+    )
     degraded: bool = False
 
     @field_validator("gate_result_ref", "remaining_work_ref", "diagnostics_ref")
@@ -816,3 +960,91 @@ def _camel_to_reason(value: str) -> str:
             chars.append("_")
         chars.append(char.lower())
     return "".join(chars).replace("-", "_")
+
+
+_SEVERITY_SCORES = {
+    "critical": 8,
+    "high": 5,
+    "medium": 3,
+    "low": 1,
+    "info": 0,
+}
+
+
+def _normalize_token(value: Any) -> str | None:
+    normalized = " ".join(str(value or "").strip().lower().split())
+    return normalized.replace(" ", "_") or None
+
+
+def _canonical_digest(value: Any) -> str:
+    encoded = json_dumps_canonical(value).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def json_dumps_canonical(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_gap(issue: Mapping[str, Any]) -> CanonicalGap:
+    requirement = (
+        issue.get("requirementId")
+        or issue.get("acceptanceCriterionId")
+        or issue.get("requirement")
+        or issue.get("id")
+        or issue.get("code")
+    )
+    scope = issue.get("scope") or issue.get("component") or issue.get("file")
+    check_id = issue.get("requiredCheckId") or issue.get("checkId")
+    if not requirement:
+        # Structured bounded fields are the fallback identity. Free-form feedback,
+        # artifact refs and execution identity are intentionally never included.
+        requirement = _canonical_digest(
+            {
+                "scope": _normalize_token(scope),
+                "check": _normalize_token(check_id),
+                "category": _normalize_token(issue.get("category") or issue.get("type")),
+            }
+        )
+    severity = _normalize_token(issue.get("severity") or issue.get("priority")) or "medium"
+    score_value = issue.get("score")
+    score = (
+        int(score_value)
+        if isinstance(score_value, int) and not isinstance(score_value, bool) and score_value >= 0
+        else _SEVERITY_SCORES.get(severity, 3)
+    )
+    return CanonicalGap(
+        identity=str(requirement).strip().lower(),
+        status=_normalize_token(issue.get("status")) or "unresolved",
+        severity=severity,
+        score=score,
+        scope=_normalize_token(scope),
+        requiredCheckId=_normalize_token(check_id),
+    )
+
+
+def _canonical_check(check: Mapping[str, Any]) -> CanonicalCheck:
+    identity = check.get("checkId") or check.get("commandId") or check.get("id")
+    target = check.get("target") or check.get("scope")
+    if not identity:
+        identity = _canonical_digest(
+            {
+                "target": _normalize_token(target),
+                "kind": _normalize_token(check.get("kind") or check.get("type")),
+            }
+        )
+    status = _normalize_token(check.get("status")) or "not_run"
+    if status in {"success", "succeeded", "pass"}:
+        status = "passed"
+    elif status in {"failure", "failed", "error"}:
+        status = "failed"
+    elif status in {"notrun", "skipped", "pending"}:
+        status = "not_run"
+    failure = check.get("failureSignature") or check.get("failureClass")
+    return CanonicalCheck(
+        identity=str(identity).strip().lower(),
+        status=status,
+        target=_normalize_token(target),
+        failureSignature=_normalize_token(failure),
+    )

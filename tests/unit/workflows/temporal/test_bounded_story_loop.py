@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     TypedGateResult,
     VerificationWorkspaceSnapshot,
     advance_candidate_workspace_head,
+    build_remediation_progress_vector,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
     evaluate_attempt_preflight,
@@ -63,6 +64,90 @@ def _attempt(**overrides: object) -> LoopAttempt:
     }
     payload.update(overrides)
     return LoopAttempt.model_validate(payload)
+
+
+def test_progress_vector_ignores_refs_prose_and_runtime_identity() -> None:
+    issue = {
+        "requirementId": "AC-1",
+        "scope": "api/controller.py",
+        "status": "unresolved",
+        "severity": "high",
+        "summary": "first wording",
+        "artifactRef": "artifact://report/one",
+        "runId": "run-one",
+    }
+    first = build_remediation_progress_vector(
+        loop_id="loop-1", attempt_ordinal=1, issues=[issue]
+    )
+    second = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[
+            {
+                **issue,
+                "summary": "completely rewritten",
+                "artifactRef": "artifact://report/two",
+                "runId": "run-two",
+            }
+        ],
+        prior=first,
+    )
+
+    assert first.unresolved_gap_digest == second.unresolved_gap_digest
+    assert second.classification == "no_progress"
+
+
+def test_progress_vector_detects_gap_check_and_evidence_progress() -> None:
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[
+            {"requirementId": "AC-1", "status": "unresolved", "severity": "high"},
+            {"requirementId": "AC-2", "status": "unresolved", "severity": "medium"},
+        ],
+        checks=[{"checkId": "unit", "status": "failed", "failureClass": "assertion"}],
+    )
+    progressed = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[
+            {"requirementId": "AC-1", "status": "resolved", "severity": "high"},
+            {"requirementId": "AC-2", "status": "unresolved", "severity": "medium"},
+        ],
+        checks=[{"checkId": "unit", "status": "passed"}],
+        prior=baseline,
+    )
+
+    assert progressed.classification == "meaningful_progress"
+    assert progressed.unresolved_gap_score < baseline.unresolved_gap_score
+    assert progressed.required_checks == {"passed": 1, "failed": 0, "not_run": 0}
+
+
+def test_progress_vector_records_regressions_separately() -> None:
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[{"requirementId": "AC-1", "status": "unresolved"}],
+        checks=[{"checkId": "unit", "status": "passed"}],
+    )
+    regressed = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[
+            {"requirementId": "AC-1", "status": "unresolved"},
+            {"requirementId": "AC-2", "status": "unresolved"},
+        ],
+        checks=[{"checkId": "unit", "status": "failed"}],
+        prior=baseline,
+        candidate_disposition="contaminated",
+    )
+
+    assert regressed.classification == "regression"
+    assert set(regressed.regressions) == {
+        "new_gap_introduced",
+        "required_check_regressed",
+        "contaminated",
+    }
 
 
 def test_selected_item_validation_and_compilation_are_single_item_only() -> None:

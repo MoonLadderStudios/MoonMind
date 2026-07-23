@@ -339,12 +339,13 @@ def test_parent_loop_stops_when_verification_makes_no_progress(
     )
 
     assert first["continueLoop"] is True
-    assert second["continueLoop"] is False
-    assert second["reason"] == "no_progress_attempts_exhausted"
+    assert second["continueLoop"] is True
+    assert second["reason"] == "verification_requested_remediation"
+    assert second["budget"]["consumed"]["consecutiveNoProgressAttempts"] == 1
     assert second["hasRemainingRemediationStep"] is True
 
 
-def test_explicit_remediation_budget_governs_repeated_verifier_results(
+def test_semantic_no_progress_budget_stops_before_hard_attempt_maximum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression for mm:bd3dedc3-6cf3-4801-95b4-be177b70ef6b."""
@@ -377,16 +378,16 @@ def test_explicit_remediation_budget_governs_repeated_verifier_results(
     assert first_post_remediation["nextLogicalStepId"] == "remediate-2"
     assert first_post_remediation["budget"][
         "maxConsecutiveNoProgressAttempts"
-    ] == 6
+    ] == 2
     assert first_post_remediation["budget"]["consumed"][
         "consecutiveNoProgressAttempts"
     ] == 1
 
-    assert all(decision["continueLoop"] for decision in decisions[:-1])
-    assert decisions[-1]["continueLoop"] is False
-    assert decisions[-1]["reason"] == "max_attempts_exhausted"
-    assert decisions[-1]["remediationBudget"]["maxAttempts"] == 6
-    assert decisions[-1]["remediationBudget"]["currentAttempt"] == 6
+    assert decisions[1]["continueLoop"] is True
+    assert decisions[2]["continueLoop"] is False
+    assert decisions[2]["reason"] == "no_progress_attempts_exhausted"
+    assert decisions[2]["remediationBudget"]["maxAttempts"] == 6
+    assert decisions[2]["remediationBudget"]["currentAttempt"] == 2
 
 
 def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
@@ -424,7 +425,7 @@ def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
     assert decision["remediationBudget"]["remainingAttempts"] == 6
 
 
-def test_remediation_budget_patch_preserves_legacy_no_progress_stop(
+def test_default_no_progress_policy_is_independent_of_remediation_budget_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = MoonMindRunWorkflow()
@@ -459,9 +460,9 @@ def test_remediation_budget_patch_preserves_legacy_no_progress_stop(
     )
 
     assert RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH.endswith("-v1")
-    assert decision["continueLoop"] is False
-    assert decision["reason"] == "no_progress_attempts_exhausted"
-    assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 1
+    assert decision["continueLoop"] is True
+    assert decision["reason"] == "verification_requested_remediation"
+    assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 2
 
 
 def test_parent_loop_continues_when_verification_progress_changes(
@@ -523,7 +524,7 @@ def test_parent_loop_continues_when_verification_progress_changes(
     assert second["reason"] == "verification_requested_remediation"
 
 
-def test_parent_loop_progress_tracks_changed_verifier_feedback(
+def test_parent_loop_does_not_treat_changed_verifier_feedback_as_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sparse structured gates still carry progress in verifier feedback."""
@@ -572,7 +573,8 @@ def test_parent_loop_progress_tracks_changed_verifier_feedback(
         current_index=2,
     )
 
-    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert first["gate"]["progressVector"]["unresolvedGapDigest"] == second["gate"]["progressVector"]["unresolvedGapDigest"]
+    assert second["gate"]["progressVector"]["classification"] == "no_progress"
     assert second["continueLoop"] is True
     assert second["nextAttemptKind"] == "remediation"
 
@@ -610,7 +612,7 @@ def test_feedback_progress_patch_preserves_prior_history_signature(
     assert first.progress_signature == second.progress_signature
 
 
-def test_parent_loop_progress_tracks_remaining_work_refs(
+def test_parent_loop_does_not_treat_changed_remaining_work_refs_as_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -655,7 +657,8 @@ def test_parent_loop_progress_tracks_remaining_work_refs(
         current_index=2,
     )
 
-    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert first["gate"]["progressVector"]["unresolvedGapDigest"] == second["gate"]["progressVector"]["unresolvedGapDigest"]
+    assert second["gate"]["progressVector"]["classification"] == "no_progress"
     assert second["continueLoop"] is True
 
 

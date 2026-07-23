@@ -1744,6 +1744,24 @@ const RunSummaryArtifactSchema = z
         baseRef: z.string().nullable().optional(),
         commitCount: z.union([z.number(), z.string()]).nullable().optional(),
         pullRequestUrl: z.string().nullable().optional(),
+        boundedStoryLoop: z.object({
+          continuationDecision: z.object({
+            reason: z.string().optional(),
+            continueLoop: z.boolean().optional(),
+            progressVectorDigest: z.string().optional(),
+            gate: z.object({
+              progressVector: z.object({
+                classification: z.string(),
+                unresolvedGapScore: z.number().int().nonnegative(),
+                requiredChecks: z.record(z.string(), z.number().int().nonnegative()),
+                regressions: z.array(z.string()).optional(),
+              }).passthrough().optional(),
+            }).passthrough().optional(),
+            budget: z.object({
+              consumed: z.record(z.string(), z.number().int().nonnegative()),
+            }).passthrough().optional(),
+          }).passthrough().optional(),
+        }).passthrough().optional(),
       })
       .passthrough()
       .optional(),
@@ -9323,6 +9341,29 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ) : null}
                 </FlatFactGrid>
               ) : null}
+              {runSummary.publishContext?.boundedStoryLoop?.continuationDecision ? (() => {
+                const continuation = runSummary.publishContext.boundedStoryLoop.continuationDecision;
+                const progress = continuation.gate?.progressVector;
+                const consumed = continuation.budget?.consumed ?? {};
+                return (
+                  <section className="stack" aria-label="Remediation progress and budgets">
+                    <h4>Remediation progress</h4>
+                    <FlatFactGrid>
+                      <Fact label="Classification">{formatStatusLabel(progress?.classification) || '—'}</Fact>
+                      <Fact label="Unresolved gap score">{progress?.unresolvedGapScore ?? '—'}</Fact>
+                      <Fact label="Required checks">
+                        {progress ? `Passed ${progress.requiredChecks.passed ?? 0} · Failed ${progress.requiredChecks.failed ?? 0} · Not run ${progress.requiredChecks.not_run ?? 0}` : '—'}
+                      </Fact>
+                      <Fact label="Semantic no-progress cycles">{consumed.consecutiveNoProgressAttempts ?? 0}</Fact>
+                      <Fact label="Remediation attempts">{consumed.attempts ?? 0}</Fact>
+                      <Fact label="Continuation">{continuation.continueLoop ? 'Continue' : `Stop: ${formatStatusLabel(continuation.reason)}`}</Fact>
+                    </FlatFactGrid>
+                    {progress?.regressions?.length ? (
+                      <p className="small">Regressions: {progress.regressions.map(formatStatusLabel).join(', ')}</p>
+                    ) : null}
+                  </section>
+                );
+              })() : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>
                   <strong>Last Step</strong>
