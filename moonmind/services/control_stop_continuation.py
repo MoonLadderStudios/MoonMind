@@ -42,7 +42,8 @@ class ControlStopContinuationReservation:
 class ControlStopContinuationRepository(Protocol):
     async def load_source_evidence(
         self, *, source_workflow_id: str, source_run_id: str, control_stop_id: str
-    ) -> ControlStopSourceEvidence: ...
+    ) -> ControlStopSourceEvidence:
+        raise NotImplementedError
 
     async def reserve_destination(
         self, *, contract: ControlStopContinuationContract

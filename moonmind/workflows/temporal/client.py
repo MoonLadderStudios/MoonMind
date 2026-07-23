@@ -15,6 +15,7 @@ from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
     TypedSearchAttributes,
+    WorkflowIDReusePolicy,
 )
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
@@ -369,6 +370,7 @@ class TemporalClientAdapter:
         search_attributes: Mapping[str, Any] | None = None,
         start_delay: timedelta | None = None,
         task_queue: str | None = None,
+        id_reuse_policy: WorkflowIDReusePolicy | None = None,
     ) -> WorkflowStartResult:
         """Start a new Temporal workflow.
 
@@ -406,6 +408,8 @@ class TemporalClientAdapter:
         }
         if start_delay is not None:
             start_kwargs["start_delay"] = start_delay
+        if id_reuse_policy is not None:
+            start_kwargs["id_reuse_policy"] = id_reuse_policy
         try:
             handle = await client.start_workflow(
                 workflow_type,

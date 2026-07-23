@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.common import WorkflowIDReusePolicy
 
 from api_service.db.models import ControlStopContinuationRecord
 from moonmind.services.control_stop_continuation import (
@@ -37,6 +38,17 @@ class TemporalControlStopContinuationStarter:
             workflow_type=WORKFLOW_NAME,
             workflow_id=workflow_id,
             input_args=dict(input_payload),
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            memo={
+                "owner_id": str(input_payload["ownerId"]),
+                "owner_type": str(input_payload["ownerType"]),
+                "source_workflow_id": str(input_payload["sourceWorkflowId"]),
+                "source_run_id": str(input_payload["sourceRunId"]),
+            },
+            search_attributes={
+                "mm_owner_id": str(input_payload["ownerId"]),
+                "mm_owner_type": str(input_payload["ownerType"]),
+            },
         )
         if result.workflow_id != workflow_id:
             raise ControlStopContinuationError(

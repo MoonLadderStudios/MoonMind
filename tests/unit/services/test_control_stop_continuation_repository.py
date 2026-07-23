@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from temporalio.common import WorkflowIDReusePolicy
 
 from api_service.db.models import ControlStopContinuationRecord
 from api_service.services.control_stop_continuation import (
@@ -131,7 +132,7 @@ async def test_sql_repository_commits_reservation_before_returning() -> None:
         row = (
             await session.execute(select(ControlStopContinuationRecord))
         ).scalar_one()
-        assert row.destination_workflow_id == payload["destinationWorkflowId"]
+        assert row.destination_workflow_id == contract.destination_workflow_id
 
     await engine.dispose()
 
@@ -164,6 +165,17 @@ async def test_temporal_starter_uses_registered_type_and_reconciles_duplicate() 
             "workflow_type": WORKFLOW_NAME,
             "workflow_id": workflow_id,
             "input_args": payload,
+            "id_reuse_policy": WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            "memo": {
+                "owner_id": payload["ownerId"],
+                "owner_type": payload["ownerType"],
+                "source_workflow_id": payload["sourceWorkflowId"],
+                "source_run_id": payload["sourceRunId"],
+            },
+            "search_attributes": {
+                "mm_owner_id": payload["ownerId"],
+                "mm_owner_type": payload["ownerType"],
+            },
         }
     ]
 

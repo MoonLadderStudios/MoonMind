@@ -17,6 +17,8 @@ def _payload() -> dict:
         "sourceOutcomeKind": "workflow_gate",
         "sourceWorkflowId": "source-workflow",
         "sourceRunId": "source-run",
+        "ownerType": "user",
+        "ownerId": "user-123",
         "controlStopId": "verify:control-stop:6",
         "semanticVerdict": "ADDITIONAL_WORK_NEEDED",
         "stopReason": "remediation_budget_exhausted",
@@ -50,11 +52,15 @@ def _payload() -> dict:
             "capabilitySnapshotDigest": "capability-digest",
             "effectiveLaunchSnapshotRef": "artifact://effective-launch",
             "effectiveLaunchSnapshotDigest": "effective-launch-digest",
+            "checkpointBoundarySupport": {
+                "after_gate": ["continue_to_remediation"]
+            },
         },
         "preservedSteps": [
             {
                 "sourceStepExecutionId": "source:implement:1",
                 "logicalStepId": "implement",
+                "executionOrdinal": 1,
                 "terminalDisposition": "accepted",
                 "outputRefs": {"result": "artifact://implementation"},
                 "checkpointRef": "artifact://workspace/C5",
@@ -63,6 +69,7 @@ def _payload() -> dict:
             {
                 "sourceStepExecutionId": "source:verify:6",
                 "logicalStepId": "verify",
+                "executionOrdinal": 6,
                 "terminalDisposition": "accepted_control_result",
                 "outputRefs": {"gate": "artifact://gate/6"},
                 "checkpointRef": "artifact://workspace/C6",

@@ -89,6 +89,9 @@ class FrozenProfileBoundLane(BaseModel):
     effective_launch_snapshot_digest: str = Field(
         alias="effectiveLaunchSnapshotDigest", min_length=1
     )
+    checkpoint_boundary_support: dict[str, list[str]] = Field(
+        alias="checkpointBoundarySupport"
+    )
 
 
 class PreservedControlStopStep(BaseModel):
@@ -98,6 +101,7 @@ class PreservedControlStopStep(BaseModel):
         alias="sourceStepExecutionId", min_length=1
     )
     logical_step_id: str = Field(alias="logicalStepId", min_length=1)
+    execution_ordinal: int = Field(alias="executionOrdinal", ge=1)
     terminal_disposition: Literal["accepted", "accepted_control_result"] = Field(
         alias="terminalDisposition"
     )
@@ -151,6 +155,8 @@ class ControlStopContinuationContract(BaseModel):
     source_outcome_kind: Literal["workflow_gate"] = Field(alias="sourceOutcomeKind")
     source_workflow_id: str = Field(alias="sourceWorkflowId", min_length=1)
     source_run_id: str = Field(alias="sourceRunId", min_length=1)
+    owner_type: Literal["user", "service", "system"] = Field(alias="ownerType")
+    owner_id: str = Field(alias="ownerId", min_length=1)
     control_stop_id: str = Field(alias="controlStopId", min_length=1)
     semantic_verdict: Literal["ADDITIONAL_WORK_NEEDED"] = Field(
         alias="semanticVerdict"
@@ -220,6 +226,13 @@ class ControlStopContinuationContract(BaseModel):
             for step in self.preserved_steps
         ):
             raise ValueError("preserved terminal verifier evidence is required")
+        if self.phase not in self.lane.checkpoint_boundary_support.get(
+            self.checkpoint_boundary, []
+        ):
+            raise ValueError(
+                "frozen runtime capabilities do not authorize the checkpoint "
+                "boundary and continuation phase"
+            )
         return self
 
     @property
@@ -273,6 +286,12 @@ class ControlStopContinuationContract(BaseModel):
         Omnigent AgentRun may be started.
         """
 
+        terminal_verifier = next(
+            step
+            for step in reversed(self.preserved_steps)
+            if step.semantic_verdict == "ADDITIONAL_WORK_NEEDED"
+            and step.terminal_disposition == "accepted_control_result"
+        )
         return {
             "schemaVersion": "v1",
             "recoveryIdentity": {
@@ -284,8 +303,8 @@ class ControlStopContinuationContract(BaseModel):
             "source": {
                 "workflowId": self.source_workflow_id,
                 "runId": self.source_run_id,
-                "logicalStepId": "verify",
-                "executionOrdinal": self.source_budget.consumed_attempts,
+                "logicalStepId": terminal_verifier.logical_step_id,
+                "executionOrdinal": terminal_verifier.execution_ordinal,
                 "checkpointRef": self.workspace_head_ref,
                 "checkpointBoundary": self.checkpoint_boundary,
             },
