@@ -727,6 +727,12 @@ Managed agents run targeted Python verification with:
 moonmind container python-tests tests/unit/path/test_file.py
 ```
 
+When `AUTH_PROVIDER` requires authentication, the managed-session credential
+boundary supplies a scoped Bearer credential as
+`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request.
+An authenticated deployment must not expose a shared or deployment-wide token
+to managed sessions.
+
 The command derives the canonical `managed_runtime` locator from the active
 session, submits durable work, polls `container.status`, and exits from the
 authoritative terminal state.
