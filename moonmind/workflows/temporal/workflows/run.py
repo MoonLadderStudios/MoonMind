@@ -818,14 +818,7 @@ class MoonMindRunWorkflow:
         if not hasattr(logger_to_use, "isEnabledFor"):
             logger_to_use = logging.getLogger(__name__)
 
-        try:
-            logger_to_use.isEnabledFor(logging.INFO)
-            return logging.LoggerAdapter(logger_to_use, extra=extra)
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "Error checking logger capabilities in _get_logger"
-            )
-            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+        return logging.LoggerAdapter(logger_to_use, extra=extra)
 
     @staticmethod
     def _operator_failure_summary(exc: BaseException) -> str:
@@ -6616,6 +6609,9 @@ class MoonMindRunWorkflow:
                 if prior_loop_state is not None:
                     prior_progress_vector = prior_loop_state.progress_vector
                     prior_consumed_counters = dict(prior_loop_state.consumed)
+                    prior_no_progress_attempts = prior_loop_state.consumed.get(
+                        "consecutiveNoProgressAttempts", 0
+                    )
             prior_decision = loop_context.get("continuationDecision")
             if isinstance(prior_decision, Mapping):
                 prior_gate = prior_decision.get("gate")
@@ -6788,18 +6784,16 @@ class MoonMindRunWorkflow:
         evidence_retries = max(
             0, (self._step_execution_for(logical_step_id) or 1) - 1
         )
-        infrastructure_retries = max(
-            0,
-            int(
-                (
-                    (gate_result.validated_refs or {}).get(
-                        "infrastructureRetries", 0
-                    )
-                    if isinstance(gate_result.validated_refs, Mapping)
-                    else 0
-                )
-                or 0
-            ),
+        raw_infrastructure_retries = (
+            (gate_result.validated_refs or {}).get("infrastructureRetries", 0)
+            if isinstance(gate_result.validated_refs, Mapping)
+            else 0
+        )
+        infrastructure_retries = (
+            max(0, int(raw_infrastructure_retries))
+            if isinstance(raw_infrastructure_retries, (int, float))
+            and not isinstance(raw_infrastructure_retries, bool)
+            else 0
         )
         consumed["evidenceRetries"] = max(
             consumed.get("evidenceRetries", 0), evidence_retries
@@ -6891,6 +6885,19 @@ class MoonMindRunWorkflow:
             checkpoint_available=True,
             policy_allowed=True,
         )
+        if (
+            gate.verdict == "ADDITIONAL_WORK_NEEDED"
+            and not has_remaining_remediation_step
+            and decision.continue_loop
+        ):
+            decision = decision.model_copy(
+                update={
+                    "continue_loop": False,
+                    "reason": "no_remediation_successor",
+                    "state": LoopStopState.FAILED_WITH_REMAINING_WORK,
+                    "next_attempt_kind": None,
+                }
+            )
         if progress_evidence_invalid:
             decision = decision.model_copy(
                 update={

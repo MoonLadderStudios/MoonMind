@@ -802,8 +802,13 @@ def evaluate_attempt_continuation(
             diagnostics_ref=gate.diagnostics_ref,
         )
     if gate.verdict == "ADDITIONAL_WORK_NEEDED":
+        semantic_attempt_ordinal = (
+            gate.progress_vector.attempt_ordinal
+            if gate.progress_vector is not None
+            else attempt.attempt_ordinal
+        )
         if (
-            attempt.attempt_ordinal >= 3
+            semantic_attempt_ordinal >= 3
             and (
                 gate.progress_vector is None
                 or gate.progress_vector.classification != "meaningful_progress"

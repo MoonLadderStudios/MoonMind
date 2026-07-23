@@ -477,6 +477,60 @@ def test_continuation_decision_preserves_consumption_and_applies_explicit_grant(
     assert "budgetGrant" not in run._publish_context["boundedStoryLoop"]
 
 
+def test_continuation_seeds_no_progress_count_from_durable_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(run, "_patched_or_false_outside_workflow", lambda _: True)
+    ordered_nodes = _explicit_remediation_chain(max_attempts=6)
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        issues=({"requirement": "same gap", "status": "unmet"},),
+    )
+    first = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+    durable_state = first["durableLoopState"]
+    durable_state["consumed"]["consecutiveNoProgressAttempts"] = 1
+    durable_state["policy"]["consumed"]["consecutiveNoProgressAttempts"] = 1
+    run._publish_context["boundedStoryLoop"] = {
+        "budgets": {"maxConsecutiveNoProgressAttempts": 2},
+        "durableLoopState": durable_state,
+    }
+
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/2",
+        ordered_nodes=ordered_nodes,
+        current_index=4,
+    )
+
+    assert decision["continueLoop"] is False
+    assert decision["reason"] == "semantic_no_progress_exhausted"
+    assert decision["budget"]["consumed"]["consecutiveNoProgressAttempts"] == 2
+
+
+def test_invalid_infrastructure_retry_telemetry_is_ignored() -> None:
+    run = MoonMindRunWorkflow()
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-initial",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            validated_refs={"infrastructureRetries": "unknown"},
+        ),
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=_explicit_remediation_chain(max_attempts=2),
+        current_index=0,
+    )
+
+    assert decision["budget"]["consumed"]["infrastructureRetries"] == 0
+
+
 def test_default_no_progress_policy_is_independent_of_remediation_budget_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
