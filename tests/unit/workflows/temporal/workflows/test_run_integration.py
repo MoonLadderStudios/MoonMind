@@ -3396,6 +3396,50 @@ def test_moonspec_verify_gate_skips_loop_steps_after_passing_verdict(
     )
 
 
+def test_user_workflow_initializes_one_dynamic_loop_and_materializes_one_pair(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {
+            "hardMaxAttempts": 6,
+            "maxConsecutiveSemanticNoProgress": 2,
+            "maxRepeatedFailureSignature": 2,
+        },
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+        "continueAsNewAttemptThreshold": 3,
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {
+                "id": "controller",
+                "annotations": {"remediationLoop": loop},
+            }
+        ]
+    )
+
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["status"] == "initial_verification_pending"
+    assert projection["attemptOrdinal"] == 0
+    remediation, verification = (
+        mock_run_workflow._materialize_remediation_attempt(ordinal=1)
+    )
+    assert remediation["annotations"]["moonSpecRemediationAttempt"] == 1
+    assert verification["dependsOn"] == [remediation["id"]]
+
+
 def _remediation_head_payload(
     *, checkpoint: str = "C0", version: int = 1
 ) -> dict[str, object]:

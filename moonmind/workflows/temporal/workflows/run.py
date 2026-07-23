@@ -133,6 +133,14 @@ with workflow.unsafe.imports_passed_through():
         freeze_attempt_input,
         project_head,
     )
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopSpec,
+        RemediationLoopState,
+        materialize_attempt_nodes,
+        project_remediation_loop,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -687,6 +695,9 @@ RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v
 RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH = (
     "run-plan-routed-moonspec-remediation-v1"
+)
+RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
+    "run-dynamic-remediation-loop-controller-v1"
 )
 
 
@@ -1253,6 +1264,8 @@ class MoonMindRunWorkflow:
         # lifetime of the workflow and replays it deterministically; filesystem
         # paths and checkpoint bodies never enter workflow state.
         self._remediation_workspace_head: RemediationWorkspaceHead | None = None
+        self._remediation_loop_spec: RemediationLoopSpec | None = None
+        self._remediation_loop_state: RemediationLoopState | None = None
         self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
         # A valid verifier can stop workflow routing without fabricating a
@@ -3674,6 +3687,66 @@ class MoonMindRunWorkflow:
                 )
                 refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
+
+    def _initialize_remediation_loop_controller(
+        self,
+        *,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Freeze the one authored loop contract into compact workflow state."""
+
+        controllers: list[Mapping[str, Any]] = []
+        for node in ordered_nodes:
+            annotations = self._node_annotations_mapping(node)
+            raw_loop = annotations.get("remediationLoop")
+            if isinstance(raw_loop, Mapping):
+                controllers.append(raw_loop)
+        if not controllers:
+            return
+        if len(controllers) != 1:
+            raise ValueError("a plan must contain at most one remediation loop")
+        spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
+        info = workflow.info()
+        self._remediation_loop_spec = spec
+        self._remediation_loop_state = RemediationLoopState(
+            loopId=spec.loop_id,
+            phase=RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
+            consumedBudgets=ConsumedRemediationBudgets(),
+            sourceRunId=info.run_id,
+        )
+        self._sync_remediation_loop_projection()
+
+    def _sync_remediation_loop_projection(self) -> None:
+        spec = self._remediation_loop_spec
+        state = self._remediation_loop_state
+        if spec is None or state is None:
+            return
+        self._publish_context["remediationLoop"] = project_remediation_loop(
+            spec=spec,
+            state=state,
+        )
+
+    def _materialize_remediation_attempt(
+        self,
+        *,
+        ordinal: int,
+        verification_inputs: Mapping[str, object] | None = None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Create the admitted pair only; callers append it to the live ledger."""
+
+        spec = self._remediation_loop_spec
+        state = self._remediation_loop_state
+        if spec is None or state is None:
+            raise ValueError("remediation loop is not initialized")
+        info = workflow.info()
+        return materialize_attempt_nodes(
+            spec=spec,
+            workflow_id=info.workflow_id,
+            run_id=info.run_id,
+            ordinal=ordinal,
+            workspace_head_ref=state.workspace_head_ref,
+            verification_inputs=verification_inputs,
+        )
 
     def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
         task_payload = parameters.get("task")
@@ -9296,6 +9369,10 @@ class MoonMindRunWorkflow:
             dependency_map=dependency_map,
             updated_at=workflow.now(),
         )
+        if workflow.patched(RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH):
+            self._initialize_remediation_loop_controller(
+                ordered_nodes=ordered_nodes,
+            )
         self._capture_prepared_input_refs(parameters)
 
         task_payload = parameters.get("task")

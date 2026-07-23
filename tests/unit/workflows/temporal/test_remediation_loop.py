@@ -7,8 +7,16 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopPhase,
     RemediationLoopSpec,
     RemediationLoopState,
+    apply_continuation_decision,
+    capture_remediation_candidate,
     decide_remediation_continuation,
+    materialize_attempt_nodes,
+    project_remediation_loop,
+    record_verification_evidence,
     remediation_step_execution_id,
+    should_continue_as_new,
+    start_remediation_attempt,
+    start_verification,
 )
 
 
@@ -125,3 +133,76 @@ def test_continue_as_new_state_rejects_inline_or_filesystem_evidence() -> None:
             workspaceHeadRef="/tmp/workspace",
             consumedBudgets={},
         )
+
+
+def test_attempt_lifecycle_advances_head_before_read_only_verification() -> None:
+    pending = _state(attempts=0).model_copy(
+        update={"phase": RemediationLoopPhase.REMEDIATION_PENDING}
+    )
+    running = start_remediation_attempt(pending)
+    captured = capture_remediation_candidate(
+        running, workspace_head_ref="artifact://workspace/C2"
+    )
+    verifying = start_verification(captured)
+    evaluating = record_verification_evidence(
+        verifying, verification_ref="artifact://verification/V2"
+    )
+
+    assert running.attempt_ordinal == 1
+    assert captured.workspace_head_ref == "artifact://workspace/C2"
+    assert verifying.consumed_budgets.attempts == 1
+    assert evaluating.phase == RemediationLoopPhase.CONTINUATION_DECIDING
+
+
+def test_decision_is_persisted_once_and_drives_projection() -> None:
+    state = _state(attempts=1)
+    decision = decide_remediation_continuation(
+        spec=_spec(),
+        state=state,
+        verdict="FULLY_IMPLEMENTED",
+        gate_result_ref="artifact://gate/pass",
+    )
+    accepted = apply_continuation_decision(
+        state,
+        decision=decision,
+        decision_ref="artifact://decision/D1",
+    )
+    projection = project_remediation_loop(spec=_spec(), state=accepted)
+
+    assert accepted.phase == RemediationLoopPhase.ACCEPTED
+    assert projection["latestVerdict"] == "FULLY_IMPLEMENTED"
+    assert projection["continuationDecisionRef"] == "artifact://decision/D1"
+    assert projection["continuationReason"] == "verification_accepted"
+
+
+def test_materialization_creates_only_the_admitted_pair() -> None:
+    remediation, verification = materialize_attempt_nodes(
+        spec=_spec(6),
+        workflow_id="wf",
+        run_id="run",
+        ordinal=2,
+        workspace_head_ref="artifact://workspace/C1",
+    )
+
+    assert remediation["id"] == (
+        "wf:run:issue-implementation-remediation:remediation:2"
+    )
+    assert verification["id"] == (
+        "wf:run:issue-implementation-remediation:verification:2"
+    )
+    assert verification["dependsOn"] == [remediation["id"]]
+    assert verification["inputs"]["readOnlyWorkspaceHead"] is True
+
+
+def test_continue_as_new_preserves_consumed_budget_threshold() -> None:
+    spec = _spec(6).model_copy(update={"continue_as_new_attempt_threshold": 3})
+    state = _state(attempts=3).model_copy(
+        update={"phase": RemediationLoopPhase.REMEDIATION_PENDING}
+    )
+
+    assert should_continue_as_new(spec=spec, state=state) is True
+    carried = RemediationLoopState.model_validate(
+        state.model_dump(by_alias=True, mode="json")
+    )
+    assert carried.attempt_ordinal == 3
+    assert carried.workspace_head_ref == "artifact://workspace/C1"

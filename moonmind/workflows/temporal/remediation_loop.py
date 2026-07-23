@@ -11,7 +11,7 @@ Implementation reference: MoonLadderStudios/MoonMind#3475.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -138,6 +138,11 @@ class RemediationLoopState(_Contract):
     source_run_id: str | None = Field(default=None, alias="sourceRunId")
     plan_digest: str | None = Field(default=None, alias="planDigest")
     capability_digest: str | None = Field(default=None, alias="capabilityDigest")
+    latest_verdict: str | None = Field(default=None, alias="latestVerdict")
+    continuation_reason: str | None = Field(
+        default=None, alias="continuationReason"
+    )
+    continue_as_new_count: int = Field(default=0, alias="continueAsNewCount", ge=0)
 
     @model_validator(mode="after")
     def _attempt_counter_matches_ordinal(self) -> "RemediationLoopState":
@@ -194,6 +199,209 @@ def remediation_step_execution_id(
     if ordinal < 1:
         raise ValueError("ordinal must be positive")
     return f"{workflow_id}:{run_id}:{loop_id}:{kind}:{ordinal}"
+
+
+def start_remediation_attempt(
+    state: RemediationLoopState,
+) -> RemediationLoopState:
+    """Admit one semantic attempt and consume its budget exactly once."""
+
+    if state.phase != RemediationLoopPhase.REMEDIATION_PENDING:
+        raise ValueError("remediation can only start from remediation_pending")
+    next_attempt = state.attempt_ordinal + 1
+    budgets = state.consumed_budgets.model_copy(
+        update={"attempts": next_attempt}
+    )
+    return state.model_copy(
+        update={
+            "attempt_ordinal": next_attempt,
+            "phase": RemediationLoopPhase.REMEDIATION_RUNNING,
+            "consumed_budgets": budgets,
+        }
+    )
+
+
+def capture_remediation_candidate(
+    state: RemediationLoopState, *, workspace_head_ref: str
+) -> RemediationLoopState:
+    """Atomically advance the workflow-owned candidate before verification."""
+
+    if state.phase not in {
+        RemediationLoopPhase.REMEDIATION_RUNNING,
+        RemediationLoopPhase.CANDIDATE_CAPTURING,
+    }:
+        raise ValueError("candidate capture requires a running remediation")
+    if not workspace_head_ref.startswith("artifact://"):
+        raise ValueError("workspace head must use an artifact:// reference")
+    return state.model_copy(
+        update={
+            "workspace_head_ref": workspace_head_ref,
+            "phase": RemediationLoopPhase.VERIFICATION_PENDING,
+        }
+    )
+
+
+def start_verification(state: RemediationLoopState) -> RemediationLoopState:
+    """Start verifier execution without consuming a remediation attempt."""
+
+    if state.phase not in {
+        RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
+        RemediationLoopPhase.VERIFICATION_PENDING,
+    }:
+        raise ValueError("verification can only start from a pending phase")
+    return state.model_copy(update={"phase": RemediationLoopPhase.VERIFICATION_RUNNING})
+
+
+def record_verification_evidence(
+    state: RemediationLoopState, *, verification_ref: str
+) -> RemediationLoopState:
+    if state.phase != RemediationLoopPhase.VERIFICATION_RUNNING:
+        raise ValueError("verification evidence requires a running verifier")
+    if not verification_ref.startswith("artifact://"):
+        raise ValueError("verification evidence must use an artifact:// reference")
+    return state.model_copy(
+        update={
+            "latest_verification_ref": verification_ref,
+            "phase": RemediationLoopPhase.CONTINUATION_DECIDING,
+        }
+    )
+
+
+def apply_continuation_decision(
+    state: RemediationLoopState,
+    *,
+    decision: RemediationContinuationDecision,
+    decision_ref: str,
+) -> RemediationLoopState:
+    """Persist and project the one routing authority for all consumers."""
+
+    if state.phase != RemediationLoopPhase.CONTINUATION_DECIDING:
+        raise ValueError("continuation decision requires continuation_deciding")
+    if decision.loop_id != state.loop_id:
+        raise ValueError("continuation decision belongs to another loop")
+    if not decision_ref.startswith("artifact://"):
+        raise ValueError("continuation decision must use an artifact:// reference")
+    budgets = state.consumed_budgets
+    if decision.retry_kind == "evidence":
+        budgets = budgets.model_copy(
+            update={"evidence_retries": budgets.evidence_retries + 1}
+        )
+    elif decision.retry_kind == "contract_repair":
+        budgets = budgets.model_copy(
+            update={"contract_repairs": budgets.contract_repairs + 1}
+        )
+    return state.model_copy(
+        update={
+            "phase": decision.next_phase,
+            "continuation_decision_ref": decision_ref,
+            "latest_verdict": decision.verdict,
+            "continuation_reason": decision.reason,
+            "consumed_budgets": budgets,
+        }
+    )
+
+
+def should_continue_as_new(
+    *, spec: RemediationLoopSpec, state: RemediationLoopState
+) -> bool:
+    threshold = spec.continue_as_new_attempt_threshold
+    return bool(
+        threshold
+        and state.attempt_ordinal > 0
+        and state.attempt_ordinal % threshold == 0
+        and state.phase
+        in {
+            RemediationLoopPhase.REMEDIATION_PENDING,
+            RemediationLoopPhase.VERIFICATION_PENDING,
+        }
+    )
+
+
+def project_remediation_loop(
+    *, spec: RemediationLoopSpec, state: RemediationLoopState
+) -> dict[str, object]:
+    """Return the compact API/UI projection; never include evidence bodies."""
+
+    return {
+        "loopId": state.loop_id,
+        "status": state.phase.value,
+        "attemptOrdinal": state.attempt_ordinal,
+        "hardMaxAttempts": spec.budgets.hard_max_attempts,
+        "workspaceHeadRef": state.workspace_head_ref,
+        "latestVerificationRef": state.latest_verification_ref,
+        "latestVerdict": state.latest_verdict,
+        "continuationDecisionRef": state.continuation_decision_ref,
+        "continuationReason": state.continuation_reason,
+        "continueAsNewCount": state.continue_as_new_count,
+        "sourceRunId": state.source_run_id,
+        "consumedBudgets": state.consumed_budgets.model_dump(
+            by_alias=True, mode="json"
+        ),
+    }
+
+
+def materialize_attempt_nodes(
+    *,
+    spec: RemediationLoopSpec,
+    workflow_id: str,
+    run_id: str,
+    ordinal: int,
+    workspace_head_ref: str | None,
+    verification_inputs: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Build only the admitted attempt pair with deterministic lineage."""
+
+    remediation_id = remediation_step_execution_id(
+        workflow_id, run_id, spec.loop_id, "remediation", ordinal
+    )
+    verification_id = remediation_step_execution_id(
+        workflow_id, run_id, spec.loop_id, "verification", ordinal
+    )
+    common_annotations = {
+        "remediationLoopId": spec.loop_id,
+        "moonSpecRemediationAttempt": ordinal,
+        "moonSpecRemediationMaxAttempts": spec.budgets.hard_max_attempts,
+    }
+    remediation_inputs = dict(spec.remediation_tool.inputs)
+    remediation_inputs.update(
+        {
+            "remediationLoopId": spec.loop_id,
+            "remediationAttempt": ordinal,
+            "remediationWorkspaceHeadRef": workspace_head_ref,
+        }
+    )
+    verifier_inputs = dict(spec.verification_tool.inputs)
+    verifier_inputs.update(dict(verification_inputs or {}))
+    verifier_inputs.update(
+        {
+            "remediationLoopId": spec.loop_id,
+            "remediationAttempt": ordinal,
+            "remediationWorkspaceHeadRef": workspace_head_ref,
+            "readOnlyWorkspaceHead": True,
+        }
+    )
+    remediation = {
+        "id": remediation_id,
+        "title": f"Remediate verification gaps (attempt {ordinal})",
+        "tool": spec.remediation_tool.model_dump(by_alias=True, mode="json"),
+        "inputs": remediation_inputs,
+        "annotations": {
+            **common_annotations,
+            "issueImplementRole": "moonspec-remediation",
+        },
+    }
+    verification = {
+        "id": verification_id,
+        "title": f"Verify remediation (attempt {ordinal})",
+        "tool": spec.verification_tool.model_dump(by_alias=True, mode="json"),
+        "inputs": verifier_inputs,
+        "annotations": {
+            **common_annotations,
+            "issueImplementRole": "moonspec-verification-gate",
+        },
+        "dependsOn": [remediation_id],
+    }
+    return remediation, verification
 
 
 def decide_remediation_continuation(
