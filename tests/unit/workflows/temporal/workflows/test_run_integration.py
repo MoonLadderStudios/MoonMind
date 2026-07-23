@@ -36,6 +36,11 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityTimeouts,
 )
 from moonmind.workloads.tool_bridge import build_container_job_tool_definition_payload
+from moonmind.workflows.temporal.remediation_workspace_head import (
+    REMEDIATION_HEAD_MISMATCH,
+    RemediationHeadError,
+    RemediationWorkspaceHead,
+)
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
     import json
@@ -3389,6 +3394,137 @@ def test_moonspec_verify_gate_skips_loop_steps_after_passing_verdict(
         "Skipped MoonSpec remediation loop step because verification already "
         "passed with verdict FULLY_IMPLEMENTED."
     )
+
+
+def _remediation_head_payload(
+    *, checkpoint: str = "C0", version: int = 1
+) -> dict[str, object]:
+    return {
+        "loopId": "loop-3473",
+        "branchRef": "checkpoint-branch:loop-3473",
+        "rootCheckpointRef": "artifact://workspace/C0",
+        "rootWorkspaceDigest": "sha256:c0",
+        "headCheckpointRef": f"artifact://workspace/{checkpoint}",
+        "headWorkspaceDigest": f"sha256:{checkpoint.lower()}",
+        "headAttemptOrdinal": version - 1,
+        "headVersion": version,
+    }
+
+
+def test_remediation_step_receives_frozen_workflow_owned_candidate_baseline(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    node = {
+        "id": "remediation-2",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 2,
+            "moonSpecRemediationMaxAttempts": 6,
+        },
+        "inputs": {},
+    }
+    inputs = {
+        "remediationWorkspaceHead": _remediation_head_payload(
+            checkpoint="C1", version=2
+        )
+    }
+
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node, node_inputs=inputs
+    )
+
+    assert inputs["remediationAttemptInput"] == {
+        "loopId": "loop-3473",
+        "attemptOrdinal": 2,
+        "baseCheckpointRef": "artifact://workspace/C1",
+        "expectedBaseDigest": "sha256:c1",
+        "expectedHeadVersion": 2,
+        "latestVerificationRef": None,
+        "workspacePolicy": "continue_from_loop_head",
+    }
+    assert inputs["remediationWorkspaceHead"]["nextActionBaseline"][
+        "checkpointRef"
+    ] == "artifact://workspace/C1"
+
+
+def test_completed_remediation_advances_baseline_before_next_attempt(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    node = {
+        "id": "remediation-1",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {},
+    }
+    inputs = {"remediationWorkspaceHead": _remediation_head_payload()}
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node, node_inputs=inputs
+    )
+
+    mock_run_workflow._advance_remediation_workspace_head(
+        node=node,
+        node_inputs=inputs,
+        execution_result={
+            "outputs": {
+                "remediationAttemptOutput": {
+                    "attemptEvidenceRef": "artifact://attempt/1",
+                    "parentCheckpointRef": "artifact://workspace/C0",
+                    "parentWorkspaceDigest": "sha256:c0",
+                    "outputCheckpointRef": "artifact://workspace/C1",
+                    "outputWorkspaceDigest": "sha256:c1",
+                    "checkpointManifestRef": "artifact://manifest/C1",
+                    "candidateDiffRef": "artifact://diff/C1",
+                    "changedFilesRef": "artifact://changed/C1",
+                    "targetedChecksRef": "artifact://checks/C1",
+                    "outcome": "candidate_captured",
+                }
+            }
+        },
+        step_execution_id="wf:run:remediation-1:execution:1",
+    )
+
+    next_node = {
+        "id": "remediation-2",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 2,
+        },
+        "inputs": {},
+    }
+    next_inputs: dict[str, object] = {}
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=next_node, node_inputs=next_inputs
+    )
+    assert next_inputs["remediationAttemptInput"]["baseCheckpointRef"] == (
+        "artifact://workspace/C1"
+    )
+    assert next_inputs["remediationAttemptInput"]["expectedHeadVersion"] == 2
+
+
+def test_remediation_step_rejects_root_fallback_after_workflow_head_is_owned(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    node = {
+        "id": "remediation-2",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 2,
+        },
+        "inputs": {},
+    }
+    mock_run_workflow._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+        _remediation_head_payload(checkpoint="C1", version=2)
+    )
+    inputs = {"remediationWorkspaceHead": _remediation_head_payload()}
+
+    with pytest.raises(RemediationHeadError) as exc:
+        mock_run_workflow._inject_remediation_workspace_baseline(
+            node=node, node_inputs=inputs
+        )
+
+    assert exc.value.code == REMEDIATION_HEAD_MISMATCH
 
 
 def test_moonspec_verify_gate_detects_issue_implement_remediation_role(

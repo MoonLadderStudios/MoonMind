@@ -561,6 +561,23 @@ class WorkflowCheckpointBranch(Base):
     current_head_checkpoint_ref: Mapped[Optional[str]] = mapped_column(
         String(1024), nullable=True
     )
+    current_head_checkpoint_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    current_head_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    current_head_attempt_ordinal: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    remediation_loop_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    remediation_head_status: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    latest_verification_ref: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    latest_verification_verdict: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
     current_head_commit: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     pull_request_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     publish_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
