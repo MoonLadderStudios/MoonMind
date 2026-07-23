@@ -1,5 +1,16 @@
 # Step Executions and Checkpointing
 
+## Plane-aware checkpoints
+
+Policy callers select session state, workspace state, or both. Session evidence
+supports reattach or cold-session decisions; workspace evidence supports repository
+continuation and must satisfy the artifact contract, digest, and boundary map in the
+frozen workspace capability. A session `external_state_ref` never represents files,
+git metadata, generated tests, or uncommitted changes. Omnigent workspace boundaries
+therefore use MoonMind `worktree_archive` checkpoints and
+`workspace.apply_checkpoint`, while replay consumes the recorded capability snapshot
+instead of performing a mutable registry lookup.
+
 Status: Desired State
 Owners: MoonMind Engineering
 Last Updated: 2026-06-13

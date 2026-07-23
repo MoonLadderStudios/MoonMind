@@ -13,6 +13,33 @@ class OmnigentRecoveryMode(str, Enum):
     COLD_RESTORE = "cold_restore"
 
 
+class CandidateWorkspaceAuthority(BaseModel):
+    """MoonMind-owned repository checkpoint selected for continuation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    loop_id: str = Field(..., alias="loopId", min_length=1)
+    attempt_ordinal: int = Field(..., alias="attemptOrdinal", ge=0)
+    head_ref: str = Field(..., alias="headRef", min_length=1)
+    head_digest: str = Field(
+        ..., alias="headDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    checkpoint_ref: str = Field(..., alias="checkpointRef", min_length=1)
+    checkpoint_digest: str = Field(
+        ..., alias="checkpointDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+
+    @model_validator(mode="after")
+    def _refs_are_artifact_authority(self) -> "CandidateWorkspaceAuthority":
+        for name, value in (
+            ("headRef", self.head_ref),
+            ("checkpointRef", self.checkpoint_ref),
+        ):
+            if not value.startswith("artifact://"):
+                raise ValueError(f"{name} must be a durable artifact reference")
+        return self
+
+
 class OmnigentCheckpointIdentity(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -123,6 +150,7 @@ def validate_branch_identity(
 
 
 __all__ = [
+    "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
     "OmnigentRecoveryMode",
     "recovery_mode",

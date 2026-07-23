@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from moonmind.schemas.temporal_models import WorkspacePolicy
 from moonmind.workflows.executions.runtime_capabilities import (
@@ -16,6 +16,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
 )
 
 _LEGACY_SANDBOX_CAPABILITIES = RuntimeExecutionCapabilities(
+    capabilitySetVersion="runtime-execution-capabilities-v2",
     runtimeId="legacy_sandbox",
     runtimeFamily="moonmind_sandbox",
     workspaceAuthority="moonmind_sandbox",
@@ -29,6 +30,7 @@ _LEGACY_SANDBOX_CAPABILITIES = RuntimeExecutionCapabilities(
     postExecutionCheckpointCriticality="recoverability_only",
 ).with_digest()
 _LEGACY_MANAGED_CAPABILITIES = RuntimeExecutionCapabilities(
+    capabilitySetVersion="runtime-execution-capabilities-v2",
     runtimeId="legacy_managed_runtime",
     runtimeFamily="managed_cli",
     workspaceAuthority="managed_runtime",
@@ -48,6 +50,20 @@ class ResolvedCheckpointPolicy:
     capture_activity: str | None = None
     criticality: str = "unsupported"
     supported_checkpoint_kinds: tuple[str, ...] = ()
+    session: "CheckpointPlaneDecision | None" = None
+    workspace: "CheckpointPlaneDecision | None" = None
+
+
+@dataclass(frozen=True)
+class CheckpointPlaneDecision:
+    plane: Literal["session", "workspace"]
+    checkpoint_kind: str | None
+    resumable: bool
+    required_evidence: tuple[str, ...]
+    authority: WorkspaceAuthority
+    capture_activity: str | None
+    restore_activity: str | None
+    supported_checkpoint_kinds: tuple[str, ...]
 
 
 _EXTERNAL_STATE_BOUNDARIES = frozenset(
@@ -102,6 +118,7 @@ def resolve_checkpoint_policy(
     runtime_kind: str | None = None,
     external_agent_id: str | None = None,
     agent_kind: str | None = None,
+    requested_state: Literal["session", "workspace", "both"] = "workspace",
 ) -> ResolvedCheckpointPolicy:
     """Select checkpoint behavior solely from a recorded capability snapshot."""
 
@@ -128,6 +145,39 @@ def resolve_checkpoint_policy(
     validate_runtime_preflight(capabilities, workspace_authority=authority)
     token = _boundary_token(boundary)
 
+    session_capability = capabilities.session_state
+    session_kind = None
+    if session_capability and session_capability.checkpoint_kinds and token in _EXTERNAL_STATE_BOUNDARIES:
+        session_kind = session_capability.checkpoint_kinds[0]
+    session_decision = CheckpointPlaneDecision(
+        plane="session",
+        checkpoint_kind=session_kind,
+        resumable=bool(
+            session_kind and session_capability
+            and (session_capability.supports_live_reattach or session_capability.supports_cold_session)
+        ),
+        required_evidence=(
+            session_capability.required_evidence if session_kind and session_capability else ()
+        ),
+        authority=session_capability.authority if session_capability else authority,
+        capture_activity=session_capability.capture_activity if session_capability else None,
+        restore_activity=session_capability.restore_owner if session_capability else None,
+        supported_checkpoint_kinds=session_capability.checkpoint_kinds if session_capability else (),
+    )
+
+    if requested_state == "session":
+        return ResolvedCheckpointPolicy(
+            workspace_policy="continue_from_previous_execution",
+            checkpoint_kind=session_decision.checkpoint_kind,
+            resumable=session_decision.resumable,
+            required_evidence=session_decision.required_evidence,
+            capture_authority=session_decision.authority,
+            capture_activity=session_decision.capture_activity,
+            criticality=capabilities.post_execution_checkpoint_criticality,
+            supported_checkpoint_kinds=session_decision.supported_checkpoint_kinds,
+            session=session_decision,
+        )
+
     if "external_state_ref" in capabilities.checkpoint_capture_kinds:
         if token not in _EXTERNAL_STATE_BOUNDARIES:
             return ResolvedCheckpointPolicy(
@@ -138,6 +188,7 @@ def resolve_checkpoint_policy(
                 capture_authority=authority,
                 criticality="unsupported",
                 supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+                session=session_decision if requested_state == "both" else None,
             )
         return ResolvedCheckpointPolicy(
             workspace_policy="continue_from_previous_execution",
@@ -148,9 +199,15 @@ def resolve_checkpoint_policy(
             capture_activity=capabilities.checkpoint_capture_activity,
             criticality=capabilities.post_execution_checkpoint_criticality,
             supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+            session=session_decision if requested_state == "both" else None,
         )
 
     if not capabilities.checkpoint_capture_kinds:
+        workspace_decision = CheckpointPlaneDecision(
+            plane="workspace", checkpoint_kind=None, resumable=False,
+            required_evidence=(), authority=authority, capture_activity=None,
+            restore_activity=None, supported_checkpoint_kinds=(),
+        )
         return ResolvedCheckpointPolicy(
             workspace_policy=(
                 _workspace_policy_from_recovery_source(recovery_source)
@@ -163,6 +220,8 @@ def resolve_checkpoint_policy(
             capture_authority=authority,
             criticality=capabilities.post_execution_checkpoint_criticality,
             supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+            session=session_decision if requested_state == "both" else None,
+            workspace=workspace_decision,
         )
 
     preferred_kind = (
@@ -179,6 +238,19 @@ def resolve_checkpoint_policy(
         checkpoint_kind=kind,
         restore_required=token == "before_recovery_restoration",
     )
+    required_evidence = (
+        ("patchRef", "manifestRef")
+        if kind == "git_patch"
+        else ("archiveRef", "manifestRef")
+    )
+    workspace_decision = CheckpointPlaneDecision(
+        plane="workspace", checkpoint_kind=kind,
+        resumable=kind in capabilities.checkpoint_restore_kinds,
+        required_evidence=required_evidence, authority=authority,
+        capture_activity=capabilities.checkpoint_capture_activity,
+        restore_activity=capabilities.checkpoint_restore_activity,
+        supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+    )
     return ResolvedCheckpointPolicy(
         workspace_policy=(
             _workspace_policy_from_recovery_source(recovery_source)
@@ -187,13 +259,11 @@ def resolve_checkpoint_policy(
         ),
         checkpoint_kind=kind,
         resumable=kind in capabilities.checkpoint_restore_kinds,
-        required_evidence=(
-            ("patchRef", "manifestRef")
-            if kind == "git_patch"
-            else ("archiveRef", "manifestRef")
-        ),
+        required_evidence=required_evidence,
         capture_authority=authority,
         capture_activity=capabilities.checkpoint_capture_activity,
         criticality=capabilities.post_execution_checkpoint_criticality,
         supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
+        session=session_decision if requested_state == "both" else None,
+        workspace=workspace_decision,
     )

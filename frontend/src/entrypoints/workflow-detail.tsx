@@ -725,6 +725,10 @@ const RecoveryEligibilitySchema = z
     promotionState: z.string().nullable().optional(),
     liveSessionId: z.string().nullable().optional(),
     supportsSameSessionContinuation: z.boolean().nullable().optional(),
+    sessionRecoverable: z.boolean().nullable().optional(),
+    workspaceRecoverable: z.boolean().nullable().optional(),
+    authoritativeWorkspaceCheckpointKind: z.string().nullable().optional(),
+    partialRecoveryReason: z.string().nullable().optional(),
     operatorGuidance: z.enum(['continue_same_session', 'resume_from_workspace_checkpoint', 'full_retry', 'fix_environment', 'manual_intervention', 'resume', 'needs_human']),
     evidence: z.array(EvidenceRefStatusSchema).default([]),
   })
@@ -6610,6 +6614,18 @@ function RecoveryEvidencePanel({
         ) : null}
         {recovery?.checkpointKind ? (
           <li><strong>Checkpoint kind:</strong> {formatStatusLabel(recovery.checkpointKind)}</li>
+        ) : null}
+        {recovery?.sessionRecoverable != null ? (
+          <li><strong>Session reattach:</strong> {recovery.sessionRecoverable ? 'supported' : 'unavailable'}</li>
+        ) : null}
+        {recovery?.workspaceRecoverable != null ? (
+          <li><strong>Workspace restore:</strong> {recovery.workspaceRecoverable ? 'supported' : 'unavailable'}</li>
+        ) : null}
+        {recovery?.authoritativeWorkspaceCheckpointKind ? (
+          <li><strong>Authoritative workspace checkpoint:</strong> {formatStatusLabel(recovery.authoritativeWorkspaceCheckpointKind)}</li>
+        ) : null}
+        {recovery?.partialRecoveryReason ? (
+          <li><strong>Partial recovery:</strong> {recovery.partialRecoveryReason}</li>
         ) : null}
         {recovery?.runtimeId ? (
           <li><strong>Runtime:</strong> {formatStatusLabel(recovery.runtimeId)}</li>

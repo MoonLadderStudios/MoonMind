@@ -24,6 +24,7 @@ from api_service.db.models import (
 )
 
 from moonmind.omnigent.checkpoints import (
+    CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
     OmnigentRecoveryMode,
     recovery_mode,
@@ -40,6 +41,7 @@ from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _bind_candidate_workspace,
     _failure_evidence,
 )
 from moonmind.provider_profiles.lease_client import (
@@ -102,6 +104,29 @@ def test_failure_evidence_falls_back_when_code_is_none() -> None:
     exc = RuntimeError("failed")
     exc.code = None  # type: ignore[attr-defined]
     assert _failure_evidence(exc)[0] == "RuntimeError"
+
+
+def test_repository_mutation_requirement_is_explicit_or_implied_by_publish() -> None:
+    explicit = AgentExecutionRequest(
+        agentKind="external", agentId="omnigent", correlationId="corr-explicit",
+        idempotencyKey="explicit",
+        parameters={"repositoryMutationRequired": True},
+    )
+    read_only = AgentExecutionRequest(
+        agentKind="external", agentId="omnigent", correlationId="corr-read-only",
+        idempotencyKey="read-only",
+        parameters={},
+    )
+    branch_publish_without_gh = AgentExecutionRequest(
+        agentKind="external", agentId="omnigent", correlationId="corr-branch",
+        idempotencyKey="branch", parameters={"publishMode": "branch"},
+    )
+
+    assert OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(explicit)
+    assert OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(
+        branch_publish_without_gh
+    )
+    assert not OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(read_only)
 
 
 def _binding() -> OmnigentOAuthHostBinding:
@@ -955,6 +980,47 @@ def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> No
             checkpoint,
             new_host_lease_ref="host-lease-1",
             new_session_id="session-2",
+        )
+
+
+def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> None:
+    candidate = CandidateWorkspaceAuthority(
+        loopId="mm:loop-1",
+        attemptOrdinal=2,
+        headRef="artifact://candidate-head/2",
+        headDigest="sha256:" + "a" * 64,
+        checkpointRef="artifact://workspace-checkpoint/2",
+        checkpointDigest="sha256:" + "b" * 64,
+    )
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "mm:loop-1",
+            "idempotencyKey": "attempt-3",
+            "inputRefs": ["artifact://remaining-work/2"],
+        }
+    )
+
+    bound = _bind_candidate_workspace(request, candidate)
+
+    assert bound.parameters["candidateWorkspace"] == candidate.model_dump(
+        by_alias=True, mode="json"
+    )
+    assert bound.input_refs == [
+        "artifact://remaining-work/2",
+        "artifact://candidate-head/2",
+        "artifact://workspace-checkpoint/2",
+    ]
+
+    with pytest.raises(ValidationError, match="durable artifact reference"):
+        CandidateWorkspaceAuthority(
+            loopId="mm:loop-1",
+            attemptOrdinal=2,
+            headRef="/workspaces/original-root",
+            headDigest="sha256:" + "a" * 64,
+            checkpointRef="artifact://workspace-checkpoint/2",
+            checkpointDigest="sha256:" + "b" * 64,
         )
 
 

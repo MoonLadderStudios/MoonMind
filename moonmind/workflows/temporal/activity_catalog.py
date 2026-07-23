@@ -621,6 +621,16 @@ def build_default_activity_catalog(
             heartbeat_required=True,
         ),
         TemporalActivityDefinition(
+            activity_type="workspace.apply_checkpoint",
+            family="workspace",
+            capability_class="sandbox",
+            task_queue=cfg.activity_sandbox_task_queue,
+            fleet=SANDBOX_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 300, heartbeat_timeout_seconds=30),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
             activity_type="workspace.apply_policy",
             family="workspace",
             capability_class="sandbox",

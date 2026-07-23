@@ -2217,6 +2217,9 @@ describe('Workflow Detail Entrypoint', () => {
               checkpointRef: 'artifact://checkpoint/before',
               sourceWorkflowId: 'wf-source',
               sourceRunId: 'run-source',
+              sessionRecoverable: false,
+              workspaceRecoverable: true,
+              authoritativeWorkspaceCheckpointKind: 'worktree_archive',
               operatorGuidance: 'resume',
               evidence: [
                 {
@@ -2253,6 +2256,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
     expect(screen.getByText(/Resume from checkpoint is the default recovery action/)).toBeTruthy();
     expect(screen.getByText('artifact://checkpoint/before')).toBeTruthy();
+    expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('unavailable');
+    expect(screen.getByText('Workspace restore:').parentElement?.textContent).toContain('supported');
+    expect(screen.getByText('Authoritative workspace checkpoint:').parentElement?.textContent).toContain('worktree archive');
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/executions/test-123/steps/apply/step-executions/2?source=temporal',
       { credentials: 'include' },

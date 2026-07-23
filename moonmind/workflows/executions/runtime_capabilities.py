@@ -21,7 +21,7 @@ WorkspaceAuthority = Literal[
 ]
 CheckpointCriticality = Literal["required", "recoverability_only", "unsupported"]
 
-CAPABILITY_SET_VERSION = "runtime-execution-capabilities-v2"
+CAPABILITY_SET_VERSION = "runtime-execution-capabilities-v3"
 CheckpointResumePhase = Literal[
     "rerun_failed_step", "continue_to_gate", "continue_after_gate",
     "resume_publication", "retry_restoration",
@@ -32,18 +32,123 @@ class RuntimeCapabilityError(ValueError):
     """Raised when a runtime or capability/workspace combination is invalid."""
 
 
+class AgentIdentityCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    agent_kind: Literal["managed", "external"] = Field(..., alias="agentKind")
+    agent_id: NonBlankStr = Field(..., alias="agentId")
+    harness: str | None = None
+
+
+class SessionStateCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    authority: WorkspaceAuthority
+    checkpoint_kinds: tuple[str, ...] = Field(default=(), alias="checkpointKinds")
+    capture_activity: str | None = Field(None, alias="captureActivity")
+    restore_owner: str | None = Field(None, alias="restoreOwner")
+    required_evidence: tuple[str, ...] = Field(default=(), alias="requiredEvidence")
+    supports_live_reattach: bool = Field(False, alias="supportsLiveReattach")
+    supports_cold_session: bool = Field(False, alias="supportsColdSession")
+
+    @model_validator(mode="after")
+    def _validate_capture(self) -> "SessionStateCapability":
+        if bool(self.checkpoint_kinds) != bool(self.capture_activity):
+            raise ValueError("session checkpoint kinds and capture activity must be declared together")
+        if self.supports_cold_session and not self.restore_owner:
+            raise ValueError("cold session support must name its restore owner")
+        return self
+
+
+class WorkspaceStateCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    authority: WorkspaceAuthority
+    locator_kinds: tuple[str, ...] = Field(default=(), alias="locatorKinds")
+    checkpoint_kinds: tuple[str, ...] = Field(default=(), alias="checkpointKinds")
+    restore_kinds: tuple[str, ...] = Field(default=(), alias="restoreKinds")
+    capture_activity: str | None = Field(None, alias="captureActivity")
+    restore_activity: str | None = Field(None, alias="restoreActivity")
+    artifact_contract_version: str | None = Field(None, alias="artifactContractVersion")
+    digest_required: bool = Field(False, alias="digestRequired")
+    boundary_support: dict[str, tuple[CheckpointResumePhase, ...]] = Field(
+        default_factory=dict, alias="boundarySupport"
+    )
+
+    @model_validator(mode="after")
+    def _validate_checkpoint_contract(self) -> "WorkspaceStateCapability":
+        if bool(self.checkpoint_kinds) != bool(self.capture_activity):
+            raise ValueError("workspace checkpoint kinds and capture activity must be declared together")
+        if bool(self.restore_kinds) != bool(self.restore_activity):
+            raise ValueError("workspace restore kinds and activity must be declared together")
+        if self.restore_kinds and (not self.artifact_contract_version or not self.boundary_support):
+            raise ValueError("workspace restore support requires artifact contract and boundaries")
+        if self.authority == "moonmind_sandbox" and self.locator_kinds != ("sandbox",):
+            raise ValueError("MoonMind sandbox workspace authority requires sandbox locators")
+        return self
+
+
+class HostModeCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    mode: NonBlankStr
+    repository_mutation_isolated: bool = Field(False, alias="repositoryMutationIsolated")
+    github_credentials_isolated: bool = Field(False, alias="githubCredentialsIsolated")
+
+
+class HostRealizationCapability(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    owner: NonBlankStr
+    mode_capabilities: tuple[HostModeCapability, ...] = Field(
+        default=(), alias="modeCapabilities"
+    )
+    lease_owner: str | None = Field(None, alias="leaseOwner")
+    cleanup_owner: str | None = Field(None, alias="cleanupOwner")
+    workspace_mount_target: str | None = Field(None, alias="workspaceMountTarget")
+
+    @model_validator(mode="after")
+    def _validate_modes(self) -> "HostRealizationCapability":
+        modes = tuple(item.mode for item in self.mode_capabilities)
+        if len(modes) != len(set(modes)):
+            raise ValueError("host realization modes must be unique")
+        return self
+
+    def require_mode(
+        self, mode: str, *, repository_mutation: bool = False,
+        github_credentials: bool = False,
+    ) -> HostModeCapability:
+        selected = next((item for item in self.mode_capabilities if item.mode == mode), None)
+        if selected is None:
+            raise RuntimeCapabilityError(f"unsupported host realization mode '{mode}'")
+        if repository_mutation and not selected.repository_mutation_isolated:
+            raise RuntimeCapabilityError(
+                f"host realization mode '{mode}' does not isolate repository mutation"
+            )
+        if github_credentials and not selected.github_credentials_isolated:
+            raise RuntimeCapabilityError(
+                f"host realization mode '{mode}' does not isolate GitHub credentials"
+            )
+        return selected
+
+
 class RuntimeExecutionCapabilities(BaseModel):
     """Compact runtime-neutral policy snapshot recorded with an execution."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     capability_set_version: Literal[
-        "runtime-execution-capabilities-v1", "runtime-execution-capabilities-v2"
+        "runtime-execution-capabilities-v1", "runtime-execution-capabilities-v2",
+        "runtime-execution-capabilities-v3",
     ] = Field(
-        CAPABILITY_SET_VERSION, alias="capabilitySetVersion"
+        "runtime-execution-capabilities-v2", alias="capabilitySetVersion"
     )
     runtime_id: NonBlankStr = Field(..., alias="runtimeId")
     runtime_family: str | None = Field(None, alias="runtimeFamily")
+    agent_identity: AgentIdentityCapability | None = Field(None, alias="agentIdentity")
+    session_state: SessionStateCapability | None = Field(None, alias="sessionState")
+    workspace_state: WorkspaceStateCapability | None = Field(None, alias="workspaceState")
+    host_realization: HostRealizationCapability | None = Field(None, alias="hostRealization")
     workspace_authority: WorkspaceAuthority = Field(..., alias="workspaceAuthority")
     checkpoint_capture_kinds: tuple[str, ...] = Field(
         default=(), alias="checkpointCaptureKinds"
@@ -82,6 +187,27 @@ class RuntimeExecutionCapabilities(BaseModel):
 
     @model_validator(mode="after")
     def _validate_claims(self) -> "RuntimeExecutionCapabilities":
+        if self.capability_set_version == CAPABILITY_SET_VERSION:
+            if not all((self.agent_identity, self.session_state, self.workspace_state, self.host_realization)):
+                raise ValueError("v3 capability snapshots require identity, session, workspace, and host planes")
+            assert self.workspace_state is not None
+            if self.workspace_authority != self.workspace_state.authority:
+                raise ValueError("workspace authority contradicts workspace state plane")
+            if self.checkpoint_capture_kinds != self.workspace_state.checkpoint_kinds:
+                raise ValueError("checkpoint capture kinds contradict workspace state plane")
+            if self.checkpoint_restore_kinds != self.workspace_state.restore_kinds:
+                raise ValueError("checkpoint restore kinds contradict workspace state plane")
+            if self.checkpoint_capture_activity != self.workspace_state.capture_activity:
+                raise ValueError("checkpoint capture activity contradicts workspace state plane")
+            if self.checkpoint_restore_activity != self.workspace_state.restore_activity:
+                raise ValueError("checkpoint restore activity contradicts workspace state plane")
+            if (
+                self.checkpoint_artifact_contract_version
+                != self.workspace_state.artifact_contract_version
+            ):
+                raise ValueError("checkpoint artifact contract contradicts workspace state plane")
+            if self.checkpoint_boundary_support != self.workspace_state.boundary_support:
+                raise ValueError("checkpoint boundary support contradicts workspace state plane")
         if bool(self.checkpoint_capture_kinds) != bool(self.checkpoint_capture_activity):
             raise ValueError("checkpoint capture kinds and activity must be declared together")
         if bool(self.checkpoint_restore_kinds) != bool(self.checkpoint_restore_activity):
@@ -121,6 +247,35 @@ class RuntimeExecutionCapabilities(BaseModel):
 
 
 def _descriptor(**values: Any) -> RuntimeExecutionCapabilities:
+    values.setdefault("capabilitySetVersion", CAPABILITY_SET_VERSION)
+    runtime_id = values["runtimeId"]
+    authority = values["workspaceAuthority"]
+    capture_kinds = tuple(values.get("checkpointCaptureKinds", ()))
+    restore_kinds = tuple(values.get("checkpointRestoreKinds", ()))
+    capture_activity = values.get("checkpointCaptureActivity")
+    restore_activity = values.get("checkpointRestoreActivity")
+    contract_version = values.get("checkpointArtifactContractVersion")
+    boundaries = values.get("checkpointBoundarySupport", {})
+    values.setdefault("agentIdentity", {
+        "agentKind": "external" if values.get("runtimeFamily") == "external_provider" else "managed",
+        "agentId": runtime_id,
+    })
+    values.setdefault("sessionState", {
+        "authority": authority,
+        "supportsLiveReattach": values.get("supportsSameSessionContinuation", False),
+    })
+    values.setdefault("workspaceState", {
+        "authority": authority,
+        "locatorKinds": ({"moonmind_sandbox": ("sandbox",), "managed_runtime": ("managed_runtime",), "external_provider": ("external_state",)}.get(authority, ())),
+        "checkpointKinds": capture_kinds,
+        "restoreKinds": restore_kinds,
+        "captureActivity": capture_activity,
+        "restoreActivity": restore_activity,
+        "artifactContractVersion": contract_version,
+        "digestRequired": bool(restore_kinds),
+        "boundarySupport": boundaries or ({"before_execution": ("rerun_failed_step",)} if restore_kinds else {}),
+    })
+    values.setdefault("hostRealization", {"owner": "moonmind" if authority != "external_provider" else "external_provider"})
     return RuntimeExecutionCapabilities(**values).with_digest()
 
 
@@ -165,14 +320,56 @@ _DESCRIPTORS = (
     ),
     _descriptor(
         runtimeId="omnigent", runtimeFamily="external_provider",
-        workspaceAuthority="external_provider",
-        checkpointCaptureKinds=("external_state_ref",),
-        checkpointRestoreKinds=("external_state_ref",),
-        # This activity persists an already-produced external state reference;
-        # it never resolves or reads an external provider workspace path.
+        agentIdentity={"agentKind": "external", "agentId": "omnigent", "harness": "codex-native"},
+        sessionState={
+            "authority": "external_provider",
+            "checkpointKinds": ("external_state_ref",),
+            "captureActivity": "workspace.capture_checkpoint",
+            "restoreOwner": "integration.omnigent.profile_bound_execute",
+            "requiredEvidence": ("externalStateRef", "runtimeSessionId", "firstMessageEvidenceRef"),
+            "supportsLiveReattach": True,
+            "supportsColdSession": True,
+        },
+        workspaceAuthority="moonmind_sandbox",
+        checkpointCaptureKinds=("worktree_archive",),
+        checkpointRestoreKinds=("worktree_archive",),
         checkpointCaptureActivity="workspace.capture_checkpoint",
-        checkpointRestoreActivity="integration.omnigent.execute",
-        checkpointArtifactContractVersion="external-state-ref-v1",
+        checkpointRestoreActivity="workspace.apply_checkpoint",
+        checkpointArtifactContractVersion="workspace-checkpoint-v1",
+        checkpointBoundarySupport={
+            "after_execution": ("continue_to_gate",),
+            "after_gate": ("continue_after_gate",),
+            "before_publication": ("resume_publication",),
+            "before_execution": ("rerun_failed_step",),
+        },
+        workspaceState={
+            "authority": "moonmind_sandbox", "locatorKinds": ("sandbox",),
+            "checkpointKinds": ("worktree_archive",), "restoreKinds": ("worktree_archive",),
+            "captureActivity": "workspace.capture_checkpoint",
+            "restoreActivity": "workspace.apply_checkpoint",
+            "artifactContractVersion": "workspace-checkpoint-v1", "digestRequired": True,
+            "boundarySupport": {
+                "after_execution": ("continue_to_gate",), "after_gate": ("continue_after_gate",),
+                "before_publication": ("resume_publication",), "before_execution": ("rerun_failed_step",),
+            },
+        },
+        hostRealization={
+            "owner": "moonmind", "modeCapabilities": (
+                {
+                    "mode": "static_compose",
+                    "repositoryMutationIsolated": False,
+                    "githubCredentialsIsolated": False,
+                },
+                {
+                    "mode": "on_demand_docker",
+                    "repositoryMutationIsolated": True,
+                    "githubCredentialsIsolated": True,
+                },
+            ),
+            "leaseOwner": "integration.omnigent.profile_bound_execute",
+            "cleanupOwner": "integration.omnigent.profile_bound_execute",
+            "workspaceMountTarget": "/workspaces/run",
+        },
         supportsSameSessionContinuation=True,
         terminalContractIds=("omnigent_execution_terminal_v1",),
         postExecutionCheckpointCriticality="required",
@@ -261,6 +458,12 @@ def validate_runtime_preflight(
             f"runtime '{capabilities.runtime_id}' owns '{capabilities.workspace_authority}' "
             f"workspaces, not '{requested_authority}'"
         )
+    if workspace_locator and capabilities.workspace_state:
+        locator_kind = str(workspace_locator.get("kind") or "").strip()
+        if locator_kind not in capabilities.workspace_state.locator_kinds:
+            raise RuntimeCapabilityError(
+                f"runtime '{capabilities.runtime_id}' does not accept workspace locator kind '{locator_kind}'"
+            )
     if checkpoint_kind and checkpoint_kind not in capabilities.checkpoint_capture_kinds:
         raise RuntimeCapabilityError(
             f"runtime '{capabilities.runtime_id}' cannot capture checkpoint kind "
@@ -279,7 +482,8 @@ def validate_runtime_preflight(
 
 __all__ = [
     "CAPABILITY_SET_VERSION", "RUNTIME_EXECUTION_CAPABILITIES",
-    "RuntimeCapabilityError", "RuntimeExecutionCapabilities",
+    "AgentIdentityCapability", "HostRealizationCapability", "RuntimeCapabilityError",
+    "RuntimeExecutionCapabilities", "SessionStateCapability", "WorkspaceStateCapability",
     "RuntimeExecutionCapabilityRegistry", "resolve_runtime_execution_capabilities",
     "validate_runtime_preflight", "workspace_authority_from_locator",
 ]

@@ -16,6 +16,7 @@ from api_service.services.provider_profile_readiness import (
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
+    CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
     OmnigentRecoveryMode,
     recovery_mode,
@@ -39,6 +40,10 @@ from moonmind.provider_profiles.lease_client import (
 )
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.workflows.executions.runtime_capabilities import (
+    RuntimeCapabilityError,
+    resolve_runtime_execution_capabilities,
+)
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
@@ -161,6 +166,30 @@ def _bind_exact_host(
     omnigent["_moonmindProfileAuthorization"] = dict(profile_authorization)
     parameters["omnigent"] = omnigent
     return request.model_copy(update={"parameters": parameters})
+
+
+def _bind_candidate_workspace(
+    request: AgentExecutionRequest,
+    candidate: CandidateWorkspaceAuthority,
+) -> AgentExecutionRequest:
+    """Bind continuation to the exact MoonMind checkpoint, never a workspace root."""
+
+    parameters = dict(request.parameters or {})
+    parameters["candidateWorkspace"] = candidate.model_dump(by_alias=True, mode="json")
+    return request.model_copy(
+        update={
+            "parameters": parameters,
+            "input_refs": list(
+                dict.fromkeys(
+                    [
+                        *request.input_refs,
+                        candidate.head_ref,
+                        candidate.checkpoint_ref,
+                    ]
+                )
+            ),
+        }
+    )
 
 
 class OmnigentProfileBoundExecutionCoordinator:
@@ -342,6 +371,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                     provider_profile_id=profile_id,
                 )
+            try:
+                host_capabilities = resolve_runtime_execution_capabilities(
+                    "omnigent"
+                ).host_realization
+                assert host_capabilities is not None
+                host_capabilities.require_mode(
+                    str(effective_launch["hostMode"]),
+                    repository_mutation=self._repository_mutation_required(request),
+                    github_credentials=self._github_mutation_required(request),
+                )
+            except RuntimeCapabilityError as exc:
+                raise OmnigentOAuthHostError(
+                    str(exc), code="OMNIGENT_HOST_MODE_CAPABILITY_UNSUPPORTED"
+                ) from exc
             await emit(
                 "effective_launch_compiled",
                 "completed",
@@ -760,6 +803,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         session_valid: bool,
         first_message_consistent: bool,
         current_credential_generation: int,
+        candidate_workspace: CandidateWorkspaceAuthority,
     ) -> AgentRunResult:
         """Live-reattach when safe; otherwise cold-restore on a new lease/session."""
 
@@ -774,12 +818,13 @@ class OmnigentProfileBoundExecutionCoordinator:
         if mode == OmnigentRecoveryMode.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
-            live_request = request.model_copy(
+            live_request = _bind_candidate_workspace(request, candidate_workspace)
+            live_request = live_request.model_copy(
                 update={
                     "idempotency_key": checkpoint.idempotency_key,
                     "input_refs": list(
                         dict.fromkeys(
-                            [*request.input_refs, checkpoint.external_state_ref]
+                            [*live_request.input_refs, checkpoint.external_state_ref]
                         )
                     ),
                 }
@@ -812,6 +857,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             "mode": "cold_restore",
             "externalStateRef": checkpoint.external_state_ref,
             "sourceBridgeSessionId": checkpoint.bridge_session_id,
+            "candidateWorkspace": candidate_workspace.model_dump(
+                by_alias=True, mode="json"
+            ),
         }
         return await self.execute(
             request.model_copy(
@@ -820,7 +868,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "parameters": parameters,
                     "input_refs": list(
                         dict.fromkeys(
-                            [*request.input_refs, checkpoint.external_state_ref]
+                            [
+                                *request.input_refs,
+                                checkpoint.external_state_ref,
+                                candidate_workspace.head_ref,
+                                candidate_workspace.checkpoint_ref,
+                            ]
                         )
                     ),
                 }
@@ -833,6 +886,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         request: AgentExecutionRequest,
         checkpoint: OmnigentCheckpointIdentity,
         current_credential_generation: int,
+        candidate_workspace: CandidateWorkspaceAuthority,
     ) -> AgentRunResult:
         """Create a new capacity-gated host lease and session from checkpoint refs."""
 
@@ -848,6 +902,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             "mode": "branch",
             "externalStateRef": checkpoint.external_state_ref,
             "sourceBridgeSessionId": checkpoint.bridge_session_id,
+            "candidateWorkspace": candidate_workspace.model_dump(
+                by_alias=True, mode="json"
+            ),
         }
         return await self.execute(
             request.model_copy(
@@ -855,7 +912,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "parameters": parameters,
                     "input_refs": list(
                         dict.fromkeys(
-                            [*request.input_refs, checkpoint.external_state_ref]
+                            [
+                                *request.input_refs,
+                                checkpoint.external_state_ref,
+                                candidate_workspace.head_ref,
+                                candidate_workspace.checkpoint_ref,
+                            ]
                         )
                     ),
                 }
@@ -942,6 +1004,23 @@ class OmnigentProfileBoundExecutionCoordinator:
         return isinstance(side_effect, Mapping) and bool(
             str(side_effect.get("kind") or "").strip()
         )
+
+    @staticmethod
+    def _repository_mutation_required(request: AgentExecutionRequest) -> bool:
+        parameters = request.parameters or {}
+        if bool(parameters.get("repositoryMutationRequired")):
+            return True
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"", "none"}:
+            return True
+        skill = parameters.get("skill")
+        if isinstance(skill, Mapping):
+            side_effect = skill.get("sideEffect")
+            if isinstance(side_effect, Mapping) and str(
+                side_effect.get("kind") or ""
+            ).strip():
+                return True
+        return False
 
 
 __all__ = ["OmnigentProfileBoundExecutionCoordinator"]
