@@ -102,7 +102,7 @@ async def test_emit_recovery_manifest_writes_artifact_and_compact_summary(
     capabilities = resolve_runtime_execution_capabilities("omnigent")
     assert capabilities is not None
     workflow._step_workspace_capture_inputs["run-tests"] = {
-        "kind": "external_state_ref",
+        "kind": "worktree_archive",
         "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
     }
 
@@ -141,13 +141,53 @@ async def test_emit_recovery_manifest_writes_artifact_and_compact_summary(
     assert payload["lastAcceptedStep"]["logicalStepId"] == "prepare"
     assert payload["validation"]["result"] == "valid"
     assert payload["resumeAllowed"] is True
-    assert payload["recoveryEligibility"]["checkpointKind"] == "external_state_ref"
+    assert payload["recoveryEligibility"]["checkpointKind"] == "worktree_archive"
     # Compact, execution-linked summary.
     assert summary["resumeAllowed"] is True
     assert summary["failedLogicalStepId"] == "run-tests"
     assert summary["checkpointRef"] == "artifact://checkpoint/before"
     assert summary["manifestRef"] == "artifact-1"
     assert workflow._recovery_manifest_ref == "artifact-1"
+
+
+@pytest.mark.asyncio
+async def test_recovery_manifest_freezes_hybrid_planes_without_inferred_session_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the workflow boundary used to project a v3 hybrid snapshot."""
+
+    _configure(monkeypatch, patched=True)
+    workflow = MoonMindRunWorkflow()
+    _seed_failed_run(workflow)
+    capabilities = resolve_runtime_execution_capabilities("omnigent")
+    workflow._step_workspace_capture_inputs["run-tests"] = {
+        "kind": "worktree_archive",
+        "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
+    }
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(payload)
+        return "artifact-hybrid-manifest"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    summary, manifest_ref = await workflow._emit_failed_run_recovery_manifest()
+
+    assert manifest_ref == "artifact-hybrid-manifest"
+    assert summary is not None and summary["resumeAllowed"] is True
+    eligibility = writes[0]["recoveryEligibility"]
+    assert eligibility["capabilitySetVersion"] == "runtime-execution-capabilities-v3"
+    assert eligibility["sessionRecoverable"] is False
+    assert eligibility["workspaceRecoverable"] is True
+    rendered = str(writes[0])
+    assert "workspacePath" not in rendered
+    assert "githubToken" not in rendered
 
 
 @pytest.mark.asyncio

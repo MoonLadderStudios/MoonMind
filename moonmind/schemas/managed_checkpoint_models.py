@@ -42,7 +42,9 @@ class ManagedWorkspaceCheckpointCaptureInput(BaseModel):
         "codex_cli", alias="expectedRuntimeId"
     )
     capability_set_version: Literal[
-        "runtime-execution-capabilities-v1", "runtime-execution-capabilities-v2"
+        "runtime-execution-capabilities-v1",
+        "runtime-execution-capabilities-v2",
+        "runtime-execution-capabilities-v3",
     ] = Field(
         ..., alias="capabilitySetVersion"
     )

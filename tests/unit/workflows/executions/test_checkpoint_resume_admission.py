@@ -58,7 +58,7 @@ def test_codex_capability_and_admitted_decision_are_frozen() -> None:
     decision = _decision()
     assert decision.admitted is True
     assert decision.restore_activity == "agent_runtime.restore_workspace_checkpoint"
-    assert decision.runtime_capabilities.capability_set_version.endswith("v2")
+    assert decision.runtime_capabilities.capability_set_version.endswith("v3")
     assert decision.runtime_capabilities.checkpoint_artifact_contract_version
 
 

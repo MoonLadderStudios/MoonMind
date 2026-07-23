@@ -3807,7 +3807,11 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     monkeypatch.setattr(
         run_module.workflow,
         "patched",
-        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+        lambda patch_id: patch_id in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+        },
     )
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
@@ -3844,16 +3848,9 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     ) -> dict[str, Any]:
         captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
         if activity == "workspace.capture_checkpoint":
-            assert payload["kind"] == "external_state_ref"
-            return {
-                "status": "captured",
-                "workspace": {
-                    "kind": "external_state_ref",
-                    "externalStateRef": "artifact://omnigent/state",
-                    "createdAt": "2026-06-13T12:00:00+00:00",
-                },
-                "diagnosticRefs": ["artifact://omnigent/manifest"],
-            }
+            assert payload["kind"] == "worktree_archive"
+            assert payload["workspaceLocator"]["kind"] == "sandbox"
+            return _managed_checkpoint_capture_result(payload)
         assert activity == "step_checkpoint.create"
         return _checkpoint_create_result(payload)
 
@@ -3878,10 +3875,10 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
         ("workspace.capture_checkpoint", "before_execution"),
         ("step_checkpoint.create", "before_execution"),
     ]
-    assert captured[0]["payload"]["kind"] == "external_state_ref"
-    assert captured[1]["payload"]["workspace"]["kind"] == "external_state_ref"
+    assert captured[0]["payload"]["kind"] == "worktree_archive"
+    assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
     assert "patchRef" not in captured[1]["payload"]["workspace"]
-    assert "archiveRef" not in captured[1]["payload"]["workspace"]
+    assert "archiveRef" in captured[1]["payload"]["workspace"]
 
 
 def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None:
@@ -3900,7 +3897,7 @@ def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None
     capture = workflow._step_workspace_capture_inputs["implement"]
     assert capture["workspacePath"] == "/work/agent_jobs/run-1/repo"
     assert capture["baseCommit"] == "abc123"
-    assert capture["captureAuthority"] == "external_provider"
+    assert capture["captureAuthority"] == "moonmind_sandbox"
     assert capture["runtimeCapabilities"]["runtimeId"] == "omnigent"
     assert "kind" not in capture
 
