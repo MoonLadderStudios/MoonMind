@@ -328,6 +328,18 @@ from .temporal_signal_contracts import (
     SlotAssignedSignal,
     SyncProfilesSignal,
 )
+from .workflow_recovery_models import (
+    RECOVERY_ADMISSION_REASONS,
+    TARGET_PHASE_BOUNDARIES,
+    RecoveryAdmissionDimensionModel,
+    RecoveryCheckpointTargetModel,
+    RecoveryContinuationModel,
+    RecoveryDestinationModel,
+    RecoverySourceIdentityModel,
+    RecoveryTargetModel,
+    WorkflowRecoveryTargetModel,
+    deterministic_recovery_creation_key,
+)
 _WORKFLOW_MODEL_EXPORTS = {
     "CreateWorkflowRunRequest",
     "WorkflowRunModel",
@@ -348,6 +360,16 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
+    "RECOVERY_ADMISSION_REASONS",
+    "TARGET_PHASE_BOUNDARIES",
+    "RecoveryAdmissionDimensionModel",
+    "RecoveryCheckpointTargetModel",
+    "RecoveryContinuationModel",
+    "RecoveryDestinationModel",
+    "RecoverySourceIdentityModel",
+    "RecoveryTargetModel",
+    "WorkflowRecoveryTargetModel",
+    "deterministic_recovery_creation_key",
     "SecretRef",
     "AuthItem",
     "Defaults",

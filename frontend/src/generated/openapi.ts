@@ -2065,6 +2065,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recover Execution
+         * @description Create a typed recovery destination without mutating its terminal source.
+         */
+        post: operations["recover_execution_api_executions__workflow_id__recover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/recover-from-failed-step": {
         parameters: {
             query?: never;
@@ -10027,6 +10047,40 @@ export interface components {
             updatedAt?: string | null;
         };
         /**
+         * RecoverExecutionResponse
+         * @description Response from the canonical typed recovery command.
+         */
+        RecoverExecutionResponse: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Applied
+             * @default created_recovery_execution
+             * @constant
+             */
+            applied: "created_recovery_execution";
+            /**
+             * Targetkind
+             * @enum {string}
+             */
+            targetKind: "failed_step" | "control_stop" | "publication" | "restoration_failure";
+            /**
+             * Continuationphase
+             * @enum {string}
+             */
+            continuationPhase: "rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "continue_to_remediation" | "resume_publication" | "retry_restoration";
+            source: components["schemas"]["ResumeExecutionRefModel"];
+            execution: components["schemas"]["ResumeExecutionRefModel"];
+            /** Recoverycheckpointref */
+            recoveryCheckpointRef: string;
+            /** Creationkey */
+            creationKey: string;
+        };
+        /**
          * RecoverFromFailedStepRequest
          * @description Request payload for creating a failed-step recovery follow-up execution.
          */
@@ -10136,6 +10190,52 @@ export interface components {
             /** Selectedstartstepid */
             selectedStartStepId: string;
         };
+        /** RecoveryCheckpointTargetModel */
+        RecoveryCheckpointTargetModel: {
+            /** Ref */
+            ref: string;
+            /** Boundary */
+            boundary: string;
+            /** Kind */
+            kind: string;
+            /** Digest */
+            digest: string;
+            /** Validationref */
+            validationRef: string;
+            /** Sourceworkspaceref */
+            sourceWorkspaceRef?: string | null;
+        };
+        /** RecoveryContinuationModel */
+        RecoveryContinuationModel: {
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "continue_to_remediation" | "resume_publication" | "retry_restoration";
+            /** Remainingworkref */
+            remainingWorkRef?: string | null;
+            /** Workspaceheadref */
+            workspaceHeadRef?: string | null;
+            /** Priorbudgetref */
+            priorBudgetRef?: string | null;
+            /** Newbudgetref */
+            newBudgetRef?: string | null;
+        };
+        /** RecoveryDestinationModel */
+        RecoveryDestinationModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId?: string | null;
+            /** Creationkey */
+            creationKey: string;
+            /** Runtimeid */
+            runtimeId: string;
+            /** Executionprofileref */
+            executionProfileRef: string;
+            /** Workspacereservationid */
+            workspaceReservationId: string;
+        };
         /**
          * RecoveryEligibilityDiagnosticModel
          * @description Typed fail-closed checkpoint Resume decision for API and UI surfaces.
@@ -10159,7 +10259,7 @@ export interface components {
             /** Checkpointboundary */
             checkpointBoundary?: string | null;
             /** Resumephase */
-            resumePhase?: ("rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "resume_publication" | "retry_restoration") | null;
+            resumePhase?: ("rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "continue_to_remediation" | "resume_publication" | "retry_restoration") | null;
             /** Checkpointkind */
             checkpointKind?: string | null;
             /** Targetruntimeid */
@@ -10208,6 +10308,49 @@ export interface components {
             deploymentGeneration?: string | null;
             /** Promotionstate */
             promotionState?: string | null;
+        };
+        /** RecoverySourceIdentityModel */
+        RecoverySourceIdentityModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Planref */
+            planRef?: string | null;
+            /** Plandigest */
+            planDigest?: string | null;
+            /** Taskinputsnapshotref */
+            taskInputSnapshotRef: string;
+        };
+        /** RecoveryTargetModel */
+        RecoveryTargetModel: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "failed_step" | "control_stop" | "publication" | "restoration_failure";
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Sourcestepexecutionid */
+            sourceStepExecutionId?: string | null;
+            /** Controlstopkind */
+            controlStopKind?: string | null;
+            /** Reasoncode */
+            reasonCode?: string | null;
+            /** Gateresultref */
+            gateResultRef?: string | null;
+            /** Acceptedcandidateref */
+            acceptedCandidateRef?: string | null;
+            /** Publicationobservationref */
+            publicationObservationRef?: string | null;
+            /** Publicationidempotencykey */
+            publicationIdempotencyKey?: string | null;
+            /** Restoreoperationid */
+            restoreOperationId?: string | null;
+            /** Restoreidempotencykey */
+            restoreIdempotencyKey?: string | null;
+            /** Partialrestorationref */
+            partialRestorationRef?: string | null;
         };
         /**
          * RecurringWorkflowActionPermissionsModel
@@ -12499,6 +12642,44 @@ export interface components {
          * @enum {string}
          */
         WorkflowProposalStatus: "open" | "promoted" | "dismissed" | "accepted" | "rejected";
+        /**
+         * WorkflowRecoveryTargetModel
+         * @description Frozen, bounded input shared by the API and recovery workflow.
+         */
+        WorkflowRecoveryTargetModel: {
+            /**
+             * Schemaversion
+             * @default workflow-recovery-target/v1
+             * @constant
+             */
+            schemaVersion: "workflow-recovery-target/v1";
+            /**
+             * Recoveryaction
+             * @default recover
+             * @constant
+             */
+            recoveryAction: "recover";
+            target: components["schemas"]["RecoveryTargetModel"];
+            source: components["schemas"]["RecoverySourceIdentityModel"];
+            checkpoint: components["schemas"]["RecoveryCheckpointTargetModel"];
+            continuation: components["schemas"]["RecoveryContinuationModel"];
+            /** Capabilitysnapshot */
+            capabilitySnapshot: {
+                [key: string]: unknown;
+            };
+            /**
+             * Preservedsteprefs
+             * @default []
+             */
+            preservedStepRefs: string[];
+            /** Sideeffectdispositionref */
+            sideEffectDispositionRef: string;
+            /** Sideeffectsafe */
+            sideEffectSafe: boolean;
+            /** Sideeffectreconciliationref */
+            sideEffectReconciliationRef?: string | null;
+            destination: components["schemas"]["RecoveryDestinationModel"];
+        };
         /**
          * WorkflowRunStatus
          * @description Lifecycle states tracked for Spec workflow runs.
@@ -16698,6 +16879,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recover_execution_api_executions__workflow_id__recover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRecoveryTargetModel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoverExecutionResponse"];
                 };
             };
             /** @description Validation Error */
