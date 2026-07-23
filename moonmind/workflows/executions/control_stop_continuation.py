@@ -328,3 +328,51 @@ class ControlStopContinuationContract(BaseModel):
             "capabilityDigest": self.restore_capability_digest,
             "idempotencyKey": f"{self.destination_workflow_id}:restore",
         }
+
+    def remediation_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the first profile-bound semantic operation after restore."""
+
+        attempt = self.source_budget.consumed_attempts + 1
+        step_execution_id = (
+            f"{self.destination_workflow_id}:remediation:execution:{attempt}"
+        )
+        return {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "executionProfileRef": self.lane.provider_profile_id,
+            "correlationId": self.destination_workflow_id,
+            "idempotencyKey": step_execution_id,
+            "instructionRef": self.remaining_work_ref,
+            "inputRefs": [
+                self.remaining_work_ref,
+                self.gate_result_ref,
+                self.plan_ref,
+                self.task_input_snapshot_ref,
+            ],
+            "workspaceSpec": {
+                "workspaceLocator": destination_workspace_locator,
+                "workspacePolicy": "continue_from_restored_control_stop",
+            },
+            "parameters": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "remediation",
+                "stepExecutionId": step_execution_id,
+                "attemptOrdinal": attempt,
+                "providerProfileId": self.lane.provider_profile_id,
+                "providerProfileGeneration": self.lane.provider_profile_generation,
+                "executionProfileRef": self.lane.execution_profile_id,
+                "launchPolicyRef": self.lane.launch_policy_ref,
+                "sourceWorkflowId": self.source_workflow_id,
+                "sourceRunId": self.source_run_id,
+                "controlStopId": self.control_stop_id,
+                "continuationBudget": self.continuation_budget.model_dump(
+                    by_alias=True, mode="json"
+                ),
+            },
+        }
