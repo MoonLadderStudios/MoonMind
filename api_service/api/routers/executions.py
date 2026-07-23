@@ -6837,6 +6837,24 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     memo = dict(getattr(record, "memo", None) or {})
+    persisted_finish_summary = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(persisted_finish_summary)
+        if isinstance(persisted_finish_summary, Mapping)
+        else (_finish_summary_from_memo(memo) or {})
+    )
+    control_stop = (
+        finish_summary.get("controlStop")
+        if isinstance(finish_summary, Mapping)
+        else None
+    )
+    control_stop = control_stop if isinstance(control_stop, Mapping) else {}
+    metrics = control_stop.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    auxiliary_outcomes = control_stop.get("auxiliaryOutcomes")
+    auxiliary_outcomes = (
+        auxiliary_outcomes if isinstance(auxiliary_outcomes, Mapping) else {}
+    )
     waiting_reason = (
         str(getattr(record, "waiting_reason", "") or "").strip()
         or str(memo.get("waiting_reason") or "").strip()
@@ -6954,6 +6972,13 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         and resume_evidence_disabled_reason is None
     ):
         enabled = enabled | {"can_failed_step_resume"}
+    if raw_state == "failed":
+        enabled = enabled | {"can_full_retry"}
+        if bool(metrics.get("remediationAdmitted")):
+            enabled = enabled | {"can_continue_remediation"}
+        git_publication = auxiliary_outcomes.get("gitPublication")
+        if isinstance(git_publication, Mapping) and git_publication.get("status") == "failed":
+            enabled = enabled | {"can_retry_publication"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -6963,6 +6988,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_pause": "canPause",
         "can_resume": "canResume",
         "can_failed_step_resume": "canResumeFromFailedStep",
+        "can_continue_remediation": "canContinueRemediation",
+        "can_retry_publication": "canRetryPublication",
+        "can_full_retry": "canFullRetry",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
@@ -7004,6 +7032,21 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         if field_name == "can_pause" and is_operator_paused:
             disabled_reasons[alias] = "already_paused"
             continue
+        if field_name == "can_continue_remediation" and raw_state == "failed":
+            disabled_reasons[alias] = (
+                "remediation_not_admitted"
+                if control_stop.get("kind") == "workflow_gate"
+                else "control_stop_not_available"
+            )
+            continue
+        if field_name == "can_retry_publication" and raw_state == "failed":
+            git_publication = auxiliary_outcomes.get("gitPublication")
+            disabled_reasons[alias] = (
+                "publication_not_failed"
+                if isinstance(git_publication, Mapping)
+                else "publication_retry_not_applicable"
+            )
+            continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
@@ -7014,6 +7057,22 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
         can_failed_step_resume="can_failed_step_resume" in enabled,
+        can_continue_remediation="can_continue_remediation" in enabled,
+        can_retry_publication="can_retry_publication" in enabled,
+        can_full_retry="can_full_retry" in enabled,
+        action_evidence={
+            action: {
+                "candidateRef": control_stop.get("workspaceHeadRef"),
+                "remainingWorkRef": control_stop.get("remainingWorkRef"),
+            }
+            for action in (
+                "editForRerun",
+                "fullRetry",
+                "continueRemediation",
+                "retryPublication",
+            )
+            if control_stop
+        },
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,

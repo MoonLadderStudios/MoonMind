@@ -625,6 +625,78 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  it('explains terminal quality-gate outcomes without claiming a failed step', async () => {
+    window.history.pushState(
+      {},
+      'Test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          runId: '02-run',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Quality gate stopped run',
+          summary: 'Remaining work is preserved.',
+          status: 'failed',
+          state: 'failed',
+          rawState: 'failed',
+          temporalStatus: 'failed',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          actions: {
+            canFullRetry: true,
+            actionEvidence: {
+              fullRetry: {
+                candidateRef: 'artifact://workspace/final',
+                remainingWorkRef: 'artifact://remaining/final',
+              },
+            },
+          },
+          finishSummary: {
+            finishOutcome: { code: 'FAILED', stage: 'finalizing' },
+            controlStop: {
+              kind: 'workflow_gate',
+              verdict: 'ADDITIONAL_WORK_NEEDED',
+              reasonCode: 'semantic_no_progress_exhausted',
+              remainingWorkRef: 'artifact://remaining/final',
+              workspaceHeadRef: 'artifact://workspace/final',
+              publicationFeasible: false,
+              publicationAttempted: false,
+            },
+          },
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Quality gate stopped this workflow' }),
+    ).toBeTruthy();
+    expect(screen.getByText('ADDITIONAL_WORK_NEEDED')).toBeTruthy();
+    expect(screen.getByText('artifact://remaining/final')).toBeTruthy();
+    expect(screen.getByText(/No failed Step Execution was fabricated/)).toBeTruthy();
+  });
+
   function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
     const selectedExecution = {
       taskId: 'test-123',

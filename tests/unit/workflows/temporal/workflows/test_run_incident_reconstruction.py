@@ -275,6 +275,106 @@ async def test_incident_manifest_emitted_before_terminal_failure_in_finalizing(
 
 
 @pytest.mark.asyncio
+async def test_workflow_gate_finalization_preserves_auxiliary_failures_and_redacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure(monkeypatch, patched=True)
+    workflow = MoonMindRunWorkflow()
+    _seed_failed_run(workflow)
+    workflow._publish_status = "failed"
+    workflow._publish_reason = "branch publication failed"
+    workflow._workflow_control_stop = {
+        "kind": "workflow_gate",
+        "reasonCode": "semantic_no_progress_exhausted",
+        "logicalStepId": "verify-final",
+        "verdict": "ADDITIONAL_WORK_NEEDED",
+        "terminalDisposition": "failed_with_remaining_work",
+        "gateResultRef": "artifact://gate/final",
+        "remainingWorkRef": "artifact://remaining/final",
+        "terminalHandoffRef": "artifact://handoff/final",
+        "workspaceHeadRef": "artifact://workspace/final",
+        "publicationFeasible": True,
+        "publicationAttempted": True,
+        "metrics": {"failureKind": "workflow_gate"},
+        "auxiliaryOutcomes": {
+            "gitPublication": {"status": "failed", "reason": "push rejected"},
+            "hostCleanup": {"status": "pending"},
+            "providerProfileRelease": {
+                "status": "failed",
+                "reason": "token=provider-secret",
+            },
+            "janitorRequired": True,
+        },
+    }
+
+    async def fail_cleanup(*, reason: str) -> None:
+        raise RuntimeError(f"cleanup failed: token=cleanup-secret ({reason})")
+
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact:{name}"
+
+    async def fake_execute_activity(activity_type: str, *_a: Any, **_k: Any) -> Any:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "run-summary-artifact"}, "desc")
+        return None
+
+    async def fake_execute_typed_activity(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(workflow, "_terminate_workflow_scoped_sessions", fail_cleanup)
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_module, "execute_typed_activity", fake_execute_typed_activity)
+
+    await workflow._run_finalizing_stage(
+        parameters={"publishMode": "pr", "runtime": {"mode": "codex_cli"}},
+        status="failed",
+        error="quality gate stopped the workflow",
+    )
+
+    finish = workflow._finish_summary
+    assert finish is not None
+    assert finish["finishOutcome"]["code"] == "FAILED"
+    assert finish["primaryOutcome"]["kind"] == "workflow_gate"
+    assert finish["primaryOutcome"]["verdict"] == "ADDITIONAL_WORK_NEEDED"
+    auxiliary = finish["primaryOutcome"]["auxiliaryOutcomes"]
+    assert auxiliary["gitPublication"]["status"] == "failed"
+    assert auxiliary["hostCleanup"]["status"] == "failed"
+    assert auxiliary["providerProfileRelease"]["status"] == "failed"
+    assert auxiliary["janitorRequired"] is True
+    assert finish["controlStop"]["remainingWorkRef"] == "artifact://remaining/final"
+    assert finish["controlStop"]["terminalHandoffRef"] == "artifact://handoff/final"
+    assert (
+        finish["recoveryManifest"]["controlStop"]["remainingWorkRef"]
+        == "artifact://remaining/final"
+    )
+    assert (
+        finish["incidentReconstruction"]["controlStop"]["remainingWorkRef"]
+        == "artifact://remaining/final"
+    )
+    rendered = str(finish)
+    assert "provider-secret" not in rendered
+    assert "cleanup-secret" not in rendered
+
+    incident = next(
+        write["payload"]
+        for write in writes
+        if write["name"] == "reports/incident_reconstruction.json"
+    )
+    assert incident["artifactRefs"]["remainingWork"] == "artifact://remaining/final"
+    assert "provider-secret" not in str(incident)
+    assert "cleanup-secret" not in str(incident)
+
+
+@pytest.mark.asyncio
 async def test_incident_manifest_linked_in_memo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

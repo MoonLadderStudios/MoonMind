@@ -14,6 +14,8 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.utils.logging import redact_sensitive_text
+
 
 ArtifactRef = str
 
@@ -468,6 +470,81 @@ class TypedGateResult(_ContractModel):
                     }
                 )
         return cls.model_validate(merged)
+
+
+class RemainingWorkArtifact(_ContractModel):
+    """Bounded canonical handoff for a terminal incomplete gate."""
+
+    schema_version: Literal["remaining-work/v1"] = Field(
+        "remaining-work/v1", alias="schemaVersion"
+    )
+    source_gate_result_ref: ArtifactRef = Field(alias="sourceGateResultRef")
+    source_verification_ref: ArtifactRef | None = Field(
+        None, alias="sourceVerificationRef"
+    )
+    workspace_head_ref: ArtifactRef = Field(alias="workspaceHeadRef")
+    gaps: tuple[str, ...] = ()
+    required_checks: tuple[str, ...] = Field((), alias="requiredChecks")
+    blocked_items: tuple[str, ...] = Field((), alias="blockedItems")
+    recommended_starting_files: tuple[str, ...] = Field(
+        (), alias="recommendedStartingFiles"
+    )
+    recommended_commands: tuple[str, ...] = Field(
+        (), alias="recommendedCommands"
+    )
+    scope_limitations: tuple[str, ...] = Field((), alias="scopeLimitations")
+    generated_at: str = Field(alias="generatedAt")
+
+    @field_validator(
+        "source_gate_result_ref", "source_verification_ref", "workspace_head_ref"
+    )
+    @classmethod
+    def _remaining_work_refs_are_refs(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_ref(value, field_name="remaining-work evidence ref")
+
+    @field_validator(
+        "gaps",
+        "required_checks",
+        "blocked_items",
+        "recommended_starting_files",
+        "recommended_commands",
+        "scope_limitations",
+    )
+    @classmethod
+    def _bound_redacted_items(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        bounded: list[str] = []
+        for raw in value[:100]:
+            item = str(raw or "").strip()
+            if not item:
+                continue
+            # Artifact payloads must not become an alternate raw-log channel.
+            item = redact_sensitive_text(item)
+            bounded.append(item[:500])
+        return tuple(bounded)
+
+
+class PublicationFeasibility(_ContractModel):
+    """Trusted decision made before an incomplete-work handoff is selected."""
+
+    feasible: bool
+    reason: Literal[
+        "commits_ahead_of_base",
+        "safe_candidate_diff",
+        "verified_remote_head",
+        "no_candidate_change",
+        "publication_unauthorized",
+        "candidate_contaminated",
+        "publication_state_ambiguous",
+    ]
+    attempted: bool = False
+    evidence_refs: tuple[ArtifactRef, ...] = Field((), alias="evidenceRefs")
+
+    @field_validator("evidence_refs")
+    @classmethod
+    def _publication_refs_are_refs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_require_ref(item, field_name="publication evidence ref") for item in value)
 
 
 class LoopAttempt(_ContractModel):

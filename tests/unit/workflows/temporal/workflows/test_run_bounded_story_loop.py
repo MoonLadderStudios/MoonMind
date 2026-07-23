@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import dis
+from datetime import datetime, timezone
+from typing import Any
+
 import pytest
 
+from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
 from moonmind.workflows.temporal.workflows.run import (
@@ -13,6 +18,147 @@ from moonmind.workflows.temporal.workflows.run import (
     bounded_story_loop_scope_guard,
     bounded_story_loop_step_effects,
 )
+
+
+@pytest.mark.asyncio
+async def test_terminal_remaining_work_is_persisted_redacted_and_linked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    captured: dict[str, Any] = {}
+
+    async def fake_write_json_artifact(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "art_remaining_work_final"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 23, tzinfo=timezone.utc),
+    )
+
+    ref = await workflow._materialize_remaining_work_artifact(
+        gate=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="high",
+            blocking_evidence_refs=("artifact://verification/final",),
+            issues=(
+                {
+                    "remainingWork": "token=super-secret",
+                    "requiredCheck": "pytest tests/unit",
+                    "suggestedFile": "moonmind/workflows/run.py",
+                },
+            ),
+            remaining_work_ref="artifact://gate/final",
+        ),
+        gate_result_ref="artifact://gate/final",
+        workspace_head_ref="artifact://workspace/final",
+    )
+
+    assert ref == "artifact://art_remaining_work_final"
+    assert captured["payload"]["schemaVersion"] == "remaining-work/v1"
+    assert captured["payload"]["gaps"] == ["token=[REDACTED]"]
+    assert captured["payload"]["sourceGateResultRef"] == "artifact://gate/final"
+    assert captured["payload"]["sourceVerificationRef"] == (
+        "artifact://verification/final"
+    )
+    assert captured["payload"]["workspaceHeadRef"] == "artifact://workspace/final"
+
+
+@pytest.mark.asyncio
+async def test_terminal_remaining_work_persistence_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    async def fail_write(**_kwargs: Any) -> str:
+        raise RuntimeError("artifact persistence unavailable")
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fail_write)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 23, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(RuntimeError, match="artifact persistence unavailable"):
+        await workflow._materialize_remaining_work_artifact(
+            gate=StepGateResult(
+                verdict="ADDITIONAL_WORK_NEEDED",
+                confidence="high",
+                issues=({"remainingWork": "finish tests"},),
+                remaining_work_ref="artifact://gate/final",
+            ),
+            gate_result_ref="artifact://gate/final",
+            workspace_head_ref="artifact://workspace/final",
+        )
+
+
+def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
+    instructions = tuple(dis.get_instructions(MoonMindRunWorkflow._run_execution_stage))
+
+    patch_offset = next(
+        instruction.offset
+        for instruction in instructions
+        if instruction.argval == "RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH"
+    )
+    materialize_offset = next(
+        instruction.offset
+        for instruction in instructions
+        if instruction.argval == "_materialize_remaining_work_artifact"
+    )
+    persist_offset = next(
+        instruction.offset
+        for instruction in instructions
+        if instruction.argval == "_persist_terminal_gate_handoff"
+    )
+    assert patch_offset < materialize_offset
+    assert patch_offset < persist_offset
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("publish_mode", "feasible", "reason"),
+    [
+        ("pr", False, "no_candidate_change"),
+        ("none", True, "commits_ahead_of_base"),
+        ("pr", False, "publication_unauthorized"),
+        ("pr", False, "candidate_contaminated"),
+        ("pr", False, "publication_state_ambiguous"),
+    ],
+)
+async def test_artifact_backed_terminal_handoff_persists_all_fallback_cases(
+    monkeypatch: pytest.MonkeyPatch,
+    publish_mode: str,
+    feasible: bool,
+    reason: str,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    captured: dict[str, Any] = {}
+
+    async def fake_write_json_artifact(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "art_terminal_handoff_final"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    ref = await workflow._persist_terminal_gate_handoff(
+        feasibility={"feasible": feasible, "reason": reason},
+        publish_mode=publish_mode,
+        remaining_work_ref="artifact://remaining/final",
+        workspace_head_ref="artifact://workspace/final",
+    )
+
+    assert ref == "artifact://art_terminal_handoff_final"
+    assert captured["name"] == "reports/terminal_gate_handoff.json"
+    assert captured["payload"]["publicationFeasible"] is feasible
+    assert captured["payload"]["publicationAttempted"] is False
+    assert captured["payload"]["reason"] == reason
+    assert captured["payload"]["remainingWorkRef"] == "artifact://remaining/final"
+    assert captured["payload"]["workspaceHeadRef"] == "artifact://workspace/final"
+    assert workflow._publish_context["terminalGateHandoff"]["artifactRef"] == ref
+    assert ("noChangeHandoff" in workflow._publish_context) is (not feasible)
 
 
 def _explicit_remediation_chain(max_attempts: int) -> list[dict[str, object]]:
@@ -1014,6 +1160,92 @@ def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted(
     assert decision["reason"] == "no_remediation_successor"
     assert decision["remainingWorkRef"] == "artifact://remaining-work/final"
     assert decision["hasRemainingRemediationStep"] is False
+
+
+def test_publication_feasibility_requires_typed_accepted_evidence() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._publication_feasibility(
+        {"outputs": {"push_commit_count": 2}}
+    )["reason"] == "publication_state_ambiguous"
+    assert workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "candidateDiffRef": "diff --git a/file b/file",
+                }
+            }
+        }
+    )["reason"] == "publication_state_ambiguous"
+    assert workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "commitsAheadOfBase": 2,
+                    "evidenceRef": "artifact://repository/evidence",
+                }
+            }
+        }
+    ) == {
+        "feasible": True,
+        "reason": "commits_ahead_of_base",
+        "attempted": False,
+        "evidenceRefs": ("artifact://repository/evidence",),
+    }
+
+
+def test_publication_feasibility_distinguishes_no_change_and_unsafe() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    no_change = workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "repositoryChanged": False,
+                    "evidenceRef": "artifact://repository/no-change",
+                }
+            }
+        }
+    )
+    contaminated = workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "candidateContaminated": True,
+                    "evidenceRef": "artifact://repository/scan",
+                }
+            }
+        }
+    )
+
+    assert (no_change["feasible"], no_change["reason"]) == (
+        False,
+        "no_candidate_change",
+    )
+    assert (contaminated["feasible"], contaminated["reason"]) == (
+        False,
+        "candidate_contaminated",
+    )
+
+
+def test_terminal_gate_handoff_routes_changed_and_no_change_candidates() -> None:
+    policy = "draft_pr_on_additional_work_needed"
+
+    assert MoonMindRunWorkflow._terminal_gate_handoff_kind(
+        publish_mode="pr",
+        draft_publication_policy=policy,
+        publication_feasible=True,
+    ) == "draft_publication"
+    assert MoonMindRunWorkflow._terminal_gate_handoff_kind(
+        publish_mode="pr",
+        draft_publication_policy=policy,
+        publication_feasible=False,
+    ) == "artifact_backed"
+    assert MoonMindRunWorkflow._terminal_gate_handoff_kind(
+        publish_mode="none",
+        draft_publication_policy=policy,
+        publication_feasible=True,
+    ) == "artifact_backed"
 
 
 def test_parent_loop_preserves_legacy_remediation_scan_before_plan_routing_patch() -> None:
