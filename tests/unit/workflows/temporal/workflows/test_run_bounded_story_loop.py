@@ -206,6 +206,9 @@ def test_workflow_payload_records_compiled_bounded_story_loop_context() -> None:
             "maxConsecutiveNoProgressAttempts": 2,
             "maxRepeatedFailedCommands": 2,
             "maxUnsafeOrPolicyDeniedAttempts": 0,
+            "maxEvidenceRetries": 2,
+            "maxInfrastructureRetries": 2,
+            "maxContractRepairAttempts": 1,
             "providerBudget": None,
             "tokenBudget": None,
             "costBudget": None,
@@ -339,12 +342,13 @@ def test_parent_loop_stops_when_verification_makes_no_progress(
     )
 
     assert first["continueLoop"] is True
-    assert second["continueLoop"] is False
-    assert second["reason"] == "no_progress_attempts_exhausted"
+    assert second["continueLoop"] is True
+    assert second["reason"] == "verification_requested_remediation"
+    assert second["budget"]["consumed"]["consecutiveNoProgressAttempts"] == 1
     assert second["hasRemainingRemediationStep"] is True
 
 
-def test_explicit_remediation_budget_governs_repeated_verifier_results(
+def test_semantic_no_progress_budget_stops_before_hard_attempt_maximum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression for mm:bd3dedc3-6cf3-4801-95b4-be177b70ef6b."""
@@ -377,16 +381,16 @@ def test_explicit_remediation_budget_governs_repeated_verifier_results(
     assert first_post_remediation["nextLogicalStepId"] == "remediate-2"
     assert first_post_remediation["budget"][
         "maxConsecutiveNoProgressAttempts"
-    ] == 6
+    ] == 2
     assert first_post_remediation["budget"]["consumed"][
         "consecutiveNoProgressAttempts"
     ] == 1
 
-    assert all(decision["continueLoop"] for decision in decisions[:-1])
-    assert decisions[-1]["continueLoop"] is False
-    assert decisions[-1]["reason"] == "max_attempts_exhausted"
-    assert decisions[-1]["remediationBudget"]["maxAttempts"] == 6
-    assert decisions[-1]["remediationBudget"]["currentAttempt"] == 6
+    assert decisions[1]["continueLoop"] is True
+    assert decisions[2]["continueLoop"] is False
+    assert decisions[2]["reason"] == "semantic_no_progress_exhausted"
+    assert decisions[2]["remediationBudget"]["maxAttempts"] == 6
+    assert decisions[2]["remediationBudget"]["currentAttempt"] == 2
 
 
 def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
@@ -419,12 +423,118 @@ def test_explicit_no_progress_policy_overrides_remediation_attempt_budget(
     )
 
     assert decision["continueLoop"] is False
-    assert decision["reason"] == "no_progress_attempts_exhausted"
+    assert decision["reason"] == "semantic_no_progress_exhausted"
     assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 1
     assert decision["remediationBudget"]["remainingAttempts"] == 6
 
 
-def test_remediation_budget_patch_preserves_legacy_no_progress_stop(
+def test_continuation_decision_preserves_consumption_and_applies_explicit_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(run, "_patched_or_false_outside_workflow", lambda _: True)
+    run._publish_context["boundedStoryLoop"] = {
+        "budgets": {
+            "maxAttempts": 6,
+            "maxConsecutiveNoProgressAttempts": 2,
+            "maxRepeatedFailedCommands": 2,
+            "maxUnsafeOrPolicyDeniedAttempts": 0,
+            "maxEvidenceRetries": 2,
+        },
+        "durableLoopState": {
+            "schemaVersion": "remediation-loop-state/v1",
+            "policy": {
+                "maxAttempts": 6,
+                "maxConsecutiveNoProgressAttempts": 2,
+                "maxRepeatedFailedCommands": 2,
+                "maxUnsafeOrPolicyDeniedAttempts": 0,
+                "maxEvidenceRetries": 2,
+                "consumed": {"attempts": 4, "evidenceRetries": 2},
+            },
+            "consumed": {"attempts": 4, "evidenceRetries": 2},
+            "grants": {},
+            "priorExhaustionReason": "evidence_retry_budget_exhausted",
+        },
+        "budgetGrant": {"evidenceRetries": 1},
+        "retryAccounting": {"evidenceRetries": 2},
+    }
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        feedback="A bounded gap remains.",
+    )
+
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=_explicit_remediation_chain(max_attempts=6),
+        current_index=2,
+    )
+
+    state = decision["durableLoopState"]
+    assert state["consumed"]["attempts"] == 4
+    assert state["consumed"]["evidenceRetries"] == 2
+    assert state["policy"]["maxEvidenceRetries"] == 3
+    assert state["grants"] == {"evidenceRetries": 1}
+    assert state["priorExhaustionReason"] == "evidence_retry_budget_exhausted"
+    assert "budgetGrant" not in run._publish_context["boundedStoryLoop"]
+
+
+def test_continuation_seeds_no_progress_count_from_durable_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindRunWorkflow()
+    monkeypatch.setattr(run, "_patched_or_false_outside_workflow", lambda _: True)
+    ordered_nodes = _explicit_remediation_chain(max_attempts=6)
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        issues=({"requirement": "same gap", "status": "unmet"},),
+    )
+    first = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=ordered_nodes,
+        current_index=2,
+    )
+    durable_state = first["durableLoopState"]
+    durable_state["consumed"]["consecutiveNoProgressAttempts"] = 1
+    durable_state["policy"]["consumed"]["consecutiveNoProgressAttempts"] = 1
+    run._publish_context["boundedStoryLoop"] = {
+        "budgets": {"maxConsecutiveNoProgressAttempts": 2},
+        "durableLoopState": durable_state,
+    }
+
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-2",
+        gate_result=gate,
+        gate_result_ref="artifact://gate/2",
+        ordered_nodes=ordered_nodes,
+        current_index=4,
+    )
+
+    assert decision["continueLoop"] is False
+    assert decision["reason"] == "semantic_no_progress_exhausted"
+    assert decision["budget"]["consumed"]["consecutiveNoProgressAttempts"] == 2
+
+
+def test_invalid_infrastructure_retry_telemetry_is_ignored() -> None:
+    run = MoonMindRunWorkflow()
+    decision = run._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-initial",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            validated_refs={"infrastructureRetries": "unknown"},
+        ),
+        gate_result_ref="artifact://gate/1",
+        ordered_nodes=_explicit_remediation_chain(max_attempts=2),
+        current_index=0,
+    )
+
+    assert decision["budget"]["consumed"]["infrastructureRetries"] == 0
+
+
+def test_default_no_progress_policy_is_independent_of_remediation_budget_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = MoonMindRunWorkflow()
@@ -459,9 +569,9 @@ def test_remediation_budget_patch_preserves_legacy_no_progress_stop(
     )
 
     assert RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH.endswith("-v1")
-    assert decision["continueLoop"] is False
-    assert decision["reason"] == "no_progress_attempts_exhausted"
-    assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 1
+    assert decision["continueLoop"] is True
+    assert decision["reason"] == "verification_requested_remediation"
+    assert decision["budget"]["maxConsecutiveNoProgressAttempts"] == 2
 
 
 def test_parent_loop_continues_when_verification_progress_changes(
@@ -523,7 +633,7 @@ def test_parent_loop_continues_when_verification_progress_changes(
     assert second["reason"] == "verification_requested_remediation"
 
 
-def test_parent_loop_progress_tracks_changed_verifier_feedback(
+def test_parent_loop_does_not_treat_changed_verifier_feedback_as_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sparse structured gates still carry progress in verifier feedback."""
@@ -572,7 +682,8 @@ def test_parent_loop_progress_tracks_changed_verifier_feedback(
         current_index=2,
     )
 
-    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert first["gate"]["progressVector"]["unresolvedGapDigest"] == second["gate"]["progressVector"]["unresolvedGapDigest"]
+    assert second["gate"]["progressVector"]["classification"] == "no_progress"
     assert second["continueLoop"] is True
     assert second["nextAttemptKind"] == "remediation"
 
@@ -610,7 +721,7 @@ def test_feedback_progress_patch_preserves_prior_history_signature(
     assert first.progress_signature == second.progress_signature
 
 
-def test_parent_loop_progress_tracks_remaining_work_refs(
+def test_parent_loop_does_not_treat_changed_remaining_work_refs_as_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -655,7 +766,8 @@ def test_parent_loop_progress_tracks_remaining_work_refs(
         current_index=2,
     )
 
-    assert first["gate"]["progressSignature"] != second["gate"]["progressSignature"]
+    assert first["gate"]["progressVector"]["unresolvedGapDigest"] == second["gate"]["progressVector"]["unresolvedGapDigest"]
+    assert second["gate"]["progressVector"]["classification"] == "no_progress"
     assert second["continueLoop"] is True
 
 
@@ -725,7 +837,7 @@ def test_parent_loop_honors_configured_no_progress_budget(
 
     assert second["continueLoop"] is True
     assert third["continueLoop"] is False
-    assert third["reason"] == "no_progress_attempts_exhausted"
+    assert third["reason"] == "semantic_no_progress_exhausted"
 
 
 def test_parent_loop_replay_before_progress_patch_keeps_legacy_continuation() -> None:
@@ -899,7 +1011,7 @@ def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted(
 
     assert decision["continueLoop"] is False
     assert decision["state"] == "failed_with_remaining_work"
-    assert decision["reason"] == "max_attempts_exhausted"
+    assert decision["reason"] == "no_remediation_successor"
     assert decision["remainingWorkRef"] == "artifact://remaining-work/final"
     assert decision["hasRemainingRemediationStep"] is False
 

@@ -14,6 +14,7 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from pydantic import ValidationError
     from collections.abc import Mapping as WorkflowMapping
 
     from moonmind.schemas.agent_runtime_models import (
@@ -188,8 +189,13 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
     LoopAttempt,
     LoopBudget,
+    LoopStopState,
     PublicationAction,
+    RemediationLoopState,
+    RemediationProgressVector,
     TypedGateResult,
+    advance_remediation_loop_state,
+    build_remediation_progress_vector,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
     evaluate_publication_decision,
@@ -814,13 +820,14 @@ class MoonMindRunWorkflow:
             logger_to_use = logging.getLogger(__name__)
 
         try:
-            logger_to_use.isEnabledFor(logging.INFO)
-            return logging.LoggerAdapter(logger_to_use, extra=extra)
+            if not isinstance(logger_to_use.isEnabledFor(logging.INFO), bool):
+                logger_to_use = logging.getLogger(__name__)
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error checking logger capabilities in _get_logger"
             )
-            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+            logger_to_use = logging.getLogger(__name__)
+        return logging.LoggerAdapter(logger_to_use, extra=extra)
 
     @staticmethod
     def _operator_failure_summary(exc: BaseException) -> str:
@@ -6451,34 +6458,6 @@ class MoonMindRunWorkflow:
         terminal_disposition = (
             "accepted" if terminal == "accepted" else "failed_with_remaining_work"
         )
-        progress_payload = {
-            "verdict": gate_result.verdict,
-            "issues": [dict(issue) for issue in gate_result.issues],
-            "remainingWorkRef": gate_result.remaining_work_ref,
-            "blockingEvidenceRefs": list(gate_result.blocking_evidence_refs),
-            "recommendedNextAction": gate_result.recommended_next_action,
-            "workspacePolicyRecommendation": (
-                gate_result.workspace_policy_recommendation
-            ),
-            "recoverableInCurrentRuntime": gate_result.recoverable_in_current_runtime,
-        }
-        if self._patched_or_false_outside_workflow(
-            RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH
-        ):
-            # Verifiers may report their remaining gaps in feedback even when
-            # they omit the optional structured issues/remainingWorkRef fields.
-            # Excluding that authoritative summary makes distinct verifier
-            # reports look identical and can exhaust the no-progress budget
-            # after the first remediation attempt.
-            progress_payload["feedback"] = gate_result.feedback
-        progress_signature = hashlib.sha256(
-            json.dumps(
-                progress_payload,
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
         return TypedGateResult.from_boundary_payload(
             {
                 "verdict": gate_result.verdict,
@@ -6501,7 +6480,7 @@ class MoonMindRunWorkflow:
                     next(iter(gate_result.blocking_evidence_refs), None)
                 ),
                 "progressSignature": (
-                    progress_signature if progress_budget_enabled else None
+                    None
                 ),
                 "degraded": gate_result.degraded,
             }
@@ -6624,7 +6603,24 @@ class MoonMindRunWorkflow:
         loop_context = self._publish_context.get("boundedStoryLoop")
         prior_progress_signature = None
         prior_no_progress_attempts = 0
+        prior_progress_vector: RemediationProgressVector | None = None
+        prior_loop_state: RemediationLoopState | None = None
+        prior_consumed_counters: dict[str, int] = {}
         if isinstance(loop_context, Mapping):
+            durable_state_payload = loop_context.get("durableLoopState")
+            if isinstance(durable_state_payload, Mapping):
+                try:
+                    prior_loop_state = RemediationLoopState.model_validate(
+                        durable_state_payload
+                    )
+                except ValidationError:
+                    prior_loop_state = None
+                if prior_loop_state is not None:
+                    prior_progress_vector = prior_loop_state.progress_vector
+                    prior_consumed_counters = dict(prior_loop_state.consumed)
+                    prior_no_progress_attempts = prior_loop_state.consumed.get(
+                        "consecutiveNoProgressAttempts", 0
+                    )
             prior_decision = loop_context.get("continuationDecision")
             if isinstance(prior_decision, Mapping):
                 prior_gate = prior_decision.get("gate")
@@ -6632,25 +6628,135 @@ class MoonMindRunWorkflow:
                     prior_progress_signature = str(
                         prior_gate.get("progressSignature") or ""
                     ).strip() or None
+                    prior_vector_payload = prior_gate.get("progressVector")
+                    if isinstance(prior_vector_payload, Mapping):
+                        try:
+                            prior_progress_vector = RemediationProgressVector.model_validate(
+                                prior_vector_payload
+                            )
+                        except ValidationError:
+                            prior_progress_vector = None
                 prior_budget = prior_decision.get("budget")
                 if isinstance(prior_budget, Mapping):
                     prior_consumed = prior_budget.get("consumed")
                     if isinstance(prior_consumed, Mapping):
+                        prior_consumed_counters = {
+                            str(key): max(0, int(value or 0))
+                            for key, value in prior_consumed.items()
+                            if isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                        }
                         prior_no_progress_attempts = int(
                             prior_consumed.get(
                                 "consecutiveNoProgressAttempts", 0
                             )
                             or 0
                         )
+            if prior_loop_state is not None:
+                for key, value in prior_loop_state.consumed.items():
+                    prior_consumed_counters[key] = max(
+                        prior_consumed_counters.get(key, 0), value
+                    )
+        workflow_id, _ = self._bounded_story_loop_workflow_identity()
+        progress_node = (
+            ordered_nodes[current_index]
+            if 0 <= current_index < len(ordered_nodes)
+            else {}
+        )
+        remediation_attempt, remediation_max = (
+            self._moonspec_remediation_attempt_metadata(progress_node)
+        )
+        structured_evidence = (
+            gate_result.validated_refs
+            if isinstance(gate_result.validated_refs, Mapping)
+            else {}
+        )
+        evidence_schema_version = structured_evidence.get("progressEvidenceSchemaVersion")
+        progress_evidence_invalid = evidence_schema_version not in {
+            None,
+            "remediation-progress-evidence/v1",
+        } or (
+            isinstance(loop_context, Mapping)
+            and isinstance(loop_context.get("continuationDecision"), Mapping)
+            and isinstance(
+                loop_context["continuationDecision"].get("gate"), Mapping
+            )
+            and loop_context["continuationDecision"]["gate"].get("progressVector")
+            is not None
+            and prior_progress_vector is None
+        )
+        structured_checks: list[Mapping[str, Any]] = []
+        raw_checks = structured_evidence.get("requiredChecks")
+        if isinstance(raw_checks, Sequence) and not isinstance(raw_checks, (str, bytes)):
+            structured_checks = [
+                check for check in raw_checks if isinstance(check, Mapping)
+            ]
+        progress_issues: Sequence[Mapping[str, Any]] = gate_result.issues
+        if (
+            self._patched_or_false_outside_workflow(
+                RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH
+            )
+            and not progress_issues
+            and gate_result.feedback
+        ):
+            progress_issues = ({"feedback": gate_result.feedback},)
+        progress_vector = build_remediation_progress_vector(
+            loop_id=workflow_id,
+            attempt_ordinal=remediation_attempt or attempt.attempt_ordinal,
+            issues=progress_issues,
+            checks=structured_checks,
+            prior=prior_progress_vector,
+            base_workspace_digest=self._coerce_text(
+                structured_evidence.get("baseWorkspaceDigest"), max_chars=200
+            ),
+            candidate_workspace_digest=self._coerce_text(
+                structured_evidence.get("candidateWorkspaceDigest"), max_chars=200
+            ),
+            relevant_diff_digest=self._coerce_text(
+                structured_evidence.get("relevantDiffDigest"), max_chars=200
+            ),
+            addressed_gap_ids=(
+                structured_evidence.get("addressedGapIds")
+                if isinstance(structured_evidence.get("addressedGapIds"), Sequence)
+                and not isinstance(
+                    structured_evidence.get("addressedGapIds"), (str, bytes)
+                )
+                else ()
+            ),
+            blocker_code=(
+                "verification_blocked" if gate_result.verdict == "BLOCKED" else None
+            ),
+            authoritative_evidence_digest=(
+                self._coerce_text(
+                    (gate_result.validated_refs or {}).get("authoritativeEvidenceDigest"),
+                    max_chars=200,
+                )
+                if structured_evidence
+                else None
+            ),
+            candidate_disposition=(
+                self._coerce_text(
+                    (gate_result.validated_refs or {}).get("candidateDisposition"),
+                    max_chars=100,
+                )
+                if structured_evidence
+                else None
+            ),
+        )
+        gate = gate.model_copy(
+            update={
+                "progress_vector": progress_vector,
+                "progress_signature": progress_vector.digest,
+            }
+        )
         repeated_progress = bool(
             progress_budget_enabled
-            and gate.progress_signature
-            and prior_progress_signature == gate.progress_signature
+            and progress_vector.classification in {"no_progress", "regression"}
         )
         consecutive_no_progress_attempts = (
             prior_no_progress_attempts + 1 if repeated_progress else 0
         )
-        max_no_progress_attempts = 1
+        max_no_progress_attempts = 2
         explicit_no_progress_budget = False
         if progress_budget_enabled and isinstance(loop_context, Mapping):
             loop_budgets = loop_context.get("budgets")
@@ -6661,46 +6767,135 @@ class MoonMindRunWorkflow:
                 if configured_no_progress_attempts is not None:
                     max_no_progress_attempts = configured_no_progress_attempts
                     explicit_no_progress_budget = True
-        if (
-            progress_budget_enabled
-            and not explicit_no_progress_budget
-            and self._patched_or_false_outside_workflow(
-                RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH
-            )
-        ):
-            # A compiled remediation chain already has a finite, operator-visible
-            # attempt budget. When no independent no-progress policy was authored,
-            # let that declared budget govern repeated verifier results as well.
-            # Defaulting this guard to one makes the first unchanged/sparse
-            # post-remediation report shadow an explicit "attempt 1 of 6" plan.
-            declared_remediation_maxima: set[int] = set()
-            for candidate in ordered_nodes:
-                if self._moonspec_step_role(candidate) not in {
-                    "moonspec-remediation",
-                    "moonspec-verification-gate",
-                }:
-                    continue
-                _, maximum = self._moonspec_remediation_attempt_metadata(candidate)
-                if maximum is not None:
-                    declared_remediation_maxima.add(maximum)
-            if len(declared_remediation_maxima) == 1:
-                max_no_progress_attempts = next(iter(declared_remediation_maxima))
-        budget = LoopBudget.model_validate(
+        hard_max_attempts = remediation_max or 6
+        consumed = dict(prior_consumed_counters)
+        prior_failures = (
+            set(prior_progress_vector.repeated_failure_signatures)
+            if prior_progress_vector is not None
+            else set()
+        )
+        current_failures = set(progress_vector.repeated_failure_signatures)
+        repeated_failure_count = (
+            consumed.get("repeatedFailedCommands", 0) + 1
+            if current_failures and current_failures & prior_failures
+            else (1 if current_failures else 0)
+        )
+        consumed.update(
             {
-                "maxAttempts": 1,
-                "maxConsecutiveNoProgressAttempts": max_no_progress_attempts,
-                "maxRepeatedFailedCommands": 1,
-                "maxUnsafeOrPolicyDeniedAttempts": 1,
-                "consumed": {
-                    "attempts": 0 if has_remaining_remediation_step else 1,
-                    "consecutiveNoProgressAttempts": (
-                        consecutive_no_progress_attempts
-                    ),
-                    "repeated_failed_commands": 0,
-                    "unsafe_or_policy_denied_attempts": 0,
-                },
+                "attempts": max(
+                    consumed.get("attempts", 0),
+                    remediation_attempt or (1 if remediation_gate else 0),
+                ),
+                "consecutiveNoProgressAttempts": max(
+                    0, consecutive_no_progress_attempts
+                ),
+                "repeatedFailedCommands": repeated_failure_count,
+                "unsafeOrPolicyDeniedAttempts": max(
+                    consumed.get("unsafeOrPolicyDeniedAttempts", 0),
+                    1
+                    if progress_vector.candidate_disposition
+                    in {"unsafe_side_effect", "policy_denied"}
+                    else 0,
+                ),
             }
         )
+        evidence_retries = max(
+            0, (self._step_execution_for(logical_step_id) or 1) - 1
+        )
+        raw_infrastructure_retries = (
+            (gate_result.validated_refs or {}).get("infrastructureRetries", 0)
+            if isinstance(gate_result.validated_refs, Mapping)
+            else 0
+        )
+        infrastructure_retries = (
+            max(0, int(raw_infrastructure_retries))
+            if isinstance(raw_infrastructure_retries, (int, float))
+            and not isinstance(raw_infrastructure_retries, bool)
+            else 0
+        )
+        consumed["evidenceRetries"] = max(
+            consumed.get("evidenceRetries", 0), evidence_retries
+        )
+        consumed["infrastructureRetries"] = max(
+            consumed.get("infrastructureRetries", 0), infrastructure_retries
+        )
+        retry_accounting = (
+            loop_context.get("retryAccounting")
+            if isinstance(loop_context, Mapping)
+            else None
+        )
+        if isinstance(retry_accounting, Mapping):
+            for key in (
+                "evidenceRetries",
+                "infrastructureRetries",
+                "contractRepairAttempts",
+            ):
+                amount = retry_accounting.get(key)
+                if isinstance(amount, int) and not isinstance(amount, bool):
+                    consumed[key] = max(consumed.get(key, 0), amount)
+        resource_usage = (
+            gate_result.validated_refs.get("resourceUsage")
+            if isinstance(gate_result.validated_refs, Mapping)
+            else None
+        )
+        if isinstance(resource_usage, Mapping):
+            for source_key, counter_key in (
+                ("elapsedSeconds", "elapsedSeconds"),
+                ("provider", "provider"),
+                ("tokens", "tokens"),
+                ("cost", "cost"),
+            ):
+                amount = resource_usage.get(source_key)
+                if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+                    consumed[counter_key] = max(
+                        consumed.get(counter_key, 0), max(0, int(amount))
+                    )
+        configured_budgets = (
+            loop_context.get("budgets") if isinstance(loop_context, Mapping) else None
+        )
+        configured_budgets = (
+            configured_budgets if isinstance(configured_budgets, Mapping) else {}
+        )
+        budget = LoopBudget.model_validate(
+            {
+                "maxAttempts": hard_max_attempts,
+                "maxConsecutiveNoProgressAttempts": max_no_progress_attempts,
+                "maxRepeatedFailedCommands": configured_budgets.get(
+                    "maxRepeatedFailedCommands", 2
+                ),
+                "maxUnsafeOrPolicyDeniedAttempts": configured_budgets.get(
+                    "maxUnsafeOrPolicyDeniedAttempts", 0
+                ),
+                "maxEvidenceRetries": configured_budgets.get(
+                    "maxEvidenceRetries", 2
+                ),
+                "maxInfrastructureRetries": configured_budgets.get(
+                    "maxInfrastructureRetries", 2
+                ),
+                "maxContractRepairAttempts": configured_budgets.get(
+                    "maxContractRepairAttempts", 1
+                ),
+                "maxElapsedSeconds": configured_budgets.get("maxElapsedSeconds"),
+                "providerBudget": configured_budgets.get("providerBudget"),
+                "tokenBudget": configured_budgets.get("tokenBudget"),
+                "costBudget": configured_budgets.get("costBudget"),
+                "consumed": consumed,
+            }
+        )
+        grant = (
+            loop_context.get("budgetGrant")
+            if isinstance(loop_context, Mapping)
+            and isinstance(loop_context.get("budgetGrant"), Mapping)
+            else None
+        )
+        provisional_state = advance_remediation_loop_state(
+            prior=prior_loop_state,
+            policy=budget,
+            progress_vector=progress_vector,
+            consumed=consumed,
+            grant=grant,
+        )
+        budget = provisional_state.policy
         decision = evaluate_attempt_continuation(
             attempt=attempt,
             gate=gate,
@@ -6708,6 +6903,28 @@ class MoonMindRunWorkflow:
             checkpoint_available=True,
             policy_allowed=True,
         )
+        if (
+            gate.verdict == "ADDITIONAL_WORK_NEEDED"
+            and not has_remaining_remediation_step
+            and decision.continue_loop
+        ):
+            decision = decision.model_copy(
+                update={
+                    "continue_loop": False,
+                    "reason": "no_remediation_successor",
+                    "state": LoopStopState.FAILED_WITH_REMAINING_WORK,
+                    "next_attempt_kind": None,
+                }
+            )
+        if progress_evidence_invalid:
+            decision = decision.model_copy(
+                update={
+                    "continue_loop": False,
+                    "reason": "progress_evidence_invalid",
+                    "state": LoopStopState.FAILED_WITH_REMAINING_WORK,
+                    "next_attempt_kind": None,
+                }
+            )
         payload = decision.model_dump(by_alias=True, mode="json")
         payload["hasRemainingRemediationStep"] = has_remaining_remediation_step
         payload["remediationRoutingReason"] = successor_reason
@@ -6720,8 +6937,22 @@ class MoonMindRunWorkflow:
             "remainingWorkRef": gate.remaining_work_ref,
             "diagnosticsRef": gate.diagnostics_ref,
             "progressSignature": gate.progress_signature,
+            "progressVector": progress_vector.model_dump(by_alias=True, mode="json"),
+            "progressVectorDigest": progress_vector.digest,
         }
         payload["budget"] = budget.model_dump(by_alias=True, mode="json")
+        durable_state = provisional_state.model_copy(
+            update={
+                "prior_exhaustion_reason": (
+                    provisional_state.prior_exhaustion_reason
+                    if decision.continue_loop
+                    else decision.reason
+                )
+            }
+        )
+        payload["durableLoopState"] = durable_state.model_dump(
+            by_alias=True, mode="json"
+        )
         payload["currentLogicalStepId"] = logical_step_id
         current_node = next(
             (
@@ -6738,7 +6969,7 @@ class MoonMindRunWorkflow:
         remediation_attempt, remediation_max = (
             self._moonspec_remediation_attempt_metadata(current_node)
         )
-        review_retries = max(0, (self._step_execution_for(logical_step_id) or 1) - 1)
+        review_retries = evidence_retries
         persisted_review_budget: Mapping[str, Any] | None = None
         current_row = self._step_ledger_row_for(logical_step_id) or {}
         checks = current_row.get("checks")
@@ -6760,6 +6991,13 @@ class MoonMindRunWorkflow:
                 "remainingExecutions": 0,
             }
         )
+        payload["nonSemanticRetryBudgets"] = {
+            "reviewEvidenceRetries": review_retries,
+            "infrastructureRetries": max(
+                0, infrastructure_retries
+            ),
+            "consumesSemanticAttempt": False,
+        }
         payload["remediationBudget"] = self._moonspec_remediation_budget_metadata(
             ordered_nodes=ordered_nodes,
             current_attempt=remediation_attempt,
@@ -6768,6 +7006,10 @@ class MoonMindRunWorkflow:
         self._publish_context.setdefault("boundedStoryLoop", {})[
             "continuationDecision"
         ] = payload
+        self._publish_context["boundedStoryLoop"]["durableLoopState"] = payload[
+            "durableLoopState"
+        ]
+        self._publish_context["boundedStoryLoop"].pop("budgetGrant", None)
         return payload
 
     def _blocking_moonspec_gate_reason(self) -> str | None:
@@ -8827,6 +9069,14 @@ class MoonMindRunWorkflow:
             "budgets": serialized_budgets,
             "scopeGuard": scope,
         }
+        if loop_input.prior_loop_state is not None:
+            self._publish_context["boundedStoryLoop"]["durableLoopState"] = (
+                loop_input.prior_loop_state.model_dump(by_alias=True, mode="json")
+            )
+        if loop_input.budget_grant:
+            self._publish_context["boundedStoryLoop"]["budgetGrant"] = dict(
+                loop_input.budget_grant
+            )
 
     def _runtime_visibility_from_parameters(
         self,
@@ -10330,6 +10580,15 @@ class MoonMindRunWorkflow:
                         < _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS
                     ):
                         moonspec_contract_repair_attempts += 1
+                        loop_context = self._publish_context.setdefault(
+                            "boundedStoryLoop", {}
+                        )
+                        retry_accounting = loop_context.setdefault(
+                            "retryAccounting", {}
+                        )
+                        retry_accounting["contractRepairAttempts"] = (
+                            moonspec_contract_repair_attempts
+                        )
                         if workflow.patched(
                             RUN_MOONSPEC_GATE_CONTRACT_REPAIR_FRESH_SOURCE_PATCH
                         ):
@@ -10964,7 +11223,7 @@ class MoonMindRunWorkflow:
                                 or 1
                             )
                         ):
-                            transition_reason = "no_progress_attempts_exhausted"
+                            transition_reason = "semantic_no_progress_exhausted"
                         elif (
                             normalized_gate == "ADDITIONAL_WORK_NEEDED"
                             and plan_routed_moonspec_remediation_enabled
@@ -11008,7 +11267,7 @@ class MoonMindRunWorkflow:
                             "no_remediation_successor": (
                                 "Skipped because no explicit remediation successor exists."
                             ),
-                            "no_progress_attempts_exhausted": (
+                            "semantic_no_progress_exhausted": (
                                 "Skipped because consecutive remediation cycles "
                                 "produced no new progress."
                             ),
@@ -20396,3 +20655,4 @@ class MoonMindUserWorkflow(MoonMindRunWorkflow):
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         return await super().run(input_payload)
+    advance_remediation_loop_state,
