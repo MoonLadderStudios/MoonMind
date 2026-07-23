@@ -6,6 +6,7 @@
   },
   "cases": [
     {"id": "product.normal-create-api", "layer": "product-provider", "critical": true},
+    {"id": "product.cumulative-remediation", "layer": "product-provider", "critical": true},
     {"id": "proxy.routes", "layer": "fake-and-stock", "critical": true},
     {"id": "session.first-message-crash-matrix", "layer": "fake", "critical": true},
     {"id": "events.durable-replay-sse", "layer": "api", "critical": true},

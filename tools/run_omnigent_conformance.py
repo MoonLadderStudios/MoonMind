@@ -20,6 +20,7 @@ from moonmind.omnigent.conformance import (  # noqa: E402
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
+    "product.cumulative-remediation",
     "proxy.routes",
     "session.first-message-crash-matrix",
     "events.durable-replay-sse",
@@ -38,6 +39,7 @@ COMMANDS = (
         "pytest",
         "tests/unit/omnigent",
         "tests/integration/omnigent",
+        "tests/unit/tools/test_run_omnigent_live_conformance.py",
         # This production-Postgres serialization check belongs to the
         # compose-backed integration-ci job; the deterministic runner does not
         # provision a database service.
