@@ -3416,6 +3416,48 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 "Typed recovery plan ref does not match the source execution."
             )
+        if target.target.kind in {"publication", "restoration_failure"}:
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_PHASE_UNSUPPORTED"
+            )
+        if target.target.kind == "failed_step" and target.preserved_step_refs:
+            # The existing resume path materializes preserved steps from their
+            # expanded identities and output refs. Ref-only typed collections
+            # are not dereferenced by the workflow yet, so admitting them would
+            # repeat already completed work.
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_PHASE_UNSUPPORTED"
+            )
+        trusted_capabilities = resolve_runtime_execution_capabilities(
+            target.destination.runtime_id
+        )
+        if (
+            trusted_capabilities is None
+            or target.capability_snapshot
+            != trusted_capabilities.model_dump(by_alias=True, mode="json")
+        ):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_CAPABILITY_DIGEST_MISMATCH"
+            )
+        source_artifact_refs = {
+            str(ref).strip() for ref in (record.artifact_refs or []) if str(ref).strip()
+        }
+        required_recovery_refs = {
+            target.checkpoint.ref,
+            target.checkpoint.validation_ref,
+        }
+        if not required_recovery_refs.issubset(source_artifact_refs):
+            raise TemporalExecutionRecoveryCheckpointError(
+                "RECOVERY_CHECKPOINT_INVALID"
+            )
+        await self._validate_readable_temporal_artifact_ref(
+            target.checkpoint.ref,
+            field_name="recoveryTarget.checkpoint.ref",
+        )
+        await self._validate_readable_temporal_artifact_ref(
+            target.checkpoint.validation_ref,
+            field_name="recoveryTarget.checkpoint.validationRef",
+        )
         existing_destination = await self._session.get(
             TemporalExecutionCanonicalRecord,
             target.destination.workflow_id,
@@ -3446,6 +3488,25 @@ class TemporalExecutionService:
         params.pop("task", None)
         params["workflow"] = workflow_params
         params["recoveryTarget"] = frozen_target
+        params["recoverySource"] = {
+            "sourceWorkflowId": target.source.workflow_id,
+            "sourceRunId": target.source.run_id,
+            "sourcePlanRef": target.source.plan_ref,
+            "sourcePlanDigest": target.source.plan_digest,
+            "recoveryCheckpointRef": target.checkpoint.ref,
+            "failedRunRecoveryManifestRef": target.checkpoint.validation_ref,
+            "recoveryWorkspace": {
+                "checkpointRef": target.checkpoint.ref,
+                "checkpointKind": target.checkpoint.kind,
+                "checkpointDigest": target.checkpoint.digest,
+                "validationRef": target.checkpoint.validation_ref,
+            },
+            "preservedSteps": [],
+            "preservedStepRefs": list(target.preserved_step_refs),
+            "selectedStartStepId": target.target.logical_step_id,
+            "selectedStartStepExecution": target.target.source_step_execution_id,
+            "recoveryMode": "selected_step",
+        }
         params["recoveryLineage"] = {
             "source": target.source.model_dump(by_alias=True, mode="json"),
             "checkpointRef": target.checkpoint.ref,
@@ -3478,6 +3539,16 @@ class TemporalExecutionService:
             _workflow_id=target.destination.workflow_id,
             _run_id=destination_run_id,
         )
+        destination = await self._session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        if destination is not None:
+            destination_params = dict(destination.parameters or {})
+            lineage = dict(destination_params.get("recoveryLineage") or {})
+            lineage["destinationRunId"] = created.run_id
+            destination_params["recoveryLineage"] = lineage
+            destination.parameters = destination_params
+            await self._session.commit()
         return {
             "accepted": True,
             "applied": "created_recovery_execution",

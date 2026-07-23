@@ -174,10 +174,14 @@ class WorkflowRecoveryTargetModel(BaseModel):
         for key, value in _walk(payload):
             normalized = key.replace("_", "").lower()
             if normalized in forbidden or (
-                normalized.endswith("ref") and value and not isinstance(value, str)
+                normalized.endswith("ref")
+                and value
+                and not isinstance(value, str)
             ):
                 raise ValueError("recovery input must contain bounded refs, not raw data")
-            if normalized.endswith("ref") and isinstance(value, str):
+            if (
+                normalized.endswith("ref") or normalized.endswith("refs")
+            ) and isinstance(value, str):
                 if not value.strip() or value.startswith(("/", "./", "../", "~")):
                     raise ValueError("recovery refs must not be raw filesystem paths")
         return self
@@ -223,6 +227,7 @@ class WorkflowRecoveryTargetModel(BaseModel):
             self.source.run_id,
             target.kind,
             self.checkpoint.digest,
+            phase,
         )
         destination_ok = self.destination.creation_key == creation_key
         destination_ok = destination_ok and bool(
@@ -269,9 +274,16 @@ class WorkflowRecoveryTargetModel(BaseModel):
 
 
 def deterministic_recovery_creation_key(
-    workflow_id: str, run_id: str, target_kind: str, checkpoint_digest: str
+    workflow_id: str,
+    run_id: str,
+    target_kind: str,
+    checkpoint_digest: str,
+    continuation_phase: str,
 ) -> str:
-    canonical = f"{workflow_id}\0{run_id}\0{target_kind}\0{checkpoint_digest}"
+    canonical = (
+        f"{workflow_id}\0{run_id}\0{target_kind}\0{checkpoint_digest}"
+        f"\0{continuation_phase}"
+    )
     return "recovery:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -281,7 +293,6 @@ def _target_reason(contract: WorkflowRecoveryTargetModel) -> str | None:
         ok = bool(
             target.logical_step_id
             and target.source_step_execution_id
-            and contract.preserved_step_refs
         )
         return None if ok else "RECOVERY_TARGET_IDENTITY_MISMATCH"
     if target.kind == "control_stop":
@@ -327,14 +338,17 @@ def _capability_digest(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _walk(value: Any):
+def _walk(value: Any, parent_key: str = ""):
     if isinstance(value, dict):
         for key, child in value.items():
             yield str(key), child
-            yield from _walk(child)
+            yield from _walk(child, str(key))
     elif isinstance(value, (list, tuple)):
         for child in value:
-            yield from _walk(child)
+            if isinstance(child, str):
+                yield parent_key, child
+            else:
+                yield from _walk(child, parent_key)
 
 
 __all__ = [

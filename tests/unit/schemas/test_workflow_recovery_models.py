@@ -66,7 +66,7 @@ def _payload(kind: str = "failed_step") -> dict:
     }[kind]
     checkpoint_digest = "sha256:checkpoint"
     creation_key = deterministic_recovery_creation_key(
-        "source-workflow", "source-run", kind, checkpoint_digest
+        "source-workflow", "source-run", kind, checkpoint_digest, phase
     )
     return {
         "schemaVersion": "workflow-recovery-target/v1",
@@ -194,6 +194,28 @@ def test_workflow_input_rejects_raw_paths_and_payloads() -> None:
     payload["capabilitySnapshot"]["providerPayload"] = {"secret": "raw"}
     with pytest.raises(ValueError, match="bounded refs"):
         WorkflowRecoveryTargetModel.model_validate(payload)
+
+    payload = _payload()
+    payload["preservedStepRefs"] = ["/tmp/raw"]
+    with pytest.raises(ValueError, match="raw filesystem paths"):
+        WorkflowRecoveryTargetModel.model_validate(payload)
+
+
+def test_failed_first_step_does_not_require_preserved_refs() -> None:
+    payload = _payload()
+    payload["preservedStepRefs"] = []
+
+    WorkflowRecoveryTargetModel.model_validate(payload).require_admitted()
+
+
+def test_creation_key_includes_continuation_phase() -> None:
+    common = ("source-workflow", "source-run", "control_stop", "sha256:checkpoint")
+
+    assert deterministic_recovery_creation_key(
+        *common, "continue_after_gate"
+    ) != deterministic_recovery_creation_key(
+        *common, "continue_to_remediation"
+    )
 
 
 def test_duplicate_requests_have_one_deterministic_destination_key() -> None:

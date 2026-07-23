@@ -60,7 +60,6 @@ from moonmind.schemas.workflow_recovery_models import (
     deterministic_recovery_creation_key,
 )
 from moonmind.workflows.executions.runtime_capabilities import (
-    RuntimeExecutionCapabilities,
     resolve_runtime_execution_capabilities,
 )
 from moonmind.statuses.compat import (
@@ -3674,16 +3673,6 @@ def _typed_failed_step_recovery_target(
     capability = resolve_runtime_execution_capabilities("omnigent").model_dump(
         by_alias=True, mode="json"
     )
-    capability["checkpointBoundarySupport"]["before_execution"] = [
-        "rerun_failed_step"
-    ]
-    capability["workspaceState"]["boundarySupport"]["before_execution"] = [
-        "rerun_failed_step"
-    ]
-    capability["capabilityDigest"] = ""
-    capability = RuntimeExecutionCapabilities.model_validate(
-        capability
-    ).with_digest().model_dump(by_alias=True, mode="json")
     checkpoint_digest = "sha256:typed-checkpoint"
     return WorkflowRecoveryTargetModel.model_validate(
         {
@@ -3709,7 +3698,7 @@ def _typed_failed_step_recovery_target(
             },
             "continuation": {"phase": "rerun_failed_step"},
             "capabilitySnapshot": capability,
-            "preservedStepRefs": ["artifact://preserved"],
+            "preservedStepRefs": [],
             "sideEffectDispositionRef": "artifact://side-effects",
             "sideEffectSafe": True,
             "destination": {
@@ -3719,6 +3708,7 @@ def _typed_failed_step_recovery_target(
                     source_run_id,
                     "failed_step",
                     checkpoint_digest,
+                    "rerun_failed_step",
                 ),
                 "runtimeId": "omnigent",
                 "executionProfileRef": "provider-profile:primary",
@@ -3750,6 +3740,10 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
         )
         source.state = MoonMindWorkflowState.FAILED
         source.close_status = TemporalExecutionCloseStatus.FAILED
+        source.artifact_refs = list(source.artifact_refs or []) + [
+            "artifact://checkpoint/source",
+            "artifact://checkpoint-validation",
+        ]
         await session.commit()
         target = _typed_failed_step_recovery_target(
             source_workflow_id=source.workflow_id,
@@ -3781,6 +3775,9 @@ async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
         }
         assert destination.parameters["recoveryLineage"]["destinationRunId"] == (
             destination.run_id
+        )
+        assert destination.parameters["recoverySource"]["recoveryCheckpointRef"] == (
+            "artifact://checkpoint/source"
         )
         assert "agentRunId" not in destination.parameters
         refreshed_source = await service.describe_execution(source.workflow_id)
