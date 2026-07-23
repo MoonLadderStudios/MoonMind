@@ -4134,6 +4134,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.container_job import (
         MoonMindContainerJobWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.control_stop_continuation import (
+        MoonMindControlStopContinuationWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     from moonmind.workflows.temporal.workflows.merge_automation import (
@@ -4155,6 +4158,7 @@ async def test_main_async_workflow_fleet(
         MoonMindUserWorkflow,
         MoonMindContainerJobWorkflow,
         MoonMindManifestIngest,
+        MoonMindControlStopContinuationWorkflow,
         MoonMindProviderProfileManagerWorkflow,
         MoonMindAgentSessionWorkflow,
         MoonMindManagedSessionReconcileWorkflow,

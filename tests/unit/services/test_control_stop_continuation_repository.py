@@ -150,7 +150,9 @@ class _TemporalAdapter:
 @pytest.mark.asyncio
 async def test_temporal_starter_uses_registered_type_and_reconciles_duplicate() -> None:
     payload = _payload()
-    workflow_id = payload["destinationWorkflowId"]
+    workflow_id = ControlStopContinuationContract.model_validate(
+        payload
+    ).destination_workflow_id
     adapter = _TemporalAdapter(
         WorkflowStartResult(workflow_id=workflow_id, run_id="existing-run")
     )
