@@ -25,8 +25,11 @@ def _payload() -> dict:
         "remainingWorkRef": "artifact://remaining/6",
         "remainingWorkDigest": "remaining-digest",
         "workspaceHeadRef": "artifact://workspace/C6",
-        "workspaceHeadDigest": "workspace-digest",
+        "workspaceHeadDigest": f"sha256:{'a' * 64}",
         "workspaceBaseCommit": "abc123",
+        "workspaceManifestRef": "artifact://workspace/C6/manifest",
+        "workspaceManifestDigest": f"sha256:{'b' * 64}",
+        "repository": "MoonLadderStudios/MoonMind",
         "checkpointKind": "worktree_archive",
         "checkpointBoundary": "after_gate",
         "terminalHead": True,
@@ -86,6 +89,8 @@ def _payload() -> dict:
         },
         "deploymentGeneration": "control-stop-2026-07",
         "deploymentPromoted": True,
+        "restoreCapabilitySetVersion": "managed-runtime/v1",
+        "restoreCapabilityDigest": "capability-digest",
         "idempotencyKey": "operator-request-1",
     }
 
@@ -114,6 +119,21 @@ def test_duplicate_contract_has_one_deterministic_destination() -> None:
         ControlStopContinuationContract.model_validate(changed).destination_workflow_id
         != first.destination_workflow_id
     )
+
+
+def test_restore_request_uses_distinct_deterministic_destination() -> None:
+    contract = ControlStopContinuationContract.model_validate(_payload())
+
+    request = contract.restore_request(destination_run_id="destination-run")
+
+    assert request["source"]["workflowId"] == "source-workflow"
+    assert request["recoveryIdentity"]["workflowId"] == contract.destination_workflow_id
+    assert request["recoveryIdentity"]["runId"] == "destination-run"
+    assert request["destination"]["agentRunId"] == contract.destination_workspace_id
+    assert request["checkpoint"]["archiveDigest"] == f"sha256:{'a' * 64}"
+    assert request["checkpoint"]["manifestDigest"] == f"sha256:{'b' * 64}"
+    assert request["resumePhase"] == "continue_to_remediation"
+    assert request["idempotencyKey"] == f"{contract.destination_workflow_id}:restore"
 
 
 @pytest.mark.parametrize(
@@ -168,4 +188,3 @@ def test_continuation_budget_is_monotonic_and_bounded() -> None:
         ControlStopContinuationError, match="continuation_attempt_budget_exhausted"
     ):
         after_no_progress.consume(progress=True)
-

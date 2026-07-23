@@ -165,8 +165,15 @@ class ControlStopContinuationContract(BaseModel):
     remaining_work_ref: str = Field(alias="remainingWorkRef", min_length=1)
     remaining_work_digest: str = Field(alias="remainingWorkDigest", min_length=1)
     workspace_head_ref: str = Field(alias="workspaceHeadRef", min_length=1)
-    workspace_head_digest: str = Field(alias="workspaceHeadDigest", min_length=1)
+    workspace_head_digest: str = Field(
+        alias="workspaceHeadDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
     workspace_base_commit: str = Field(alias="workspaceBaseCommit", min_length=1)
+    workspace_manifest_ref: str = Field(alias="workspaceManifestRef", min_length=1)
+    workspace_manifest_digest: str = Field(
+        alias="workspaceManifestDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     checkpoint_kind: Literal["worktree_archive"] = Field(alias="checkpointKind")
     checkpoint_boundary: Literal["after_gate"] = Field(alias="checkpointBoundary")
     terminal_head: bool = Field(alias="terminalHead")
@@ -185,6 +192,12 @@ class ControlStopContinuationContract(BaseModel):
     continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
     deployment_generation: str = Field(alias="deploymentGeneration", min_length=1)
     deployment_promoted: bool = Field(alias="deploymentPromoted")
+    restore_capability_set_version: str = Field(
+        alias="restoreCapabilitySetVersion", min_length=1
+    )
+    restore_capability_digest: str = Field(
+        alias="restoreCapabilityDigest", min_length=1
+    )
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=200)
     instruction_changes_ref: str | None = Field(None, alias="instructionChangesRef")
     instruction_changes_digest: str | None = Field(
@@ -253,3 +266,46 @@ class ControlStopContinuationContract(BaseModel):
             "hostProfile": "omnigent-host-codex",
         }
 
+    def restore_request(self, *, destination_run_id: str) -> dict[str, Any]:
+        """Build the canonical cold-restore activity request.
+
+        The recovery workflow validates this request and its result before an
+        Omnigent AgentRun may be started.
+        """
+
+        return {
+            "schemaVersion": "v1",
+            "recoveryIdentity": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "continue-remediation",
+                "executionOrdinal": self.source_budget.consumed_attempts + 1,
+            },
+            "source": {
+                "workflowId": self.source_workflow_id,
+                "runId": self.source_run_id,
+                "logicalStepId": "verify",
+                "executionOrdinal": self.source_budget.consumed_attempts,
+                "checkpointRef": self.workspace_head_ref,
+                "checkpointBoundary": self.checkpoint_boundary,
+            },
+            "checkpoint": {
+                "kind": self.checkpoint_kind,
+                "baseCommit": self.workspace_base_commit,
+                "archiveRef": self.workspace_head_ref,
+                "archiveDigest": self.workspace_head_digest,
+                "manifestRef": self.workspace_manifest_ref,
+                "manifestDigest": self.workspace_manifest_digest,
+            },
+            "destination": {
+                "runtimeId": "codex_cli",
+                "agentRunId": self.destination_workspace_id,
+                "repository": self.repository,
+                "relativePath": "repo",
+            },
+            "workspacePolicy": "restore_pre_execution",
+            "resumePhase": "continue_to_remediation",
+            "capabilitySetVersion": self.restore_capability_set_version,
+            "capabilityDigest": self.restore_capability_digest,
+            "idempotencyKey": f"{self.destination_workflow_id}:restore",
+        }
