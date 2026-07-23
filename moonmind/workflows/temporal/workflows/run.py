@@ -5004,6 +5004,8 @@ class MoonMindRunWorkflow:
                             "relativePath": "repo",
                         }
                     except workflow._NotInWorkflowEventLoopError:
+                        # Pure unit callers cannot derive a durable workflow identity;
+                        # the real workflow path always records this locator.
                         pass
         elif (
             agent_kind == "managed"
