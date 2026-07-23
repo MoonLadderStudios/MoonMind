@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
 )
@@ -113,6 +114,24 @@ class _CurrentStaticLoopCutoverReplayFixture:
         if workflow.patched(RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH):
             return ["controller", "remediation:1", "verification:1"]
         return commands
+
+
+@workflow.defn(name="MM3478TypedRecoveryCutoverReplayFixture")
+class _LegacyTypedRecoveryCutoverReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        # The retained failed-step history predates the typed target and must
+        # continue to emit exactly the original restore/continuation commands.
+        return ["restore_failed_step_checkpoint", "rerun_failed_step"]
+
+
+@workflow.defn(name="MM3478TypedRecoveryCutoverReplayFixture")
+class _CurrentTypedRecoveryCutoverReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str]:
+        if not workflow.patched(RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH):
+            return ["restore_failed_step_checkpoint", "rerun_failed_step"]
+        return ["compile_typed_recovery_target", "restore_checkpoint", "continue"]
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -407,6 +426,52 @@ async def test_static_remediation_history_replays_across_loop_schema_cutover() -
 
     replayer = Replayer(
         workflows=[_CurrentStaticLoopCutoverReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_failed_step_history_replays_across_typed_recovery_cutover() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3478-failed-step-history",
+            workflows=[_LegacyTypedRecoveryCutoverReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyTypedRecoveryCutoverReplayFixture.run,
+                id="test-mm3478-failed-step-history",
+                task_queue="test-mm3478-failed-step-history",
+            )
+            assert await legacy.result() == [
+                "restore_failed_step_checkpoint",
+                "rerun_failed_step",
+            ]
+            legacy_history = await legacy.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-mm3478-typed-history",
+            workflows=[_CurrentTypedRecoveryCutoverReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current = await env.client.start_workflow(
+                _CurrentTypedRecoveryCutoverReplayFixture.run,
+                id="test-mm3478-typed-history",
+                task_queue="test-mm3478-typed-history",
+            )
+            assert await current.result() == [
+                "compile_typed_recovery_target",
+                "restore_checkpoint",
+                "continue",
+            ]
+            current_history = await current.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentTypedRecoveryCutoverReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)
