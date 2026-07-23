@@ -82,13 +82,18 @@ class CheckpointRecoveryContract(BaseModel):
             raise RecoveryContractError(
                 CHECKPOINT_CAPABILITY_INVALID, "checkpoint kind is not restorable"
             )
-        supported_phases = self.capabilities.checkpoint_boundary_support.get(
-            self.source_checkpoint_boundary, ()
+        supported_phases = (
+            self.capabilities.checkpoint_boundary_support.get(
+                self.source_checkpoint_boundary, ()
+            )
+            if self.capabilities.capability_set_version == CAPABILITY_SET_VERSION
+            else (
+                ("rerun_failed_step",)
+                if self.source_checkpoint_boundary == "before_execution"
+                else ()
+            )
         )
-        if (
-            self.capabilities.capability_set_version == CAPABILITY_SET_VERSION
-            and self.resume_phase not in supported_phases
-        ):
+        if self.resume_phase not in supported_phases:
             raise RecoveryContractError(
                 CHECKPOINT_BOUNDARY_INCOMPATIBLE,
                 "workspace capability does not authorize the requested boundary",

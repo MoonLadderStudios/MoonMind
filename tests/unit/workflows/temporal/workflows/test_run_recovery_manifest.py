@@ -102,7 +102,7 @@ async def test_emit_recovery_manifest_writes_artifact_and_compact_summary(
     capabilities = resolve_runtime_execution_capabilities("omnigent")
     assert capabilities is not None
     workflow._step_workspace_capture_inputs["run-tests"] = {
-        "kind": "external_state_ref",
+        "kind": "worktree_archive",
         "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
     }
 
@@ -141,7 +141,7 @@ async def test_emit_recovery_manifest_writes_artifact_and_compact_summary(
     assert payload["lastAcceptedStep"]["logicalStepId"] == "prepare"
     assert payload["validation"]["result"] == "valid"
     assert payload["resumeAllowed"] is True
-    assert payload["recoveryEligibility"]["checkpointKind"] == "external_state_ref"
+    assert payload["recoveryEligibility"]["checkpointKind"] == "worktree_archive"
     # Compact, execution-linked summary.
     assert summary["resumeAllowed"] is True
     assert summary["failedLogicalStepId"] == "run-tests"
