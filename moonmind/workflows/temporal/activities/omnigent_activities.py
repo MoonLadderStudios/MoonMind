@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from temporalio import activity
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -54,12 +57,46 @@ async def omnigent_execute_activity(
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
         class OnDemandTemporalArtifactService:
+            async def create(self, **kwargs):
+                async with async_session_maker() as artifact_session:
+                    service = TemporalArtifactService(
+                        TemporalArtifactRepository(artifact_session)
+                    )
+                    return await service.create(**kwargs)
+
             async def read(self, *, artifact_id: str, **kwargs):
                 async with async_session_maker() as artifact_session:
                     service = TemporalArtifactService(
                         TemporalArtifactRepository(artifact_session)
                     )
                     return await service.read(artifact_id=artifact_id, **kwargs)
+
+            async def write_complete(self, *, artifact_id: str, **kwargs):
+                async with async_session_maker() as artifact_session:
+                    service = TemporalArtifactService(
+                        TemporalArtifactRepository(artifact_session)
+                    )
+                    return await service.write_complete(
+                        artifact_id=artifact_id, **kwargs
+                    )
+
+        artifact_service = OnDemandTemporalArtifactService()
+        from moonmind.omnigent.remediation_workspace import (
+            ArtifactRemediationHeadLoader,
+            ManagedServiceRemediationRestorer,
+            SandboxRemediationWorkspaceOwner,
+        )
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
+        )
+
+        workspace_root = Path(
+            os.environ.get("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+        )
+        restore_service = ManagedCheckpointRestoreService(
+            authority_root=workspace_root / "temporal_sandbox",
+            artifact_service=artifact_service,
+        )
 
         coordinator = OmnigentProfileBoundExecutionCoordinator(
             session_factory=async_session_maker,
@@ -69,7 +106,12 @@ async def omnigent_execute_activity(
             run_store=run_store,
             execution_runner=run_omnigent_execution,
             artifact_gateway=artifact_gateway,
-            artifact_service=OnDemandTemporalArtifactService(),
+            artifact_service=artifact_service,
+            workspace_owner=SandboxRemediationWorkspaceOwner(
+                workspace_root,
+                restorer=ManagedServiceRemediationRestorer(restore_service),
+                head_loader=ArtifactRemediationHeadLoader(artifact_service),
+            ),
         )
         return await coordinator.execute(request)
 

@@ -596,6 +596,9 @@ class AgentExecutionRequest(BaseModel):
         None, alias="stepExecution"
     )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    remediation_workspace: dict[str, Any] | None = Field(
+        None, alias="remediationWorkspace"
+    )
     terminal_contract: AgentTerminalContract | None = Field(
         None, alias="terminalContract"
     )
@@ -672,6 +675,17 @@ class AgentExecutionRequest(BaseModel):
                 raise ValueError(
                     "managedSession.runtimeId must match the managed-session runtime"
                 )
+        if self.remediation_workspace is not None:
+            from moonmind.omnigent.remediation_workspace import (
+                RemediationWorkspaceBinding,
+            )
+
+            binding = RemediationWorkspaceBinding.model_validate(
+                self.remediation_workspace
+            )
+            self.remediation_workspace = binding.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
         self.input_refs = [
             require_non_blank(item, field_name="inputRefs[]")
             for item in self.input_refs
