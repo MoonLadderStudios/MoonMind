@@ -6561,6 +6561,7 @@ function RecoveryEvidencePanel({
       case 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING': return 'The immutable runtime capability snapshot is missing. Refresh recovery evidence.';
       case 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH': return `${runtime} capabilities changed. Refresh recovery evidence before retrying.`;
       case 'CHECKPOINT_ARTIFACT_INVALID': return 'The checkpoint artifact or its source identity is invalid. Retry from source.';
+      case 'RECOVERY_TARGET_UNAVAILABLE': return 'The checkpoint is valid, but this run has no supported recovery target. Use Edit for rerun or Full retry.';
       case 'CHECKPOINT_SIDE_EFFECT_UNSAFE': return 'Prior side effects make checkpoint restoration unsafe. Resolve them or retry from source.';
       case 'CHECKPOINT_BOUNDARY_INCOMPATIBLE': return 'This checkpoint boundary has no legal continuation phase. Retry from source.';
       case 'CHECKPOINT_CAPTURE_UNSUPPORTED': return `${runtime} cannot capture a restorable workspace checkpoint. Retry from source.`;

@@ -130,6 +130,7 @@ CheckpointRecoveryDisabledReason = Literal[
     "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH",
     "CHECKPOINT_ARTIFACT_INVALID",
     "CHECKPOINT_SIDE_EFFECT_UNSAFE",
+    "RECOVERY_TARGET_UNAVAILABLE",
 ]
 SameSessionRecoveryDisabledReason = Literal[
     "SAME_SESSION_UNREACHABLE",

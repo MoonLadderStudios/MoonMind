@@ -14,7 +14,9 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     PreflightDecision,
     PublicationAction,
     PublicationDecision,
+    PublicationFeasibility,
     ProviderLeaseDecision,
+    RemainingWorkArtifact,
     TypedGateResult,
     VerificationWorkspaceSnapshot,
     advance_candidate_workspace_head,
@@ -139,6 +141,42 @@ def test_additional_work_needed_requires_durable_remaining_work_ref() -> None:
         match="ADDITIONAL_WORK_NEEDED requires remainingWorkRef durable evidence",
     ):
         _gate(remainingWorkRef=None)
+
+
+def test_remaining_work_v1_is_bounded_and_redacted() -> None:
+    artifact = RemainingWorkArtifact.model_validate(
+        {
+            "sourceGateResultRef": "artifact://gate/final",
+            "sourceVerificationRef": "artifact://verification/final",
+            "workspaceHeadRef": "artifact://workspace/final",
+            "gaps": ["implement result projection", "token=secret"],
+            "generatedAt": "2026-07-23T00:00:00Z",
+        }
+    )
+
+    assert artifact.schema_version == "remaining-work/v1"
+    assert artifact.gaps == ("implement result projection", "[REDACTED]")
+
+
+@pytest.mark.parametrize(
+    ("reason", "feasible"),
+    [
+        ("commits_ahead_of_base", True),
+        ("safe_candidate_diff", True),
+        ("verified_remote_head", True),
+        ("no_candidate_change", False),
+        ("publication_unauthorized", False),
+        ("candidate_contaminated", False),
+        ("publication_state_ambiguous", False),
+    ],
+)
+def test_publication_feasibility_has_stable_complete_reason_set(
+    reason: str, feasible: bool
+) -> None:
+    decision = PublicationFeasibility.model_validate(
+        {"feasible": feasible, "reason": reason}
+    )
+    assert decision.reason == reason
 
 
 def test_legacy_additional_work_uses_gate_result_as_remaining_work() -> None:

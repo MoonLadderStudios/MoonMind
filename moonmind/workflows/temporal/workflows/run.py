@@ -6721,6 +6721,7 @@ class MoonMindRunWorkflow:
             "diagnosticsRef": gate.diagnostics_ref,
             "progressSignature": gate.progress_signature,
         }
+        payload["attempt"] = attempt.model_dump(by_alias=True, mode="json")
         payload["budget"] = budget.model_dump(by_alias=True, mode="json")
         payload["currentLogicalStepId"] = logical_step_id
         current_node = next(
@@ -10981,13 +10982,63 @@ class MoonMindRunWorkflow:
                             "remediationBudget"
                         )
                         review_budget = continuation_decision.get("reviewGateBudget")
+                        gate_payload = continuation_decision.get("gate")
+                        gate_payload = (
+                            gate_payload if isinstance(gate_payload, Mapping) else {}
+                        )
+                        remaining_work_ref = (
+                            gate_payload.get("remainingWorkRef")
+                            or step_gate_result.remaining_work_ref
+                        )
+                        attempt_payload = continuation_decision.get("attempt")
+                        attempt_payload = (
+                            attempt_payload
+                            if isinstance(attempt_payload, Mapping)
+                            else {}
+                        )
+                        workspace_head_ref = (
+                            attempt_payload.get("checkpointAfterRef")
+                            or attempt_payload.get("checkpointBeforeRef")
+                        )
+                        feasibility = self._publication_feasibility(execution_result)
+                        exhausted_budget_dimension = (
+                            "consecutive_no_progress_attempts"
+                            if transition_reason == "no_progress_attempts_exhausted"
+                            else "remediation_attempts"
+                            if transition_reason == "remediation_budget_exhausted"
+                            else None
+                        )
                         self._workflow_control_stop = {
                             "kind": "workflow_gate",
                             "reasonCode": transition_reason,
                             "logicalStepId": node_id,
                             "verdict": normalized_gate,
+                            "terminalDisposition": "failed_with_remaining_work",
                             "gateResultRef": step_gate_result_ref,
-                            "remainingWorkRef": step_gate_result.remaining_work_ref,
+                            "verificationRef": gate_payload.get("diagnosticsRef"),
+                            "remainingWorkRef": remaining_work_ref,
+                            "workspaceHeadRef": workspace_head_ref,
+                            "exhaustedBudgetDimension": exhausted_budget_dimension,
+                            "lastAcceptedStepExecutionId": attempt_payload.get(
+                                "stepExecutionId"
+                            ),
+                            "publicationFeasible": feasibility["feasible"],
+                            "publicationFeasibilityReason": feasibility["reason"],
+                            "publicationAttempted": False,
+                            "auxiliaryOutcomes": {
+                                "evidencePublication": {"status": "preserved"},
+                                "gitPublication": {"status": "not_attempted"},
+                                "workspacePreservation": {
+                                    "status": (
+                                        "preserved"
+                                        if workspace_head_ref
+                                        else "unavailable"
+                                    )
+                                },
+                                "hostCleanup": {"status": "pending"},
+                                "providerProfileRelease": {"status": "pending"},
+                                "janitorRequired": False,
+                            },
                             "reviewGateBudget": (
                                 dict(review_budget)
                                 if isinstance(review_budget, Mapping)
@@ -11040,7 +11091,12 @@ class MoonMindRunWorkflow:
                         if (
                             publish_mode == "pr"
                             and draft_publication_policy is not None
+                            and feasibility["feasible"]
                         ):
+                            self._workflow_control_stop["publicationAttempted"] = True
+                            self._workflow_control_stop["auxiliaryOutcomes"][
+                                "gitPublication"
+                            ] = {"status": "attempted"}
                             draft_summary = (
                                 self._activate_moonspec_draft_publication(
                                     blocking_gate_reason,
@@ -11081,6 +11137,29 @@ class MoonMindRunWorkflow:
                             )
                             self._update_memo()
                             break
+                        if (
+                            draft_publication_policy is not None
+                            and not feasibility["feasible"]
+                        ):
+                            self._publish_context["noChangeHandoff"] = {
+                                "status": "artifact_backed",
+                                "publicationFeasible": False,
+                                "reason": feasibility["reason"],
+                                "remainingWorkRef": remaining_work_ref,
+                                "workspaceHeadRef": workspace_head_ref,
+                                "actions": [
+                                    "edit_for_rerun",
+                                    "full_retry",
+                                    "continue_remediation_not_yet_admitted",
+                                ],
+                            }
+                            control_stop_summary = (
+                                "Verification completed as an operation but the quality "
+                                f"gate returned {normalized_gate}. No pull request was "
+                                "attempted because no publishable candidate change existed; "
+                                "the remaining-work evidence is preserved for Edit for rerun "
+                                "or Full retry."
+                            )
                         self._plan_blocked_message = control_stop_summary
                         self._publish_status = "not_required"
                         self._publish_reason = control_stop_summary
@@ -14481,24 +14560,48 @@ class MoonMindRunWorkflow:
         return slugs
 
     def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
+        return self._publication_feasibility(execution_result)["feasible"]
+
+    def _publication_feasibility(self, execution_result: Any) -> dict[str, Any]:
+        """Classify accepted repository evidence before selecting a handoff."""
+
         if self._extract_pull_request_url(execution_result):
-            return True
+            return {"feasible": True, "reason": "verified_remote_head"}
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
-            return False
+            return {"feasible": False, "reason": "publication_state_ambiguous"}
+        if outputs.get("publication_authorized") is False:
+            return {"feasible": False, "reason": "publication_unauthorized"}
+        if outputs.get("candidate_contaminated") is True:
+            return {"feasible": False, "reason": "candidate_contaminated"}
         push_status = str(outputs.get("push_status") or "").strip().lower()
         if push_status in {"pushed", "published"}:
-            return True
+            return {"feasible": True, "reason": "verified_remote_head"}
         commit_count = outputs.get("push_commit_count")
         if commit_count is None:
             commit_count = outputs.get("pushCommitCount")
         if isinstance(commit_count, bool):
-            return False
+            return {"feasible": False, "reason": "publication_state_ambiguous"}
         if isinstance(commit_count, (int, float)):
-            return int(commit_count) > 0
+            return {
+                "feasible": int(commit_count) > 0,
+                "reason": (
+                    "commits_ahead_of_base"
+                    if int(commit_count) > 0
+                    else "no_candidate_change"
+                ),
+            }
         if isinstance(commit_count, str) and commit_count.strip().isdigit():
-            return int(commit_count.strip()) > 0
-        return False
+            count = int(commit_count.strip())
+            return {
+                "feasible": count > 0,
+                "reason": "commits_ahead_of_base" if count > 0 else "no_candidate_change",
+            }
+        if outputs.get("candidate_diff_ref") or outputs.get("candidateDiffRef"):
+            return {"feasible": True, "reason": "safe_candidate_diff"}
+        if outputs.get("repository_changed") is False:
+            return {"feasible": False, "reason": "no_candidate_change"}
+        return {"feasible": False, "reason": "publication_state_ambiguous"}
 
     @staticmethod
     def _sanitize_operator_summary(summary: str | None) -> str | None:
