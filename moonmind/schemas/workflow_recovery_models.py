@@ -225,6 +225,14 @@ class WorkflowRecoveryTargetModel(BaseModel):
             self.checkpoint.digest,
         )
         destination_ok = self.destination.creation_key == creation_key
+        destination_ok = destination_ok and bool(
+            self.destination.workflow_id != self.source.workflow_id
+            and self.destination.run_id is None
+            and self.destination.runtime_id
+            == capability.get("runtimeId")
+            and self.destination.workspace_reservation_id
+            != self.checkpoint.source_workspace_ref
+        )
         return (
             _dimension("checkpoint", checkpoint_ok, "RECOVERY_CHECKPOINT_INVALID"),
             _dimension("target", target_reason is None, target_reason),

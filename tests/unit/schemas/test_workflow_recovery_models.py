@@ -201,3 +201,26 @@ def test_duplicate_requests_have_one_deterministic_destination_key() -> None:
     second = WorkflowRecoveryTargetModel.model_validate(_payload())
 
     assert first.destination.creation_key == second.destination.creation_key
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("workflowId", "source-workflow"),
+        ("runId", "already-started-run"),
+        ("runtimeId", "codex_cli"),
+        ("workspaceReservationId", "workspace://source"),
+    ],
+)
+def test_destination_must_be_new_and_match_frozen_capability(
+    field: str, value: str
+) -> None:
+    payload = _payload()
+    payload["destination"][field] = value
+    contract = WorkflowRecoveryTargetModel.model_validate(payload)
+    dimensions = {item.dimension: item for item in contract.admission()}
+
+    assert dimensions["checkpoint"].admitted is True
+    assert dimensions["destination"].reason_code == (
+        "RECOVERY_DESTINATION_IDENTITY_MISMATCH"
+    )
