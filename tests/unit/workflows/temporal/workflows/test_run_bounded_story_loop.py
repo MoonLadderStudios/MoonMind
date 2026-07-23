@@ -30,7 +30,7 @@ async def test_terminal_remaining_work_is_persisted_redacted_and_linked(
 
     async def fake_write_json_artifact(**kwargs: Any) -> str:
         captured.update(kwargs)
-        return "remaining-work-final"
+        return "art_remaining_work_final"
 
     monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
     monkeypatch.setattr(
@@ -57,7 +57,7 @@ async def test_terminal_remaining_work_is_persisted_redacted_and_linked(
         workspace_head_ref="artifact://workspace/final",
     )
 
-    assert ref == "artifact://remaining-work-final"
+    assert ref == "artifact://art_remaining_work_final"
     assert captured["payload"]["schemaVersion"] == "remaining-work/v1"
     assert captured["payload"]["gaps"] == ["[REDACTED]"]
     assert captured["payload"]["sourceGateResultRef"] == "artifact://gate/final"
@@ -92,7 +92,7 @@ async def test_terminal_remaining_work_persistence_failure_fails_closed(
 
 
 def test_terminal_handoff_side_effects_have_replay_patch_boundary() -> None:
-    source = inspect.getsource(MoonMindRunWorkflow.run)
+    source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
 
     assert RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH in source
     assert source.index(RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH) < source.index(
@@ -1153,6 +1153,15 @@ def test_publication_feasibility_requires_typed_accepted_evidence() -> None:
 
     assert workflow._publication_feasibility(
         {"outputs": {"push_commit_count": 2}}
+    )["reason"] == "publication_state_ambiguous"
+    assert workflow._publication_feasibility(
+        {
+            "outputs": {
+                "acceptedRepositoryEvidence": {
+                    "candidateDiffRef": "diff --git a/file b/file",
+                }
+            }
+        }
     )["reason"] == "publication_state_ambiguous"
     assert workflow._publication_feasibility(
         {

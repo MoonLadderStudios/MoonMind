@@ -6837,13 +6837,24 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     memo = dict(getattr(record, "memo", None) or {})
-    finish_summary = _finish_summary_from_memo(memo) or {}
+    persisted_finish_summary = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(persisted_finish_summary)
+        if isinstance(persisted_finish_summary, Mapping)
+        else (_finish_summary_from_memo(memo) or {})
+    )
     control_stop = (
         finish_summary.get("controlStop")
         if isinstance(finish_summary, Mapping)
         else None
     )
     control_stop = control_stop if isinstance(control_stop, Mapping) else {}
+    metrics = control_stop.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    auxiliary_outcomes = control_stop.get("auxiliaryOutcomes")
+    auxiliary_outcomes = (
+        auxiliary_outcomes if isinstance(auxiliary_outcomes, Mapping) else {}
+    )
     waiting_reason = (
         str(getattr(record, "waiting_reason", "") or "").strip()
         or str(memo.get("waiting_reason") or "").strip()
@@ -6963,11 +6974,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         enabled = enabled | {"can_failed_step_resume"}
     if raw_state == "failed":
         enabled = enabled | {"can_full_retry"}
-        if bool((control_stop.get("metrics") or {}).get("remediationAdmitted")):
+        if bool(metrics.get("remediationAdmitted")):
             enabled = enabled | {"can_continue_remediation"}
-        git_publication = (control_stop.get("auxiliaryOutcomes") or {}).get(
-            "gitPublication"
-        )
+        git_publication = auxiliary_outcomes.get("gitPublication")
         if isinstance(git_publication, Mapping) and git_publication.get("status") == "failed":
             enabled = enabled | {"can_retry_publication"}
     capability_values = {
@@ -7031,9 +7040,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             )
             continue
         if field_name == "can_retry_publication" and raw_state == "failed":
-            git_publication = (control_stop.get("auxiliaryOutcomes") or {}).get(
-                "gitPublication"
-            )
+            git_publication = auxiliary_outcomes.get("gitPublication")
             disabled_reasons[alias] = (
                 "publication_not_failed"
                 if isinstance(git_publication, Mapping)

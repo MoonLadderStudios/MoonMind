@@ -14722,7 +14722,7 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
         settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
     )
     record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
-    record.memo["finishSummary"] = {
+    record.finish_summary_json = {
         "controlStop": {
             "kind": "workflow_gate",
             "remainingWorkRef": "artifact://remaining/final",
@@ -14742,6 +14742,27 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
         "candidateRef": "artifact://workspace/final",
         "remainingWorkRef": "artifact://remaining/final",
     }
+
+
+@pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
+def test_workflow_gate_actions_ignore_malformed_optional_control_stop_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_field: str,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record.finish_summary_json = {
+        "controlStop": {
+            "kind": "workflow_gate",
+            malformed_field: "not-an-object",
+        }
+    }
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canFullRetry"] is True
+    assert actions["canContinueRemediation"] is False
+    assert actions["canRetryPublication"] is False
 
 
 def test_workflow_gate_actions_expose_action_specific_disabled_reasons(

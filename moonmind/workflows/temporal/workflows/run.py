@@ -14941,11 +14941,14 @@ class MoonMindRunWorkflow:
             return PublicationFeasibility(
                 feasible=False, reason="publication_state_ambiguous"
             ).model_dump(by_alias=True)
+        candidate_diff_ref = self._bounded_story_loop_artifact_ref(
+            evidence.get("candidateDiffRef")
+        )
         evidence_refs = tuple(
             ref
             for ref in (
                 self._bounded_story_loop_artifact_ref(evidence.get("evidenceRef")),
-                self._bounded_story_loop_artifact_ref(evidence.get("candidateDiffRef")),
+                candidate_diff_ref,
             )
             if ref
         )
@@ -14981,7 +14984,7 @@ class MoonMindRunWorkflow:
                 ),
                 evidenceRefs=evidence_refs,
             ).model_dump(by_alias=True)
-        if evidence.get("candidateDiffRef"):
+        if candidate_diff_ref:
             return PublicationFeasibility(
                 feasible=True,
                 reason="safe_candidate_diff",

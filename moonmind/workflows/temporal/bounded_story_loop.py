@@ -14,6 +14,8 @@ from pydantic import (
     model_validator,
 )
 
+from moonmind.utils.logging import redact_sensitive_text
+
 
 ArtifactRef = str
 
@@ -518,8 +520,7 @@ class RemainingWorkArtifact(_ContractModel):
             if not item:
                 continue
             # Artifact payloads must not become an alternate raw-log channel.
-            if any(token in item.lower() for token in ("token=", "password=", "authorization:")):
-                item = "[REDACTED]"
+            item = redact_sensitive_text(item)
             bounded.append(item[:500])
         return tuple(bounded)
 
