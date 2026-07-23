@@ -141,6 +141,28 @@ def test_additional_work_needed_requires_durable_remaining_work_ref() -> None:
         _gate(remainingWorkRef=None)
 
 
+def test_legacy_additional_work_uses_gate_result_as_remaining_work() -> None:
+    gate = TypedGateResult.from_boundary_payload(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "gateResultRef": "artifact://gate/legacy",
+        }
+    )
+
+    assert gate.remaining_work_ref == "artifact://gate/legacy"
+    assert gate.degraded is False
+
+
+def test_legacy_additional_work_without_evidence_degrades_deterministically() -> None:
+    gate = TypedGateResult.from_boundary_payload(
+        {"verdict": "ADDITIONAL_WORK_NEEDED"}
+    )
+
+    assert gate.verdict == "NO_DETERMINATION"
+    assert gate.terminal_disposition == "blocked"
+    assert gate.degraded is True
+
+
 def test_candidate_workspace_head_advances_from_latest_durable_checkpoint() -> None:
     root = advance_candidate_workspace_head(
         previous=None,

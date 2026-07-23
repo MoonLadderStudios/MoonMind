@@ -201,6 +201,24 @@ class TypedGateResult(_ContractModel):
             return cls.model_validate(degraded_payload)
         merged = dict(payload)
         merged["verdict"] = raw_verdict
+        if raw_verdict == "ADDITIONAL_WORK_NEEDED" and not (
+            merged.get("remainingWorkRef") or merged.get("remaining_work_ref")
+        ):
+            gate_result_ref = merged.get("gateResultRef") or merged.get(
+                "gate_result_ref"
+            )
+            if gate_result_ref:
+                merged["remainingWorkRef"] = gate_result_ref
+            else:
+                return cls.model_validate(
+                    {
+                        "verdict": "NO_DETERMINATION",
+                        "terminalDisposition": "blocked",
+                        "diagnosticsRef": merged.get("diagnosticsRef")
+                        or merged.get("diagnostics_ref"),
+                        "degraded": True,
+                    }
+                )
         return cls.model_validate(merged)
 
 

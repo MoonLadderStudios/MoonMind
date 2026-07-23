@@ -804,6 +804,24 @@ def test_parent_loop_uses_gate_report_as_durable_remaining_work_evidence() -> No
     assert decision["gate"]["remainingWorkRef"] == "artifact://gate/attempt-1"
 
 
+def test_parent_loop_accepts_canonical_artifact_id_as_gate_evidence() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    gate = workflow._bounded_story_loop_gate_from_step_gate(
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="art_gate_result",
+        logical_step_id="verify-1",
+        progress_budget_enabled=False,
+    )
+
+    assert gate.gate_result_ref == "artifact://art_gate_result"
+    assert gate.remaining_work_ref == "artifact://art_gate_result"
+
+
 def test_parent_loop_continues_to_unannotated_issue_implement_remediation_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
