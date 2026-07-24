@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
+    RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
@@ -113,6 +114,28 @@ class _CurrentStaticLoopCutoverReplayFixture:
         if workflow.patched(RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH):
             return ["controller", "remediation:1", "verification:1"]
         return commands
+
+
+@workflow.defn(name="MMRemediationArtifactRefReplayFixture")
+class _LegacyRemediationArtifactRefReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        return "art_gate_result"
+
+
+@workflow.defn(name="MMRemediationArtifactRefReplayFixture")
+class _CurrentRemediationArtifactRefReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        artifact_ref = "art_gate_result"
+        if workflow.patched(
+            RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH
+        ):
+            return (
+                MoonMindRunWorkflow._bounded_story_loop_artifact_ref(artifact_ref)
+                or ""
+            )
+        return artifact_ref
 
 
 def _mm3379_remediation_nodes() -> list[dict[str, Any]]:
@@ -407,6 +430,45 @@ async def test_static_remediation_history_replays_across_loop_schema_cutover() -
 
     replayer = Replayer(
         workflows=[_CurrentStaticLoopCutoverReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_remediation_artifact_ref_normalization_histories_replay() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-remediation-artifact-ref-legacy-replay",
+            workflows=[_LegacyRemediationArtifactRefReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy_handle = await env.client.start_workflow(
+                _LegacyRemediationArtifactRefReplayFixture.run,
+                id="test-remediation-artifact-ref-legacy",
+                task_queue="test-remediation-artifact-ref-legacy-replay",
+            )
+            assert await legacy_handle.result() == "art_gate_result"
+            legacy_history = await legacy_handle.fetch_history()
+
+        async with Worker(
+            env.client,
+            task_queue="test-remediation-artifact-ref-current-replay",
+            workflows=[_CurrentRemediationArtifactRefReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            current_handle = await env.client.start_workflow(
+                _CurrentRemediationArtifactRefReplayFixture.run,
+                id="test-remediation-artifact-ref-current",
+                task_queue="test-remediation-artifact-ref-current-replay",
+            )
+            assert await current_handle.result() == "artifact://art_gate_result"
+            current_history = await current_handle.fetch_history()
+
+    replayer = Replayer(
+        workflows=[_CurrentRemediationArtifactRefReplayFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(legacy_history)

@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
+    RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
@@ -3501,6 +3502,61 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
     assert projection["latestVerdict"] == "ADDITIONAL_WORK_NEEDED"
     assert projection["continuationDecisionRef"] == "artifact://decision/D0"
     mock_run_workflow._write_json_artifact.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_normalizes_runtime_artifact_ids(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {"id": "controller", "annotations": {"remediationLoop": loop}}
+        ]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="art_decision_D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id == RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH
+        ),
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="art_verification_V0",
+        remaining_work_ref="art_remaining_R0",
+    )
+
+    assert admitted is True
+    state = mock_run_workflow._remediation_loop_state
+    assert state is not None
+    assert state.latest_verification_ref == "artifact://art_verification_V0"
+    assert state.latest_progress_ref == "artifact://art_remaining_R0"
+    assert state.continuation_decision_ref == "artifact://art_decision_D0"
 
 
 @pytest.mark.asyncio

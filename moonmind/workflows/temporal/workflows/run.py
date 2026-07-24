@@ -734,6 +734,13 @@ RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
 RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = (
     "run-remediation-loop-continue-as-new-v1"
 )
+# Agent/runtime artifact activities return opaque ``art_`` IDs, while the
+# deterministic remediation state stores canonical ``artifact://`` refs.
+# Version the boundary normalization so histories that already evaluated a gate
+# retain their original command sequence during replay.
+RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
+    "run-remediation-loop-artifact-ref-normalization-v1"
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3941,6 +3948,28 @@ class MoonMindRunWorkflow:
         state = self._remediation_loop_state
         if spec is None or state is None:
             return False
+        normalize_artifact_refs = workflow.patched(
+            RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH
+        )
+        if normalize_artifact_refs:
+            normalized_gate_result_ref = self._bounded_story_loop_artifact_ref(
+                gate_result_ref
+            )
+            if normalized_gate_result_ref is None:
+                raise ValueError(
+                    "dynamic remediation verification requires an artifact gate result"
+                )
+            gate_result_ref = normalized_gate_result_ref
+            if remaining_work_ref:
+                normalized_remaining_work_ref = (
+                    self._bounded_story_loop_artifact_ref(remaining_work_ref)
+                )
+                if normalized_remaining_work_ref is None:
+                    raise ValueError(
+                        "dynamic remediation verification requires an artifact "
+                        "remaining-work result"
+                    )
+                remaining_work_ref = normalized_remaining_work_ref
         if self._remediation_workspace_head is None and workspace_head is not None:
             self._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
                 workspace_head
@@ -3985,6 +4014,16 @@ class MoonMindRunWorkflow:
             ),
             payload=decision.model_dump(by_alias=True, mode="json"),
         )
+        if normalize_artifact_refs:
+            normalized_decision_ref = self._bounded_story_loop_artifact_ref(
+                decision_ref
+            )
+            if normalized_decision_ref is None:
+                raise ValueError(
+                    "dynamic remediation verification requires an artifact "
+                    "continuation decision"
+                )
+            decision_ref = normalized_decision_ref
         state = apply_continuation_decision(
             state,
             decision=decision,
