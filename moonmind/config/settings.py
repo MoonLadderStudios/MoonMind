@@ -2339,6 +2339,55 @@ class FeatureFlagsSettings(BaseSettings):
             "PUBLICATION_RECOVERY_GENERATION",
         ),
     )
+    control_stop_continuation_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ENABLED",
+            "CONTROL_STOP_CONTINUATION_ENABLED",
+        ),
+    )
+    control_stop_continuation_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_SHADOW",
+            "CONTROL_STOP_CONTINUATION_SHADOW",
+        ),
+    )
+    control_stop_continuation_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS",
+            "CONTROL_STOP_CONTINUATION_CANARY_OWNER_IDS",
+        ),
+    )
+    control_stop_continuation_allowed_provider_profile_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS",
+            "CONTROL_STOP_CONTINUATION_ALLOWED_PROVIDER_PROFILE_IDS",
+        ),
+    )
+    control_stop_continuation_allowed_execution_profile_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS",
+            "CONTROL_STOP_CONTINUATION_ALLOWED_EXECUTION_PROFILE_REFS",
+        ),
+    )
+    control_stop_continuation_allowed_launch_policy_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS",
+            "CONTROL_STOP_CONTINUATION_ALLOWED_LAUNCH_POLICY_REFS",
+        ),
+    )
+    control_stop_continuation_generation: str = Field(
+        "disabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION",
+            "CONTROL_STOP_CONTINUATION_GENERATION",
+        ),
+    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",

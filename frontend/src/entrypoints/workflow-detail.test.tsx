@@ -697,6 +697,119 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText(/No failed Step Execution was fabricated/)).toBeTruthy();
   });
 
+  it('submits an explicit operator-selected budget from the authorized grant', async () => {
+    window.history.pushState(
+      {},
+      'Continuation budget test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    const execution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      runId: '02-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Quality gate stopped run',
+      summary: 'Remaining work is preserved.',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {
+        canContinueRemediation: true,
+        actionEvidence: {
+          continueRemediation: {
+            controlStopId: 'verify:control-stop:6',
+            candidateRef: 'artifact://workspace/final',
+            remainingWorkRef: 'artifact://remaining/final',
+            sourceBudget: {
+              maxAttempts: 6,
+              consumedAttempts: 6,
+              exhaustedDimension: 'remediation_attempts',
+            },
+            continuationBudget: {
+              grantId: 'grant-authorized',
+              maxAttempts: 4,
+              maxConsecutiveNoProgressAttempts: 2,
+            },
+            destinationWorkflowId: 'control-stop-continuation-linked',
+            restorationEvidenceRef: 'artifact://restore/evidence',
+            hostSessionLifecycle: {
+              activityCleanupCompleted: true,
+              omnigentSessionId: 'session-7',
+            },
+          },
+        },
+      },
+      finishSummary: {
+        finishOutcome: { code: 'FAILED', stage: 'finalizing' },
+        controlStop: {
+          kind: 'workflow_gate',
+          controlStopId: 'verify:control-stop:6',
+          verdict: 'ADDITIONAL_WORK_NEEDED',
+          reasonCode: 'remediation_budget_exhausted',
+          remainingWorkRef: 'artifact://remaining/final',
+          workspaceHeadRef: 'artifact://workspace/final',
+          publicationFeasible: false,
+          publicationAttempted: false,
+        },
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/actions/continue-remediation') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            destinationWorkflowId: 'control-stop-continuation-linked',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => execution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByText('4 attempts · 2 consecutive no-progress')).toBeTruthy();
+    expect(screen.getByText('6 / 6 · remediation attempts')).toBeTruthy();
+    expect(screen.getByText('artifact://restore/evidence')).toBeTruthy();
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'Continuation maximum attempts' }),
+      { target: { value: '3' } },
+    );
+    fireEvent.change(
+      screen.getByRole('spinbutton', {
+        name: 'Continuation consecutive no-progress attempts',
+      }),
+      { target: { value: '1' } },
+    );
+    const menu = await openWorkflowActionsMenu('Continue remediation');
+    fireEvent.click(
+      within(menu).getByRole('menuitem', { name: 'Continue remediation' }),
+    );
+
+    await waitFor(() => {
+      const post = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith('/actions/continue-remediation') &&
+          init?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+        proposedContinuationBudget: {
+          maxAttempts: 3,
+          maxConsecutiveNoProgressAttempts: 1,
+        },
+      });
+    });
+  });
+
   function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
     const selectedExecution = {
       taskId: 'test-123',
