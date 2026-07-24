@@ -331,7 +331,7 @@ hostConnection:
     bindAddress: 0.0.0.0
     port: 8000
     authMode: upstream_runner_tunnel
-    protocolProfile: omnigent.runner_tunnel.538494ff
+    protocolProfile: omnigent.runner_tunnel.983c93c6
 
 sessionDefaults:
   hostType: managed
