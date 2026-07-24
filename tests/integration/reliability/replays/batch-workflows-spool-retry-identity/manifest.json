@@ -1,0 +1,25 @@
+{
+  "failureShapeId": "batch-workflows-spool-retry-identity",
+  "incidentWorkflowId": "mm:f10b86c4-3ad4-40d5-8574-9bd264e0e634",
+  "terminalContract": {
+    "contractId": "batch_workflows_fanout.v1",
+    "relativePath": "artifacts/batch-workflows-result.json",
+    "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
+    "executionRef": "workflow:run:batch-workflows:execution:4"
+  },
+  "resolvedTargets": ["EXAMPLE-1", "EXAMPLE-2"],
+  "terminalEvidence": {
+    "schemaVersion": "moonmind.batch-workflows-result.v1",
+    "contractId": "batch_workflows_fanout.v1",
+    "executionRef": "workflow:run:batch-workflows:execution:4",
+    "status": "queued",
+    "requested": 2,
+    "created": 2,
+    "queued": [
+      {"executionId": "mm:child-example-1"},
+      {"executionId": "mm:child-example-2"}
+    ],
+    "skipped": [],
+    "errors": []
+  }
+}

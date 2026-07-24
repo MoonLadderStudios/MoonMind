@@ -1906,6 +1906,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/actions/continue-remediation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Remediation
+         * @description Admit one deterministic continuation from authoritative frozen evidence.
+         */
+        post: operations["continue_remediation_api_executions__workflow_id__actions_continue_remediation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/update": {
         parameters: {
             query?: never;
@@ -2059,6 +2079,26 @@ export interface paths {
          *     a new workflow execution with identical settings.
          */
         post: operations["rerun_execution_api_executions__workflow_id__rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/retry-publication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Execution Publication
+         * @description Start or reconcile exactly one publication-only linked workflow.
+         */
+        post: operations["retry_execution_publication_api_executions__workflow_id__retry_publication_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6058,6 +6098,58 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ContinuationBudgetGrant */
+        ContinuationBudgetGrant: {
+            /** Grantid */
+            grantId: string;
+            /** Maxattempts */
+            maxAttempts: number;
+            /** Maxconsecutivenoprogressattempts */
+            maxConsecutiveNoProgressAttempts: number;
+            /**
+             * Consumedattempts
+             * @default 0
+             */
+            consumedAttempts: number;
+            /**
+             * Consecutivenoprogressattempts
+             * @default 0
+             */
+            consecutiveNoProgressAttempts: number;
+        };
+        /**
+         * ContinueRemediationRequest
+         * @description Select the frozen control-stop evidence owned by the source execution.
+         */
+        ContinueRemediationRequest: {
+            /** Controlstopid */
+            controlStopId: string;
+            continuationBudget: components["schemas"]["ContinuationBudgetGrant"];
+            /** Instructionchangesref */
+            instructionChangesRef?: string | null;
+            /** Instructionchangesdigest */
+            instructionChangesDigest?: string | null;
+        };
+        /**
+         * ContinueRemediationResponse
+         * @description Stable linked destination returned for both first and duplicate submissions.
+         */
+        ContinueRemediationResponse: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Controlstopid */
+            controlStopId: string;
+            /** Destinationworkflowid */
+            destinationWorkflowId: string;
+            /** Workspaceheadref */
+            workspaceHeadRef: string;
+            /** Remainingworkref */
+            remainingWorkRef: string;
+            /** Created */
+            created: boolean;
+        };
         /**
          * CreateArtifactRequest
          * @description Create a pending artifact and return upload details.
@@ -6877,7 +6969,7 @@ export interface components {
             /** Actionevidence */
             actionEvidence?: {
                 [key: string]: {
-                    [key: string]: string | null;
+                    [key: string]: unknown;
                 };
             };
             /**
@@ -10025,6 +10117,21 @@ export interface components {
             status: string;
             /** Message */
             message: string;
+        };
+        /** PublicationRecoveryResponse */
+        PublicationRecoveryResponse: {
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Publicationidempotencykey */
+            publicationIdempotencyKey: string;
+            /** Rolloutgeneration */
+            rolloutGeneration: string;
         };
         /**
          * QueueSystemMetadataModel
@@ -16585,6 +16692,41 @@ export interface operations {
             };
         };
     };
+    continue_remediation_api_executions__workflow_id__actions_continue_remediation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueRemediationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinueRemediationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_execution_api_executions__workflow_id__update_post: {
         parameters: {
             query?: never;
@@ -16879,6 +17021,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_execution_publication_api_executions__workflow_id__retry_publication_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicationRecoveryResponse"];
                 };
             };
             /** @description Validation Error */

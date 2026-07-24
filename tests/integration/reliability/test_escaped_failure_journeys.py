@@ -166,6 +166,42 @@ async def test_completed_batch_turn_without_fanout_evidence_fails() -> None:
     assert expected["parentState"] == "failed"
 
 
+async def test_verified_remediation_push_reaches_draft_publication_handoff() -> None:
+    """Replay the two orphaned branches through the production authority seam."""
+    replay_id = "draft-publication-authority-gap"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    for case in manifest["cases"]:
+        workflow_run = MoonMindRunWorkflow()
+        raw_result = {"outputs": case["pushResult"]}
+        assert workflow_run._publication_feasibility(raw_result)["reason"] == (
+            "publication_state_ambiguous"
+        )
+
+        accepted = TemporalAgentRuntimeActivities._accepted_repository_evidence(
+            case["pushResult"]
+        )
+        assert accepted is not None
+        assert accepted["schemaVersion"] == expected[
+            "acceptedEvidenceSchemaVersion"
+        ]
+        assert accepted["authority"] == expected["acceptedEvidenceAuthority"]
+
+        feasibility = workflow_run._publication_feasibility(
+            {"outputs": {"acceptedRepositoryEvidence": accepted}}
+        )
+        assert feasibility["feasible"] is expected["publicationFeasible"]
+        assert feasibility["reason"] == expected[
+            "publicationFeasibilityReason"
+        ]
+        assert workflow_run._terminal_gate_handoff_kind(
+            publish_mode=manifest["publishMode"],
+            draft_publication_policy=manifest["draftPublicationPolicy"],
+            publication_feasible=feasibility["feasible"],
+        ) == expected["terminalHandoff"]
+
+
 async def test_completed_batch_turn_is_rejected_at_agent_run_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -328,6 +364,47 @@ async def test_completed_batch_no_op_replays_through_production_activity_route(
     assert result.failure_class is None
     assert result.metadata["terminalContractId"] == "batch_workflows_fanout.v1"
     assert result.metadata["queuedChildCount"] == 0
+
+
+async def test_retry_batch_artifacts_in_spool_replay_as_terminal_success(
+    tmp_path: Path,
+) -> None:
+    """Replay the false-negative fan-out through the production activity boundary."""
+
+    replay_id = "batch-workflows-spool-retry-identity"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workspace = tmp_path / "repo"
+    spool = tmp_path / "spool"
+    workspace.mkdir()
+    spool.mkdir()
+    targets_bytes = json.dumps(manifest["resolvedTargets"]).encode("utf-8")
+    (spool / "batch-workflows-targets.json").write_bytes(targets_bytes)
+    terminal_evidence = dict(manifest["terminalEvidence"])
+    terminal_evidence["targetsSha256"] = hashlib.sha256(targets_bytes).hexdigest()
+    (spool / "batch-workflows-result.json").write_text(
+        json.dumps(terminal_evidence),
+        encoding="utf-8",
+    )
+
+    result = (
+        await TemporalAgentRuntimeActivities().agent_runtime_evaluate_terminal_evidence(
+            {
+                "workspacePath": str(workspace),
+                "artifactSpoolPath": str(spool),
+                "terminalContract": manifest["terminalContract"],
+                "result": {"summary": "Queued both child workflows."},
+            }
+        )
+    )
+
+    assert not (workspace / "artifacts").exists()
+    assert result.failure_class is expected["failureClass"]
+    assert result.metadata["queuedChildCount"] == expected["queuedChildCount"]
+    assert (
+        result.metadata["terminalContractExecutionRef"] == expected["executionRef"]
+    )
+    assert expected["parentState"] == "completed"
 
 
 async def test_successful_batch_without_publication_skips_prepublication_checkpoint(

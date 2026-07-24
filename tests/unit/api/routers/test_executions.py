@@ -23,6 +23,7 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
     _get_service,
+    get_temporal_client_adapter,
     _artifact_id_from_ref,
     _build_original_workflow_input_snapshot_payload,
     _build_recurring_target,
@@ -75,6 +76,11 @@ from api_service.db.models import (
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import settings
+from moonmind.workflows.temporal.publication_recovery import (
+    publication_operation_key,
+    publication_recovery_workflow_id,
+)
+from moonmind.workflows.temporal.client import WorkflowStartResult
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -93,6 +99,9 @@ from moonmind.schemas.temporal_models import (
     UpdateExecutionRequest,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.services.control_stop_continuation import (
+    ControlStopContinuationReservation,
+)
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
@@ -1637,7 +1646,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
 def test_create_task_shaped_execution_keeps_integration_as_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
-    test_client, service, _user = client
+    test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -14728,7 +14737,58 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
             "remainingWorkRef": "artifact://remaining/final",
             "workspaceHeadRef": "artifact://workspace/final",
             "metrics": {"remediationAdmitted": True},
-            "auxiliaryOutcomes": {"gitPublication": {"status": "failed"}},
+            "auxiliaryOutcomes": {
+                "gitPublication": {
+                    "status": "failed",
+                    "recoveryContract": {
+                        "sourceWorkflowId": record.workflow_id,
+                        "sourceRunId": record.run_id,
+                        "sourceSemanticOutcome": "failed",
+                        "target": {
+                            "kind": "publication",
+                            "publicationKind": "pull_request",
+                            "sourcePublicationOperationId": "publish-1",
+                            "semanticContext": "incomplete_draft_handoff",
+                        },
+                        "continuation": {
+                            "phase": "resume_publication",
+                            "publicationIdempotencyKey": (
+                                publication_operation_key(
+                                    source_workflow_id=record.workflow_id,
+                                    source_run_id=record.run_id,
+                                    publication_kind="pull_request",
+                                    repository="MoonLadderStudios/MoonMind",
+                                    head_ref="issue-3481",
+                                    base_ref="main",
+                                )
+                            ),
+                            "candidateRef": "artifact://workspace/final",
+                            "beforePublicationCheckpointRef": (
+                                "artifact://checkpoint/before-publication"
+                            ),
+                            "expectedHeadSha": "a" * 40,
+                            "expectedTreeDigest": "sha256:" + "b" * 64,
+                            "expectedDiffDigest": "sha256:" + "c" * 64,
+                            "priorObservationsRef": "artifact://github/observations",
+                            "secretScanRef": "artifact://scan/clean",
+                            "diagnosticsRef": "artifact://diagnostics/publication",
+                            "remainingWorkRef": "artifact://remaining/final",
+                        },
+                        "intent": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "baseRef": "main",
+                            "headRef": "issue-3481",
+                            "mode": "draft_pr",
+                            "branchPolicy": "reuse_exact_head",
+                            "githubAuthorityRef": "managed-secret://github/source",
+                        },
+                        "candidateAccepted": False,
+                        "hasPublishableChange": True,
+                        "publicationAuthorityCurrent": True,
+                        "incompleteDraftAuthorized": True,
+                    },
+                }
+            },
         }
     }
 
@@ -14742,6 +14802,139 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
         "candidateRef": "artifact://workspace/final",
         "remainingWorkRef": "artifact://remaining/final",
     }
+
+
+def _publication_recovery_record() -> SimpleNamespace:
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    operation_key = publication_operation_key(
+        source_workflow_id=record.workflow_id,
+        source_run_id=record.run_id,
+        publication_kind="pull_request",
+        repository="MoonLadderStudios/MoonMind",
+        head_ref="issue-3481",
+        base_ref="main",
+    )
+    record.finish_summary_json = {
+        "controlStop": {
+            "auxiliaryOutcomes": {
+                "gitPublication": {
+                    "status": "failed",
+                    "recoveryContract": {
+                        "sourceWorkflowId": record.workflow_id,
+                        "sourceRunId": record.run_id,
+                        "sourceSemanticOutcome": "accepted",
+                        "target": {
+                            "kind": "publication",
+                            "publicationKind": "pull_request",
+                            "sourcePublicationOperationId": "publish-1",
+                            "semanticContext": "accepted",
+                        },
+                        "continuation": {
+                            "phase": "resume_publication",
+                            "publicationIdempotencyKey": operation_key,
+                            "candidateRef": "artifact://candidate/accepted",
+                            "verifiedRemoteCandidateRef": "artifact://remote/head",
+                            "expectedHeadSha": "a" * 40,
+                            "expectedTreeDigest": "sha256:" + "b" * 64,
+                            "expectedDiffDigest": "sha256:" + "c" * 64,
+                            "priorObservationsRef": "artifact://github/observations",
+                            "secretScanRef": "artifact://scan/clean",
+                            "diagnosticsRef": "artifact://diagnostics/publication",
+                        },
+                        "intent": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "baseRef": "main",
+                            "headRef": "issue-3481",
+                            "mode": "pr",
+                            "branchPolicy": "reuse_exact_head",
+                            "githubAuthorityRef": "managed-secret://github/source",
+                        },
+                        "candidateAccepted": True,
+                        "hasPublishableChange": True,
+                        "publicationAuthorityCurrent": True,
+                    },
+                }
+            }
+        }
+    }
+    return record
+
+
+def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    record = _publication_recovery_record()
+    service.describe_execution.return_value = record
+    adapter = AsyncMock()
+    contract_payload = record.finish_summary_json["controlStop"]["auxiliaryOutcomes"][
+        "gitPublication"
+    ]["recoveryContract"]
+    from moonmind.workflows.temporal.publication_recovery import (
+        PublicationRecoveryContract,
+    )
+
+    destination_id = publication_recovery_workflow_id(
+        PublicationRecoveryContract.model_validate(contract_payload)
+    )
+    adapter.start_workflow.return_value = WorkflowStartResult(
+        workflow_id=destination_id,
+        run_id="publication-run-1",
+    )
+    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
+    monkeypatch.setattr(
+        settings.feature_flags, "publication_recovery_generation", "canary-1"
+    )
+
+    with TestClient(app) as test_client:
+        first = test_client.post("/api/executions/mm:wf-1/retry-publication")
+        duplicate = test_client.post("/api/executions/mm:wf-1/retry-publication")
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 201
+    assert first.json() == duplicate.json()
+    assert first.json()["workflowId"] == destination_id
+    assert first.json()["rolloutGeneration"] == "canary-1"
+    assert adapter.start_workflow.await_count == 2
+    for call_args in adapter.start_workflow.await_args_list:
+        assert call_args.kwargs["workflow_id"] == destination_id
+        assert call_args.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
+        assert call_args.kwargs["input_args"] == (
+            PublicationRecoveryContract.model_validate(contract_payload).model_dump(
+                by_alias=True, mode="json"
+            )
+        )
+        assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
+        assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
+        assert call_args.kwargs["memo"][
+            "publication_no_implementation_rerun"
+        ] is True
+
+
+def test_retry_publication_stops_before_temporal_when_rollout_disables_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    service.describe_execution.return_value = _publication_recovery_record()
+    adapter = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", False)
+
+    with TestClient(app) as test_client:
+        response = test_client.post("/api/executions/mm:wf-1/retry-publication")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "publication_recovery_disabled"
+    adapter.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.parametrize("malformed_field", ["metrics", "auxiliaryOutcomes"])
@@ -15081,6 +15274,107 @@ def test_action_endpoints_reject_non_owner_operator(
     service.update_execution.assert_not_awaited()
     service.signal_execution.assert_not_awaited()
     service.cancel_execution.assert_not_awaited()
+
+
+def test_continue_remediation_returns_same_destination_for_duplicate_requests(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        owner_id=str(user.id),
+    )
+    reservations = [
+        ControlStopContinuationReservation(
+            destination_workflow_id="control-stop-continuation-digest",
+            source_workflow_id="mm:wf-1",
+            source_run_id="run-2",
+            control_stop_id="verify:control-stop:6",
+            workspace_head_ref="artifact://checkpoint/head-6",
+            remaining_work_ref="artifact://verify/remaining-6",
+            created=created,
+        )
+        for created in (True, False)
+    ]
+    admit = AsyncMock(side_effect=reservations)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.admit_control_stop_continuation",
+        admit,
+    )
+
+    first = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
+    )
+    duplicate = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
+    )
+
+    assert first.status_code == 202
+    assert duplicate.status_code == 202
+    assert first.json()["destinationWorkflowId"] == duplicate.json()[
+        "destinationWorkflowId"
+    ]
+    assert first.json()["created"] is True
+    assert duplicate.json()["created"] is False
+    assert admit.await_count == 2
+    for invocation in admit.await_args_list:
+        assert invocation.kwargs["source_workflow_id"] == "mm:wf-1"
+        assert invocation.kwargs["source_run_id"] == "run-2"
+        assert invocation.kwargs["control_stop_id"] == "verify:control-stop:6"
+        assert invocation.kwargs["continuation_budget"].grant_id == "grant-1"
+        assert invocation.kwargs["instruction_changes_ref"] is None
+
+
+def test_continue_remediation_rejects_non_owner_before_admission(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED,
+        owner_id="other-user",
+    )
+    admit = AsyncMock()
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.admit_control_stop_continuation",
+        admit,
+    )
+
+    response = test_client.post(
+        "/api/executions/mm:wf-1/actions/continue-remediation",
+        json={
+            "controlStopId": "verify:control-stop:6",
+            "continuationBudget": {
+                "grantId": "grant-1",
+                "maxAttempts": 2,
+                "maxConsecutiveNoProgressAttempts": 1,
+            },
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    admit.assert_not_awaited()
+
 
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""

@@ -13,8 +13,8 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any, Mapping
 
-PINNED_OMNIGENT_COMMIT = "538494ff735a93f13e6914f264abb7feca037e57"
-PINNED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.538494ff"
+PINNED_OMNIGENT_COMMIT = "983c93c6ec00fd0ec75a6eb3f12f3e3fc7d4b315"
+PINNED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.983c93c6"
 
 
 class UpstreamHostAuthError(RuntimeError):

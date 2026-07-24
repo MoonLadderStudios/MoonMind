@@ -41,6 +41,10 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "MoonMindManifestIngestWorkflow",
     ),
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.control_stop_continuation",
+        "MoonMindControlStopContinuationWorkflow",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.provider_profile_manager",
         "MoonMindProviderProfileManagerWorkflow",
     ),
@@ -75,6 +79,10 @@ STATIC_WORKFLOW_REGISTRATIONS = (
     WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.pr_resolver",
         "MoonMindPRResolverWorkflow",
+    ),
+    WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.publication_recovery",
+        "MoonMindPublicationRecoveryWorkflow",
     ),
 )
 

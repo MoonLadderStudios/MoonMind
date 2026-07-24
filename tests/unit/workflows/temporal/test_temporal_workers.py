@@ -131,6 +131,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.UserWorkflow",
         "MoonMind.ContainerJob",
         "MoonMind.ManifestIngest",
+        "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
         "MoonMind.ManagedSessionReconcile",
@@ -140,7 +141,27 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.OmnigentOAuthHostJanitor",
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",
+        "MoonMind.PublicationRecoveryV1",
     )
+
+
+def test_publication_recovery_activity_routes_are_registered_by_authority() -> None:
+    expected = {
+        "integrations": {
+            "publication_recovery.observe",
+            "publication_recovery.publish",
+            "publication_recovery.verify",
+        },
+        "agent_runtime": {
+            "publication_recovery.restore_candidate",
+            "publication_recovery.cleanup",
+        },
+        "artifacts": {"publication_recovery.persist_result"},
+    }
+
+    for fleet, activity_types in expected.items():
+        topology = build_worker_topology(fleet=fleet)
+        assert activity_types <= set(topology.activity_types)
 
 
 def test_advertised_workflow_types_match_production_worker_classes():
@@ -174,6 +195,9 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
     assert first.registry_fingerprint == second.registry_fingerprint
     assert first.workflow_types == list_registered_workflow_types()
     assert "MoonMind.PRResolver" in first.readiness_payload()["workflowTypes"]
+    assert "MoonMind.PublicationRecoveryV1" in first.readiness_payload()[
+        "workflowTypes"
+    ]
     assert first.versioning_enabled is True
     assert first.build_id == "abc123"
 

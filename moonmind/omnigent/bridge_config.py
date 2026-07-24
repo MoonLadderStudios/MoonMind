@@ -389,7 +389,7 @@ class BridgeEmbeddedHostConnection(BaseModel):
     port: int = Field(8000, ge=1, le=65535)
     auth_mode: str = Field("upstream_runner_tunnel", alias="authMode")
     protocol_profile: str = Field(
-        "omnigent.runner_tunnel.538494ff", alias="protocolProfile"
+        "omnigent.runner_tunnel.983c93c6", alias="protocolProfile"
     )
     proxy_conformance_evidence_ref: str | None = Field(
         None, alias="proxyConformanceEvidenceRef"
@@ -405,10 +405,10 @@ class BridgeEmbeddedHostConnection(BaseModel):
             raise BridgeConfigError(
                 "hostConnection.embedded.authMode must be 'upstream_runner_tunnel'."
             )
-        if self.protocol_profile != "omnigent.runner_tunnel.538494ff":
+        if self.protocol_profile != "omnigent.runner_tunnel.983c93c6":
             raise BridgeConfigError(
                 "hostConnection.embedded.protocolProfile must be "
-                "'omnigent.runner_tunnel.538494ff'."
+                "'omnigent.runner_tunnel.983c93c6'."
             )
         return self
 

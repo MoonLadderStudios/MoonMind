@@ -25,6 +25,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionBinding,
         CodexManagedSessionWorkflowInput,
         SendCodexManagedSessionTurnRequest,
+        build_codex_managed_session_turn_environment,
         canonical_managed_session_runtime_id,
     )
     from moonmind.schemas.temporal_activity_models import (
@@ -330,6 +331,9 @@ PR_RESOLVER_MERGE_GATE_OWNERSHIP_PATCH_ID = (
     "agent-run-pr-resolver-merge-gate-ownership-v1"
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
+PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID = (
+    "agent-run-preserve-slot-request-on-ambiguous-inspection-v1"
+)
 NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID = (
     "agent-run-non-destructive-slot-wait-recovery-v1"
 )
@@ -2328,6 +2332,16 @@ class MoonMindAgentRun:
                 requestId=(
                     f"{request.idempotency_key}:terminal-contract:{continuation}"
                 ),
+                environment=build_codex_managed_session_turn_environment(
+                    active_skills_dir=str(
+                        request.parameters.get("_moonmindActiveSkillsDir") or ""
+                    ),
+                    step_execution_id=(
+                        request.step_execution.step_execution_id
+                        if request.step_execution is not None
+                        else None
+                    ),
+                ),
             )
             history.append(
                 {"continuation": continuation, "reason": "missing_terminal_evidence", "outcome": "requested"}
@@ -4098,6 +4112,9 @@ class MoonMindAgentRun:
                                     by_alias=True,
                                     exclude_none=True,
                                 )
+                                preserve_durable_slot_request = workflow.patched(
+                                    PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID
+                                )
                                 if workflow.patched(MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID):
                                     try:
                                         manager_state = await self._manager_state_for_slot_wait(
@@ -4108,12 +4125,25 @@ class MoonMindAgentRun:
                                         raise
                                     except Exception as exc:
                                         self._get_logger().warning(
-                                            "Auth profile manager %s state inspection failed while %s waits for a slot; using non-destructive recovery: %s",
+                                            "Auth profile manager %s state inspection failed while %s waits for a slot; preserving the durable slot request: %s",
                                             manager_id,
                                             workflow.info().workflow_id,
                                             exc,
                                         )
+                                        if preserve_durable_slot_request:
+                                            continue
                                         manager_state = {"running": False}
+                                    if (
+                                        preserve_durable_slot_request
+                                        and manager_state.get("inspection_succeeded")
+                                        is False
+                                    ):
+                                        self._get_logger().warning(
+                                            "Auth profile manager %s inspection was inconclusive while %s waits for a slot; preserving the durable slot request without ensure or duplicate signal",
+                                            manager_id,
+                                            workflow.info().workflow_id,
+                                        )
+                                        continue
                                     if manager_state.get("running") is True:
                                         if manager_state.get("requester_pending") is True:
                                             self._get_logger().warning(

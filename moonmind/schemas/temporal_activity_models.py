@@ -366,6 +366,46 @@ class AgentRuntimeTerminalCheckpointResult(BaseModel):
     error: str | None = None
 
 
+class AcceptedRepositoryEvidence(BaseModel):
+    """Authoritative repository state emitted by the managed push boundary."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["accepted-repository-evidence/v1"] = Field(
+        "accepted-repository-evidence/v1", alias="schemaVersion"
+    )
+    push_status: Literal["pushed", "no_commits"] = Field(..., alias="pushStatus")
+    branch: str = Field(..., min_length=1)
+    base_branch: str = Field(..., alias="baseBranch", min_length=1)
+    head_sha: str = Field(..., alias="headSha", min_length=1)
+    commits_ahead_of_base: int = Field(..., alias="commitsAheadOfBase", ge=0)
+    repository_changed: bool = Field(..., alias="repositoryChanged")
+    publication_authorized: Literal[True] = Field(
+        True, alias="publicationAuthorized"
+    )
+    candidate_contaminated: Literal[False] = Field(
+        False, alias="candidateContaminated"
+    )
+    remote_verified: Literal[True] = Field(..., alias="remoteVerified")
+    authority: Literal["agent_runtime.fetch_result"] = "agent_runtime.fetch_result"
+
+    @model_validator(mode="after")
+    def _validate_push_evidence(self) -> "AcceptedRepositoryEvidence":
+        self.branch = self.branch.strip()
+        self.base_branch = self.base_branch.strip()
+        self.head_sha = self.head_sha.strip()
+        if not self.branch or not self.base_branch or not self.head_sha:
+            raise ValueError("accepted repository evidence requires git identities")
+        expected_changed = self.push_status == "pushed"
+        if self.repository_changed != expected_changed:
+            raise ValueError("push status and repositoryChanged disagree")
+        if expected_changed and self.commits_ahead_of_base < 1:
+            raise ValueError("pushed repository evidence requires commits over base")
+        if not expected_changed and self.commits_ahead_of_base != 0:
+            raise ValueError("no-commit repository evidence cannot be ahead of base")
+        return self
+
+
 class ResiliencePolicyCompileInput(BaseModel):
     """Input for the ``resilience.compile_policy`` activity (MM-880).
 
