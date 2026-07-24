@@ -8553,6 +8553,37 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const continueRemediationMutation = useMutation({
+    mutationFn: async () => {
+      const evidence = execution?.actions?.actionEvidence?.continueRemediation;
+      if (!evidence?.controlStopId || !evidence.continuationBudget) {
+        throw new Error('Authorized control-stop continuation evidence is incomplete.');
+      }
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            controlStopId: evidence.controlStopId,
+            continuationBudget: evidence.continuationBudget,
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json() as Promise<{ destinationWorkflowId: string }>;
+    },
+    onSuccess: (result) => {
+      setActionNotice(`Continuation started: ${result.destinationWorkflowId}`);
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const selectedStepRecoveryMutation = useMutation({
     mutationFn: async () => {
       const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
@@ -8834,6 +8865,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
     retryPublicationMutation.isPending ||
+    continueRemediationMutation.isPending ||
     selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
@@ -8953,6 +8985,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       onRetryPublication: () => {
         setActionError(null);
         retryPublicationMutation.mutate();
+      },
+      onContinueRemediation: () => {
+        setActionError(null);
+        continueRemediationMutation.mutate();
       },
       onPause,
       onResume,

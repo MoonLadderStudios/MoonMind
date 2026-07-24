@@ -45,6 +45,28 @@ async def test_workflow_restores_before_exposing_remediation_state(monkeypatch) 
                 "summary": "Remediation attempt completed.",
                 "metrics": {"attemptOrdinal": 7},
             },
+            {
+                "schemaVersion": "v1",
+                "status": "captured",
+                "checkpointKind": "worktree_archive",
+                "workspace": {
+                    "kind": "worktree_archive",
+                    "baseCommit": contract.workspace_base_commit,
+                    "archiveRef": "artifact://workspace/C7",
+                    "archiveDigest": f"sha256:{'c' * 64}",
+                },
+                "sourceWorkspaceLocator": restore_result[
+                    "destinationWorkspaceLocator"
+                ],
+                "idempotencyKey": (
+                    f"{contract.destination_workflow_id}:remediation:7:capture"
+                ),
+            },
+            {
+                "outputRefs": ["artifact://verification/result"],
+                "summary": "Candidate accepted.",
+                "metrics": {"verdict": "FULLY_IMPLEMENTED"},
+            },
         ]
     )
     monkeypatch.setattr(
@@ -58,7 +80,7 @@ async def test_workflow_restores_before_exposing_remediation_state(monkeypatch) 
 
     result = await MoonMindControlStopContinuationWorkflow().run(_payload())
 
-    assert result["status"] == "remediation_completed"
+    assert result["status"] == "accepted"
     assert result["nextSemanticOperation"] == "remediation"
     assert result["candidateState"] == "recovered_candidate"
     assert result["sideEffects"][0]["disposition"] == "already_performed"
@@ -68,8 +90,16 @@ async def test_workflow_restores_before_exposing_remediation_state(monkeypatch) 
     assert execute.await_args_list[1].args[0] == (
         "integration.omnigent.profile_bound_execute"
     )
+    assert execute.await_args_list[2].args[0] == (
+        "agent_runtime.capture_workspace_checkpoint"
+    )
+    assert execute.await_args_list[3].args[0] == (
+        "integration.omnigent.profile_bound_execute"
+    )
     remediation_request = execute.await_args_list[1].args[1]
     assert remediation_request["instructionRef"] == contract.remaining_work_ref
     assert remediation_request["executionProfileRef"] == (
         contract.lane.provider_profile_id
     )
+    assert result["latestWorkspaceHeadRef"] == "artifact://workspace/C7"
+    assert result["continuationBudget"]["consumedAttempts"] == 1

@@ -25,6 +25,16 @@ export const ExecutionActionsSchema = z
       z.object({
         candidateRef: z.string().nullable().optional(),
         remainingWorkRef: z.string().nullable().optional(),
+        controlStopId: z.string().nullable().optional(),
+        sourceBudget: z.record(z.string(), z.unknown()).nullable().optional(),
+        continuationBudget: z.object({
+          grantId: z.string(),
+          maxAttempts: z.number().int().positive(),
+          maxConsecutiveNoProgressAttempts: z.number().int().positive(),
+          consumedAttempts: z.number().int().nonnegative().optional(),
+          consecutiveNoProgressAttempts: z.number().int().nonnegative().optional(),
+        }).passthrough().nullable().optional(),
+        linkedDestinationWorkflowId: z.string().nullable().optional(),
       }).passthrough(),
     ).optional(),
     canCancel: z.boolean().optional(),
@@ -58,6 +68,7 @@ export type WorkflowActionHandlers = {
   onResumeFromFailedStep: () => void;
   onRecoverFromSelectedStep: () => void;
   onRetryPublication: () => void;
+  onContinueRemediation: () => void;
   onPause: () => void;
   onResume: () => void;
   onApprove: () => void;
@@ -238,6 +249,13 @@ export function buildWorkflowActionMenuItems(
     available: canCreateRemediation,
     disabledReason: null,
     onSelect: handlers.onCreateRemediation,
+  });
+  addButton({
+    id: 'continue-remediation',
+    label: 'Continue remediation',
+    available: Boolean(actions.canContinueRemediation),
+    disabledReason: disabledReason('canContinueRemediation'),
+    onSelect: handlers.onContinueRemediation,
   });
   addButton({
     id: 'retry-publication',

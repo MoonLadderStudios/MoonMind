@@ -7107,6 +7107,12 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             action: {
                 "candidateRef": control_stop.get("workspaceHeadRef"),
                 "remainingWorkRef": control_stop.get("remainingWorkRef"),
+                "controlStopId": control_stop.get("controlStopId"),
+                "sourceBudget": control_stop.get("remediationBudget"),
+                "continuationBudget": control_stop.get("continuationBudget"),
+                "linkedDestinationWorkflowId": control_stop.get(
+                    "linkedDestinationWorkflowId"
+                ),
             }
             for action in (
                 "editForRerun",

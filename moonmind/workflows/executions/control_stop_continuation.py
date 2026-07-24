@@ -204,6 +204,14 @@ class ControlStopContinuationContract(BaseModel):
     restore_capability_digest: str = Field(
         alias="restoreCapabilityDigest", min_length=1
     )
+    capture_capability_set_version: Literal[
+        "runtime-execution-capabilities-v1",
+        "runtime-execution-capabilities-v2",
+        "runtime-execution-capabilities-v3",
+    ] = Field(alias="captureCapabilitySetVersion")
+    capture_capability_digest: str = Field(
+        alias="captureCapabilityDigest", min_length=1
+    )
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=200)
     instruction_changes_ref: str | None = Field(None, alias="instructionChangesRef")
     instruction_changes_digest: str | None = Field(
@@ -324,8 +332,8 @@ class ControlStopContinuationContract(BaseModel):
             },
             "workspacePolicy": "restore_pre_execution",
             "resumePhase": "continue_to_remediation",
-            "capabilitySetVersion": self.restore_capability_set_version,
-            "capabilityDigest": self.restore_capability_digest,
+            "capabilitySetVersion": self.capture_capability_set_version,
+            "capabilityDigest": self.capture_capability_digest,
             "idempotencyKey": f"{self.destination_workflow_id}:restore",
         }
 
@@ -334,10 +342,13 @@ class ControlStopContinuationContract(BaseModel):
         *,
         destination_run_id: str,
         destination_workspace_locator: dict[str, Any],
+        attempt: int | None = None,
+        workspace_head_ref: str | None = None,
+        remaining_work_ref: str | None = None,
     ) -> dict[str, Any]:
-        """Build the first profile-bound semantic operation after restore."""
+        """Build one profile-bound remediation operation."""
 
-        attempt = self.source_budget.consumed_attempts + 1
+        attempt = attempt or self.source_budget.consumed_attempts + 1
         step_execution_id = (
             f"{self.destination_workflow_id}:remediation:execution:{attempt}"
         )
@@ -347,12 +358,13 @@ class ControlStopContinuationContract(BaseModel):
             "executionProfileRef": self.lane.provider_profile_id,
             "correlationId": self.destination_workflow_id,
             "idempotencyKey": step_execution_id,
-            "instructionRef": self.remaining_work_ref,
+            "instructionRef": remaining_work_ref or self.remaining_work_ref,
             "inputRefs": [
-                self.remaining_work_ref,
+                remaining_work_ref or self.remaining_work_ref,
                 self.gate_result_ref,
                 self.plan_ref,
                 self.task_input_snapshot_ref,
+                workspace_head_ref or self.workspace_head_ref,
             ],
             "workspaceSpec": {
                 "workspaceLocator": destination_workspace_locator,
@@ -374,5 +386,81 @@ class ControlStopContinuationContract(BaseModel):
                 "continuationBudget": self.continuation_budget.model_dump(
                     by_alias=True, mode="json"
                 ),
+            },
+        }
+
+    def capture_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+        attempt: int,
+    ) -> dict[str, Any]:
+        """Capture the cumulative destination head idempotently after remediation."""
+
+        return {
+            "schemaVersion": "v1",
+            "identity": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "remediation",
+                "executionOrdinal": attempt,
+            },
+            "boundary": "after_execution",
+            "checkpointKind": "worktree_archive",
+            "workspaceLocator": destination_workspace_locator,
+            "expectedRuntimeId": "codex_cli",
+            "capabilitySetVersion": self.restore_capability_set_version,
+            "capabilityDigest": self.restore_capability_digest,
+            "artifactNamespace": self.destination_workflow_id,
+            "idempotencyKey": (
+                f"{self.destination_workflow_id}:remediation:{attempt}:capture"
+            ),
+        }
+
+    def verification_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+        attempt: int,
+        workspace_head_ref: str,
+    ) -> dict[str, Any]:
+        """Build the verifier paired with a newly captured cumulative head."""
+
+        step_execution_id = (
+            f"{self.destination_workflow_id}:verification:execution:{attempt}"
+        )
+        return {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "executionProfileRef": self.lane.provider_profile_id,
+            "correlationId": self.destination_workflow_id,
+            "idempotencyKey": step_execution_id,
+            "instructionRef": self.gate_result_ref,
+            "inputRefs": [
+                workspace_head_ref,
+                self.plan_ref,
+                self.task_input_snapshot_ref,
+            ],
+            "workspaceSpec": {
+                "workspaceLocator": destination_workspace_locator,
+                "workspacePolicy": "continue_from_restored_control_stop",
+            },
+            "parameters": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "verification",
+                "stepExecutionId": step_execution_id,
+                "attemptOrdinal": attempt,
+                "providerProfileId": self.lane.provider_profile_id,
+                "providerProfileGeneration": self.lane.provider_profile_generation,
+                "executionProfileRef": self.lane.execution_profile_id,
+                "launchPolicyRef": self.lane.launch_policy_ref,
+                "expectedVerdicts": [
+                    "FULLY_IMPLEMENTED",
+                    "ADDITIONAL_WORK_NEEDED",
+                    "BLOCKED",
+                ],
             },
         }

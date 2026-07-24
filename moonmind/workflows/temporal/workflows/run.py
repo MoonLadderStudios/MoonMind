@@ -11797,6 +11797,10 @@ class MoonMindRunWorkflow:
                         )
                         self._workflow_control_stop = {
                             "kind": "workflow_gate",
+                            "controlStopId": (
+                                f"{node_id}:control-stop:"
+                                f"{attempt_payload.get('executionOrdinal') or 1}"
+                            ),
                             "reasonCode": transition_reason,
                             "logicalStepId": node_id,
                             "verdict": normalized_gate,

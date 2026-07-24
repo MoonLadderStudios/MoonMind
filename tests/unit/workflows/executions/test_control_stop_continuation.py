@@ -98,6 +98,8 @@ def _payload() -> dict:
         "deploymentPromoted": True,
         "restoreCapabilitySetVersion": "managed-runtime/v1",
         "restoreCapabilityDigest": "capability-digest",
+        "captureCapabilitySetVersion": "runtime-execution-capabilities-v3",
+        "captureCapabilityDigest": "capture-capability-digest",
         "idempotencyKey": "operator-request-1",
     }
 

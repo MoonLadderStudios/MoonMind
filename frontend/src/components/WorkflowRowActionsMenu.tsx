@@ -311,6 +311,34 @@ export function WorkflowRowActionsMenu({
     onError: onMutationError,
   });
 
+  const continueRemediationMutation = useMutation({
+    mutationFn: async () => {
+      const evidence = execution?.actions?.actionEvidence?.continueRemediation;
+      if (!evidence?.controlStopId || !evidence.continuationBudget) {
+        throw new Error('Authorized control-stop continuation evidence is incomplete.');
+      }
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            controlStopId: evidence.controlStopId,
+            continuationBudget: evidence.continuationBudget,
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: invalidate,
+    onError: onMutationError,
+  });
+
   const createRemediationMutation = useMutation({
     mutationFn: async () => {
       if (!execution) {
@@ -330,6 +358,7 @@ export function WorkflowRowActionsMenu({
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
     retryPublicationMutation.isPending ||
+    continueRemediationMutation.isPending ||
     createRemediationMutation.isPending;
 
   const editHref = workflowId
@@ -420,6 +449,10 @@ export function WorkflowRowActionsMenu({
           setActionError(null);
           retryPublicationMutation.mutate();
         },
+        onContinueRemediation: () => {
+          setActionError(null);
+          continueRemediationMutation.mutate();
+        },
         onPause: () => {
           setActionError(null);
           signalMutation.mutate({ signalName: 'Pause', payload: {} });
@@ -484,6 +517,7 @@ export function WorkflowRowActionsMenu({
     canShowEditWorkflow,
     cancelMutation,
     compareHref,
+    continueRemediationMutation,
     createRemediationMutation,
     disabledReason,
     detailHref,

@@ -17,6 +17,7 @@ function noopHandlers(): WorkflowActionHandlers {
     onResumeFromFailedStep: vi.fn(),
     onRecoverFromSelectedStep: vi.fn(),
     onRetryPublication: vi.fn(),
+    onContinueRemediation: vi.fn(),
     onPause: vi.fn(),
     onResume: vi.fn(),
     onApprove: vi.fn(),
@@ -179,6 +180,19 @@ describe('buildWorkflowActionMenuItems', () => {
       id: 'retry-publication',
       disabledReason: 'Publication evidence is incomplete',
     });
+  });
+
+  it('exposes control-stop continuation with its projected eligibility', () => {
+    const handlers = noopHandlers();
+    const items = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: { canContinueRemediation: true },
+        handlers,
+      }),
+    );
+    expect(items.map((item) => item.id)).toEqual(['continue-remediation']);
+    items[0]?.onSelect?.();
+    expect(handlers.onContinueRemediation).toHaveBeenCalledOnce();
   });
 
   it('uses a caller-provided pending reason for temporarily disabled actions', () => {

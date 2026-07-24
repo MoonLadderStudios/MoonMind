@@ -120,6 +120,23 @@ disable-new-selection, rollback, historical-read, and worker-version replay
 outcomes. A missing or false assertion fails publication; there is no
 fresh-root, alternate-profile, direct-Codex, or lower-level fallback.
 
+### Control-stop continuation rollout
+
+Control-stop remediation is admitted only from a frozen capability snapshot and
+an explicitly promoted deployment generation. Keep `deploymentPromoted=false`
+for hidden/shadow admission diagnostics. Canary promotion must mint evidence
+only for the selected deployment and user allowlist and only for the exact
+`external/omnigent`, `codex-native`, `omnigent-host-codex`, Provider Profile,
+and launch-policy tuple. There is no runtime or profile fallback.
+
+Rollback stops minting promoted contracts (or advances the deployment generation)
+without deleting continuation records. Previously linked destinations continue
+from their frozen inputs; historical source/destination reads remain available.
+Operators should monitor admission rejection, duplicate reconciliation, restore
+success, candidate capture, convergence, exhausted grants, and side-effect block
+counts. A rollback must not cancel already admitted workflows or mutate their
+source outcomes.
+
 ## Credentialed CI publication
 
 `.github/workflows/omnigent-live-conformance.yml` is the scheduled and manually
