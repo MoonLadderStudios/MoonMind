@@ -96,7 +96,7 @@ def _payload() -> dict:
         },
         "deploymentGeneration": "control-stop-2026-07",
         "deploymentPromoted": True,
-        "restoreCapabilitySetVersion": "managed-runtime/v1",
+        "restoreCapabilitySetVersion": "runtime-execution-capabilities-v3",
         "restoreCapabilityDigest": "capability-digest",
         "idempotencyKey": "operator-request-1",
     }
@@ -141,6 +141,41 @@ def test_restore_request_uses_distinct_deterministic_destination() -> None:
     assert request["checkpoint"]["manifestDigest"] == f"sha256:{'b' * 64}"
     assert request["resumePhase"] == "continue_to_remediation"
     assert request["idempotencyKey"] == f"{contract.destination_workflow_id}:restore"
+
+
+def test_attempt_requests_freeze_profile_and_have_distinct_retry_safe_identities() -> None:
+    contract = ControlStopContinuationContract.model_validate(_payload())
+    locator = {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": contract.destination_workspace_id,
+        "relativePath": "repo",
+    }
+
+    remediation = contract.remediation_request(
+        destination_run_id="destination-run",
+        destination_workspace_locator=locator,
+        attempt=7,
+    )
+    capture = contract.capture_request(
+        destination_run_id="destination-run",
+        destination_workspace_locator=locator,
+        attempt=7,
+    )
+    verification = contract.verification_request(
+        destination_run_id="destination-run",
+        destination_workspace_locator=locator,
+        attempt=7,
+        workspace_head_ref="artifact://workspace/C7",
+        remaining_work_ref="artifact://remaining/7",
+    )
+
+    assert remediation["executionProfileRef"] == "codex-oauth-primary"
+    assert verification["executionProfileRef"] == "codex-oauth-primary"
+    assert remediation["idempotencyKey"].endswith(":remediation:execution:7")
+    assert capture["idempotencyKey"].endswith(":remediation:7:capture")
+    assert verification["idempotencyKey"].endswith(":verification:execution:7")
+    assert capture["workspaceLocator"] == locator
 
 
 @pytest.mark.parametrize(

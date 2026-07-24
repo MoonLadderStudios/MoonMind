@@ -198,9 +198,11 @@ class ControlStopContinuationContract(BaseModel):
     continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
     deployment_generation: str = Field(alias="deploymentGeneration", min_length=1)
     deployment_promoted: bool = Field(alias="deploymentPromoted")
-    restore_capability_set_version: str = Field(
-        alias="restoreCapabilitySetVersion", min_length=1
-    )
+    restore_capability_set_version: Literal[
+        "runtime-execution-capabilities-v1",
+        "runtime-execution-capabilities-v2",
+        "runtime-execution-capabilities-v3",
+    ] = Field(alias="restoreCapabilitySetVersion")
     restore_capability_digest: str = Field(
         alias="restoreCapabilityDigest", min_length=1
     )
@@ -334,10 +336,19 @@ class ControlStopContinuationContract(BaseModel):
         *,
         destination_run_id: str,
         destination_workspace_locator: dict[str, Any],
+        attempt: int | None = None,
+        workspace_head_ref: str | None = None,
+        latest_verification_ref: str | None = None,
+        remaining_work_ref: str | None = None,
+        continuation_budget: ContinuationBudgetGrant | None = None,
     ) -> dict[str, Any]:
-        """Build the first profile-bound semantic operation after restore."""
+        """Build one retry-safe profile-bound remediation operation."""
 
-        attempt = self.source_budget.consumed_attempts + 1
+        attempt = attempt or self.source_budget.consumed_attempts + 1
+        remaining_work_ref = remaining_work_ref or self.remaining_work_ref
+        latest_verification_ref = latest_verification_ref or self.gate_result_ref
+        workspace_head_ref = workspace_head_ref or self.workspace_head_ref
+        continuation_budget = continuation_budget or self.continuation_budget
         step_execution_id = (
             f"{self.destination_workflow_id}:remediation:execution:{attempt}"
         )
@@ -347,10 +358,11 @@ class ControlStopContinuationContract(BaseModel):
             "executionProfileRef": self.lane.provider_profile_id,
             "correlationId": self.destination_workflow_id,
             "idempotencyKey": step_execution_id,
-            "instructionRef": self.remaining_work_ref,
+            "instructionRef": remaining_work_ref,
             "inputRefs": [
-                self.remaining_work_ref,
-                self.gate_result_ref,
+                remaining_work_ref,
+                latest_verification_ref,
+                workspace_head_ref,
                 self.plan_ref,
                 self.task_input_snapshot_ref,
             ],
@@ -371,8 +383,96 @@ class ControlStopContinuationContract(BaseModel):
                 "sourceWorkflowId": self.source_workflow_id,
                 "sourceRunId": self.source_run_id,
                 "controlStopId": self.control_stop_id,
-                "continuationBudget": self.continuation_budget.model_dump(
+                "continuationBudget": continuation_budget.model_dump(
                     by_alias=True, mode="json"
                 ),
+            },
+        }
+
+    def capture_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+        attempt: int,
+    ) -> dict[str, Any]:
+        """Capture the cumulative candidate produced by one remediation attempt."""
+
+        return {
+            "schemaVersion": "v1",
+            "identity": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "remediation",
+                "executionOrdinal": attempt,
+            },
+            "boundary": "after_execution",
+            "checkpointKind": "worktree_archive",
+            "workspaceLocator": destination_workspace_locator,
+            "expectedRuntimeId": "codex_cli",
+            "capabilitySetVersion": self.restore_capability_set_version,
+            "capabilityDigest": self.restore_capability_digest,
+            "artifactNamespace": (
+                f"control-stop-continuations/{self.destination_workflow_id}/"
+                f"attempts/{attempt}"
+            ),
+            "idempotencyKey": (
+                f"{self.destination_workflow_id}:remediation:{attempt}:capture"
+            ),
+        }
+
+    def verification_request(
+        self,
+        *,
+        destination_run_id: str,
+        destination_workspace_locator: dict[str, Any],
+        attempt: int,
+        workspace_head_ref: str,
+        remaining_work_ref: str,
+    ) -> dict[str, Any]:
+        """Build the authoritative verifier operation for a captured candidate."""
+
+        step_execution_id = (
+            f"{self.destination_workflow_id}:verification:execution:{attempt}"
+        )
+        return {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "executionProfileRef": self.lane.provider_profile_id,
+            "correlationId": self.destination_workflow_id,
+            "idempotencyKey": step_execution_id,
+            "instructionRef": self.gate_result_ref,
+            "inputRefs": [
+                workspace_head_ref,
+                remaining_work_ref,
+                self.plan_ref,
+                self.task_input_snapshot_ref,
+            ],
+            "workspaceSpec": {
+                "workspaceLocator": destination_workspace_locator,
+                "workspacePolicy": "verify_restored_control_stop_candidate",
+            },
+            "parameters": {
+                "workflowId": self.destination_workflow_id,
+                "runId": destination_run_id,
+                "logicalStepId": "verification",
+                "stepExecutionId": step_execution_id,
+                "attemptOrdinal": attempt,
+                "providerProfileId": self.lane.provider_profile_id,
+                "providerProfileGeneration": self.lane.provider_profile_generation,
+                "executionProfileRef": self.lane.execution_profile_id,
+                "launchPolicyRef": self.lane.launch_policy_ref,
+                "sourceWorkflowId": self.source_workflow_id,
+                "sourceRunId": self.source_run_id,
+                "controlStopId": self.control_stop_id,
+                "candidateRef": workspace_head_ref,
+                "expectedResultContract": {
+                    "metadata.semanticVerdict": [
+                        "FULLY_IMPLEMENTED",
+                        "ADDITIONAL_WORK_NEEDED",
+                        "BLOCKED",
+                    ],
+                    "metadata.remainingWorkRef": "required_for_additional_work",
+                },
             },
         }

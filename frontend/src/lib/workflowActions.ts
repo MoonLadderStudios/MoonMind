@@ -57,6 +57,7 @@ export type WorkflowActionHandlers = {
   onRerun: () => void;
   onResumeFromFailedStep: () => void;
   onRecoverFromSelectedStep: () => void;
+  onContinueRemediation: () => void;
   onRetryPublication: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -238,6 +239,13 @@ export function buildWorkflowActionMenuItems(
     available: canCreateRemediation,
     disabledReason: null,
     onSelect: handlers.onCreateRemediation,
+  });
+  addButton({
+    id: 'continue-remediation',
+    label: 'Continue remediation',
+    available: Boolean(actions.canContinueRemediation),
+    disabledReason: disabledReason('canContinueRemediation'),
+    onSelect: handlers.onContinueRemediation,
   });
   addButton({
     id: 'retry-publication',
