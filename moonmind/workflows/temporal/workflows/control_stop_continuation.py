@@ -127,6 +127,22 @@ class MoonMindControlStopContinuationWorkflow:
         latest_verification_ref = contract.gate_result_ref
 
         while budget.consumed_attempts < budget.max_attempts:
+            if (
+                budget.consecutive_no_progress_attempts
+                >= budget.max_consecutive_no_progress_attempts
+            ):
+                return {
+                    **state,
+                    "status": "control_stop",
+                    "outcomeKind": "workflow_gate",
+                    "reasonCode": "continuation_no_progress_budget_exhausted",
+                    "latestWorkspaceHeadRef": workspace_head_ref,
+                    "latestWorkspaceHeadDigest": workspace_head_digest,
+                    "remainingWorkRef": remaining_work_ref,
+                    "continuationBudget": budget.model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                }
             attempt = (
                 contract.source_budget.consumed_attempts
                 + budget.consumed_attempts
@@ -222,11 +238,18 @@ class MoonMindControlStopContinuationWorkflow:
                     ),
                 )
             )
+            gate = verification.metadata.get("moonSpecVerify")
+            gate = gate if isinstance(gate, dict) else verification.metadata
             verdict = str(
-                verification.metadata.get("semanticVerdict") or ""
+                gate.get("semanticVerdict")
+                or gate.get("verdict")
+                or gate.get("gateVerdict")
+                or gate.get("moonSpecVerdict")
+                or gate.get("verificationVerdict")
+                or ""
             ).strip().upper()
             verification_ref = str(
-                verification.metadata.get("gateResultRef")
+                gate.get("gateResultRef")
                 or (verification.output_refs[0] if verification.output_refs else "")
             ).strip()
             attempt_result = {
@@ -287,7 +310,9 @@ class MoonMindControlStopContinuationWorkflow:
                     non_retryable=True,
                 )
             next_remaining = str(
-                verification.metadata.get("remainingWorkRef") or ""
+                gate.get("remainingWorkRef")
+                or gate.get("remaining_work_ref")
+                or ""
             ).strip()
             if not next_remaining:
                 raise exceptions.ApplicationError(

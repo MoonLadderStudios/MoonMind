@@ -198,11 +198,9 @@ class ControlStopContinuationContract(BaseModel):
     continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
     deployment_generation: str = Field(alias="deploymentGeneration", min_length=1)
     deployment_promoted: bool = Field(alias="deploymentPromoted")
-    restore_capability_set_version: Literal[
-        "runtime-execution-capabilities-v1",
-        "runtime-execution-capabilities-v2",
-        "runtime-execution-capabilities-v3",
-    ] = Field(alias="restoreCapabilitySetVersion")
+    restore_capability_set_version: str = Field(
+        alias="restoreCapabilitySetVersion", min_length=1
+    )
     restore_capability_digest: str = Field(
         alias="restoreCapabilityDigest", min_length=1
     )
@@ -441,7 +439,6 @@ class ControlStopContinuationContract(BaseModel):
             "executionProfileRef": self.lane.provider_profile_id,
             "correlationId": self.destination_workflow_id,
             "idempotencyKey": step_execution_id,
-            "instructionRef": self.gate_result_ref,
             "inputRefs": [
                 workspace_head_ref,
                 remaining_work_ref,
@@ -453,6 +450,11 @@ class ControlStopContinuationContract(BaseModel):
                 "workspacePolicy": "verify_restored_control_stop_candidate",
             },
             "parameters": {
+                "omnigent": {
+                    "prompt": {
+                        "instructionRef": self.gate_result_ref,
+                    }
+                },
                 "workflowId": self.destination_workflow_id,
                 "runId": destination_run_id,
                 "logicalStepId": "verification",

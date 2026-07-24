@@ -175,7 +175,21 @@ def test_attempt_requests_freeze_profile_and_have_distinct_retry_safe_identities
     assert remediation["idempotencyKey"].endswith(":remediation:execution:7")
     assert capture["idempotencyKey"].endswith(":remediation:7:capture")
     assert verification["idempotencyKey"].endswith(":verification:execution:7")
+    assert "instructionRef" not in verification
+    assert (
+        verification["parameters"]["omnigent"]["prompt"]["instructionRef"]
+        == contract.gate_result_ref
+    )
     assert capture["workspaceLocator"] == locator
+
+
+def test_previous_restore_capability_value_remains_accepted() -> None:
+    payload = _payload()
+    payload["restoreCapabilitySetVersion"] = "managed-runtime/v1"
+
+    contract = ControlStopContinuationContract.model_validate(payload)
+
+    assert contract.restore_capability_set_version == "managed-runtime/v1"
 
 
 @pytest.mark.parametrize(

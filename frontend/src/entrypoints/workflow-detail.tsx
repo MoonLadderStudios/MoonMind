@@ -8556,24 +8556,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
   const continueRemediationMutation = useMutation({
     mutationFn: async () => {
-      const controlStopId = execution?.finishSummary?.controlStop?.controlStopId?.trim();
-      if (!controlStopId) {
-        throw new Error('Continue remediation requires a control-stop identity.');
-      }
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/actions/continue-remediation`,
         {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            controlStopId,
-            continuationBudget: {
-              grantId: `workflow-detail-${workflowId}-${latestRunId || runId || 'latest'}`,
-              maxAttempts: 2,
-              maxConsecutiveNoProgressAttempts: 1,
-            },
-          }),
+          body: JSON.stringify({}),
         },
       );
       if (!response.ok) {
