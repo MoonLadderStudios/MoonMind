@@ -233,6 +233,60 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
 
 
+def test_runtime_state_save_failure_preserves_last_valid_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+    state_path = (
+        Path(request.session_workspace_path) / ".moonmind-codex-session-state.json"
+    )
+    previous_payload = state_path.read_text(encoding="utf-8")
+    state = runtime._load_state()
+    state.last_control_action = "send_turn"
+
+    def _fail_replace(_source: str | Path, _target: str | Path) -> None:
+        raise OSError("simulated atomic replace failure")
+
+    with monkeypatch.context() as replace_failure:
+        replace_failure.setattr(os, "replace", _fail_replace)
+
+        with pytest.raises(OSError, match="simulated atomic replace failure"):
+            runtime._save_state(state)
+
+    assert state_path.read_text(encoding="utf-8") == previous_payload
+    assert (
+        CodexSessionRuntimeState.model_validate_json(previous_payload).session_epoch
+        == 1
+    )
+    assert not list(state_path.parent.glob(f"{state_path.name}.*.tmp"))
+
+    handle = runtime.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+        )
+    )
+
+    assert handle.status == "ready"
+    assert handle.session_state.session_epoch == 2
+
+
 def test_runtime_clear_session_recovers_sqlite_state_runtime_init_failure(
     tmp_path: Path,
 ) -> None:
