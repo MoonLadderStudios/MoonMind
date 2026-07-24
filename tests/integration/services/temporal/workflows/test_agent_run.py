@@ -8,14 +8,17 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+from temporalio.worker import Replayer, Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from temporalio.service import RPCError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
 from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.agent_run import (
+    MoonMindAgentRun,
+    _SLOT_WAIT_TIMEOUT_SECONDS,
+)
 
 # NOTE: This test file is NOT marked integration_ci because the Temporal
 # time-skipping workflow tests consistently exceed CI timeout thresholds.
@@ -169,11 +172,41 @@ async def mock_provider_profile_list(request: dict) -> dict:
 
 @_activity.defn(name="provider_profile.ensure_manager")
 async def mock_provider_profile_ensure_manager(request: dict) -> dict:
+    global _provider_profile_ensure_manager_count
+    _provider_profile_ensure_manager_count += 1
     return {"started": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
 
 @_activity.defn(name="provider_profile.reset_manager")
 async def mock_provider_profile_reset_manager(request: dict) -> dict:
     return {"reset": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
+
+
+_provider_profile_ensure_manager_count = 0
+_provider_profile_manager_state_count = 0
+_provider_profile_manager_state_mode = "running"
+
+
+@_activity.defn(name="provider_profile.manager_state")
+async def mock_provider_profile_manager_state(request: dict) -> dict:
+    global _provider_profile_manager_state_count
+    _provider_profile_manager_state_count += 1
+    workflow_id = f"provider-profile-manager:{request.get('runtime_id', 'test')}"
+    if _provider_profile_manager_state_mode == "ambiguous":
+        return {
+            "running": True,
+            "workflow_id": workflow_id,
+            "status": "RUNNING",
+            "inspection_succeeded": False,
+            "inspection_status": "QUERY_TIMEOUT",
+        }
+    return {
+        "running": True,
+        "workflow_id": workflow_id,
+        "status": "RUNNING",
+        "inspection_succeeded": True,
+        "requester_pending": True,
+    }
+
 
 # Collect all activities that need to be registered on the main task queue.
 _COMMON_AGENT_RUN_ACTIVITIES = [
@@ -182,6 +215,7 @@ _COMMON_AGENT_RUN_ACTIVITIES = [
     mock_provider_profile_list,
     mock_provider_profile_ensure_manager,
     mock_provider_profile_reset_manager,
+    mock_provider_profile_manager_state,
 ]
 
 _managed_launch_requests: list[dict] = []
@@ -717,6 +751,106 @@ async def test_agent_run_workflow_cancellation():
                 assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
                     exc_info.value.__cause__, asyncio.CancelledError
                 )
+
+
+async def test_slot_wait_preserves_durable_request_when_manager_inspection_is_ambiguous(
+):
+    """A busy manager query must not trigger ensure/re-request amplification."""
+    global _provider_profile_ensure_manager_count
+    global _provider_profile_manager_state_count
+    global _provider_profile_manager_state_mode
+
+    _provider_profile_ensure_manager_count = 0
+    _provider_profile_manager_state_count = 0
+    _provider_profile_manager_state_mode = "ambiguous"
+    history = None
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue-ambiguous-manager",
+                    workflows=[
+                        MoonMindAgentRun,
+                        RuntimeUpdateProviderProfileManager,
+                    ],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
+                    ],
+                ),
+            ):
+                manager_id = "provider-profile-manager:codex_cli"
+                await env.client.start_workflow(
+                    RuntimeUpdateProviderProfileManager.run,
+                    {
+                        "runtime_id": "codex_cli",
+                        "assignable_profile_id": "never-assign",
+                    },
+                    id=manager_id,
+                    task_queue="agent-run-task-queue-ambiguous-manager",
+                )
+                manager_handle = env.client.get_workflow_handle(manager_id)
+                child_handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    AgentExecutionRequest(
+                        agent_kind="managed",
+                        agent_id="codex_cli",
+                        execution_profile_ref="default-managed",
+                        correlation_id="ambiguous-manager:corr",
+                        idempotency_key="ambiguous-manager:idem",
+                    ),
+                    id="test-agent-run-ambiguous-manager",
+                    task_queue="agent-run-task-queue-ambiguous-manager",
+                )
+
+                manager_state = {}
+                for _ in range(40):
+                    manager_state = await manager_handle.query(
+                        RuntimeUpdateProviderProfileManager.get_state
+                    )
+                    if (
+                        manager_state.get("request_payloads")
+                        and _provider_profile_manager_state_count >= 1
+                    ):
+                        break
+                    await asyncio.sleep(0.05)
+
+                assert len(manager_state.get("request_payloads", [])) == 1
+                await env.sleep(_SLOT_WAIT_TIMEOUT_SECONDS + 5)
+
+                for _ in range(40):
+                    if _provider_profile_manager_state_count >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+
+                manager_state = await manager_handle.query(
+                    RuntimeUpdateProviderProfileManager.get_state
+                )
+                assert _provider_profile_manager_state_count >= 2
+                assert _provider_profile_ensure_manager_count == 0
+                assert len(manager_state["request_payloads"]) == 1
+
+                await child_handle.cancel()
+                with pytest.raises(WorkflowFailureError):
+                    await child_handle.result()
+                history = await child_handle.fetch_history()
+
+        assert history is not None
+        await Replayer(
+            workflows=[MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+    finally:
+        _provider_profile_manager_state_mode = "running"
+
 
 @pytest.mark.asyncio
 async def test_agent_run_reports_managed_429_retry_summary_to_parent():
