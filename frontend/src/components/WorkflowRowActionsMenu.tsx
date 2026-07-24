@@ -416,6 +416,7 @@ export function WorkflowRowActionsMenu({
           failedStepResumeMutation.mutate();
         },
         onRecoverFromSelectedStep: () => {},
+        onContinueRemediation: () => navigateTo(detailHref),
         onRetryPublication: () => {
           setActionError(null);
           retryPublicationMutation.mutate();

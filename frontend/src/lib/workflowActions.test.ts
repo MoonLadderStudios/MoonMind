@@ -16,6 +16,7 @@ function noopHandlers(): WorkflowActionHandlers {
     onRerun: vi.fn(),
     onResumeFromFailedStep: vi.fn(),
     onRecoverFromSelectedStep: vi.fn(),
+    onContinueRemediation: vi.fn(),
     onRetryPublication: vi.fn(),
     onPause: vi.fn(),
     onResume: vi.fn(),
@@ -117,6 +118,36 @@ describe('buildWorkflowActionMenuItems', () => {
       'compare-run',
     ]);
     expect(withEditing.find((item) => item.id === 'edit-task')?.href).toBe('/tasks/abc/edit');
+  });
+
+  it('exposes admitted control-stop continuation and its disabled reason', () => {
+    const handlers = noopHandlers();
+    const available = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: { canContinueRemediation: true },
+        handlers,
+      }),
+    );
+    expect(available.map((item) => item.id)).toEqual(['continue-remediation']);
+    available[0]?.onSelect?.();
+    expect(handlers.onContinueRemediation).toHaveBeenCalledOnce();
+
+    const unavailable = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: {
+          canContinueRemediation: false,
+          disabledReasons: {
+            canContinueRemediation: 'deployment canary disabled',
+          },
+        },
+        disabledReason: (key) =>
+          key === 'canContinueRemediation' ? 'deployment canary disabled' : null,
+      }),
+    );
+    expect(unavailable[0]).toMatchObject({
+      id: 'continue-remediation',
+      disabledReason: 'deployment canary disabled',
+    });
   });
 
   it('omits recover-from-selected-step unless a recovery option is selected', () => {

@@ -102,6 +102,9 @@ from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.services.control_stop_continuation import (
     ControlStopContinuationReservation,
 )
+from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
+)
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
@@ -15303,28 +15306,35 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
         "api_service.api.routers.executions.admit_control_stop_continuation",
         admit,
     )
+    authorized_budget = ContinuationBudgetGrant(
+        grantId="grant-1",
+        maxAttempts=2,
+        maxConsecutiveNoProgressAttempts=1,
+    )
+    repository = SimpleNamespace(
+        load_source_identity=AsyncMock(
+            return_value=(
+                "verify:control-stop:6",
+                SimpleNamespace(contract_payload={"authoritative": True}),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.SqlControlStopContinuationRepository",
+        lambda _session: repository,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.ControlStopContinuationContract.model_validate",
+        lambda _payload: SimpleNamespace(continuation_budget=authorized_budget),
+    )
 
     first = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={
-            "controlStopId": "verify:control-stop:6",
-            "continuationBudget": {
-                "grantId": "grant-1",
-                "maxAttempts": 2,
-                "maxConsecutiveNoProgressAttempts": 1,
-            },
-        },
+        json={},
     )
     duplicate = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={
-            "controlStopId": "verify:control-stop:6",
-            "continuationBudget": {
-                "grantId": "grant-1",
-                "maxAttempts": 2,
-                "maxConsecutiveNoProgressAttempts": 1,
-            },
-        },
+        json={},
     )
 
     assert first.status_code == 202
@@ -15335,6 +15345,7 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
     assert first.json()["created"] is True
     assert duplicate.json()["created"] is False
     assert admit.await_count == 2
+    assert repository.load_source_identity.await_count == 2
     for invocation in admit.await_args_list:
         assert invocation.kwargs["source_workflow_id"] == "mm:wf-1"
         assert invocation.kwargs["source_run_id"] == "run-2"
@@ -15361,14 +15372,7 @@ def test_continue_remediation_rejects_non_owner_before_admission(
 
     response = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={
-            "controlStopId": "verify:control-stop:6",
-            "continuationBudget": {
-                "grantId": "grant-1",
-                "maxAttempts": 2,
-                "maxConsecutiveNoProgressAttempts": 1,
-            },
-        },
+        json={},
     )
 
     assert response.status_code == 404

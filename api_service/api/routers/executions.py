@@ -225,7 +225,7 @@ from moonmind.services.control_stop_continuation import (
     admit_control_stop_continuation,
 )
 from moonmind.workflows.executions.control_stop_continuation import (
-    ContinuationBudgetGrant,
+    ControlStopContinuationContract,
     ControlStopContinuationError,
 )
 from api_service.api.execution_principal import (
@@ -14245,8 +14245,6 @@ class ContinueRemediationRequest(BaseModel):
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
-    control_stop_id: str = Field(alias="controlStopId", min_length=1, max_length=255)
-    continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
     instruction_changes_ref: str | None = Field(
         None, alias="instructionChangesRef", min_length=1
     )
@@ -14314,14 +14312,22 @@ async def continue_remediation(
         )
 
     try:
+        repository = SqlControlStopContinuationRepository(session)
+        control_stop_id, evidence = await repository.load_source_identity(
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+        )
+        contract = ControlStopContinuationContract.model_validate(
+            dict(evidence.contract_payload)
+        )
         reservation = await admit_control_stop_continuation(
             source_workflow_id=source.workflow_id,
             source_run_id=source_run_id,
-            control_stop_id=payload.control_stop_id,
-            continuation_budget=payload.continuation_budget,
+            control_stop_id=control_stop_id,
+            continuation_budget=contract.continuation_budget,
             instruction_changes_ref=payload.instruction_changes_ref,
             instruction_changes_digest=payload.instruction_changes_digest,
-            repository=SqlControlStopContinuationRepository(session),
+            repository=repository,
             starter=starter,
         )
     except (ControlStopContinuationError, ValidationError) as exc:
