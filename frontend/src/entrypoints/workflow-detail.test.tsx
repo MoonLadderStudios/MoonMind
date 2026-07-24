@@ -4926,8 +4926,7 @@ describe('Workflow Detail Entrypoint', () => {
       'Edit',
       'Compare run',
       'Rerun',
-      'Resume from failed step',
-      'Recover from selected step',
+      'Recover',
       'Pause',
       'Resume',
       'Approve',
@@ -5562,7 +5561,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBeTruthy();
   });
 
-  it('renders failed-step Resume separately from lifecycle Resume and submits the resume command', async () => {
+  it('submits the canonical typed recovery command separately from lifecycle Resume', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -5614,10 +5613,16 @@ describe('Workflow Detail Entrypoint', () => {
       ],
     };
     const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const recoveryTarget = {
+      schemaVersion: 'workflow-recovery-target/v1',
+      recoveryAction: 'recover',
+      target: { kind: 'failed_step' },
+    };
+    vi.spyOn(window, 'prompt').mockReturnValue(JSON.stringify(recoveryTarget));
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push(init === undefined ? { url } : { url, init });
-      if (url.includes('/recover-from-failed-step')) {
+      if (url.endsWith('/recover')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ accepted: true }),
@@ -5631,22 +5636,18 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const menu = await openWorkflowActionsMenu('Resume from failed step');
-    const resumeButton = within(menu).getByRole('menuitem', { name: 'Resume from failed step' });
+    const menu = await openWorkflowActionsMenu('Recover');
+    const resumeButton = within(menu).getByRole('menuitem', { name: 'Recover' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
     fireEvent.click(resumeButton);
-    expect(screen.queryByRole('dialog', { name: 'Resume from failed step' })).toBeNull();
-
     await waitFor(() => {
-      expect(calls.some((call) => call.url.includes('/recover-from-failed-step'))).toBe(true);
+      expect(calls.some((call) => call.url.endsWith('/recover'))).toBe(true);
     });
-    const resumeCall = calls.find((call) => call.url.includes('/recover-from-failed-step'));
-    expect(JSON.parse(String(resumeCall?.init?.body || '{}')).recoveryCheckpointRef).toBe(
-      'artifact://checkpoint/source',
-    );
+    const resumeCall = calls.find((call) => call.url.endsWith('/recover'));
+    expect(JSON.parse(String(resumeCall?.init?.body || '{}'))).toEqual(recoveryTarget);
   });
 
-  it('submits selected-step recovery with pinned source identity', async () => {
+  it('does not expose the superseded selected-step recovery control', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -5762,29 +5763,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const select = await screen.findByLabelText('Recovery start step');
-    fireEvent.change(select, { target: { value: 'plan' } });
-    await waitFor(() => {
-      expect((select as HTMLSelectElement).value).toBe('plan');
-    });
+    await screen.findByText('Failed workflow');
+    expect(screen.queryByLabelText('Recovery start step')).toBeNull();
+    const menu = await openWorkflowActionsMenu('Recover');
     expect(
-      (screen.getByRole('option', { name: /Publish - after failed step/ }) as HTMLOptionElement).disabled,
-    ).toBe(true);
-    const menu = await openWorkflowActionsMenu('Recover from selected step');
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Recover from selected step' }));
-    expect(screen.queryByRole('dialog', { name: 'Recover from selected step' })).toBeNull();
-
-    await waitFor(() => {
-      expect(calls.some((call) => call.url.includes('/recover-from-selected-step'))).toBe(true);
-    });
-    const selectedCall = calls.find((call) => call.url.includes('/recover-from-selected-step'));
-    const body = JSON.parse(String(selectedCall?.init?.body || '{}'));
-    expect(body).toMatchObject({
-      sourceWorkflowId: 'test-123',
-      sourceRunId: '01-run',
-      selectedStartStepId: 'plan',
-      recoveryCheckpointRef: 'artifact://checkpoint/source',
-    });
+      within(menu).queryByRole('menuitem', { name: 'Recover from selected step' }),
+    ).toBeNull();
   });
 
   it('omits Temporal task editing entry points when the flag is off', async () => {

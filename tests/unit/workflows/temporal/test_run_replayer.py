@@ -16,9 +16,31 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH,
     MoonMindRunWorkflow,
     MoonMindUserWorkflow,
 )
+
+
+@workflow.defn(name="MM3478FailedStepRecoveryReplayFixture")
+class _LegacyFailedStepRecoveryReplayFixture:
+    @workflow.run
+    async def run(self, recovery_source: dict[str, Any]) -> str:
+        return f"rerun:{recovery_source['failedStepId']}"
+
+
+@workflow.defn(name="MM3478FailedStepRecoveryReplayFixture")
+class _CurrentFailedStepRecoveryReplayFixture:
+    @workflow.run
+    async def run(self, recovery_source: dict[str, Any]) -> str:
+        if not workflow.patched(RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH):
+            return f"rerun:{recovery_source['failedStepId']}"
+        recovery_target = recovery_source.get("recoveryTarget")
+        return (
+            f"typed:{recovery_target['target']['logicalStepId']}"
+            if isinstance(recovery_target, dict)
+            else "typed:missing"
+        )
 from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
     mock_run_environment,  # noqa: F401
 )
@@ -364,6 +386,37 @@ async def test_moonspec_remediation_pre_and_post_patch_histories_replay() -> Non
     )
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_old_failed_step_history_replays_across_typed_recovery_cutover() -> None:
+    """MoonLadderStudios/MoonMind#3478 preserves pre-target recovery histories."""
+
+    legacy_input = {
+        "failedStepId": "implement",
+        "sourceWorkflowId": "mm:source",
+        "sourceRunId": "run-source",
+    }
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-mm3478-legacy-failed-step",
+            workflows=[_LegacyFailedStepRecoveryReplayFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            legacy = await env.client.start_workflow(
+                _LegacyFailedStepRecoveryReplayFixture.run,
+                legacy_input,
+                id="test-mm3478-legacy-failed-step-history",
+                task_queue="test-mm3478-legacy-failed-step",
+            )
+            assert await legacy.result() == "rerun:implement"
+            legacy_history = await legacy.fetch_history()
+
+    await Replayer(
+        workflows=[_CurrentFailedStepRecoveryReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(legacy_history)
 
 
 @pytest.mark.asyncio

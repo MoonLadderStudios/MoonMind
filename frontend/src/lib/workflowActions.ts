@@ -256,20 +256,11 @@ export function buildWorkflowActionMenuItems(
     });
     addButton({
       id: 'resume-from-failed-step',
-      label: 'Resume from failed step',
+      label: 'Recover',
       available: Boolean(actions.canResumeFromFailedStep),
       disabledReason: disabledReason('canResumeFromFailedStep'),
       onSelect: handlers.onResumeFromFailedStep,
     });
-    if (actions.canResumeFromFailedStep && selectedRecoveryOptionCount > 0) {
-      addButton({
-        id: 'recover-from-selected-step',
-        label: 'Recover from selected step',
-        available: selectedRecoveryStepEligible,
-        disabledReason: selectedRecoveryStepDisabledReason ?? 'selected step is not eligible',
-        onSelect: handlers.onRecoverFromSelectedStep,
-      });
-    }
   }
   // Remaining, less commonly used actions follow.
   addButton({

@@ -15242,12 +15242,6 @@ async def recover_execution(
     return RecoverExecutionResponse.model_validate(result)
 
 
-@router.post(
-    "/{workflow_id}/recover-from-failed-step",
-    response_model=RecoverFromFailedStepResponse,
-    status_code=status.HTTP_201_CREATED,
-    response_model_exclude_none=True,
-)
 async def recover_execution_from_failed_step(
     workflow_id: str,
     request: RecoverFromFailedStepRequest = Body(...),
@@ -15338,12 +15332,6 @@ async def recover_execution_from_failed_step(
     await session.commit()
     return RecoverFromFailedStepResponse.model_validate(result)
 
-@router.post(
-    "/{workflow_id}/recover-from-selected-step",
-    response_model=RecoverFromFailedStepResponse,
-    status_code=status.HTTP_201_CREATED,
-    response_model_exclude_none=True,
-)
 async def recover_execution_from_selected_step(
     workflow_id: str,
     request: RecoverFromSelectedStepRequest = Body(...),

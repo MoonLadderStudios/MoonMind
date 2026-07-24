@@ -8503,18 +8503,24 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
   const failedStepResumeMutation = useMutation({
     mutationFn: async () => {
+      const rawContract = window.prompt(
+        'Paste the admitted workflow-recovery-target/v1 JSON contract.',
+      );
+      if (!rawContract) {
+        throw new Error('Typed recovery requires an admitted recovery contract.');
+      }
+      let recoveryTarget: unknown;
+      try {
+        recoveryTarget = JSON.parse(rawContract);
+      } catch {
+        throw new Error('Typed recovery contract must be valid JSON.');
+      }
       const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-failed-step`,
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            idempotencyKey: `resume-${workflowId}-${latestRunId || runId || 'latest'}`,
-            ...(execution?.resume?.checkpointRef
-              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
-              : {}),
-            operatorMetadata: { requestedFrom: 'workflow-detail' },
-          }),
+          body: JSON.stringify(recoveryTarget),
         },
       );
       if (!response.ok) {
@@ -8524,7 +8530,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       return response.json();
     },
     onSuccess: () => {
-      setActionNotice('Resumed from failed step.');
+      setActionNotice('Typed recovery started.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -8548,43 +8554,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     },
     onSuccess: () => {
       setActionNotice('Publication-only recovery started.');
-      invalidate();
-    },
-    onError: (error: Error) => setActionError(error.message),
-  });
-
-  const selectedStepRecoveryMutation = useMutation({
-    mutationFn: async () => {
-      const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
-      const sourceRunId = execution?.resume?.sourceRunId || latestRunId || runId || '';
-      if (!selectedStepId || !sourceRunId) {
-        throw new Error('Selected-step recovery requires a source run and start step.');
-      }
-      const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-selected-step`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            idempotencyKey: `selected-step-recovery-${workflowId}-${sourceRunId}-${selectedStepId}`,
-            sourceWorkflowId: workflowId,
-            sourceRunId,
-            selectedStartStepId: selectedStepId,
-            ...(execution?.resume?.checkpointRef
-              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
-              : {}),
-            operatorMetadata: { requestedFrom: 'workflow-detail', mode: 'selected-step' },
-          }),
-        },
-      );
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      setActionNotice('Recovery started from selected step.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -8787,8 +8756,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   };
 
   const onRecoverFromSelectedStep = () => {
-    setActionError(null);
-    selectedStepRecoveryMutation.mutate();
+    failedStepResumeMutation.mutate();
   };
 
   const onApprove = () => {
@@ -8834,7 +8802,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     cancelMutation.isPending ||
     failedStepResumeMutation.isPending ||
     retryPublicationMutation.isPending ||
-    selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
     checkpointBranchMutation.isPending;
@@ -9904,39 +9871,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 <p className="small">
                   Evidence preview: step ledger, diagnostics, and 2000 log lines.
                 </p>
-              </div>
-            </section>
-          ) : null}
-
-          {stepsTabActive &&
-          actionsOn &&
-          actions &&
-          taskEditingOn &&
-          actions.canResumeFromFailedStep &&
-          selectedRecoveryOptions.length > 0 ? (
-            <section className="stack td-actions-region">
-              <div className="stack">
-                <label className="field-label" htmlFor="selected-recovery-step">
-                  Recovery start step
-                </label>
-                <select
-                  id="selected-recovery-step"
-                  value={selectedRecoveryStep?.logicalStepId || ''}
-                  disabled={busy}
-                  onChange={(event) => setSelectedRecoveryStepId(event.target.value)}
-                >
-                  {selectedRecoveryOptions.map((option) => (
-                    <option
-                      key={option.logicalStepId}
-                      value={option.logicalStepId}
-                      disabled={!option.eligible}
-                    >
-                      {option.title || option.logicalStepId}
-                      {option.isFailedStep ? ' (failed step)' : ''}
-                      {!option.eligible && option.reason ? ` - ${option.reason}` : ''}
-                    </option>
-                  ))}
-                </select>
               </div>
             </section>
           ) : null}

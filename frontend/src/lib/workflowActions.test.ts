@@ -119,7 +119,7 @@ describe('buildWorkflowActionMenuItems', () => {
     expect(withEditing.find((item) => item.id === 'edit-task')?.href).toBe('/tasks/abc/edit');
   });
 
-  it('omits recover-from-selected-step unless a recovery option is selected', () => {
+  it('never exposes the superseded selected-step recovery action', () => {
     const base = {
       taskEditingOn: true,
       actions: { canResumeFromFailedStep: true } as ExecutionActionCapabilities,
@@ -134,7 +134,7 @@ describe('buildWorkflowActionMenuItems', () => {
         selectedRecoveryStepEligible: true,
       }),
     );
-    expect(withSelection.some((item) => item.id === 'recover-from-selected-step')).toBe(true);
+    expect(withSelection.some((item) => item.id === 'recover-from-selected-step')).toBe(false);
   });
 
   it('surfaces a disabled reason for unavailable actions that report one', () => {

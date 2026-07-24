@@ -1713,55 +1713,9 @@ def test_typed_recover_route_contract_is_registered() -> None:
     }.issubset(properties)
 
 
-def test_recover_from_failed_step_route_contract_is_registered() -> None:
-    schema = app.openapi()
-    route = schema["paths"]["/api/executions/{workflow_id}/recover-from-failed-step"]["post"]
-    assert route["responses"]["201"]["description"]
-    request_schema = route["requestBody"]["content"]["application/json"]["schema"]
-    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
-    request_contract = schema["components"]["schemas"][ref]
-    properties = request_contract["properties"]
-    assert request_contract["additionalProperties"] is False
-    assert {
-        "sourceWorkflowId",
-        "sourceRunId",
-        "logicalStepId",
-        "sourceExecutionOrdinal",
-        "recoveryCheckpointRef",
-        "checkpointBoundary",
-        "taskInputSnapshotRef",
-        "planRef",
-        "planDigest",
-        "preservedStepRefs",
-        "dependencySignatures",
-        "workspacePolicy",
-    }.issubset(properties)
+def test_superseded_failed_step_recovery_routes_are_not_registered() -> None:
+    """MoonLadderStudios/MoonMind#3478 exposes one canonical recovery command."""
 
-
-def test_recover_from_selected_step_route_contract_is_registered() -> None:
     schema = app.openapi()
-    route = schema["paths"]["/api/executions/{workflow_id}/recover-from-selected-step"]["post"]
-    assert route["responses"]["201"]["description"]
-    request_schema = route["requestBody"]["content"]["application/json"]["schema"]
-    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
-    request_contract = schema["components"]["schemas"][ref]
-    properties = request_contract["properties"]
-    assert request_contract["additionalProperties"] is False
-    assert {
-        "sourceWorkflowId",
-        "sourceRunId",
-        "selectedStartStepId",
-        "logicalStepId",
-        "sourceExecutionOrdinal",
-        "recoveryCheckpointRef",
-        "checkpointBoundary",
-        "taskInputSnapshotRef",
-        "planRef",
-        "planDigest",
-        "preservedStepRefs",
-        "dependencySignatures",
-        "workspacePolicy",
-    }.issubset(properties)
-    assert {"sourceWorkflowId", "sourceRunId", "selectedStartStepId"}.issubset(
-        set(request_contract["required"])
-    )
+    assert "/api/executions/{workflow_id}/recover-from-failed-step" not in schema["paths"]
+    assert "/api/executions/{workflow_id}/recover-from-selected-step" not in schema["paths"]

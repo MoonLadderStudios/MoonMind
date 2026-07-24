@@ -267,18 +267,24 @@ export function WorkflowRowActionsMenu({
 
   const failedStepResumeMutation = useMutation({
     mutationFn: async () => {
+      const rawContract = window.prompt(
+        'Paste the admitted workflow-recovery-target/v1 JSON contract.',
+      );
+      if (!rawContract) {
+        throw new Error('Typed recovery requires an admitted recovery contract.');
+      }
+      let recoveryTarget: unknown;
+      try {
+        recoveryTarget = JSON.parse(rawContract);
+      } catch {
+        throw new Error('Typed recovery contract must be valid JSON.');
+      }
       const response = await fetch(
-        `${apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-failed-step`,
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/recover`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            idempotencyKey: `resume-${workflowId}-${runId || 'latest'}`,
-            ...(execution?.resume?.checkpointRef
-              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
-              : {}),
-            operatorMetadata: { requestedFrom: 'workflow-list' },
-          }),
+          body: JSON.stringify(recoveryTarget),
         },
       );
       if (!response.ok) {
