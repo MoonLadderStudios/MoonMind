@@ -63,6 +63,30 @@ class SqlControlStopContinuationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def load_source_identity(
+        self, *, source_workflow_id: str, source_run_id: str
+    ) -> tuple[str, ControlStopSourceEvidence]:
+        statement = select(ControlStopContinuationRecord).where(
+            ControlStopContinuationRecord.source_workflow_id == source_workflow_id,
+            ControlStopContinuationRecord.source_run_id == source_run_id,
+        )
+        rows = list((await self._session.execute(statement)).scalars())
+        if len(rows) != 1:
+            raise ControlStopContinuationError(
+                "authoritative control-stop continuation identity was not found"
+                if not rows
+                else "authoritative control-stop continuation identity is ambiguous"
+            )
+        row = rows[0]
+        return row.control_stop_id, ControlStopSourceEvidence(
+            contract_payload=dict(row.contract_payload),
+            artifact_digests={
+                str(key): str(value) for key, value in row.artifact_digests.items()
+            },
+            current_deployment_generation=row.deployment_generation,
+            deployment_promoted=row.deployment_promoted,
+        )
+
     async def _source_row(
         self,
         *,

@@ -6098,33 +6098,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** ContinuationBudgetGrant */
-        ContinuationBudgetGrant: {
-            /** Grantid */
-            grantId: string;
-            /** Maxattempts */
-            maxAttempts: number;
-            /** Maxconsecutivenoprogressattempts */
-            maxConsecutiveNoProgressAttempts: number;
-            /**
-             * Consumedattempts
-             * @default 0
-             */
-            consumedAttempts: number;
-            /**
-             * Consecutivenoprogressattempts
-             * @default 0
-             */
-            consecutiveNoProgressAttempts: number;
-        };
         /**
          * ContinueRemediationRequest
          * @description Select the frozen control-stop evidence owned by the source execution.
          */
         ContinueRemediationRequest: {
-            /** Controlstopid */
-            controlStopId: string;
-            continuationBudget: components["schemas"]["ContinuationBudgetGrant"];
             /** Instructionchangesref */
             instructionChangesRef?: string | null;
             /** Instructionchangesdigest */
