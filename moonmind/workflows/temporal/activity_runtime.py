@@ -76,6 +76,7 @@ from moonmind.schemas.managed_checkpoint_models import (
     ManagedWorkspaceCheckpointCaptureResult,
 )
 from moonmind.schemas.temporal_activity_models import (
+    AcceptedRepositoryEvidence,
     AgentRuntimeCancelInput,
     AgentRuntimeFetchResultInput,
     AgentRuntimeStatusInput,
@@ -12019,6 +12020,35 @@ class TemporalAgentRuntimeActivities:
         await self._cleanup_run_support_best_effort(run_id)
         self._cleanup_deferred_run_files_best_effort(run_id)
 
+    @staticmethod
+    def _accepted_repository_evidence(
+        push_info: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Promote a successful managed push into the workflow gate contract."""
+
+        push_status = str(push_info.get("push_status") or "").strip()
+        if push_status not in {"pushed", "no_commits"}:
+            return None
+        try:
+            evidence = AcceptedRepositoryEvidence(
+                pushStatus=push_status,
+                branch=push_info.get("push_branch"),
+                baseBranch=push_info.get("push_base_branch"),
+                headSha=push_info.get("push_head_sha"),
+                commitsAheadOfBase=push_info.get("push_commit_count"),
+                repositoryChanged=push_status == "pushed",
+                remoteVerified=push_info.get("remote_verified"),
+            )
+        except ValidationError:
+            logger.warning(
+                "Managed git push completed with status %s but lacked the "
+                "bounded identity/count fields required for accepted "
+                "repository evidence.",
+                push_status,
+            )
+            return None
+        return evidence.model_dump(mode="json", by_alias=True)
+
     async def agent_runtime_status(
         self,
         request: Any = None,
@@ -12348,6 +12378,11 @@ class TemporalAgentRuntimeActivities:
             # Build merged metadata from the typed result, then enrich with
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
+            # Provider/agent metadata is untrusted at this authority handoff.
+            # Only the managed git-push boundary below may emit accepted
+            # repository evidence.
+            meta.pop("acceptedRepositoryEvidence", None)
+            meta.pop("accepted_repository_evidence", None)
             if record is not None:
                 meta.setdefault("agentRunId", record.run_id)
                 if record.stdout_artifact_ref:
@@ -12477,6 +12512,23 @@ class TemporalAgentRuntimeActivities:
                     )
                 except Exception:
                     raise
+                accepted_repository_evidence = self._accepted_repository_evidence(
+                    push_info
+                )
+                if accepted_repository_evidence is not None:
+                    meta["acceptedRepositoryEvidence"] = (
+                        accepted_repository_evidence
+                    )
+                elif push_info.get("push_status") in {"pushed", "no_commits"}:
+                    push_info = {
+                        **push_info,
+                        "push_original_status": push_info["push_status"],
+                        "push_status": "failed",
+                        "push_error": (
+                            "managed push did not produce authoritative "
+                            "repository evidence"
+                        ),
+                    }
                 meta.update(push_info)
 
             # Enrich result with pull_request_url detected from workspace git
@@ -13862,6 +13914,21 @@ class TemporalAgentRuntimeActivities:
                 )
             )
             base_ref = f"origin/{base_branch_name}"
+            if not await self._refresh_workspace_remote_base_ref(
+                workspace=workspace,
+                base_branch=base_branch_name,
+                run_id=run_id,
+                env=auth_command_env,
+            ):
+                return {
+                    "push_status": "failed",
+                    "push_branch": current_branch,
+                    "push_base_branch": base_branch_name,
+                    "push_base_ref": base_ref,
+                    "push_error": (
+                        f"could not refresh authoritative publish base '{base_ref}'"
+                    ),
+                }
             commit_count: int | None = None
             if same_branch_publish:
                 commit_count = await self._count_branch_commits_ahead(
@@ -13882,6 +13949,31 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     env=command_env,
                 )
+                remote_verified = await self._verify_workspace_remote_branch_head(
+                    workspace=workspace,
+                    branch=current_branch,
+                    expected_head_sha=head_sha,
+                    run_id=run_id,
+                    env=auth_command_env,
+                )
+                if not remote_verified:
+                    logger.warning(
+                        "Post-agent git push for run %s did not verify the "
+                        "exact remote head for branch %s.",
+                        run_id,
+                        current_branch,
+                    )
+                    return {
+                        "push_status": "failed",
+                        "push_branch": current_branch,
+                        "push_base_branch": base_branch_name,
+                        "push_base_ref": base_ref,
+                        "push_head_sha": head_sha,
+                        "remote_verified": False,
+                        "push_error": (
+                            "post-push remote head did not match the local head"
+                        ),
+                    }
 
                 final_commit_count = precomputed_commit_count
                 # Verify the branch actually has commits over the publish base.
@@ -13896,6 +13988,19 @@ class TemporalAgentRuntimeActivities:
                         run_id=run_id,
                         env=command_env,
                     )
+                if final_commit_count < 0:
+                    return {
+                        "push_status": "failed",
+                        "push_branch": current_branch,
+                        "push_base_branch": base_branch_name,
+                        "push_base_ref": base_ref,
+                        "push_head_sha": head_sha,
+                        "remote_verified": True,
+                        "push_error": (
+                            "could not measure commits over the authoritative "
+                            "publish base"
+                        ),
+                    }
 
                 if final_commit_count == 0:
                     logger.warning(
@@ -13911,6 +14016,7 @@ class TemporalAgentRuntimeActivities:
                         "push_base_branch": base_branch_name,
                         "push_base_ref": base_ref,
                         "push_commit_count": 0,
+                        "remote_verified": True,
                     }
                     if head_sha:
                         result["push_head_sha"] = head_sha
@@ -13928,6 +14034,7 @@ class TemporalAgentRuntimeActivities:
                     "push_branch": current_branch,
                     "push_base_branch": base_branch_name,
                     "push_base_ref": base_ref,
+                    "remote_verified": True,
                 }
                 result.update(commit_info)
                 if extra:
@@ -14177,6 +14284,62 @@ class TemporalAgentRuntimeActivities:
                 "push_error": str(exc),
             }
 
+    async def _refresh_workspace_remote_base_ref(
+        self,
+        *,
+        workspace: str,
+        base_branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> bool:
+        """Refresh the exact remote base used for publication measurements."""
+
+        branch_name = str(base_branch or "").strip()
+        if not branch_name:
+            return False
+        remote_ref = f"refs/remotes/origin/{branch_name}"
+        try:
+            proc = await _create_managed_agent_subprocess(
+                *self._workspace_git_command(
+                    workspace,
+                    "fetch",
+                    "--no-tags",
+                    "origin",
+                    f"+refs/heads/{branch_name}:{remote_ref}",
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                await asyncio.wait_for(proc.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.warning(
+                    "Timed out refreshing publish base %s for run %s.",
+                    branch_name,
+                    run_id,
+                )
+                return False
+            if proc.returncode == 0:
+                return True
+            logger.warning(
+                "Could not refresh publish base %s for run %s (rc=%s).",
+                branch_name,
+                run_id,
+                proc.returncode,
+            )
+            return False
+        except Exception:
+            logger.warning(
+                "Failed to refresh publish base %s for run %s.",
+                branch_name,
+                run_id,
+                exc_info=True,
+            )
+            return False
+
     async def _resolve_workspace_remote_branch_sha(
         self,
         *,
@@ -14206,6 +14369,26 @@ class TemporalAgentRuntimeActivities:
         if remote_sha:
             return remote_sha
 
+        return await self._query_workspace_remote_branch_sha(
+            workspace=workspace,
+            branch=branch_name,
+            run_id=run_id,
+            env=env,
+        )
+
+    async def _query_workspace_remote_branch_sha(
+        self,
+        *,
+        workspace: str,
+        branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> str | None:
+        """Read the live remote branch head without trusting a tracking ref."""
+
+        branch_name = str(branch or "").strip()
+        if not branch_name:
+            return None
         try:
             proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(
@@ -14248,6 +14431,28 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
             return None
+
+    async def _verify_workspace_remote_branch_head(
+        self,
+        *,
+        workspace: str,
+        branch: str,
+        expected_head_sha: str | None,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> bool:
+        """Verify the live remote branch points at the exact local candidate."""
+
+        expected = str(expected_head_sha or "").strip()
+        if not expected:
+            return False
+        remote_head_sha = await self._query_workspace_remote_branch_sha(
+            workspace=workspace,
+            branch=branch,
+            run_id=run_id,
+            env=env,
+        )
+        return remote_head_sha == expected
 
     async def _resolve_workspace_ref_sha(
         self,
