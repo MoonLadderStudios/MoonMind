@@ -44,6 +44,24 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationWorkspaceHead,
 )
 
+# The expanded loop controller plan node always carries the run's resolved
+# runtime; materialized attempts inherit it instead of the ``auto`` sentinel.
+_LOOP_RUNTIME = {
+    "mode": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "effort": "high",
+    "executionProfileRef": "codex_openai_oauth",
+}
+
+
+def _loop_controller_node(loop: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "controller",
+        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+        "inputs": {"runtime": dict(_LOOP_RUNTIME)},
+        "annotations": {"remediationLoop": loop},
+    }
+
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
     import json
     return json.dumps({
@@ -3429,12 +3447,7 @@ def test_user_workflow_initializes_one_dynamic_loop_and_materializes_one_pair(
         "continueAsNewAttemptThreshold": 3,
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[
-            {
-                "id": "controller",
-                "annotations": {"remediationLoop": loop},
-            }
-        ]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
 
     projection = mock_run_workflow._publish_context["remediationLoop"]
@@ -3445,6 +3458,92 @@ def test_user_workflow_initializes_one_dynamic_loop_and_materializes_one_pair(
     )
     assert remediation["annotations"]["moonSpecRemediationAttempt"] == 1
     assert verification["dependsOn"] == [remediation["id"]]
+
+
+def test_materialized_loop_attempts_dispatch_on_the_selected_managed_runtime(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """A codex_cli run must not route its remediation loop to an external adapter."""
+
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "verificationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        },
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(loop)]
+    )
+
+    pair = mock_run_workflow._materialize_remediation_attempt(ordinal=1)
+
+    for node in pair:
+        assert node["tool"] == {"type": "agent_runtime", "name": "codex_cli"}
+        request = mock_run_workflow._build_agent_execution_request(
+            node_inputs=dict(node["inputs"]),
+            node_id=str(node["id"]),
+            tool_name=str(node["tool"]["name"]),
+            workflow_parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "codex_openai_oauth",
+            },
+        )
+        assert request.agent_id == "codex_cli"
+        assert request.agent_kind == "managed"
+        assert request.execution_profile_ref == "codex_openai_oauth"
+
+
+def test_loop_attempt_materialization_requires_a_resolved_controller_runtime(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "verificationTool": {"type": "agent_runtime", "name": "auto"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    controller = {
+        "id": "controller",
+        "tool": {"type": "agent_runtime", "name": "auto"},
+        "annotations": {"remediationLoop": loop},
+    }
+
+    # Initialization stays non-blocking so a loop that never remediates still
+    # makes progress; the unresolved runtime is reported when a pair is admitted.
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[controller]
+    )
+
+    assert mock_run_workflow._remediation_loop_spec is not None
+    with pytest.raises(ValueError, match="resolved agent runtime"):
+        mock_run_workflow._materialize_remediation_attempt(ordinal=1)
+
 
 @pytest.mark.asyncio
 async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair(
@@ -3468,9 +3567,7 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
         "publicationPolicy": "evaluate_after_terminal",
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[
-            {"id": "controller", "annotations": {"remediationLoop": loop}}
-        ]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
     mock_run_workflow._step_ledger_rows = []
     mock_run_workflow._write_json_artifact = AsyncMock(
@@ -3527,9 +3624,7 @@ async def test_dynamic_verifier_normalizes_runtime_artifact_ids(
         "publicationPolicy": "evaluate_after_terminal",
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[
-            {"id": "controller", "annotations": {"remediationLoop": loop}}
-        ]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
     mock_run_workflow._step_ledger_rows = []
     mock_run_workflow._write_json_artifact = AsyncMock(
@@ -3581,7 +3676,7 @@ async def test_dynamic_verifier_inserts_attempt_before_handoff_nodes(
         "publicationPolicy": "evaluate_after_terminal",
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[{"id": "controller", "annotations": {"remediationLoop": loop}}]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
     mock_run_workflow._step_ledger_rows = []
     mock_run_workflow._write_json_artifact = AsyncMock(
@@ -3632,9 +3727,7 @@ async def test_dynamic_verifier_terminal_decision_does_not_append_attempt(
         "publicationPolicy": "evaluate_after_terminal",
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[
-            {"id": "controller", "annotations": {"remediationLoop": loop}}
-        ]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
     mock_run_workflow._step_ledger_rows = []
     mock_run_workflow._write_json_artifact = AsyncMock(
@@ -3681,9 +3774,7 @@ async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
         "publicationPolicy": "evaluate_after_terminal",
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[
-            {"id": "controller", "annotations": {"remediationLoop": loop}}
-        ]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
     mock_run_workflow._step_ledger_rows = []
     mock_run_workflow._write_json_artifact = AsyncMock(
@@ -3792,6 +3883,7 @@ def test_dynamic_loop_restart_at_each_nonterminal_phase_preserves_identity_and_e
             "publicationPolicy": "evaluate_after_terminal",
         }
     )
+    mock_run_workflow._remediation_loop_runtime = dict(_LOOP_RUNTIME)
     carried_nodes = [
         {"id": "wf:old-run:loop:remediation:1"},
         {
@@ -3988,9 +4080,7 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
         "plan_artifact_ref": "artifact://plan/1",
     }
     mock_run_workflow._initialize_remediation_loop_controller(
-        ordered_nodes=[
-            {"id": "controller", "annotations": {"remediationLoop": loop}}
-        ]
+        ordered_nodes=[_loop_controller_node(loop)]
     )
     mock_run_workflow._step_ledger_rows = []
     mock_run_workflow._write_json_artifact = AsyncMock(
@@ -4090,6 +4180,7 @@ async def test_duplicate_verifier_delivery_cannot_admit_an_attempt_twice(
             "publicationPolicy": "evaluate_after_terminal",
         }
     )
+    mock_run_workflow._remediation_loop_runtime = dict(_LOOP_RUNTIME)
     mock_run_workflow._remediation_loop_state = RemediationLoopState(
         loopId="loop",
         phase="remediation_running",

@@ -1,0 +1,91 @@
+{
+  "incidentWorkflowId": "mm:dab3b32b-1e75-4706-aee2-d92acaa49ce4",
+  "incidentRunId": "019f9584-5c1a-780e-9bc2-6350bd556d67",
+  "failureShapeId": "remediation-loop-runtime-inheritance",
+  "boundary": "UserWorkflow remediation-loop attempt materialization to AgentRun dispatch",
+  "escapedFailure": {
+    "childWorkflowId": "mm:dab3b32b-1e75-4706-aee2-d92acaa49ce4:agent:mm:dab3b32b-1e75-4706-aee2-d92acaa49ce4:019f9584-5c1a-780e-9bc2-6350bd556d67:issue-implementation-remediation:remediation:1",
+    "activityType": "integration.resolve_adapter_metadata",
+    "activityInput": "auto",
+    "message": "No external adapter registered for agent_id='auto'. Registered: omnigent"
+  },
+  "logicalStepId": "tpl:github-issue-implement:07:8d9aedbc",
+  "controllerPlanNode": {
+    "id": "tpl:github-issue-implement:07:8d9aedbc",
+    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+    "inputs": {
+      "title": "Remediation loop controller",
+      "publishMode": "pr",
+      "repository": "MoonLadderStudios/Tactics",
+      "runtime": {
+        "mode": "codex_cli",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "executionProfileRef": "codex_openai_oauth"
+      },
+      "skill": {"id": "auto", "inputs": {}, "requiredCapabilities": ["git"]},
+      "annotations": {
+        "issueImplementRole": "moonspec-remediation-loop",
+        "remediationLoop": {
+          "kind": "remediation_loop",
+          "loopId": "issue-implementation-remediation",
+          "remediationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {
+              "selectedSkill": "auto",
+              "issue_provider": "github",
+              "issue_ref": "MoonLadderStudios/Tactics#2345",
+              "verify_artifact_path": "artifacts/github-issue-implement-verify.json"
+            }
+          },
+          "verificationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {
+              "selectedSkill": "moonspec-verify",
+              "issue_provider": "github",
+              "issue_ref": "MoonLadderStudios/Tactics#2345",
+              "verification_target": "issue_brief",
+              "verify_artifact_path": "artifacts/github-issue-implement-verify.json"
+            }
+          },
+          "workspacePolicy": "continue_from_loop_head",
+          "budgets": {
+            "hardMaxAttempts": "6",
+            "maxConsecutiveSemanticNoProgress": 2,
+            "maxRepeatedFailureSignature": 2,
+            "maxEvidenceRetries": 1,
+            "maxContractRepairs": 1,
+            "maxWallClockSeconds": 7200
+          },
+          "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop"
+          },
+          "sideEffectPolicy": "workflow_owned",
+          "approvalPolicy": "inherit",
+          "publicationPolicy": "evaluate_after_terminal",
+          "continueAsNewAttemptThreshold": 3
+        }
+      }
+    }
+  },
+  "workflowParameters": {
+    "targetRuntime": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "effort": "high",
+    "profileId": "codex_openai_oauth",
+    "workflow": {
+      "runtime": {
+        "mode": "codex_cli",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "executionProfileRef": "codex_openai_oauth"
+      }
+    }
+  }
+}

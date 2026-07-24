@@ -1452,3 +1452,77 @@ async def test_checkpoint_finalization_fault_is_retryable(
     assert durable_execution_result["status"] == "completed"
     assert fault.calls == 2
     assert agent_execution_calls == 1
+
+
+async def test_remediation_loop_attempts_inherit_the_runs_resolved_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:dab3b32b at the loop-materialization to AgentRun dispatch boundary."""
+
+    replay_id = "remediation-loop-runtime-inheritance"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["incidentRunId"],
+        parent=None,
+        search_attributes={},
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: workflow_info,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch: True,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime(2026, 7, 24, 19, 52, tzinfo=timezone.utc),
+    )
+
+    parent = MoonMindRunWorkflow()
+    parent._owner_id = "owner-replay"
+    parent._initialize_remediation_loop_controller(
+        ordered_nodes=[manifest["controllerPlanNode"]]
+    )
+    remediation, verification = parent._materialize_remediation_attempt(
+        ordinal=expected["attemptOrdinal"]
+    )
+
+    assert [remediation["id"], verification["id"]] == (
+        expected["materializedNodeIds"]
+    )
+    for node in (remediation, verification):
+        assert node["tool"]["name"] == expected["toolName"]
+        request = parent._build_agent_execution_request(
+            node_inputs=dict(node["inputs"]),
+            node_id=str(node["id"]),
+            tool_name=str(node["tool"]["name"]),
+            workflow_parameters=manifest["workflowParameters"],
+        )
+        # AgentRun only enters external adapter dispatch for agentKind 'external'.
+        assert request.agent_kind == expected["agentKind"]
+        assert request.agent_id == expected["agentId"]
+        assert request.execution_profile_ref == expected["executionProfileRef"]
+        assert request.parameters["model"] == expected["model"]
+        assert request.parameters["effort"] == expected["effort"]
+
+    # The escaped incident routed the sentinel into external adapter resolution,
+    # which no provider can satisfy. Keep that boundary failing loudly.
+    with pytest.raises(ValueError, match=expected["rejectedDispatchError"]):
+        await agent_run_module.resolve_adapter_metadata(expected["rejectedAgentId"])

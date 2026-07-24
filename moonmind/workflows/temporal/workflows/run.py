@@ -18,6 +18,7 @@ with workflow.unsafe.imports_passed_through():
     from collections.abc import Mapping as WorkflowMapping
 
     from moonmind.schemas.agent_runtime_models import (
+        AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
     )
     from api_service.services.provider_profile_readiness import (
@@ -153,6 +154,7 @@ with workflow.unsafe.imports_passed_through():
         project_remediation_loop,
         record_semantic_progress,
         record_verification_evidence,
+        resolve_loop_runtime,
         should_continue_as_new,
         start_remediation_attempt,
         start_verification,
@@ -1309,6 +1311,9 @@ class MoonMindRunWorkflow:
         self._remediation_workspace_head: RemediationWorkspaceHead | None = None
         self._remediation_loop_spec: RemediationLoopSpec | None = None
         self._remediation_loop_state: RemediationLoopState | None = None
+        # Resolved runtime the authored loop controller runs on. Materialized
+        # attempts inherit it so ``auto`` loop tools never reach adapter routing.
+        self._remediation_loop_runtime: dict[str, Any] | None = None
         self._remediation_loop_continuation: dict[str, Any] | None = None
         self._original_input_payload: dict[str, Any] = {}
         self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
@@ -3799,16 +3804,26 @@ class MoonMindRunWorkflow:
         """Freeze the one authored loop contract into compact workflow state."""
 
         controllers: list[Mapping[str, Any]] = []
+        controller_nodes: list[Mapping[str, Any]] = []
         for node in ordered_nodes:
             annotations = self._node_annotations_mapping(node)
             raw_loop = annotations.get("remediationLoop")
             if isinstance(raw_loop, Mapping):
                 controllers.append(raw_loop)
+                controller_nodes.append(node)
         if not controllers:
             return
         if len(controllers) != 1:
             raise ValueError("a plan must contain at most one remediation loop")
         spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
+        # Loop tools are authored as ``auto``: they inherit the run's resolved
+        # runtime from the controller plan node so every materialized attempt
+        # routes exactly like the authored steps of the same run. An unresolvable
+        # runtime is reported when an attempt is admitted, so a loop that never
+        # needs remediation still makes safe progress.
+        self._remediation_loop_runtime = self._plan_node_runtime_block(
+            controller_nodes[0]
+        )
         info = workflow.info()
         self._remediation_loop_spec = spec
         self._remediation_loop_state = RemediationLoopState(
@@ -3923,8 +3938,15 @@ class MoonMindRunWorkflow:
             run_id=info.run_id,
             ordinal=ordinal,
             workspace_head_ref=state.workspace_head_ref,
+            runtime=self._remediation_loop_runtime_block(),
             verification_inputs=verification_inputs,
         )
+
+    def _remediation_loop_runtime_block(self) -> dict[str, Any]:
+        """Return the loop's resolved runtime block for attempt materialization."""
+
+        _, runtime_block = resolve_loop_runtime(self._remediation_loop_runtime)
+        return runtime_block
 
     async def _evaluate_dynamic_remediation_verification(
         self,
@@ -4042,6 +4064,7 @@ class MoonMindRunWorkflow:
                 run_id=workflow.info().run_id,
                 ordinal=state.attempt_ordinal,
                 workspace_head_ref=state.workspace_head_ref,
+                runtime=self._remediation_loop_runtime_block(),
             )
             pair = [remediation, verification]
             insertion_index = (
@@ -17385,8 +17408,9 @@ class MoonMindRunWorkflow:
         )
         if not agent_id:
             raise ValueError(
-                "agent_runtime plan node must specify an agent_id "
-                "(via inputs.runtime.mode, inputs.targetRuntime, or tool.name)"
+                "agent_runtime plan node must specify a resolved agent_id "
+                "(via inputs.runtime.mode, inputs.targetRuntime, or tool.name); "
+                f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel"
             )
 
         agent_kind = self._agent_kind_for_id(agent_id)
@@ -18696,15 +18720,23 @@ class MoonMindRunWorkflow:
         runtime_block = (
             runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
         )
-        return str(
-            runtime_block.get("mode")
-            or runtime_block.get("agentId")
-            or runtime_block.get("agent_id")
-            or node_inputs.get("targetRuntime")
-            or node_inputs.get("agentId")
-            or fallback_name
-            or ""
-        ).strip()
+        for candidate in (
+            runtime_block.get("mode"),
+            runtime_block.get("agentId"),
+            runtime_block.get("agent_id"),
+            node_inputs.get("targetRuntime"),
+            node_inputs.get("agentId"),
+            fallback_name,
+        ):
+            value = str(candidate or "").strip()
+            if not value:
+                continue
+            # ``auto`` selects the run's runtime at planning time; it is never a
+            # runtime identity and must never route to adapter dispatch.
+            if _normalize_agent_runtime_id(value) == AUTO_RUNTIME_SENTINEL:
+                continue
+            return value
+        return ""
 
     def _agent_runtime_id_for_plan_node(
         self,
@@ -18727,6 +18759,20 @@ class MoonMindRunWorkflow:
             fallback_name=selected_node.get("name") or selected_node.get("id"),
         )
         return agent_id or None
+
+    def _plan_node_runtime_block(
+        self,
+        node: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Return an authored node's compact runtime block with a resolved mode."""
+
+        node_inputs = self._node_inputs_mapping(node)
+        raw_runtime = node_inputs.get("runtime")
+        runtime_block = dict(raw_runtime) if isinstance(raw_runtime, Mapping) else {}
+        agent_id = self._agent_runtime_id_for_plan_node(node)
+        if agent_id:
+            runtime_block["mode"] = agent_id
+        return runtime_block
 
     def _mark_slot_continuity_for_next_step(
         self,
