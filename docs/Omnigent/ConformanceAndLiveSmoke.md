@@ -120,6 +120,16 @@ disable-new-selection, rollback, historical-read, and worker-version replay
 outcomes. A missing or false assertion fails publication; there is no
 fresh-root, alternate-profile, direct-Codex, or lower-level fallback.
 
+New control-stop destinations are disabled unless
+`FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ENABLED=true`, shadow mode is false,
+and `FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION` matches the frozen
+contract generation. The comma-separated `CANARY_OWNER_IDS`,
+`ALLOWED_PROVIDER_PROFILE_IDS`, `ALLOWED_EXECUTION_PROFILE_REFS`, and
+`ALLOWED_LAUNCH_POLICY_REFS` values under the same
+`FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_` prefix are exact allowlists.
+Disabling the feature or changing its generation blocks new admissions without
+changing replay or historical reads for already-started destinations.
+
 ## Credentialed CI publication
 
 `.github/workflows/omnigent-live-conformance.yml` is the scheduled and manually
