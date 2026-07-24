@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     ACCURATE_SLOT_WAIT_REASON_PATCH_ID,
     MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID,
     NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID,
+    PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID,
     MoonMindAgentRun,
     RunStatus,
     _SLOT_WAIT_TIMEOUT_SECONDS,
@@ -208,12 +209,21 @@ class TestSlotWaitRetryBehavior:
         assert "manager_handle.signal(\"request_slot\"" not in source
         assert "provider_profile.reset_manager" not in source
 
-    def test_slot_timeout_probe_failure_falls_back_to_safe_recovery(self):
-        """Inspection ambiguity must not authorize destructive manager reset."""
+    def test_slot_timeout_probe_failure_preserves_durable_request(self):
+        """Inspection ambiguity must not amplify load with ensure/re-request work."""
         source = inspect.getsource(MoonMindAgentRun.run)
 
         assert "except CancelledError:" in source
-        assert "using non-destructive recovery" in source
+        assert (
+            PRESERVE_DURABLE_SLOT_REQUEST_ON_AMBIGUOUS_INSPECTION_PATCH_ID
+            == "agent-run-preserve-slot-request-on-ambiguous-inspection-v1"
+        )
+        assert "preserving the durable slot request" in source
+        assert 'manager_state.get("inspection_succeeded")' in source
+        assert "if preserve_durable_slot_request:" in source
+        assert "continue" in source
+        # The old replay path remains available for histories that already
+        # recorded manager recovery commands before this patch marker.
         assert 'manager_state = {"running": False}' in source
         assert "_recover_and_request_slot" in source
 

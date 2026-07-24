@@ -39,6 +39,7 @@ _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
 _MULTIPART_WRITE_CHUNK_BYTES = 8 * 1024 * 1024
 _RUN_DIGEST_INDEXING_TIMEOUT_SECONDS = 10
+_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS = 2.0
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
 _TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
@@ -3651,6 +3652,7 @@ class TemporalArtifactActivities:
                 "running": False,
                 "workflow_id": workflow_id,
                 "status": f"RPC_ERROR_{exc.status.name}",
+                "inspection_succeeded": False,
                 "error_type": type(exc).__name__,
                 "error": str(exc),
             }
@@ -3661,24 +3663,40 @@ class TemporalArtifactActivities:
                 "running": False,
                 "workflow_id": workflow_id,
                 "status": status_name,
+                "inspection_succeeded": True,
             }
 
         try:
-            state = await handle.query("get_state")
+            state = await asyncio.wait_for(
+                handle.query("get_state"),
+                timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            return {
+                "running": True,
+                "workflow_id": workflow_id,
+                "status": status_name,
+                "inspection_succeeded": False,
+                "inspection_status": "QUERY_TIMEOUT",
+            }
         except RPCError as exc:
             return {
-                "running": False,
+                "running": True,
                 "workflow_id": workflow_id,
-                "status": f"RPC_ERROR_{exc.status.name}",
+                "status": status_name,
+                "inspection_succeeded": False,
+                "inspection_status": f"RPC_ERROR_{exc.status.name}",
                 "error_type": type(exc).__name__,
                 "error": str(exc),
             }
 
         if not isinstance(state, dict):
             return {
-                "running": False,
+                "running": True,
                 "workflow_id": workflow_id,
                 "status": status_name,
+                "inspection_succeeded": False,
+                "inspection_status": "INVALID_QUERY_PAYLOAD",
                 "error_type": "InvalidQueryPayload",
             }
 
@@ -3769,6 +3787,7 @@ class TemporalArtifactActivities:
             "running": True,
             "workflow_id": workflow_id,
             "status": status_name,
+            "inspection_succeeded": True,
             "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
             "pending_requests_count": (
                 len(pending_requests) if isinstance(pending_requests, list) else 0

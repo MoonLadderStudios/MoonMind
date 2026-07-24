@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -3071,6 +3072,7 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "running": True,
         "workflow_id": "provider-profile-manager:claude_code",
         "status": "RUNNING",
+        "inspection_succeeded": True,
         "profile_count": 2,
         "pending_requests_count": 2,
         "event_count": 7,
@@ -3211,5 +3213,62 @@ async def test_provider_profile_manager_state_checks_status_before_query(
         "running": False,
         "workflow_id": "provider-profile-manager:claude_code",
         "status": "COMPLETED",
+        "inspection_succeeded": True,
     }
     assert handle.queried is False
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_bounds_busy_workflow_query(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal import artifacts as artifacts_module
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    query_cancelled = asyncio.Event()
+
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            try:
+                await asyncio.Event().wait()
+            finally:
+                query_cancelled.set()
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            assert workflow_id == "provider-profile-manager:codex_cli"
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        FakeAdapter,
+    )
+    monkeypatch.setattr(
+        artifacts_module,
+        "_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+    )
+
+    assert result == {
+        "running": True,
+        "workflow_id": "provider-profile-manager:codex_cli",
+        "status": "RUNNING",
+        "inspection_succeeded": False,
+        "inspection_status": "QUERY_TIMEOUT",
+    }
+    assert query_cancelled.is_set()
