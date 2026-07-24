@@ -26,7 +26,7 @@ from pydantic import (
 from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 
 EMBEDDED_EVIDENCE_SCHEMA_VERSION = "moonmind.omnigent.embedded-evidence/v1"
-EMBEDDED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.538494ff"
+EMBEDDED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.983c93c6"
 _PINNED_IMAGE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 
 EmbeddedClaimType = Literal[

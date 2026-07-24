@@ -836,10 +836,24 @@ class CodexManagedSessionRuntime:
 
     def _save_state(self, state: CodexSessionRuntimeState) -> None:
         self._ensure_directories()
-        self._state_path.write_text(
-            state.model_dump_json(by_alias=True, exclude_none=True, indent=2) + "\n",
-            encoding="utf-8",
+        payload = (
+            state.model_dump_json(by_alias=True, exclude_none=True, indent=2) + "\n"
         )
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix=f"{_STATE_FILENAME}.",
+            suffix=".tmp",
+            dir=str(self._state_path.parent),
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+                temp_fd = -1
+                handle.write(payload)
+            os.replace(temp_path, self._state_path)
+        finally:
+            if temp_fd >= 0:
+                os.close(temp_fd)
+            temp_path.unlink(missing_ok=True)
 
     def _session_state(self, state: CodexSessionRuntimeState) -> CodexManagedSessionState:
         return CodexManagedSessionState(
