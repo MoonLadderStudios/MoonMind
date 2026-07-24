@@ -14737,8 +14737,22 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
     record.finish_summary_json = {
         "controlStop": {
             "kind": "workflow_gate",
+            "controlStopId": "verify:control-stop:6",
             "remainingWorkRef": "artifact://remaining/final",
             "workspaceHeadRef": "artifact://workspace/final",
+            "sourceBudget": {
+                "maxAttempts": 6,
+                "consumedAttempts": 6,
+                "exhaustedDimension": "remediation_attempts",
+            },
+            "continuationBudgetGrant": {
+                "grantId": "grant-1",
+                "maxAttempts": 3,
+                "maxConsecutiveNoProgressAttempts": 2,
+            },
+            "destinationWorkflowId": "control-stop-continuation-digest",
+            "restorationEvidenceRef": "artifact://restore/evidence",
+            "hostSessionLifecycle": {"activityCleanupCompleted": True},
             "metrics": {"remediationAdmitted": True},
             "auxiliaryOutcomes": {
                 "gitPublication": {
@@ -14804,6 +14818,20 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
     assert actions["actionEvidence"]["continueRemediation"] == {
         "candidateRef": "artifact://workspace/final",
         "remainingWorkRef": "artifact://remaining/final",
+        "controlStopId": "verify:control-stop:6",
+        "sourceBudget": {
+            "maxAttempts": 6,
+            "consumedAttempts": 6,
+            "exhaustedDimension": "remediation_attempts",
+        },
+        "continuationBudget": {
+            "grantId": "grant-1",
+            "maxAttempts": 3,
+            "maxConsecutiveNoProgressAttempts": 2,
+        },
+        "destinationWorkflowId": "control-stop-continuation-digest",
+        "restorationEvidenceRef": "artifact://restore/evidence",
+        "hostSessionLifecycle": {"activityCleanupCompleted": True},
     }
 
 
@@ -15330,11 +15358,21 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
 
     first = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={},
+        json={
+            "proposedContinuationBudget": {
+                "maxAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": 1,
+            }
+        },
     )
     duplicate = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={},
+        json={
+            "proposedContinuationBudget": {
+                "maxAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": 1,
+            }
+        },
     )
 
     assert first.status_code == 202
@@ -15351,6 +15389,7 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
         assert invocation.kwargs["source_run_id"] == "run-2"
         assert invocation.kwargs["control_stop_id"] == "verify:control-stop:6"
         assert invocation.kwargs["continuation_budget"].grant_id == "grant-1"
+        assert invocation.kwargs["continuation_budget"].max_attempts == 1
         assert invocation.kwargs["instruction_changes_ref"] is None
 
 

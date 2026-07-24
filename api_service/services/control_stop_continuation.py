@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.common import WorkflowIDReusePolicy
 
 from api_service.db.models import ControlStopContinuationRecord
+from moonmind.config.settings import settings
 from moonmind.services.control_stop_continuation import (
     ControlStopContinuationReservation,
     ControlStopSourceEvidence,
@@ -18,6 +19,7 @@ from moonmind.services.control_stop_continuation import (
 from moonmind.workflows.executions.control_stop_continuation import (
     ControlStopContinuationContract,
     ControlStopContinuationError,
+    ControlStopContinuationWorkflowInput,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.workflows.control_stop_continuation import (
@@ -34,20 +36,24 @@ class TemporalControlStopContinuationStarter:
     async def start_or_reconcile(
         self, *, workflow_id: str, input_payload: Mapping[str, Any]
     ) -> str:
+        workflow_input = ControlStopContinuationWorkflowInput.model_validate(
+            dict(input_payload)
+        )
+        contract = workflow_input.contract
         result = await self._adapter.start_workflow(
             workflow_type=WORKFLOW_NAME,
             workflow_id=workflow_id,
             input_args=dict(input_payload),
             id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
             memo={
-                "owner_id": str(input_payload["ownerId"]),
-                "owner_type": str(input_payload["ownerType"]),
-                "source_workflow_id": str(input_payload["sourceWorkflowId"]),
-                "source_run_id": str(input_payload["sourceRunId"]),
+                "owner_id": contract.owner_id,
+                "owner_type": contract.owner_type,
+                "source_workflow_id": contract.source_workflow_id,
+                "source_run_id": contract.source_run_id,
             },
             search_attributes={
-                "mm_owner_id": str(input_payload["ownerId"]),
-                "mm_owner_type": str(input_payload["ownerType"]),
+                "mm_owner_id": contract.owner_id,
+                "mm_owner_type": contract.owner_type,
             },
         )
         if result.workflow_id != workflow_id:
@@ -117,13 +123,53 @@ class SqlControlStopContinuationRepository:
             source_run_id=source_run_id,
             control_stop_id=control_stop_id,
         )
+        contract = ControlStopContinuationContract.model_validate(
+            dict(row.contract_payload)
+        )
+        flags = settings.feature_flags
+        canary_owners = {
+            item.strip()
+            for item in flags.control_stop_continuation_canary_owner_ids.split(",")
+            if item.strip()
+        }
+        allowed_provider_profiles = {
+            item.strip()
+            for item in (
+                flags.control_stop_continuation_allowed_provider_profile_ids.split(",")
+            )
+            if item.strip()
+        }
+        allowed_execution_profiles = {
+            item.strip()
+            for item in (
+                flags.control_stop_continuation_allowed_execution_profile_refs.split(
+                    ","
+                )
+            )
+            if item.strip()
+        }
+        allowed_launch_policies = {
+            item.strip()
+            for item in (
+                flags.control_stop_continuation_allowed_launch_policy_refs.split(",")
+            )
+            if item.strip()
+        }
+        deployment_promoted = (
+            flags.control_stop_continuation_enabled
+            and not flags.control_stop_continuation_shadow
+            and (not canary_owners or contract.owner_id in canary_owners)
+            and contract.lane.provider_profile_id in allowed_provider_profiles
+            and contract.lane.execution_profile_id in allowed_execution_profiles
+            and contract.lane.launch_policy_ref in allowed_launch_policies
+        )
         return ControlStopSourceEvidence(
             contract_payload=dict(row.contract_payload),
             artifact_digests={
                 str(key): str(value) for key, value in row.artifact_digests.items()
             },
-            current_deployment_generation=row.deployment_generation,
-            deployment_promoted=row.deployment_promoted,
+            current_deployment_generation=(flags.control_stop_continuation_generation),
+            deployment_promoted=deployment_promoted,
         )
 
     async def reserve_destination(
@@ -141,12 +187,15 @@ class SqlControlStopContinuationRepository:
                 row.destination_workflow_id = contract.destination_workflow_id
                 row.workspace_head_ref = contract.workspace_head_ref
                 row.remaining_work_ref = contract.remaining_work_ref
+                row.contract_payload = contract.model_dump(by_alias=True, mode="json")
                 row.reserved_at = datetime.now(UTC)
                 await self._session.flush()
             elif (
                 row.destination_workflow_id != contract.destination_workflow_id
                 or row.workspace_head_ref != contract.workspace_head_ref
                 or row.remaining_work_ref != contract.remaining_work_ref
+                or dict(row.contract_payload)
+                != contract.model_dump(by_alias=True, mode="json")
             ):
                 raise ControlStopContinuationError(
                     "existing control-stop reservation conflicts with frozen contract"

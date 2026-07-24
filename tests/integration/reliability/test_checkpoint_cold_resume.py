@@ -10,6 +10,9 @@ from pathlib import Path
 import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+from moonmind.workflows.executions.control_stop_continuation import (
+    ControlStopContinuationContract,
+)
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
@@ -25,7 +28,9 @@ from moonmind.workflows.temporal.step_ledger import (
     refresh_ready_steps,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-
+from tests.unit.workflows.executions.test_control_stop_continuation import (
+    _payload as control_stop_payload,
+)
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -38,6 +43,7 @@ def _git(*args: str, cwd: Path) -> str:
     return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
 
 
+@pytest.mark.integration_ci
 async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     tmp_path: Path,
 ) -> None:
@@ -255,3 +261,61 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     assert rows["implement"]["status"] == "ready"
     assert rows["verify"]["status"] == "pending"
     assert restored["restorationEvidenceRef"]
+
+    # The control-stop continuation contract consumes the same durable archive
+    # after the source workspace and ManagedRun record have been destroyed. Its
+    # deterministic destination and idempotency identity must survive a cold
+    # process boundary without any source-path fallback.
+    control_stop_checkpoint_ref = artifact_store.put_bytes(
+        json.dumps(
+            {
+                "contentType": (
+                    "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+                ),
+                "source": {
+                    "workflowId": "source",
+                    "runId": "source-run",
+                    "logicalStepId": "verify",
+                    "executionOrdinal": 6,
+                },
+                "boundary": "after_gate",
+                "workspace": workspace,
+            }
+        ).encode(),
+        content_type=(
+            "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+        ),
+    ).artifact_ref
+    payload = control_stop_payload()
+    payload.update(
+        {
+            "sourceWorkflowId": "source",
+            "checkpointRef": control_stop_checkpoint_ref,
+            "checkpointDigest": "checkpoint-envelope-digest",
+            "workspaceHeadRef": workspace["archiveRef"],
+            "workspaceHeadDigest": workspace["archiveDigest"],
+            "workspaceBaseCommit": base_commit,
+            "workspaceManifestRef": workspace["manifestRef"],
+            "workspaceManifestDigest": workspace["manifestDigest"],
+            "restoreCapabilitySetVersion": capabilities.capability_set_version,
+            "restoreCapabilityDigest": capabilities.capability_digest,
+            "captureCapabilitySetVersion": capabilities.capability_set_version,
+            "captureCapabilityDigest": capabilities.capability_digest,
+        }
+    )
+    contract = ControlStopContinuationContract.model_validate(payload)
+    control_stop_request = contract.restore_request(
+        destination_run_id="control-stop-run"
+    )
+    control_stop_restored = await restore_service.restore(control_stop_request)
+
+    assert control_stop_restored == await restore_service.restore(control_stop_request)
+    assert control_stop_restored["checkpointRef"] == control_stop_checkpoint_ref
+    assert control_stop_restored["destinationWorkspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "codex_cli",
+        "agentRunId": contract.destination_workspace_id,
+        "relativePath": "repo",
+    }
+    assert not source_run_root.exists()
+    assert run_store.load("source-agent-run") is None
