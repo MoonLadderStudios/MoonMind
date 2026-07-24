@@ -853,10 +853,7 @@ class CodexManagedSessionRuntime:
         finally:
             if temp_fd >= 0:
                 os.close(temp_fd)
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
+            temp_path.unlink(missing_ok=True)
 
     def _session_state(self, state: CodexSessionRuntimeState) -> CodexManagedSessionState:
         return CodexManagedSessionState(
