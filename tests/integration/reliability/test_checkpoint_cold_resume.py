@@ -43,7 +43,6 @@ def _git(*args: str, cwd: Path) -> str:
     return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
 
 
-@pytest.mark.integration_ci
 async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     tmp_path: Path,
 ) -> None:
