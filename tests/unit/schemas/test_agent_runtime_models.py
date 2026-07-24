@@ -149,6 +149,20 @@ def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
             idempotencyKey="   ",
         )
 
+@pytest.mark.parametrize("agent_id", ["auto", "AUTO", " auto "])
+def test_agent_execution_request_rejects_the_auto_selection_sentinel(
+    agent_id: str,
+) -> None:
+    """``auto`` selects a runtime at planning time; it is never an agent identity."""
+
+    with pytest.raises(ValidationError, match="selection sentinel"):
+        AgentExecutionRequest(
+            agentKind="managed",
+            agentId=agent_id,
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+        )
+
 def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
     with pytest.raises(
         ValidationError, match="parameters must not contain raw credential keys"
