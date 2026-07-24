@@ -58,6 +58,20 @@ def _make_subprocess_result(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr,
     )
 
+def _verified_push_info(
+    *,
+    branch: str = "my-branch",
+    base_branch: str = "main",
+) -> dict[str, object]:
+    return {
+        "push_status": "pushed",
+        "push_branch": branch,
+        "push_base_branch": base_branch,
+        "push_head_sha": "verified-head-sha",
+        "push_commit_count": 1,
+        "remote_verified": True,
+    }
+
 def test_detect_pr_url_uses_workspace_command_shims_and_resolved_token(tmp_path):
     store = _make_mock_store(workspace_path=str(tmp_path / "run-1" / "repo"))
     activities = TemporalAgentRuntimeActivities(run_store=store)
@@ -115,6 +129,32 @@ def test_parse_git_status_paths_rejects_truncated_rename_record() -> None:
 
 class TestPushWorkspaceBranch:
     """Tests for TemporalAgentRuntimeActivities._push_workspace_branch."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_unrelated_publication_authority_calls(self, request):
+        if request.node.name in {
+            "test_push_refreshes_authoritative_base_before_remote_write",
+            "test_push_blocks_when_authoritative_base_cannot_refresh",
+            "test_push_blocks_when_live_remote_head_does_not_match",
+            "test_live_remote_head_verification_requires_exact_sha",
+        }:
+            yield
+            return
+        with (
+            patch.object(
+                TemporalAgentRuntimeActivities,
+                "_refresh_workspace_remote_base_ref",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch.object(
+                TemporalAgentRuntimeActivities,
+                "_verify_workspace_remote_branch_head",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_push_skipped_no_store(self):
@@ -868,6 +908,183 @@ class TestPushWorkspaceBranch:
         assert result["push_base_ref"] == "origin/trunk"
         assert result["push_head_sha"] == "pushed-head-sha"
         assert "push_error" not in result
+
+    @pytest.mark.asyncio
+    async def test_push_refreshes_authoritative_base_before_remote_write(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            del kwargs
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            refreshed = await activities._refresh_workspace_remote_base_ref(
+                workspace="/work/agent_jobs/run-1/repo",
+                base_branch="main",
+                run_id="run-1",
+                env={},
+            )
+
+        assert refreshed is True
+        assert list(recorded_calls[0][-4:]) == [
+            "fetch",
+            "--no-tags",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_push_blocks_when_authoritative_base_cannot_refresh(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            del kwargs
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(
+                return_value=(b"feature/base-refresh\n", b"")
+            )
+            proc.returncode = 0
+            return proc
+
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_mock_exec),
+            patch.object(
+                activities,
+                "_commit_workspace_changes_if_needed",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_default_branch",
+                new_callable=AsyncMock,
+                return_value="main",
+            ),
+            patch.object(
+                activities,
+                "_refresh_workspace_remote_base_ref",
+                new_callable=AsyncMock,
+                return_value=False,
+            ) as refresh_base,
+        ):
+            result = await activities._push_workspace_branch("run-1")
+
+        refresh_base.assert_awaited_once()
+        assert result["push_status"] == "failed"
+        assert "authoritative publish base" in result["push_error"]
+        assert not any("push" in call for call in recorded_calls)
+
+    @pytest.mark.asyncio
+    async def test_push_blocks_when_live_remote_head_does_not_match(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        recorded_calls: list[tuple[object, ...]] = []
+
+        async def _mock_exec(*args, **kwargs):
+            del kwargs
+            recorded_calls.append(args)
+            proc = AsyncMock()
+            if len(recorded_calls) == 1:
+                proc.communicate = AsyncMock(
+                    return_value=(b"feature/remote-mismatch\n", b"")
+                )
+            else:
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            proc.returncode = 0
+            return proc
+
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=_mock_exec),
+            patch.object(
+                activities,
+                "_commit_workspace_changes_if_needed",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_default_branch",
+                new_callable=AsyncMock,
+                return_value="main",
+            ),
+            patch.object(
+                activities,
+                "_refresh_workspace_remote_base_ref",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_remote_branch_sha",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_scan_workspace_push_range",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_head_sha",
+                new_callable=AsyncMock,
+                return_value="local-head",
+            ),
+            patch.object(
+                activities,
+                "_verify_workspace_remote_branch_head",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            result = await activities._push_workspace_branch("run-1")
+
+        assert result["push_status"] == "failed"
+        assert result["remote_verified"] is False
+        assert "remote head did not match" in result["push_error"]
+        assert any("push" in call for call in recorded_calls)
+
+    @pytest.mark.asyncio
+    async def test_live_remote_head_verification_requires_exact_sha(self):
+        activities = TemporalAgentRuntimeActivities(run_store=_make_mock_store())
+
+        with patch.object(
+            activities,
+            "_query_workspace_remote_branch_sha",
+            new_callable=AsyncMock,
+            side_effect=["expected-head", "different-head", None],
+        ):
+            assert await activities._verify_workspace_remote_branch_head(
+                workspace="/work/agent_jobs/run-1/repo",
+                branch="feature/exact-head",
+                expected_head_sha="expected-head",
+                run_id="run-1",
+                env={},
+            )
+            assert not await activities._verify_workspace_remote_branch_head(
+                workspace="/work/agent_jobs/run-1/repo",
+                branch="feature/exact-head",
+                expected_head_sha="expected-head",
+                run_id="run-1",
+                env={},
+            )
+            assert not await activities._verify_workspace_remote_branch_head(
+                workspace="/work/agent_jobs/run-1/repo",
+                branch="feature/exact-head",
+                expected_head_sha="expected-head",
+                run_id="run-1",
+                env={},
+            )
 
     @pytest.mark.asyncio
     async def test_push_blocks_high_security_scan_before_git_push(self, monkeypatch):
@@ -1849,8 +2066,8 @@ class TestPushWorkspaceBranch:
         assert warning_mock.call_args.args[1] == str(workspace)
 
     @pytest.mark.asyncio
-    async def test_push_revlist_failure_falls_through(self):
-        """When rev-list --count raises, we fall through to 'pushed' (safe default)."""
+    async def test_push_revlist_failure_blocks_publication(self):
+        """An indeterminate commits-ahead count cannot authorize publication."""
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
         call_count = 0
@@ -1883,9 +2100,10 @@ class TestPushWorkspaceBranch:
 
         with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
             result = await activities._push_workspace_branch("run-1")
-        assert result["push_status"] == "pushed"
+        assert result["push_status"] == "failed"
         assert result["push_branch"] == "auto-abc123"
         assert "push_commit_count" not in result
+        assert "could not measure commits" in result["push_error"]
 
     @pytest.mark.asyncio
     async def test_push_resolves_github_token_and_injects_push_env(self):
@@ -2029,8 +2247,8 @@ class TestPushWorkspaceBranch:
         assert captured_push_env["GH_TOKEN"] == "resolved-push-token"
 
     @pytest.mark.asyncio
-    async def test_push_revlist_nonzero_returncode_falls_through(self):
-        """Non-zero rev-list returncode falls through to 'pushed' instead of false no_commits."""
+    async def test_push_revlist_nonzero_returncode_blocks_publication(self):
+        """A failed rev-list cannot be treated as a publishable candidate."""
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
         call_count = 0
@@ -2064,10 +2282,10 @@ class TestPushWorkspaceBranch:
 
         with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
             result = await activities._push_workspace_branch("run-1")
-        # Should NOT be no_commits; should fall through to pushed
-        assert result["push_status"] == "pushed"
+        assert result["push_status"] == "failed"
         assert result["push_branch"] == "auto-abc123"
         assert "push_commit_count" not in result
+        assert "could not measure commits" in result["push_error"]
 
     @pytest.mark.asyncio
     async def test_push_revlist_uses_target_branch(self):
@@ -2138,6 +2356,7 @@ class TestFetchResultPushIntegration:
                     "push_base_branch": "main",
                     "push_head_sha": "abc123",
                     "push_commit_count": 2,
+                    "remote_verified": True,
                 },
             ),
             patch.object(
@@ -2176,6 +2395,71 @@ class TestFetchResultPushIntegration:
             "remoteVerified": True,
             "authority": "agent_runtime.fetch_result",
         }
+
+    def test_accepted_evidence_requires_remote_head_verification(self):
+        """A local push result cannot claim an accepted remote candidate."""
+        activities = TemporalAgentRuntimeActivities(run_store=_make_mock_store())
+
+        accepted = activities._accepted_repository_evidence(
+            {
+                "push_status": "pushed",
+                "push_branch": "partial-work",
+                "push_base_branch": "main",
+                "push_head_sha": "abc123",
+                "push_commit_count": 2,
+                "remote_verified": False,
+            }
+        )
+
+        assert accepted is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_result_blocks_incomplete_managed_push_evidence(self):
+        """Raw pushed status cannot bypass the typed publication boundary."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        with (
+            patch.object(
+                activities,
+                "_push_workspace_branch",
+                new_callable=AsyncMock,
+                return_value={
+                    "push_status": "pushed",
+                    "push_branch": "partial-work",
+                    "push_base_branch": "main",
+                    "push_head_sha": "abc123",
+                    "push_commit_count": 2,
+                    "remote_verified": False,
+                },
+            ),
+            patch.object(
+                activities,
+                "_detect_pr_url_from_workspace",
+                return_value=None,
+            ),
+            patch.object(
+                activities,
+                "_resolve_workspace_push_github_token",
+                new_callable=AsyncMock,
+                return_value="resolved-token",
+            ),
+            patch(
+                "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+            ) as MockAdapter,
+        ):
+            MockAdapter.return_value.fetch_result = AsyncMock(
+                return_value=AgentRunResult(summary="done", failure_class=None)
+            )
+
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
+            )
+
+        assert "acceptedRepositoryEvidence" not in result.metadata
+        assert result.metadata["push_status"] == "failed"
+        assert result.metadata["push_original_status"] == "pushed"
+        assert "authoritative repository evidence" in result.metadata["push_error"]
 
     @pytest.mark.asyncio
     async def test_fetch_result_rejects_provider_authored_repository_evidence(self):
@@ -2238,7 +2522,7 @@ class TestFetchResultPushIntegration:
             patch.object(
                 activities, "_push_workspace_branch",
                 new_callable=AsyncMock,
-                return_value={"push_status": "pushed", "push_branch": "my-branch"},
+                return_value=_verified_push_info(),
             ) as mock_push,
             patch.object(
                 activities, "_detect_pr_url_from_workspace",
@@ -2283,8 +2567,10 @@ class TestFetchResultPushIntegration:
                 "_push_workspace_branch",
                 new_callable=AsyncMock,
                 return_value={
-                    "push_status": "pushed",
-                    "push_branch": "feature/existing",
+                    **_verified_push_info(
+                        branch="feature/existing",
+                        base_branch="feature/existing",
+                    ),
                 },
             ) as mock_push,
             patch.object(
@@ -2717,7 +3003,7 @@ class TestFetchResultPushIntegration:
                 activities,
                 "_push_workspace_branch",
                 new_callable=AsyncMock,
-                return_value={"push_status": "pushed", "push_branch": "my-branch"},
+                return_value=_verified_push_info(),
             ) as mock_push,
             patch.object(
                 activities, "_detect_pr_url_from_workspace",
@@ -2810,7 +3096,7 @@ class TestFetchResultPushIntegration:
             patch.object(
                 activities, "_push_workspace_branch",
                 new_callable=AsyncMock,
-                return_value={"push_status": "pushed", "push_branch": "my-branch"},
+                return_value=_verified_push_info(),
             ),
             patch.object(
                 activities, "_detect_pr_url_from_workspace",
@@ -2859,7 +3145,7 @@ class TestFetchResultPushIntegration:
         async def _push_side_effect(*_args, **_kwargs):
             launcher.cleanup_run_support.assert_not_awaited()
             supervisor.cleanup_deferred_run_files.assert_not_called()
-            return {"push_status": "pushed", "push_branch": "my-branch"}
+            return _verified_push_info()
 
         with (
             patch.object(
@@ -2909,7 +3195,7 @@ class TestFetchResultPushIntegration:
             patch.object(
                 activities, "_push_workspace_branch",
                 new_callable=AsyncMock,
-                return_value={"push_status": "pushed", "push_branch": "my-branch"},
+                return_value=_verified_push_info(),
             ),
             patch.object(
                 activities,

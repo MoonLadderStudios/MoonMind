@@ -386,7 +386,7 @@ class AcceptedRepositoryEvidence(BaseModel):
     candidate_contaminated: Literal[False] = Field(
         False, alias="candidateContaminated"
     )
-    remote_verified: Literal[True] = Field(True, alias="remoteVerified")
+    remote_verified: Literal[True] = Field(..., alias="remoteVerified")
     authority: Literal["agent_runtime.fetch_result"] = "agent_runtime.fetch_result"
 
     @model_validator(mode="after")

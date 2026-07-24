@@ -11,7 +11,8 @@
         "push_branch": "github-issue-implement-moonladderstudios-fdea5b2e",
         "push_base_branch": "main",
         "push_head_sha": "0e21b2035300a8d62fc25153ad1d6ac45741dcbf",
-        "push_commit_count": 3
+        "push_commit_count": 3,
+        "remote_verified": true
       }
     },
     {
@@ -21,7 +22,8 @@
         "push_branch": "github-issue-implement-moonladderstudios-1c91487a",
         "push_base_branch": "main",
         "push_head_sha": "669cc50ce4b2aba63f0d68ecf1abf4daa793f9b8",
-        "push_commit_count": 3
+        "push_commit_count": 3,
+        "remote_verified": true
       }
     }
   ]

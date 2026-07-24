@@ -81,6 +81,7 @@ def test_accepted_repository_evidence_rejects_inconsistent_push_state() -> None:
             headSha="abc123",
             commitsAheadOfBase=0,
             repositoryChanged=True,
+            remoteVerified=True,
         )
 
     with pytest.raises(ValidationError, match="repositoryChanged disagree"):
@@ -90,6 +91,17 @@ def test_accepted_repository_evidence_rejects_inconsistent_push_state() -> None:
             baseBranch="main",
             headSha="abc123",
             commitsAheadOfBase=0,
+            repositoryChanged=True,
+            remoteVerified=True,
+        )
+
+    with pytest.raises(ValidationError, match="remoteVerified"):
+        AcceptedRepositoryEvidence(
+            pushStatus="pushed",
+            branch="partial-work",
+            baseBranch="main",
+            headSha="abc123",
+            commitsAheadOfBase=1,
             repositoryChanged=True,
         )
 

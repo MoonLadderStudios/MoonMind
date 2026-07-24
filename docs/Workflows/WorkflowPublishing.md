@@ -208,6 +208,13 @@ from raw `push_*` metadata or agent prose. If the activity cannot produce a
 complete, internally consistent envelope, draft and ready-for-review publication
 remain blocked with an explicit artifact-backed handoff.
 
+Before measuring commits, the activity refreshes the exact `origin/<base>`
+tracking ref used as the publication base. After pushing, it queries the live
+remote branch and requires its head to equal the local candidate head. A base
+refresh failure, remote-head mismatch, or indeterminate commits-ahead count
+downgrades the raw push result to a failed publication result; it never emits
+accepted evidence or permits native PR creation from that incomplete state.
+
 ### Safety Guard
 
 Before pushing, the runtime resolves the current branch name (`git rev-parse --abbrev-ref HEAD`) and **refuses to push** if the branch is:
