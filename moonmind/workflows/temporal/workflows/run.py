@@ -6304,15 +6304,34 @@ class MoonMindRunWorkflow:
         annotations = self._node_annotations_mapping(node)
         if not annotations.get("remediationLoopId"):
             return
-        head = self._remediation_workspace_head
         state = self._remediation_loop_state
-        if head is None or state is None:
+        if state is None:
+            # A materialized attempt can only exist while the loop owns state, so
+            # a missing state is a real authority break rather than a missing
+            # opt-in.
             raise RemediationHeadError(
                 REMEDIATION_HEAD_MISMATCH,
-                "dynamic remediation verification has no captured workspace head",
+                "dynamic remediation verification has no admitted loop state",
             )
         attempt, _ = self._moonspec_remediation_attempt_metadata(node)
-        if attempt != state.attempt_ordinal or attempt != head.head_attempt_ordinal:
+        if attempt != state.attempt_ordinal:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "dynamic verifier attempt does not match the admitted loop attempt",
+            )
+        head = self._remediation_workspace_head
+        if head is None:
+            # Cumulative checkpoint tracking is opt-in and is owned by the
+            # capture/persistence boundary, exactly as
+            # ``_inject_remediation_workspace_baseline`` treats it for the
+            # remediation half of the same attempt. Without that authoritative
+            # head the verifier reads the loop's own recorded head ref and the
+            # live workspace the admitted attempt just ran in, like the authored
+            # verification step does, so its absence must not fail the run.
+            node_inputs["remediationWorkspaceHeadRef"] = state.workspace_head_ref
+            node_inputs["readOnlyWorkspaceHead"] = True
+            return
+        if attempt != head.head_attempt_ordinal:
             raise RemediationHeadError(
                 REMEDIATION_HEAD_MISMATCH,
                 "dynamic verifier attempt does not match the workflow-owned head",
@@ -10219,14 +10238,32 @@ class MoonMindRunWorkflow:
                     return
 
                 node_inputs = dict(original_node_inputs)
-                self._inject_remediation_workspace_baseline(
-                    node=node,
-                    node_inputs=node_inputs,
-                )
-                self._inject_remediation_verification_baseline(
-                    node=node,
-                    node_inputs=node_inputs,
-                )
+                try:
+                    self._inject_remediation_workspace_baseline(
+                        node=node,
+                        node_inputs=node_inputs,
+                    )
+                    self._inject_remediation_verification_baseline(
+                        node=node,
+                        node_inputs=node_inputs,
+                    )
+                except RemediationHeadError as exc:
+                    # This authority check runs before the Step Execution is
+                    # launched, so nothing else would attribute the failure to a
+                    # step. Without a failed Step Execution the recovery manifest
+                    # reports ``no_failed_step_execution_to_resume`` and the run
+                    # loses checkpoint-based recovery even though the prior
+                    # accepted attempt captured valid checkpoints.
+                    self._record_step_execution_exception(
+                        exc,
+                        logical_step_id=node_id,
+                        tool_name=tool_name,
+                        source="workflow",
+                        updated_at=workflow.now(),
+                    )
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    raise
                 if previous_review_feedback:
                     node_inputs = self._inject_review_feedback_into_inputs(
                         tool_type=tool_type,

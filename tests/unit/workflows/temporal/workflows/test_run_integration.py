@@ -38,6 +38,9 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityTimeouts,
 )
 from moonmind.workloads.tool_bridge import build_container_job_tool_definition_payload
+from moonmind.workflows.temporal.recovery_manifest import (
+    build_failed_run_recovery_manifest,
+)
 from moonmind.workflows.temporal.remediation_workspace_head import (
     REMEDIATION_HEAD_MISMATCH,
     RemediationHeadError,
@@ -3841,6 +3844,231 @@ async def test_dynamic_attempt_captures_head_verifies_and_admits_next_pair(
     assert projection["attemptOrdinal"] == 2
     assert projection["workspaceHeadRef"] == "artifact://workspace/C1"
     assert len(projection["materializedAttempts"]) == 2
+
+
+def _dynamic_loop_spec_payload() -> dict[str, Any]:
+    return {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "agent_runtime", "name": "auto"},
+        "verificationTool": {
+            "type": "agent_runtime",
+            "name": "auto",
+            "inputs": {"selectedSkill": "moonspec-verify"},
+        },
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_runs_when_no_checkpoint_head_was_captured(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """Regression for workflow mm:f19f83a9-e828-4ea1-8c6b-4ac06726321c.
+
+    Cumulative checkpoint tracking is opt-in and the run path supplies no
+    ``remediationWorkspaceHead`` verifier output, so the admitted attempt's
+    verification gate must still execute instead of failing the whole run with
+    ``dynamic remediation verification has no captured workspace head``.
+    """
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+
+    assert admitted is True
+    assert mock_run_workflow._remediation_workspace_head is None
+    remediation, verification = ordered_nodes
+
+    remediation_inputs = dict(remediation["inputs"])
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=remediation,
+        node_inputs=remediation_inputs,
+    )
+    assert "remediationAttemptInput" not in remediation_inputs
+
+    verification_inputs = dict(verification["inputs"])
+    mock_run_workflow._inject_remediation_verification_baseline(
+        node=verification,
+        node_inputs=verification_inputs,
+    )
+
+    assert verification_inputs["remediationWorkspaceHeadRef"] is None
+    assert verification_inputs["readOnlyWorkspaceHead"] is True
+    assert "remediationWorkspaceHead" not in verification_inputs
+
+
+@pytest.mark.asyncio
+async def test_dynamic_verifier_rejects_attempt_outside_the_admitted_loop_attempt(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """Attempt identity remains an authority check even without a head."""
+
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+    await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+    _, verification = ordered_nodes
+    verification["annotations"] = {
+        **verification["annotations"],
+        "moonSpecRemediationAttempt": 2,
+    }
+
+    with pytest.raises(RemediationHeadError) as exc:
+        mock_run_workflow._inject_remediation_verification_baseline(
+            node=verification,
+            node_inputs=dict(verification["inputs"]),
+        )
+
+    assert exc.value.code == REMEDIATION_HEAD_MISMATCH
+    assert "admitted loop attempt" in str(exc.value)
+
+
+def test_dynamic_verifier_rejects_a_gate_without_admitted_loop_state(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._remediation_loop_state = None
+    node = {
+        "id": "wf:run:loop:verification:1",
+        "annotations": {
+            "issueImplementRole": "moonspec-verification-gate",
+            "remediationLoopId": "loop",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {},
+    }
+
+    with pytest.raises(RemediationHeadError) as exc:
+        mock_run_workflow._inject_remediation_verification_baseline(
+            node=node,
+            node_inputs={},
+        )
+
+    assert exc.value.code == REMEDIATION_HEAD_MISMATCH
+    assert "admitted loop state" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_remediation_baseline_failure_records_a_failed_step_execution(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for workflow mm:f19f83a9-e828-4ea1-8c6b-4ac06726321c.
+
+    The baseline authority check runs before the Step Execution launches, so the
+    workflow must still attribute the failure to that step. Otherwise the failed
+    run reports ``no_failed_step_execution_to_resume`` and loses checkpoint-based
+    recovery.
+    """
+
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopPhase,
+        RemediationLoopSpec,
+        RemediationLoopState,
+    )
+
+    spec = RemediationLoopSpec.model_validate(_dynamic_loop_spec_payload())
+    mock_run_workflow._remediation_loop_spec = spec
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId=spec.loop_id,
+        phase=RemediationLoopPhase.VERIFICATION_PENDING,
+        consumedBudgets=ConsumedRemediationBudgets(),
+    )
+    gate_node_id = "wf:run:issue-implementation-remediation:verification:1"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": gate_node_id,
+                        "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                        "inputs": {
+                            "selectedSkill": "moonspec-verify",
+                            # Compiled plan nodes carry annotations inside their
+                            # inputs, exactly as the failed run's plan did.
+                            "annotations": {
+                                "issueImplementRole": "moonspec-verification-gate",
+                                "remediationLoopId": spec.loop_id,
+                                "moonSpecRemediationAttempt": 1,
+                            },
+                        },
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    with pytest.raises(RemediationHeadError):
+        await mock_run_workflow._run_execution_stage(
+            parameters={},
+            plan_ref="art:sha256:plan",
+        )
+
+    row = mock_run_workflow._step_ledger_row_for(gate_node_id)
+    assert row is not None
+    assert row["status"] == "failed"
+    assert mock_run_workflow._failure_diagnostic is not None
+    assert mock_run_workflow._failure_diagnostic["stepId"] == gate_node_id
+
+    # The recovery manifest keys checkpoint recovery off the failed logical step,
+    # so the attribution above is what keeps the failed run recoverable.
+    manifest = build_failed_run_recovery_manifest(
+        workflow_id="wf",
+        run_id="run",
+        created_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+        step_ledger_rows=mock_run_workflow._step_ledger_rows,
+        failure_diagnostic=mock_run_workflow._failure_diagnostic,
+    )
+    assert manifest.failed_logical_step_id == gate_node_id
+    assert manifest.blocked_reason != "no_failed_step_execution_to_resume"
 
 
 @pytest.mark.parametrize(

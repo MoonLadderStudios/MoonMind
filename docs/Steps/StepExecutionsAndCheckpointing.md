@@ -1147,6 +1147,8 @@ When an attempt fails or a gate requests more work, MoonMind must classify the n
 
 When a downstream step depends on a passing gate, the parent workflow must skip, block, invalidate, or revalidate that downstream step if the gate fails. Publication and external state transitions must not rely only on the downstream agent noticing the failed gate.
 
+A workflow-owned authority check that rejects a step before its Step Execution launches must still record that step as a failed Step Execution. The failed logical step is the recovery manifest's key evidence: without it the manifest reports `no_failed_step_execution_to_resume`, and a run whose prior accepted attempt captured valid checkpoints loses checkpoint-based recovery even though the workspace evidence exists.
+
 ---
 
 ## 19. Security and Side-Effect Guardrails
