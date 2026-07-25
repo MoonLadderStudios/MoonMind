@@ -149,7 +149,6 @@ def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
             idempotencyKey="   ",
         )
 
-
 @pytest.mark.parametrize("agent_id", ["auto", "AUTO", " auto "])
 def test_agent_execution_request_decodes_historical_auto_selection_sentinel(
     agent_id: str,
@@ -164,7 +163,6 @@ def test_agent_execution_request_decodes_historical_auto_selection_sentinel(
     )
 
     assert request.agent_id == agent_id.strip()
-
 
 def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
     with pytest.raises(

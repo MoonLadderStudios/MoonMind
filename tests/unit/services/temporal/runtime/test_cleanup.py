@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 NOW = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)
 OLD = NOW - timedelta(days=45)
 RECENT = NOW - timedelta(days=1)
+_LEGACY_AGENT_RUN_KEY = "task" + "RunId"
 
 
 def _config(root: Path, *, dry_run: bool = True) -> ManagedRuntimeCleanupConfig:
@@ -191,7 +194,11 @@ def test_mm_949_filesystem_workspace_without_records_is_ambiguous(
     assert workspace_decision.reason == "no durable owner records reference candidate"
 
 
-def test_mm_949_corrupt_owner_record_fails_closed(tmp_path: Path) -> None:
+def test_mm_949_corrupt_owner_record_fails_closed_without_blocking_the_pass(
+    tmp_path: Path,
+) -> None:
+    """An unreadable record must not hide every other candidate from cleanup."""
+
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
     _touch_old(run_root)
@@ -202,10 +209,209 @@ def test_mm_949_corrupt_owner_record_fails_closed(tmp_path: Path) -> None:
 
     result = _janitor(root, run_store, session_store, dry_run=False).run()
 
-    assert result.decisions == ()
     assert result.errors
-    assert result.errors[0].startswith("unreadable_store:")
-    assert run_root.exists()
+    assert result.errors[0].startswith("unreadable_owner_record: corrupt.json")
+    assert result.unreadable_owner_records == 1
+    # The unreadable record names no paths, so it is reported and retained
+    # rather than deleted on a guess.
+    corrupt_decision = next(
+        d for d in result.decisions if d.path == str(corrupt)
+    )
+    assert corrupt_decision.classification == "skipped_ambiguous_owner"
+    assert corrupt.exists()
+    # The unrelated readable workspace is still reclaimed.
+    workspace_decision = next(
+        d for d in result.decisions if d.path == str(run_root)
+    )
+    assert workspace_decision.classification == "deleted"
+    assert not run_root.exists()
+
+
+def test_disabled_cleanup_reports_actual_unreadable_record_count(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    records = root / "managed_runs"
+    records.mkdir(parents=True, exist_ok=True)
+    for index in range(25):
+        (records / f"corrupt-{index}.json").write_text("{not json", encoding="utf-8")
+
+    result = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=replace(_config(root), enabled=False),
+        now=lambda: NOW,
+    ).run()
+
+    assert result.unreadable_owner_records == 25
+    assert len(result.errors) == 21
+
+
+def test_legacy_schema_owner_record_protects_only_the_paths_it_names(
+    tmp_path: Path,
+) -> None:
+    """Replay the pre-cutover session record that silently killed the janitor."""
+
+    root = tmp_path / "agent_jobs"
+    legacy_root = root / "mm:legacy"
+    other_root = root / "run-1"
+    _touch_old(legacy_root / "repo")
+    _touch_old(legacy_root)
+    _touch_old(other_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+    # Written before the agent-run identifier rename: valid JSON, no longer a
+    # valid CodexManagedSessionRecord. Construct the historical key so the
+    # terminology gate continues to reject it from current contracts.
+    legacy = root / "managed_sessions" / "sess:mm:legacy:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:legacy:codex_cli",
+                "sessionEpoch": 1,
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878:head:55",
+                "runtimeId": "codex_cli",
+                "status": "terminated",
+                "workspacePath": str(legacy_root / "repo"),
+                "updatedAt": "2026-05-01T22:54:16.290526Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    assert result.unreadable_owner_records == 1
+    assert result.skipped_unreadable_owner >= 1
+    legacy_decision = next(
+        d for d in result.decisions if d.path == str(legacy_root)
+    )
+    assert legacy_decision.classification == "protected_unreadable_owner"
+    assert legacy_decision.reason == "owner record is unreadable"
+    assert legacy_root.exists()
+    # The record file itself is retained while it still names a live path.
+    legacy_record_decision = next(
+        d for d in result.decisions if d.path == str(legacy)
+    )
+    assert legacy_record_decision.classification == "protected_unreadable_owner"
+    assert legacy.exists()
+    # Reclamation of unrelated state proceeds.
+    assert not other_root.exists()
+
+
+def test_orphaned_legacy_owner_record_is_deleted_once_its_paths_are_gone(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:orphan:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:orphan:codex_cli",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878:head:55",
+                "status": "terminated",
+                "workspacePath": str(root / "mm:orphan" / "repo"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_epoch = OLD.timestamp()
+    os.utime(legacy, (old_epoch, old_epoch))
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    decision = next(d for d in result.decisions if d.path == str(legacy))
+    assert decision.classification == "deleted"
+    assert decision.reason == "deleted orphan unreadable record"
+    assert not legacy.exists()
+    assert result.deleted_record_files == 1
+
+
+def test_unreadable_owner_record_is_retained_when_record_cleanup_is_disabled(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:orphan:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:orphan:codex_cli",
+                "workspacePath": str(root / "mm:orphan" / "repo"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(legacy, (OLD.timestamp(), OLD.timestamp()))
+
+    result = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=replace(_config(root, dry_run=False), record_retention=None),
+        docker_reference_provider=DockerReferenceState,
+        now=lambda: NOW,
+    ).run()
+
+    decision = next(d for d in result.decisions if d.path == str(legacy))
+    assert decision.classification == "protected_recent"
+    assert decision.reason == "record retention disabled"
+    assert legacy.exists()
+
+
+def test_unreadable_owner_record_protects_raw_artifact_references(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    artifact_dir = root / "artifacts" / "mm:legacy"
+    _touch_old(artifact_dir)
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:legacy:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:legacy:codex_cli",
+                "stdoutArtifactRef": "mm:legacy/stdout.log",
+                "diagnosticsRef": "mm:legacy/diagnostics.json",
+                "latestCheckpointRef": "mm:legacy/checkpoint.tgz",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    decision = next(d for d in result.decisions if d.path == str(artifact_dir))
+    assert decision.classification == "protected_unreadable_owner"
+    assert artifact_dir.exists()
+
+
+def test_unreadable_owner_record_is_retained_in_dry_run(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    legacy = root / "managed_sessions" / "sess:mm:orphan:codex_cli.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "sessionId": "sess:mm:orphan:codex_cli",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878",
+                "workspacePath": str(root / "mm:orphan" / "repo"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    old_epoch = OLD.timestamp()
+    os.utime(legacy, (old_epoch, old_epoch))
+
+    result = _janitor(root, run_store, session_store).run()
+
+    decision = next(d for d in result.decisions if d.path == str(legacy))
+    assert decision.classification == "eligible"
+    assert legacy.exists()
 
 
 def test_mm_949_recent_filesystem_timestamp_prevents_deletion(tmp_path: Path) -> None:

@@ -2755,6 +2755,42 @@ async def _maybe_call_heartbeat(
     if inspect.isawaitable(result):
         await result
 
+_CLEANUP_HEARTBEAT_MIN_INTERVAL_SECONDS = 5.0
+
+
+def _throttled_cleanup_heartbeat(
+    *,
+    min_interval_seconds: float = _CLEANUP_HEARTBEAT_MIN_INTERVAL_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> Callable[[Mapping[str, Any]], None]:
+    """Return a rate-limited heartbeat sink for managed-runtime cleanup progress.
+
+    The janitor reports progress per filesystem path. Forwarding each one is a
+    heartbeat storm that overflows the SDK's bounded pending-heartbeat queue and
+    fails the activity with ``QueueFull``, so liveness is reported at most once
+    per interval instead of once per path.
+    """
+
+    state = {"last": None}
+
+    def _emit(progress: Mapping[str, Any]) -> None:
+        if not temporal_activity.in_activity():
+            return
+        now = monotonic()
+        last = state["last"]
+        if last is not None and now - last < min_interval_seconds:
+            return
+        state["last"] = now
+        temporal_activity.heartbeat(
+            {
+                "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                **dict(progress),
+            }
+        )
+
+    return _emit
+
+
 async def _await_with_activity_heartbeats(
     awaitable: Awaitable[Any],
     *,
@@ -11928,16 +11964,7 @@ class TemporalAgentRuntimeActivities:
             docker_reference_provider=(
                 None if docker_state is None else lambda: docker_state
             ),
-            progress_callback=(
-                lambda progress: temporal_activity.heartbeat(
-                    {
-                        "activityType": "agent_runtime.cleanup_managed_runtime_files",
-                        **dict(progress),
-                    }
-                )
-                if temporal_activity.in_activity()
-                else None
-            ),
+            progress_callback=_throttled_cleanup_heartbeat(),
         )
         result_payload = result.to_dict()
         logger.info(
@@ -11969,6 +11996,20 @@ class TemporalAgentRuntimeActivities:
             len(result_payload.get("errors", [])),
             result_payload.get("candidateSamples", []),
         )
+        pass_errors = list(result_payload.get("errors", []))
+        unreadable_records = int(result_payload.get("unreadableOwnerRecords", 0) or 0)
+        if pass_errors or unreadable_records:
+            # A cleanup pass that cannot read owner records reclaims less than it
+            # should. Log loudly: a silent degraded pass let retained workspaces
+            # accumulate until the runtime volume filled.
+            logger.warning(
+                "Managed runtime cleanup pass degraded: unreadable_owner_records=%s "
+                "protected_by_unreadable_owner=%s deleted_roots=%s errors=%s",
+                unreadable_records,
+                result_payload.get("skippedUnreadableOwner", 0),
+                result_payload.get("deletedRoots", 0),
+                pass_errors[:5],
+            )
         return result_payload
 
     @staticmethod

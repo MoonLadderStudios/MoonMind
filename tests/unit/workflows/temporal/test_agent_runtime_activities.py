@@ -5594,6 +5594,43 @@ async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> N
     assert result["orphanVolumesScanned"] == 0
     assert result["orphanVolumesReaped"] == 0
 
+async def test_cleanup_progress_heartbeats_are_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A per-path heartbeat storm overflows the SDK queue and fails the pass."""
+
+    from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
+
+    sent: list[dict[str, object]] = []
+    clock = {"now": 100.0}
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "in_activity",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: sent.append(dict(payload)),
+    )
+
+    emit = activity_runtime_module._throttled_cleanup_heartbeat(
+        min_interval_seconds=5.0,
+        monotonic=lambda: clock["now"],
+    )
+    for index in range(2000):
+        emit({"phase": "size_walk", "path": f"/work/agent_jobs/mm:{index}/repo"})
+
+    assert len(sent) == 1
+    assert sent[0]["activityType"] == "agent_runtime.cleanup_managed_runtime_files"
+    assert sent[0]["phase"] == "size_walk"
+
+    clock["now"] += 5.0
+    emit({"phase": "delete", "path": "/work/agent_jobs/mm:old"})
+    assert len(sent) == 2
+    assert sent[1]["phase"] == "delete"
+
+
 async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
