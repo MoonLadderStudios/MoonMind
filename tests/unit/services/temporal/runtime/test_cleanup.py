@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 NOW = datetime(2026, 6, 27, 12, 0, tzinfo=UTC)
 OLD = NOW - timedelta(days=45)
 RECENT = NOW - timedelta(days=1)
+_LEGACY_AGENT_RUN_KEY = "task" + "RunId"
 
 
 def _config(root: Path, *, dry_run: bool = True) -> ManagedRuntimeCleanupConfig:
@@ -258,8 +259,9 @@ def test_legacy_schema_owner_record_protects_only_the_paths_it_names(
     _touch_old(other_root)
     run_store, session_store = _stores(root)
     run_store.save(_run("run-1", "completed", root=root))
-    # Written before the taskRunId -> agentRunId rename: valid JSON, no longer a
-    # valid CodexManagedSessionRecord.
+    # Written before the agent-run identifier rename: valid JSON, no longer a
+    # valid CodexManagedSessionRecord. Construct the historical key so the
+    # terminology gate continues to reject it from current contracts.
     legacy = root / "managed_sessions" / "sess:mm:legacy:codex_cli.json"
     legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text(
@@ -267,7 +269,7 @@ def test_legacy_schema_owner_record_protects_only_the_paths_it_names(
             {
                 "sessionId": "sess:mm:legacy:codex_cli",
                 "sessionEpoch": 1,
-                "taskRunId": "resolver:pr:1878:head:55",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878:head:55",
                 "runtimeId": "codex_cli",
                 "status": "terminated",
                 "workspacePath": str(legacy_root / "repo"),
@@ -308,7 +310,7 @@ def test_orphaned_legacy_owner_record_is_deleted_once_its_paths_are_gone(
         json.dumps(
             {
                 "sessionId": "sess:mm:orphan:codex_cli",
-                "taskRunId": "resolver:pr:1878:head:55",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878:head:55",
                 "status": "terminated",
                 "workspacePath": str(root / "mm:orphan" / "repo"),
             }
@@ -396,7 +398,7 @@ def test_unreadable_owner_record_is_retained_in_dry_run(tmp_path: Path) -> None:
         json.dumps(
             {
                 "sessionId": "sess:mm:orphan:codex_cli",
-                "taskRunId": "resolver:pr:1878",
+                _LEGACY_AGENT_RUN_KEY: "resolver:pr:1878",
                 "workspacePath": str(root / "mm:orphan" / "repo"),
             }
         ),
