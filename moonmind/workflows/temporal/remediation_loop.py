@@ -229,23 +229,27 @@ def start_remediation_attempt(
 
 
 def capture_remediation_candidate(
-    state: RemediationLoopState, *, workspace_head_ref: str
+    state: RemediationLoopState, *, workspace_head_ref: str | None = None
 ) -> RemediationLoopState:
-    """Atomically advance the workflow-owned candidate before verification."""
+    """Atomically advance the workflow-owned candidate before verification.
+
+    ``workspace_head_ref`` is supplied only when the loop opted into cumulative
+    checkpoint tracking. A headless attempt still has to leave remediation so
+    its verifier can record evidence; it simply carries no new candidate ref and
+    preserves any ref already recorded.
+    """
 
     if state.phase not in {
         RemediationLoopPhase.REMEDIATION_RUNNING,
         RemediationLoopPhase.CANDIDATE_CAPTURING,
     }:
         raise ValueError("candidate capture requires a running remediation")
-    if not workspace_head_ref.startswith("artifact://"):
-        raise ValueError("workspace head must use an artifact:// reference")
-    return state.model_copy(
-        update={
-            "workspace_head_ref": workspace_head_ref,
-            "phase": RemediationLoopPhase.VERIFICATION_PENDING,
-        }
-    )
+    update: dict[str, object] = {"phase": RemediationLoopPhase.VERIFICATION_PENDING}
+    if workspace_head_ref is not None:
+        if not workspace_head_ref.startswith("artifact://"):
+            raise ValueError("workspace head must use an artifact:// reference")
+        update["workspace_head_ref"] = workspace_head_ref
+    return state.model_copy(update=update)
 
 
 def start_verification(state: RemediationLoopState) -> RemediationLoopState:
