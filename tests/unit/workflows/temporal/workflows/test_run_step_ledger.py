@@ -3879,6 +3879,15 @@ async def test_run_uses_external_omnigent_identity_for_checkpoint_capture(
     assert captured[1]["payload"]["workspace"]["kind"] == "worktree_archive"
     assert "patchRef" not in captured[1]["payload"]["workspace"]
     assert "archiveRef" in captured[1]["payload"]["workspace"]
+    assert workflow._step_checkpoint_workspace_evidence_by_boundary == {
+        "implement": {
+            "before_execution": {
+                "checkpointRef": "artifact://checkpoint/before_execution",
+                "workspaceDigest": "sha256:" + ("a" * 64),
+                "checkpointManifestRef": "artifact://managed/manifest",
+            }
+        }
+    }
 
 
 def test_run_derives_external_omnigent_identity_from_runtime_selection() -> None:

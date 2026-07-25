@@ -28,6 +28,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH,
     RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -3602,6 +3603,82 @@ async def test_dynamic_verifier_persists_decision_and_appends_only_admitted_pair
 
 
 @pytest.mark.asyncio
+async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = {
+        "kind": "remediation_loop",
+        "loopId": "issue-implementation-remediation",
+        "remediationTool": {"type": "skill", "name": "auto"},
+        "verificationTool": {"type": "skill", "name": "moonspec-verify"},
+        "workspacePolicy": "continue_from_loop_head",
+        "budgets": {"hardMaxAttempts": 6},
+        "terminalPolicy": {
+            "fullyImplemented": "advance",
+            "additionalWorkNeeded": "continue_when_allowed",
+            "blocked": "stop",
+            "noDetermination": "retry_evidence_or_stop",
+            "failedUnrecoverable": "stop",
+        },
+        "sideEffectPolicy": "workflow_owned",
+        "publicationPolicy": "evaluate_after_terminal",
+    }
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(loop)]
+    )
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "initial-verification",
+            "status": "completed",
+            "attempt": 1,
+        }
+    ]
+    mock_run_workflow._rebuild_step_ledger_index()
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "initial-verification": {
+            "before_publication": {
+                "checkpointRef": "art_initial_checkpoint",
+                "workspaceDigest": "sha256:initial-candidate",
+                "checkpointManifestRef": "art_initial_manifest",
+            }
+        }
+    }
+    mock_run_workflow._write_json_artifact = AsyncMock(
+        return_value="artifact://decision/D0"
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    )
+    ordered_nodes: list[dict[str, Any]] = []
+
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=ordered_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://verification/V0",
+        remaining_work_ref="artifact://remaining/R0",
+        logical_step_id="initial-verification",
+    )
+
+    assert admitted is True
+    head = mock_run_workflow._remediation_workspace_head
+    state = mock_run_workflow._remediation_loop_state
+    assert head is not None
+    assert state is not None
+    assert head.root_checkpoint_ref == "artifact://art_initial_checkpoint"
+    assert head.head_checkpoint_ref == "artifact://art_initial_checkpoint"
+    assert head.head_workspace_digest == "sha256:initial-candidate"
+    assert head.latest_verification_ref == "artifact://verification/V0"
+    assert head.latest_verification_verdict == "ADDITIONAL_WORK_NEEDED"
+    assert state.workspace_head_ref == "artifact://art_initial_checkpoint"
+    assert ordered_nodes[0]["inputs"]["remediationWorkspaceHeadRef"] == (
+        "artifact://art_initial_checkpoint"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dynamic_verifier_normalizes_runtime_artifact_ids(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
@@ -3921,6 +3998,16 @@ def test_dynamic_loop_restart_at_each_nonterminal_phase_preserves_identity_and_e
         },
         "orderedNodes": carried_nodes,
         "stepLedgerRows": carried_rows,
+        "workspaceHead": {
+            "loopId": "loop",
+            "branchRef": "checkpoint-branch:loop",
+            "rootCheckpointRef": "artifact://workspace/C0",
+            "rootWorkspaceDigest": "sha256:c0",
+            "headCheckpointRef": "artifact://workspace/C1",
+            "headWorkspaceDigest": "sha256:c1",
+            "headAttemptOrdinal": 1,
+            "headVersion": 2,
+        },
     }
     restored_nodes: list[dict[str, Any]] = []
 
@@ -3936,6 +4023,10 @@ def test_dynamic_loop_restart_at_each_nonterminal_phase_preserves_identity_and_e
     assert state.workspace_head_ref == "artifact://workspace/C1"
     assert state.latest_verification_ref == "artifact://verification/V0"
     assert state.continuation_decision_ref == "artifact://decision/D0"
+    assert mock_run_workflow._remediation_workspace_head is not None
+    assert mock_run_workflow._remediation_workspace_head.head_checkpoint_ref == (
+        "artifact://workspace/C1"
+    )
     assert restored_nodes == carried_nodes
     assert [row["logicalStepId"] for row in mock_run_workflow._step_ledger_rows] == [
         node["id"] for node in carried_nodes
@@ -4093,15 +4184,38 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
         gate_result_ref="artifact://verification/V0",
         remaining_work_ref="artifact://remaining/R0",
     )
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(
+            {
+                "loopId": "issue-implementation-remediation",
+                "branchRef": (
+                    "checkpoint-branch:issue-implementation-remediation"
+                ),
+                "rootCheckpointRef": "artifact://workspace/C0",
+                "rootWorkspaceDigest": "sha256:c0",
+                "headCheckpointRef": "artifact://workspace/C1",
+                "headWorkspaceDigest": "sha256:c1",
+                "headAttemptOrdinal": 1,
+                "headVersion": 2,
+            }
+        )
+    )
     mock_run_workflow._remediation_loop_state = (
         mock_run_workflow._remediation_loop_state.model_copy(
-            update={"phase": "verification_pending"}
+            update={
+                "phase": "verification_pending",
+                "workspace_head_ref": "artifact://workspace/C1",
+            }
         )
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda patch_id: patch_id == RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+        lambda patch_id: patch_id
+        in {
+            RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+            RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+        },
     )
     carried: list[dict[str, Any]] = []
 
@@ -4128,7 +4242,44 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
     assert continuation["state"]["continuationDecisionRef"] == (
         "artifact://decision/D1"
     )
+    assert continuation["workspaceHead"]["headCheckpointRef"] == (
+        "artifact://workspace/C1"
+    )
+    assert continuation["workspaceHead"]["headVersion"] == 2
     assert len(continuation["orderedNodes"]) == 4
+
+
+def test_pre_cutover_continue_as_new_omits_remediation_workspace_head(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    mock_run_workflow._original_input_payload = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "initial_parameters": {"repo": "org/repo"},
+        "plan_artifact_ref": "artifact://plan/1",
+    }
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop-3473",
+        phase="verification_pending",
+        attemptOrdinal=1,
+        workspaceHeadRef="artifact://workspace/C1",
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(
+            _remediation_head_payload(checkpoint="C1", version=2)
+        )
+    )
+
+    payload = mock_run_workflow._build_remediation_loop_continue_as_new_input(
+        ordered_nodes=[]
+    )
+
+    assert "workspaceHead" not in payload["remediation_loop_continuation"]
 
 
 def test_persisted_loop_decision_is_authority_for_publication_projection(
@@ -4417,6 +4568,72 @@ def test_completed_remediation_advances_baseline_before_next_attempt(
         "artifact://workspace/C1"
     )
     assert next_inputs["remediationAttemptInput"]["expectedHeadVersion"] == 2
+
+
+def test_completed_remediation_advances_from_workflow_checkpoint_without_agent_output(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        ConsumedRemediationBudgets,
+        RemediationLoopState,
+    )
+
+    node = {
+        "id": "remediation-1",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {},
+    }
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+    mock_run_workflow._remediation_loop_state = RemediationLoopState(
+        loopId="loop-3473",
+        phase="remediation_running",
+        attemptOrdinal=1,
+        workspaceHeadRef="artifact://workspace/C0",
+        consumedBudgets=ConsumedRemediationBudgets(attempts=1),
+    )
+    inputs: dict[str, object] = {}
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node,
+        node_inputs=inputs,
+    )
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "remediation-1": {
+            "after_execution": {
+                "checkpointRef": "art_remediation_checkpoint",
+                "workspaceDigest": "sha256:remediated-candidate",
+                "checkpointManifestRef": "art_remediation_manifest",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    )
+
+    mock_run_workflow._advance_remediation_workspace_head(
+        node=node,
+        node_inputs=inputs,
+        execution_result={"outputs": {}},
+        step_execution_id="wf:run:remediation-1:execution:1",
+    )
+
+    head = mock_run_workflow._remediation_workspace_head
+    state = mock_run_workflow._remediation_loop_state
+    assert head is not None
+    assert state is not None
+    assert head.head_checkpoint_ref == "artifact://art_remediation_checkpoint"
+    assert head.head_workspace_digest == "sha256:remediated-candidate"
+    assert head.head_attempt_ordinal == 1
+    assert head.head_version == 2
+    assert state.phase.value == "verification_pending"
+    assert state.workspace_head_ref == "artifact://art_remediation_checkpoint"
 
 
 def test_remediation_step_rejects_root_fallback_after_workflow_head_is_owned(
