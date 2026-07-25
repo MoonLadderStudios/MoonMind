@@ -645,7 +645,12 @@ The implementation should include tests for:
 5. terminal managed session becomes eligible only after retention and grace;
 6. orphan reaper continues to delete containers and sidecar volumes but never workspaces;
 7. dry-run reports candidates without deleting;
-8. corrupt run/session JSON records fail closed;
+8. corrupt run/session JSON records fail closed for the paths they name, without
+   blocking cleanup of every other candidate;
+8b. an owner record that no longer satisfies its current model protects the paths
+   it names, is reported in the pass result, and is itself reclaimed only once
+   those paths are gone;
+8c. filesystem progress reporting cannot exhaust the activity heartbeat queue;
 9. paths outside `/work/agent_jobs` are skipped;
 10. symlink candidates are skipped;
 11. live Docker references protect otherwise eligible roots;
@@ -663,3 +668,10 @@ MoonMind cleanup should converge on this rule:
 > Live-runtime cleanup removes leaked containers, volumes, sockets, config, and short-lived support files as soon as they are no longer active. Retained-state cleanup removes workspaces, artifacts, and records only after all durable owners are terminal, retention has elapsed, and canonical path safety gates pass.
 
 This preserves fast leak cleanup without turning lifecycle paths into broad filesystem garbage collectors, while making bounded ownership-aware retention an operational default and keeping dry-run and opt-out controls explicit.
+
+Cleanup fails closed per owner record, never per pass. One unreadable or
+schema-superseded record protects the paths it names and is reported; it must not
+stop the janitor from reclaiming unrelated state, because a janitor that reclaims
+nothing while reporting success lets the runtime volume fill silently. Every pass
+that cannot read a record, or that leaves state protected for that reason, must
+surface that condition in its result and logs rather than only in a counter.
