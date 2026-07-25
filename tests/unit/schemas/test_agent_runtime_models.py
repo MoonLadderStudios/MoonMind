@@ -150,18 +150,19 @@ def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
         )
 
 @pytest.mark.parametrize("agent_id", ["auto", "AUTO", " auto "])
-def test_agent_execution_request_rejects_the_auto_selection_sentinel(
+def test_agent_execution_request_decodes_historical_auto_selection_sentinel(
     agent_id: str,
 ) -> None:
-    """``auto`` selects a runtime at planning time; it is never an agent identity."""
+    """Historical workflow inputs must remain decodable during replay."""
 
-    with pytest.raises(ValidationError, match="selection sentinel"):
-        AgentExecutionRequest(
-            agentKind="managed",
-            agentId=agent_id,
-            correlationId="corr-1",
-            idempotencyKey="idem-1",
-        )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=agent_id,
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+    )
+
+    assert request.agent_id == agent_id.strip()
 
 def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
     with pytest.raises(

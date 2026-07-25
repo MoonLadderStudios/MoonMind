@@ -56,6 +56,22 @@ _RAW_OWNED_PATH_KEYS = (
     "artifactSpoolPath",
     "artifact_spool_path",
 )
+_RAW_ARTIFACT_REF_KEYS = (
+    "logArtifactRef",
+    "log_artifact_ref",
+    "stdoutArtifactRef",
+    "stdout_artifact_ref",
+    "stderrArtifactRef",
+    "stderr_artifact_ref",
+    "mergedLogArtifactRef",
+    "merged_log_artifact_ref",
+    "diagnosticsRef",
+    "diagnostics_ref",
+    "observabilityEventsRef",
+    "observability_events_ref",
+    "latestCheckpointRef",
+    "latest_checkpoint_ref",
+)
 _MAX_REPORTED_UNREADABLE_RECORDS = 20
 
 _FALSEY = frozenset({"", "0", "false", "no", "off"})
@@ -310,10 +326,12 @@ class ManagedRuntimeWorkspaceJanitor:
     def run(self) -> ManagedRuntimeCleanupResult:
         config = self._config
         if not config.enabled:
+            unreadable_count = 0
             try:
                 run_records, session_records, unreadable = self._load_owner_records()
                 scanned_run_records = len(run_records)
                 scanned_session_records = len(session_records)
+                unreadable_count = len(unreadable)
                 errors: tuple[str, ...] = _unreadable_record_errors(unreadable)
             except OSError as exc:
                 scanned_run_records = 0
@@ -337,7 +355,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 skipped_unsafe_path=0,
                 skipped_ambiguous_owner=0,
                 skipped_unreadable_owner=0,
-                unreadable_owner_records=len(errors),
+                unreadable_owner_records=unreadable_count,
                 scanned_record_files=0,
                 delete_budget_exhausted=0,
                 errors=errors,
@@ -413,7 +431,9 @@ class ManagedRuntimeWorkspaceJanitor:
                             path=path,
                             kind=kind,  # type: ignore[arg-type]
                             error=error,
-                            owned_paths=_raw_owned_paths(path),
+                            owned_paths=_raw_owned_paths(
+                                path, artifact_root=self._config.artifact_root
+                            ),
                         )
                     )
                     continue
@@ -444,6 +464,16 @@ class ManagedRuntimeWorkspaceJanitor:
                     )
                 )
                 continue
+            retention = self._config.record_retention
+            if retention is None:
+                decisions.append(
+                    self._decision(
+                        candidate,
+                        "protected_recent",
+                        "record retention disabled",
+                    )
+                )
+                continue
             if any(path.exists() for path in entry.owned_paths):
                 decisions.append(
                     self._decision(
@@ -469,12 +499,12 @@ class ManagedRuntimeWorkspaceJanitor:
                     self._decision(candidate, "error", f"filesystem error: {exc}")
                 )
                 continue
-            if newest is None or self._now() - newest < self._config.grace:
+            if newest is None or self._now() - newest < retention:
                 decisions.append(
                     self._decision(
                         candidate,
                         "protected_recent",
-                        "grace window has not elapsed",
+                        "record retention window has not elapsed",
                         newest,
                     )
                 )
@@ -1310,7 +1340,7 @@ def _artifact_job_id(ref: str) -> str | None:
     return cleaned.split("/", 1)[0]
 
 
-def _raw_owned_paths(record_path: Path) -> tuple[Path, ...]:
+def _raw_owned_paths(record_path: Path, *, artifact_root: Path) -> tuple[Path, ...]:
     """Return filesystem paths named by an unreadable owner record.
 
     The record body is read as raw JSON: ownership must be honored even when the
@@ -1330,6 +1360,14 @@ def _raw_owned_paths(record_path: Path) -> tuple[Path, ...]:
             candidate = Path(raw.strip())
             if candidate not in paths:
                 paths.append(candidate)
+    for key in _RAW_ARTIFACT_REF_KEYS:
+        raw = data.get(key)
+        if isinstance(raw, str):
+            job_id = _artifact_job_id(raw)
+            if job_id:
+                candidate = artifact_root / job_id
+                if candidate not in paths:
+                    paths.append(candidate)
     return tuple(paths)
 
 
