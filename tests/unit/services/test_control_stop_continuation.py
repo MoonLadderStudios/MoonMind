@@ -18,6 +18,7 @@ def _evidence(payload: dict) -> ControlStopSourceEvidence:
     refs = {
         payload["gateResultRef"]: payload["gateResultDigest"],
         payload["remainingWorkRef"]: payload["remainingWorkDigest"],
+        payload["checkpointRef"]: payload["checkpointDigest"],
         payload["workspaceHeadRef"]: payload["workspaceHeadDigest"],
         payload["workspaceManifestRef"]: payload["workspaceManifestDigest"],
         payload["taskInputSnapshotRef"]: payload["taskInputSnapshotDigest"],
@@ -29,6 +30,7 @@ def _evidence(payload: dict) -> ControlStopSourceEvidence:
         payload["lane"]["effectiveLaunchSnapshotRef"]: payload["lane"][
             "effectiveLaunchSnapshotDigest"
         ],
+        payload["verificationInstructionRef"]: payload["verificationInstructionDigest"],
     }
     return ControlStopSourceEvidence(
         contract_payload=payload,
@@ -68,7 +70,8 @@ class _Starter:
         self.workflow_ids = []
 
     async def start_or_reconcile(self, *, workflow_id, input_payload):
-        assert input_payload["deploymentPromoted"] is True
+        assert input_payload["contract"]["deploymentPromoted"] is True
+        assert input_payload["state"] is None
         self.workflow_ids.append(workflow_id)
         return "existing-or-new-run"
 
@@ -159,6 +162,25 @@ async def test_budget_mismatch_fails_before_reservation_or_start() -> None:
 
     assert repository.reserve_calls == 0
     assert starter.workflow_ids == []
+
+
+@pytest.mark.asyncio
+async def test_operator_may_select_smaller_budget_within_frozen_grant() -> None:
+    payload = _payload()
+    repository = _Repository(_evidence(payload))
+    starter = _Starter()
+    requested = deepcopy(payload)
+    requested["continuationBudget"]["maxAttempts"] = 1
+
+    reservation = await _admit(
+        repository=repository,
+        starter=starter,
+        payload=requested,
+    )
+
+    assert reservation.created is True
+    assert repository.reserve_calls == 1
+    assert starter.workflow_ids == [reservation.destination_workflow_id]
 
 
 @pytest.mark.asyncio

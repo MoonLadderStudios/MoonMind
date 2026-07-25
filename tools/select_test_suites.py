@@ -177,6 +177,7 @@ NON_BACKEND_PREFIXES = (
 )
 
 NON_BACKEND_EXACT = {
+    "AGENTS.md",
     "README.md",
     "package.json",
     "package-lock.json",

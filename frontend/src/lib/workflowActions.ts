@@ -25,6 +25,23 @@ export const ExecutionActionsSchema = z
       z.object({
         candidateRef: z.string().nullable().optional(),
         remainingWorkRef: z.string().nullable().optional(),
+        controlStopId: z.string().nullable().optional(),
+        sourceBudget: z.object({
+          maxAttempts: z.number().int().positive(),
+          consumedAttempts: z.number().int().nonnegative(),
+          exhaustedDimension: z.string(),
+        }).passthrough().optional(),
+        continuationBudget: z.object({
+          grantId: z.string(),
+          maxAttempts: z.number().int().positive(),
+          maxConsecutiveNoProgressAttempts: z.number().int().positive(),
+          consumedAttempts: z.number().int().nonnegative().optional(),
+          consecutiveNoProgressAttempts: z.number().int().nonnegative().optional(),
+        }).passthrough().optional(),
+        destinationWorkflowId: z.string().nullable().optional(),
+        restorationEvidenceRef: z.string().nullable().optional(),
+        restorationEvidenceDigest: z.string().nullable().optional(),
+        hostSessionLifecycle: z.record(z.string(), z.unknown()).nullable().optional(),
       }).passthrough(),
     ).optional(),
     canCancel: z.boolean().optional(),

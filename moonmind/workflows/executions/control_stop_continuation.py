@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.security.outbound_scan import scan_outbound_text
+
 
 class ControlStopContinuationError(ValueError):
     """A control-stop continuation contract is unsafe or incomplete."""
@@ -32,7 +34,7 @@ class ContinuationBudgetGrant(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _bounded_consumption(self) -> "ContinuationBudgetGrant":
+    def _bounded_consumption(self) -> ContinuationBudgetGrant:
         if self.consumed_attempts > self.max_attempts:
             raise ValueError("consumedAttempts exceeds the continuation grant")
         if (
@@ -42,12 +44,14 @@ class ContinuationBudgetGrant(BaseModel):
             raise ValueError("no-progress consumption exceeds the continuation grant")
         return self
 
-    def consume(self, *, progress: bool) -> "ContinuationBudgetGrant":
+    def consume(self, *, progress: bool) -> ContinuationBudgetGrant:
         if self.consumed_attempts >= self.max_attempts:
             raise ControlStopContinuationError("continuation_attempt_budget_exhausted")
         no_progress = 0 if progress else self.consecutive_no_progress_attempts + 1
         if no_progress > self.max_consecutive_no_progress_attempts:
-            raise ControlStopContinuationError("continuation_no_progress_budget_exhausted")
+            raise ControlStopContinuationError(
+                "continuation_no_progress_budget_exhausted"
+            )
         return self.model_copy(
             update={
                 "consumed_attempts": self.consumed_attempts + 1,
@@ -64,6 +68,38 @@ class SourceBudgetEvidence(BaseModel):
     exhausted_dimension: Literal[
         "remediation_attempts", "consecutive_no_progress_attempts"
     ] = Field(alias="exhaustedDimension")
+
+
+class ControlStopRolloutPolicy(BaseModel):
+    """Frozen admission policy for one continuation destination.
+
+    Current deployment policy is evaluated before destination creation.  This
+    compact snapshot is then the replay authority, so disabling new admissions
+    never changes an already-linked workflow.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    mode: Literal["shadow", "canary", "enabled"]
+    canary_owner_ids: list[str] = Field(default_factory=list, alias="canaryOwnerIds")
+    allowed_provider_profile_ids: list[str] = Field(
+        alias="allowedProviderProfileIds", min_length=1
+    )
+    allowed_execution_profile_refs: list[str] = Field(
+        alias="allowedExecutionProfileRefs", min_length=1
+    )
+    allowed_launch_policy_refs: list[str] = Field(
+        alias="allowedLaunchPolicyRefs", min_length=1
+    )
+    allowed_runtime: Literal["external/omnigent"] = Field(
+        "external/omnigent", alias="allowedRuntime"
+    )
+    allowed_product: Literal["codex-native"] = Field(
+        "codex-native", alias="allowedProduct"
+    )
+    allowed_host_profile: Literal["omnigent-host-codex"] = Field(
+        "omnigent-host-codex", alias="allowedHostProfile"
+    )
 
 
 class FrozenProfileBoundLane(BaseModel):
@@ -97,9 +133,7 @@ class FrozenProfileBoundLane(BaseModel):
 class PreservedControlStopStep(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    source_step_execution_id: str = Field(
-        alias="sourceStepExecutionId", min_length=1
-    )
+    source_step_execution_id: str = Field(alias="sourceStepExecutionId", min_length=1)
     logical_step_id: str = Field(alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(alias="executionOrdinal", ge=1)
     terminal_disposition: Literal["accepted", "accepted_control_result"] = Field(
@@ -113,7 +147,7 @@ class PreservedControlStopStep(BaseModel):
     semantic_verdict: str | None = Field(None, alias="semanticVerdict")
 
     @model_validator(mode="after")
-    def _negative_verifier_is_control_evidence(self) -> "PreservedControlStopStep":
+    def _negative_verifier_is_control_evidence(self) -> PreservedControlStopStep:
         if (
             self.semantic_verdict == "ADDITIONAL_WORK_NEEDED"
             and self.terminal_disposition != "accepted_control_result"
@@ -129,17 +163,75 @@ class PreservedSideEffect(BaseModel):
 
     operation: str = Field(min_length=1)
     evidence_ref: str = Field(alias="evidenceRef", min_length=1)
-    disposition: Literal["already_performed", "reconcile", "reapply", "blocked"]
-    idempotency_key: str | None = Field(None, alias="idempotencyKey")
-    authorization_ref: str | None = Field(None, alias="authorizationRef")
+    disposition: Literal["already_performed"]
+
+
+class ContinuationVerificationResult(BaseModel):
+    """Typed semantic evidence returned by the authoritative verifier."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    verdict: Literal[
+        "FULLY_IMPLEMENTED",
+        "ADDITIONAL_WORK_NEEDED",
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+        "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
+    ]
+    verification_ref: str = Field(alias="verificationRef", min_length=1)
+    remaining_work_ref: str | None = Field(None, alias="remainingWorkRef")
+    progress: bool
+    progress_evidence_ref: str | None = Field(None, alias="progressEvidenceRef")
 
     @model_validator(mode="after")
-    def _safe_disposition(self) -> "PreservedSideEffect":
-        if self.disposition == "reconcile" and not self.idempotency_key:
-            raise ValueError("reconciliation requires a stable idempotencyKey")
-        if self.disposition == "reapply" and not self.authorization_ref:
-            raise ValueError("reapplication requires an authorizationRef")
+    def _remaining_work_is_authoritative(self) -> ContinuationVerificationResult:
+        if self.verdict == "ADDITIONAL_WORK_NEEDED" and not self.remaining_work_ref:
+            raise ValueError("ADDITIONAL_WORK_NEEDED requires remainingWorkRef")
         return self
+
+
+class ContinuationAttemptEvidence(BaseModel):
+    """Compact, replay-safe evidence for one remediation/verification pair."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    attempt_ordinal: int = Field(alias="attemptOrdinal", ge=1)
+    remediation_step_execution_id: str = Field(
+        alias="remediationStepExecutionId", min_length=1
+    )
+    verification_step_execution_id: str = Field(
+        alias="verificationStepExecutionId", min_length=1
+    )
+    candidate_ref: str = Field(alias="candidateRef", min_length=1)
+    candidate_digest: str = Field(alias="candidateDigest", min_length=1)
+    progress: bool
+    semantic_verdict: str = Field(alias="semanticVerdict", min_length=1)
+    verification_ref: str = Field(alias="verificationRef", min_length=1)
+    remaining_work_ref: str | None = Field(None, alias="remainingWorkRef")
+    lifecycle: dict[str, str | bool | int | None] = Field(default_factory=dict)
+
+
+class ControlStopContinuationState(BaseModel):
+    """State transferred verbatim across Continue-As-New boundaries."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    destination_workspace_locator: dict[str, Any] = Field(
+        alias="destinationWorkspaceLocator"
+    )
+    restoration_evidence_ref: str = Field(alias="restorationEvidenceRef", min_length=1)
+    restoration_evidence_digest: str = Field(
+        alias="restorationEvidenceDigest", min_length=1
+    )
+    latest_workspace_head_ref: str = Field(alias="latestWorkspaceHeadRef", min_length=1)
+    latest_workspace_head_digest: str = Field(
+        alias="latestWorkspaceHeadDigest", min_length=1
+    )
+    latest_verification_ref: str = Field(alias="latestVerificationRef", min_length=1)
+    remaining_work_ref: str = Field(alias="remainingWorkRef", min_length=1)
+    continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
+    attempts: list[ContinuationAttemptEvidence] = Field(default_factory=list)
+    continue_as_new_count: int = Field(0, alias="continueAsNewCount", ge=0)
 
 
 class ControlStopContinuationContract(BaseModel):
@@ -147,8 +239,8 @@ class ControlStopContinuationContract(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    schema_version: Literal["control-stop-continuation/v1"] = Field(
-        "control-stop-continuation/v1", alias="schemaVersion"
+    schema_version: Literal["control-stop-continuation/v2"] = Field(
+        "control-stop-continuation/v2", alias="schemaVersion"
     )
     target_kind: Literal["control_stop"] = Field(alias="targetKind")
     phase: Literal["continue_to_remediation"]
@@ -158,9 +250,7 @@ class ControlStopContinuationContract(BaseModel):
     owner_type: Literal["user", "service", "system"] = Field(alias="ownerType")
     owner_id: str = Field(alias="ownerId", min_length=1)
     control_stop_id: str = Field(alias="controlStopId", min_length=1)
-    semantic_verdict: Literal["ADDITIONAL_WORK_NEEDED"] = Field(
-        alias="semanticVerdict"
-    )
+    semantic_verdict: Literal["ADDITIONAL_WORK_NEEDED"] = Field(alias="semanticVerdict")
     stop_reason: Literal[
         "remediation_budget_exhausted",
         "no_progress_attempts_exhausted",
@@ -170,6 +260,8 @@ class ControlStopContinuationContract(BaseModel):
     gate_result_digest: str = Field(alias="gateResultDigest", min_length=1)
     remaining_work_ref: str = Field(alias="remainingWorkRef", min_length=1)
     remaining_work_digest: str = Field(alias="remainingWorkDigest", min_length=1)
+    checkpoint_ref: str = Field(alias="checkpointRef", min_length=1)
+    checkpoint_digest: str = Field(alias="checkpointDigest", min_length=1)
     workspace_head_ref: str = Field(alias="workspaceHeadRef", min_length=1)
     workspace_head_digest: str = Field(
         alias="workspaceHeadDigest", pattern=r"^sha256:[0-9a-f]{64}$"
@@ -198,11 +290,29 @@ class ControlStopContinuationContract(BaseModel):
     continuation_budget: ContinuationBudgetGrant = Field(alias="continuationBudget")
     deployment_generation: str = Field(alias="deploymentGeneration", min_length=1)
     deployment_promoted: bool = Field(alias="deploymentPromoted")
+    rollout: ControlStopRolloutPolicy
     restore_capability_set_version: str = Field(
         alias="restoreCapabilitySetVersion", min_length=1
     )
     restore_capability_digest: str = Field(
         alias="restoreCapabilityDigest", min_length=1
+    )
+    capture_capability_set_version: Literal[
+        "runtime-execution-capabilities-v1",
+        "runtime-execution-capabilities-v2",
+        "runtime-execution-capabilities-v3",
+    ] = Field(alias="captureCapabilitySetVersion")
+    capture_capability_digest: str = Field(
+        alias="captureCapabilityDigest", min_length=1
+    )
+    verification_instruction_ref: str = Field(
+        alias="verificationInstructionRef", min_length=1
+    )
+    verification_instruction_digest: str = Field(
+        alias="verificationInstructionDigest", min_length=1
+    )
+    continue_as_new_after_attempts: int = Field(
+        10, alias="continueAsNewAfterAttempts", ge=1, le=100
     )
     idempotency_key: str = Field(alias="idempotencyKey", min_length=1, max_length=200)
     instruction_changes_ref: str | None = Field(None, alias="instructionChangesRef")
@@ -211,13 +321,30 @@ class ControlStopContinuationContract(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _fail_closed_admission(self) -> "ControlStopContinuationContract":
+    def _fail_closed_admission(self) -> ControlStopContinuationContract:
         if not self.terminal_head:
             raise ValueError("selected checkpoint is not the source terminal head")
         if not self.deployment_promoted:
             raise ValueError("control-stop continuation deployment is not promoted")
-        if any(effect.disposition == "blocked" for effect in self.side_effects):
-            raise ValueError("source side effects block continuation")
+        if self.rollout.mode == "shadow":
+            raise ValueError("control-stop continuation is shadow diagnostics only")
+        if (
+            self.rollout.mode == "canary"
+            and self.owner_id not in self.rollout.canary_owner_ids
+        ):
+            raise ValueError("owner is not selected for the control-stop canary")
+        if (
+            self.lane.provider_profile_id
+            not in self.rollout.allowed_provider_profile_ids
+        ):
+            raise ValueError("selected Provider Profile is not rollout-allowlisted")
+        if (
+            self.lane.execution_profile_id
+            not in self.rollout.allowed_execution_profile_refs
+        ):
+            raise ValueError("selected execution profile is not rollout-allowlisted")
+        if self.lane.launch_policy_ref not in self.rollout.allowed_launch_policy_refs:
+            raise ValueError("selected launch policy is not rollout-allowlisted")
         if bool(self.instruction_changes_ref) != bool(self.instruction_changes_digest):
             raise ValueError("instruction changes require both ref and digest")
         if not any(
@@ -233,6 +360,16 @@ class ControlStopContinuationContract(BaseModel):
                 "frozen runtime capabilities do not authorize the checkpoint "
                 "boundary and continuation phase"
             )
+        scan_payload = self.model_dump(by_alias=True, mode="json")
+        scan = scan_outbound_text(
+            json.dumps(scan_payload, sort_keys=True, separators=(",", ":")),
+            location="control_stop_continuation.contract",
+            high_security_mode=True,
+        )
+        if not scan.allowed:
+            raise ValueError(
+                "control-stop continuation contract failed secret scanning"
+            )
         return self
 
     @property
@@ -241,6 +378,8 @@ class ControlStopContinuationContract(BaseModel):
             "sourceWorkflowId": self.source_workflow_id,
             "sourceRunId": self.source_run_id,
             "controlStopId": self.control_stop_id,
+            "checkpointRef": self.checkpoint_ref,
+            "checkpointDigest": self.checkpoint_digest,
             "workspaceHeadRef": self.workspace_head_ref,
             "workspaceHeadDigest": self.workspace_head_digest,
             "idempotencyKey": self.idempotency_key,
@@ -277,6 +416,11 @@ class ControlStopContinuationContract(BaseModel):
             "product": "codex-native",
             "providerProfileId": self.lane.provider_profile_id,
             "hostProfile": "omnigent-host-codex",
+            "sourceBudget": self.source_budget.model_dump(by_alias=True, mode="json"),
+            "proposedGrant": self.continuation_budget.model_dump(
+                by_alias=True, mode="json"
+            ),
+            "rolloutGeneration": self.deployment_generation,
         }
 
     def restore_request(self, *, destination_run_id: str) -> dict[str, Any]:
@@ -305,7 +449,7 @@ class ControlStopContinuationContract(BaseModel):
                 "runId": self.source_run_id,
                 "logicalStepId": terminal_verifier.logical_step_id,
                 "executionOrdinal": terminal_verifier.execution_ordinal,
-                "checkpointRef": self.workspace_head_ref,
+                "checkpointRef": self.checkpoint_ref,
                 "checkpointBoundary": self.checkpoint_boundary,
             },
             "checkpoint": {
@@ -408,8 +552,8 @@ class ControlStopContinuationContract(BaseModel):
             "checkpointKind": "worktree_archive",
             "workspaceLocator": destination_workspace_locator,
             "expectedRuntimeId": "codex_cli",
-            "capabilitySetVersion": self.restore_capability_set_version,
-            "capabilityDigest": self.restore_capability_digest,
+            "capabilitySetVersion": self.capture_capability_set_version,
+            "capabilityDigest": self.capture_capability_digest,
             "artifactNamespace": (
                 f"control-stop-continuations/{self.destination_workflow_id}/"
                 f"attempts/{attempt}"
@@ -452,7 +596,7 @@ class ControlStopContinuationContract(BaseModel):
             "parameters": {
                 "omnigent": {
                     "prompt": {
-                        "instructionRef": self.gate_result_ref,
+                        "instructionRef": self.verification_instruction_ref,
                     }
                 },
                 "workflowId": self.destination_workflow_id,
@@ -469,12 +613,27 @@ class ControlStopContinuationContract(BaseModel):
                 "controlStopId": self.control_stop_id,
                 "candidateRef": workspace_head_ref,
                 "expectedResultContract": {
-                    "metadata.semanticVerdict": [
-                        "FULLY_IMPLEMENTED",
-                        "ADDITIONAL_WORK_NEEDED",
-                        "BLOCKED",
-                    ],
-                    "metadata.remainingWorkRef": "required_for_additional_work",
+                    "metadata.controlStopVerification": (
+                        "ContinuationVerificationResult"
+                    ),
                 },
             },
         }
+
+
+class ControlStopContinuationWorkflowInput(BaseModel):
+    """Stable workflow input for initial execution and Continue-As-New."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["control-stop-continuation-workflow/v1"] = Field(
+        "control-stop-continuation-workflow/v1", alias="schemaVersion"
+    )
+    contract: ControlStopContinuationContract
+    state: ControlStopContinuationState | None = None
+
+    @classmethod
+    def initial(
+        cls, contract: ControlStopContinuationContract
+    ) -> ControlStopContinuationWorkflowInput:
+        return cls(contract=contract)

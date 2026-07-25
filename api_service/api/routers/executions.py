@@ -225,6 +225,7 @@ from moonmind.services.control_stop_continuation import (
     admit_control_stop_continuation,
 )
 from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
     ControlStopContinuationContract,
     ControlStopContinuationError,
 )
@@ -7102,12 +7103,33 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 )
             continue
         disabled_reasons[alias] = "state_not_eligible"
+    common_control_stop_evidence = {
+        "candidateRef": control_stop.get("workspaceHeadRef"),
+        "remainingWorkRef": control_stop.get("remainingWorkRef"),
+    }
+    continuation_evidence = {
+        **common_control_stop_evidence,
+        **{
+            destination: control_stop[source]
+            for source, destination in (
+                ("controlStopId", "controlStopId"),
+                ("sourceBudget", "sourceBudget"),
+                ("continuationBudgetGrant", "continuationBudget"),
+                ("destinationWorkflowId", "destinationWorkflowId"),
+                ("restorationEvidenceRef", "restorationEvidenceRef"),
+                ("restorationEvidenceDigest", "restorationEvidenceDigest"),
+                ("hostSessionLifecycle", "hostSessionLifecycle"),
+            )
+            if source in control_stop
+        },
+    }
     action_evidence = {
         **{
-            action: {
-                "candidateRef": control_stop.get("workspaceHeadRef"),
-                "remainingWorkRef": control_stop.get("remainingWorkRef"),
-            }
+            action: (
+                continuation_evidence
+                if action == "continueRemediation"
+                else common_control_stop_evidence
+            )
             for action in (
                 "editForRerun",
                 "fullRetry",
@@ -14240,11 +14262,25 @@ async def describe_execution(
     return execution
 
 
+class ContinueRemediationBudgetProposal(BaseModel):
+    """Operator-selected limits bounded by the server-owned grant."""
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    max_attempts: int = Field(alias="maxAttempts", ge=1)
+    max_consecutive_no_progress_attempts: int = Field(
+        alias="maxConsecutiveNoProgressAttempts", ge=1
+    )
+
+
 class ContinueRemediationRequest(BaseModel):
     """Select the frozen control-stop evidence owned by the source execution."""
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
+    proposed_continuation_budget: ContinueRemediationBudgetProposal | None = Field(
+        None, alias="proposedContinuationBudget"
+    )
     instruction_changes_ref: str | None = Field(
         None, alias="instructionChangesRef", min_length=1
     )
@@ -14296,6 +14332,11 @@ async def continue_remediation(
 ) -> ContinueRemediationResponse:
     """Admit one deterministic continuation from authoritative frozen evidence."""
 
+    continuation_metrics = get_metrics_emitter()
+    continuation_metrics.increment(
+        "control_stop_continuation.admission_total",
+        tags={"outcome": "attempt"},
+    )
     source = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -14320,17 +14361,31 @@ async def continue_remediation(
         contract = ControlStopContinuationContract.model_validate(
             dict(evidence.contract_payload)
         )
+        selected_budget = contract.continuation_budget
+        if payload.proposed_continuation_budget is not None:
+            selected_budget = ContinuationBudgetGrant(
+                grantId=contract.continuation_budget.grant_id,
+                maxAttempts=payload.proposed_continuation_budget.max_attempts,
+                maxConsecutiveNoProgressAttempts=(
+                    payload.proposed_continuation_budget
+                    .max_consecutive_no_progress_attempts
+                ),
+            )
         reservation = await admit_control_stop_continuation(
             source_workflow_id=source.workflow_id,
             source_run_id=source_run_id,
             control_stop_id=control_stop_id,
-            continuation_budget=contract.continuation_budget,
+            continuation_budget=selected_budget,
             instruction_changes_ref=payload.instruction_changes_ref,
             instruction_changes_digest=payload.instruction_changes_digest,
             repository=repository,
             starter=starter,
         )
     except (ControlStopContinuationError, ValidationError) as exc:
+        continuation_metrics.increment(
+            "control_stop_continuation.admission_total",
+            tags={"outcome": "rejected"},
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -14339,6 +14394,10 @@ async def continue_remediation(
             },
         ) from exc
 
+    continuation_metrics.increment(
+        "control_stop_continuation.admission_total",
+        tags={"outcome": "created" if reservation.created else "reconciled"},
+    )
     return ContinueRemediationResponse(
         sourceWorkflowId=reservation.source_workflow_id,
         sourceRunId=reservation.source_run_id,
