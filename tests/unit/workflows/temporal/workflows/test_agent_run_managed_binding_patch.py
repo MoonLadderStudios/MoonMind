@@ -20,6 +20,13 @@ def test_managed_launch_binding_uses_temporal_patch_guard() -> None:
     assert "task_workflow_id=task_workflow_id" in source
 
 
+def test_auto_runtime_rejection_is_replay_patched_at_dispatch() -> None:
+    source = inspect.getsource(MoonMindAgentRun.run)
+
+    assert "workflow.patched(RESOLVED_RUNTIME_DISPATCH_PATCH_ID)" in source
+    assert "request.agent_id.strip().lower() == AUTO_RUNTIME_SENTINEL" in source
+
+
 def test_agent_run_workflow_child_task_queue_is_replay_patched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

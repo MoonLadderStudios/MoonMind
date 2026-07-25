@@ -637,11 +637,6 @@ class AgentExecutionRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_contract(self) -> "AgentExecutionRequest":
         self.agent_id = require_non_blank(self.agent_id, field_name="agentId")
-        if self.agent_id.strip().lower() == AUTO_RUNTIME_SENTINEL:
-            raise ValueError(
-                "agentId must name the resolved agent runtime; "
-                f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel"
-            )
         if self.execution_profile_ref is not None:
             if self.execution_profile_ref.strip().lower() == AUTO_RUNTIME_SENTINEL:
                 self.execution_profile_ref = None

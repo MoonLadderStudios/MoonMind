@@ -14,6 +14,7 @@ with workflow.unsafe.imports_passed_through():
     from pydantic import ValidationError
 
     from moonmind.schemas.agent_runtime_models import (
+        AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
@@ -78,6 +79,7 @@ PR_RESOLVER_OWNED_CONTINUATION_PATCH_ID = "agent-run-pr-resolver-owned-continuat
 PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
     "agent-run-pr-resolver-continuation-observability-v1"
 )
+RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 
 
@@ -3845,6 +3847,18 @@ class MoonMindAgentRun:
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
+        # Keep historical ``agentId: auto`` payloads decodable so existing
+        # AgentRun histories can replay. Reject the planning sentinel only at
+        # the versioned live-dispatch boundary for newly started workflows.
+        if (
+            workflow.patched(RESOLVED_RUNTIME_DISPATCH_PATCH_ID)
+            and request.agent_id.strip().lower() == AUTO_RUNTIME_SENTINEL
+        ):
+            raise ApplicationError(
+                "agentId must name the resolved agent runtime; "
+                f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel",
+                non_retryable=True,
+            )
 
         timeout_seconds = (
             DEFAULT_EXTERNAL_TIMEOUT_SECONDS
