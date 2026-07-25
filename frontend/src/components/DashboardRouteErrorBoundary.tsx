@@ -1,10 +1,10 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Component, type ErrorInfo, type ReactNode } from "react";
 
-import { DashboardErrorState } from './DashboardErrorState';
+import { DashboardErrorState } from "./DashboardErrorState";
 import {
   isDynamicImportLoadError,
   reloadOnceForDynamicImportError,
-} from '../lib/dynamicImportRecovery';
+} from "../lib/dynamicImportRecovery";
 
 type Props = {
   children: ReactNode;
@@ -36,7 +36,7 @@ export class DashboardRouteErrorBoundary extends Component<Props, State> {
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error('Dashboard route error:', error, info);
+    console.error("Dashboard route error:", error, info);
     if (isDynamicImportLoadError(error)) {
       reloadOnceForDynamicImportError(this.props.buildId);
     }
