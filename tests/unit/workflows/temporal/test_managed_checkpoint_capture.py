@@ -195,6 +195,7 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
         digest=resolve_runtime_execution_capabilities("codex_cli").capability_digest
     )
     first = await activities.agent_runtime_capture_workspace_checkpoint(request)
+    assert first["workspace"]["workspaceIdentityDigest"].startswith("sha256:")
     assert first["workspace"]["archiveBytes"] == len(
         artifacts[first["workspace"]["archiveRef"]]
     )
@@ -385,6 +386,7 @@ async def test_managed_capture_archive_digest_is_deterministic(tmp_path) -> None
     second_request["idempotencyKey"] = "checkpoint-2:capture"
     second = await activities.agent_runtime_capture_workspace_checkpoint(second_request)
     assert first["workspace"]["archiveDigest"] == second["workspace"]["archiveDigest"]
+    assert first["workspace"]["workspaceDigest"] == second["workspace"]["workspaceDigest"]
 
 
 @pytest.mark.asyncio

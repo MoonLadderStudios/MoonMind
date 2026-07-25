@@ -3240,6 +3240,43 @@ def test_runtime_extract_turn_error_from_logs_recovers_recent_provider_error_wit
         == "The usage limit has been reached (status 429)"
     )
 
+
+def test_runtime_extract_turn_error_from_logs_ignores_unrelated_http_status(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "raise SystemExit(0)"),
+    )
+    turn_started_at = int(time.time())
+    _write_fake_codex_logs_with_timestamps(
+        request.codex_home_path,
+        entries=[
+            (
+                turn_started_at,
+                "responses.stream_request: Request completed method=POST "
+                "url=https://telemetry.example.invalid/v1/traces "
+                "status=503 Service Unavailable headers={}",
+            )
+        ],
+    )
+
+    assert (
+        runtime._extract_turn_error_from_logs(
+            "vendor-turn-without-log-row",
+            turn_started_at=turn_started_at,
+        )
+        is None
+    )
+
+
 def test_runtime_extract_turn_error_from_logs_ignores_provider_error_before_turn_start(
     tmp_path: Path,
 ) -> None:

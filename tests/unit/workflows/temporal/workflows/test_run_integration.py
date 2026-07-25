@@ -3639,7 +3639,9 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
         "initial-verification": {
             "before_publication": {
                 "checkpointRef": "art_initial_checkpoint",
+                "workspaceKind": "worktree_archive",
                 "workspaceDigest": "sha256:initial-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
                 "checkpointManifestRef": "art_initial_manifest",
             }
         }
@@ -3670,6 +3672,7 @@ async def test_dynamic_verifier_promotes_canonical_checkpoint_to_remediation_hea
     assert head.root_checkpoint_ref == "artifact://art_initial_checkpoint"
     assert head.head_checkpoint_ref == "artifact://art_initial_checkpoint"
     assert head.head_workspace_digest == "sha256:initial-candidate"
+    assert head.head_workspace_identity_digest == "sha256:" + ("c" * 64)
     assert head.latest_verification_ref == "artifact://verification/V0"
     assert head.latest_verification_verdict == "ADDITIONAL_WORK_NEEDED"
     assert state.workspace_head_ref == "artifact://art_initial_checkpoint"
@@ -4471,8 +4474,10 @@ def _remediation_head_payload(
         "branchRef": "checkpoint-branch:loop-3473",
         "rootCheckpointRef": "artifact://workspace/C0",
         "rootWorkspaceDigest": "sha256:c0",
+        "rootWorkspaceIdentityDigest": "sha256:" + ("c" * 64),
         "headCheckpointRef": f"artifact://workspace/{checkpoint}",
         "headWorkspaceDigest": f"sha256:{checkpoint.lower()}",
+        "headWorkspaceIdentityDigest": "sha256:" + ("c" * 64),
         "headAttemptOrdinal": version - 1,
         "headVersion": version,
     }
@@ -4604,9 +4609,18 @@ def test_completed_remediation_advances_from_workflow_checkpoint_without_agent_o
     )
     mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
         "remediation-1": {
-            "after_execution": {
+            "before_execution": {
+                "checkpointRef": "art_materialized_checkpoint",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:c0",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "art_materialized_manifest",
+            },
+            "before_publication": {
                 "checkpointRef": "art_remediation_checkpoint",
+                "workspaceKind": "worktree_archive",
                 "workspaceDigest": "sha256:remediated-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
                 "checkpointManifestRef": "art_remediation_manifest",
             }
         }
@@ -4630,10 +4644,101 @@ def test_completed_remediation_advances_from_workflow_checkpoint_without_agent_o
     assert state is not None
     assert head.head_checkpoint_ref == "artifact://art_remediation_checkpoint"
     assert head.head_workspace_digest == "sha256:remediated-candidate"
+    assert head.head_workspace_identity_digest == "sha256:" + ("c" * 64)
     assert head.head_attempt_ordinal == 1
     assert head.head_version == 2
     assert state.phase.value == "verification_pending"
     assert state.workspace_head_ref == "artifact://art_remediation_checkpoint"
+
+
+def test_workflow_owned_remediation_rejects_different_captured_workspace(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = {
+        "id": "remediation-1",
+        "annotations": {
+            "issueImplementRole": "moonspec-remediation",
+            "moonSpecRemediationAttempt": 1,
+        },
+        "inputs": {},
+    }
+    mock_run_workflow._remediation_workspace_head = (
+        RemediationWorkspaceHead.model_validate(_remediation_head_payload())
+    )
+    inputs: dict[str, object] = {}
+    mock_run_workflow._inject_remediation_workspace_baseline(
+        node=node,
+        node_inputs=inputs,
+    )
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "remediation-1": {
+            "before_execution": {
+                "checkpointRef": "art_materialized_checkpoint",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:c0",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "art_materialized_manifest",
+            },
+            "before_publication": {
+                "checkpointRef": "art_other_checkpoint",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:other-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("d" * 64),
+                "checkpointManifestRef": "art_other_manifest",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    )
+
+    with pytest.raises(RemediationHeadError) as exc:
+        mock_run_workflow._advance_remediation_workspace_head(
+            node=node,
+            node_inputs=inputs,
+            execution_result={"outputs": {}},
+            step_execution_id="wf:run:remediation-1:execution:1",
+        )
+
+    assert exc.value.code == REMEDIATION_HEAD_MISMATCH
+    assert "workspace identity" in str(exc.value)
+
+
+def test_remediation_head_uses_archive_not_git_patch_checkpoint(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
+        "initial-verification": {
+            "after_execution": {
+                "checkpointRef": "art_patch_checkpoint",
+                "workspaceKind": "git_patch",
+                "workspaceDigest": "",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "art_patch_manifest",
+            },
+            "before_publication": {
+                "checkpointRef": "art_archive_checkpoint",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:archive-candidate",
+                "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+                "checkpointManifestRef": "art_archive_manifest",
+            },
+        }
+    }
+
+    evidence = mock_run_workflow._canonical_remediation_checkpoint_evidence(
+        "initial-verification"
+    )
+
+    assert evidence == {
+        "checkpointRef": "artifact://art_archive_checkpoint",
+        "workspaceDigest": "sha256:archive-candidate",
+        "workspaceIdentityDigest": "sha256:" + ("c" * 64),
+        "checkpointManifestRef": "artifact://art_archive_manifest",
+    }
 
 
 def test_remediation_step_rejects_root_fallback_after_workflow_head_is_owned(

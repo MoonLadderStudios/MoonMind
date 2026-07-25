@@ -72,6 +72,10 @@ _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
 _PROVIDER_LOG_SETTLE_GRACE_SECONDS = 1.0
 _PROVIDER_LOG_SETTLE_RETRY_SECONDS = 0.1
 _LOG_RECOVERY_PROVIDER_MARKERS: tuple[str, ...] = provider_failure_search_markers()
+_CODEX_PROVIDER_RESPONSE_LOG_MARKERS: tuple[str, ...] = (
+    "url=https://chatgpt.com/backend-api/codex/responses",
+    "url=https://api.openai.com/v1/responses",
+)
 _HTTP_PROVIDER_STATUS_LOG_PATTERN = re.compile(
     r"\bstatus=(?P<status>401|403|429|500|502|503|504)"
     r"\s+(?P<reason>[A-Za-z][A-Za-z -]{0,80}?)(?:\s+headers=|$)",
@@ -1636,7 +1640,14 @@ class CodexManagedSessionRuntime:
         recovered = cls._extract_quoted_log_field(text, "error.message")
         if recovered:
             return recovered
-        status_match = _HTTP_PROVIDER_STATUS_LOG_PATTERN.search(text)
+        status_match = (
+            _HTTP_PROVIDER_STATUS_LOG_PATTERN.search(text)
+            if any(
+                marker in text.lower()
+                for marker in _CODEX_PROVIDER_RESPONSE_LOG_MARKERS
+            )
+            else None
+        )
         if status_match is not None:
             status = status_match.group("status")
             reason = " ".join(status_match.group("reason").split())
